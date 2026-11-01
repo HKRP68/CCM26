@@ -19,7 +19,8 @@ from services import auction_preseason as P
 from services import auction_trade_service as T
 from services import retention_negotiation as RN
 from services import auction_antispam as SPAM
-from services.admin_ids import is_bot_admin
+from services.admin_ids import (ADMIN_ID_ENV_VARS, OWNER_ID_ENV_VARS,
+                                configured_owner_ids, is_bot_admin, parse_id_list)
 
 
 class AccessError(A.AuctionError):
@@ -27,20 +28,57 @@ class AccessError(A.AuctionError):
 
 
 ROLE_LABELS = {
+    'bot_owner': 'Bot Owner',
     'bot_admin': 'Bot Admin',
     'auction_manager': 'Auction Manager',
     'team_owner': 'Team Owner',
     'team_co_owner': 'Team Co-owner',
+    'team_manager': 'Team Manager',
     'spectator': 'Spectator',
 }
 
 
-def team_role(franchise, tg_id):
-    """The verified viewer's relationship to this franchise, without IDs."""
+def global_roles(tg_id, *, appointed=False):
+    """Explicit assignments, with inherited permissions kept separate.
+
+    Owners inherit bot administration, but receive a second Bot Admin badge
+    only when an administrator variable also explicitly assigns that role.
+    An appointed Auction Manager may hold either global role as well.
+    """
+    value = str(tg_id).strip()
+    if not value.isascii() or not value.isdigit() or int(value) <= 0:
+        return []
+    uid = int(value)
+    administrator_ids = parse_id_list(os.getenv(name) for name in ADMIN_ID_ENV_VARS
+                                     if name not in OWNER_ID_ENV_VARS)
+    roles = []
+    if uid in configured_owner_ids():
+        roles.append('bot_owner')
+    if uid in administrator_ids:
+        roles.append('bot_admin')
+    if appointed:
+        roles.append('auction_manager')
+    return roles
+
+
+def team_roles(franchise, tg_id):
+    """All current team assignments for this viewer, without private IDs."""
     if not A.may_bid_for(franchise, tg_id):
-        return None
-    return ('team_owner' if int(franchise.owner_tg_id or 0) == int(tg_id)
-            else 'team_co_owner')
+        return []
+    uid = int(tg_id)
+    roles = []
+    if int(franchise.owner_tg_id or 0) == uid:
+        roles.append('team_owner')
+    if uid in A.co_owner_ids(franchise):
+        roles.append('team_co_owner')
+    if uid in A.team_manager_ids(franchise):
+        roles.append('team_manager')
+    return roles
+
+
+def team_role(franchise, tg_id):
+    """Primary team relationship retained for older clients."""
+    return next(iter(team_roles(franchise, tg_id)), None)
 
 
 def integer(value, name, low=0, high=1_000_000):
@@ -153,10 +191,13 @@ def lot_row(lot):
 
 def team_row(db, season, row, tg_id, *, current=None):
     purse = A.purse_summary(season, row, current)
-    viewer_role = team_role(row, tg_id)
+    viewer_roles = team_roles(row, tg_id)
+    viewer_role = next(iter(viewer_roles), None)
     return dict(id=row.id, name=row.name, short_name=row.short_name, logo_url=row.logo_url,
                 mine=viewer_role is not None, my_role=viewer_role,
-                my_role_label=ROLE_LABELS.get(viewer_role), purse_lakh=purse['remaining_lakh'],
+                my_role_label=ROLE_LABELS.get(viewer_role), my_roles=viewer_roles,
+                my_role_labels=[ROLE_LABELS[role] for role in viewer_roles],
+                purse_lakh=purse['remaining_lakh'],
                 opening_lakh=purse['total_lakh'], used_lakh=purse['used_lakh'],
                 standing_bid_lakh=purse['standing_bid_lakh'],
                 after_bid_lakh=purse['after_bid_lakh'], size=row.squad_size,
@@ -191,15 +232,21 @@ def telegram_link(season):
 def base_payload(db, season, tg_id, rows):
     manager = admin_for(db, tg_id)
     bot_admin = is_bot_admin(tg_id)
+    # Global identities inherit management authority. Read explicit appointment
+    # separately so all actual assignments can be shown together.
+    appointed = manager and not bot_admin
+    if bot_admin:
+        from models import AuctionAdmin
+        appointed = db.query(AuctionAdmin.id).filter(AuctionAdmin.tg_id == tg_id).first() is not None
     field = A.franchises(db, season.id) if season else []
-    relationships = {f.id: team_role(f, tg_id) for f in field}
+    relationships = {f.id: team_roles(f, tg_id) for f in field}
     owned = [fid for fid, relationship in relationships.items() if relationship]
-    roles = ['bot_admin'] if bot_admin else ['auction_manager'] if manager else []
-    roles.extend(role for role in ('team_owner', 'team_co_owner')
-                 if role in relationships.values())
+    roles = global_roles(tg_id, appointed=appointed)
+    roles.extend(role for role in ('team_owner', 'team_co_owner', 'team_manager')
+                 if any(role in relationship for relationship in relationships.values()))
     roles = roles or ['spectator']
     result = dict(ok=True, auctions=[season_row(s) for s in rows],
-                  admin=manager, bot_admin=bot_admin,
+                  admin=manager, bot_admin=bot_admin, bot_owner='bot_owner' in roles,
                   role='manager' if manager else 'team' if owned else 'spectator',
                   roles=roles, role_labels=[ROLE_LABELS[role] for role in roles],
                   primary_role=roles[0], role_label=ROLE_LABELS[roles[0]], my_team_ids=owned,
@@ -288,10 +335,16 @@ def pool_payload(db, season, data):
 
 
 def preseason_payload(db, season, tg_id, raw_team=None):
-    row = own_team(db, season, tg_id, raw_team) if raw_team is not None else A.franchise_for_actor(db, season.id, tg_id)
+    field = A.franchises(db, season.id)
+    manager = admin_for(db, tg_id)
+    row = (team(db, season, raw_team) if manager and raw_team is not None else
+           own_team(db, season, tg_id, raw_team) if raw_team is not None else
+           A.franchise_for_actor(db, season.id, tg_id) or (next(iter(field), None) if manager else None))
     result = dict(readiness=P.readiness(db, season), mode=season.retention_mode or 'classic',
                   retention_open=A.retention_open(season), candidates=[], offers=[], talks=[],
-                  retention=None, shortlist=[], eligible=None, team_id=row.id if row else None)
+                  retention=None, shortlist=[], eligible=None, team_id=row.id if row else None,
+                  teams=[dict(id=f.id, name=f.name, mine=A.may_bid_for(f, tg_id)) for f in field],
+                  manager_team_ids=[f.id for f in field] if manager else [])
     if row is None:
         return result
     result.update(retention=P.retention_preview(db, season, row),
@@ -393,7 +446,8 @@ def payload(db, season, tg_id, rows, data):
     elif view == 'preseason':
         result.update(preseason_payload(db, season, tg_id, data.get('team_id')))
     elif view == 'eligible':
-        row = own_team(db, season, tg_id, data.get('team_id'))
+        row = (team(db, season, data.get('team_id')) if result['admin'] and data.get('team_id')
+               else own_team(db, season, tg_id, data.get('team_id')))
         result.update(P.eligible_players(db, season, row, rating=data.get('rating'),
                                         role=data.get('role'), query=data.get('query'),
                                         country=data.get('country'), page=data.get('page', 1)))
@@ -408,13 +462,20 @@ def payload(db, season, tg_id, rows, data):
         current = A.current_lot(db, season)
         result.update(rules=rules_payload(season), playback=playback_status(db, season),
                       counts=A.pool_counts(db, season.id),
+                      sets=A.list_sets(db, season),
                       lot=lot_row(current) if current else None,
                       trade_rules=T.trade_rules(season),
                       retention_rules=RN.rules(season),
                       settings={key: getattr(season, key) for key in A.SEASON_RULE_FIELDS},
+                      retention_categories=A.retention_categories(season),
+                      retention_prices=A.retention_price_rules(season),
+                      retention_deadline=stamp(season.retention_deadline_at),
+                      trade_deadline_at=stamp(season.trade_deadline_at),
+                      trade_deadline_matches=season.trade_deadline_matches,
                       previous_league_id=season.previous_league_id,
                       teams=[dict(**team_row(db, season, f, tg_id, current=current), owner_tg_id=str(f.owner_tg_id or ''),
-                                  owner_name=f.owner_name, co_owners=[str(x) for x in A.co_owner_ids(f)],
+                                  owner_name=f.owner_name, city=f.city, sort_order=f.sort_order, co_owners=[str(x) for x in A.co_owner_ids(f)],
+                                  team_managers=[str(x) for x in A.team_manager_ids(f)],
                                   draft_picks=f.draft_picks_total, previous_team_id=f.previous_team_id)
                              for f in A.franchises(db, season.id)])
     else:
@@ -576,6 +637,20 @@ def confirm_name(season, data):
         raise A.AuctionError("Type the auction's name to confirm this action.")
 
 
+def optional_date(raw, name):
+    """Parse a nullable ISO date, always storing naive UTC like the services."""
+    if raw in (None, ''):
+        return None
+    if not isinstance(raw, str):
+        raise A.AuctionError(f"Use an ISO date for {name}.")
+    try:
+        from datetime import timezone
+        value = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+        return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+    except ValueError:
+        raise A.AuctionError(f"Use an ISO date for {name}.")
+
+
 def admin_action(db, season, tg_id, data):
     if not admin_for(db, tg_id):
         raise AccessError("Only Auction Managers can manage the auction.")
@@ -663,10 +738,28 @@ def admin_action(db, season, tg_id, data):
         row.name = name
         row.owner_tg_id = integer(data.get('owner_tg_id'), 'Owner Telegram id', 1, 10**16) if data.get('owner_tg_id') else None
         row.owner_name = str(data.get('owner_name', ''))[:120] or None
+        for key, limit in (('short_name', 30), ('city', 120)):
+            if key in data:
+                value = str(data[key] or '').strip()
+                if len(value) > limit:
+                    raise A.AuctionError(f"{key.replace('_', ' ').title()} is at most {limit} characters.")
+                setattr(row, key, value or None)
+        if 'logo_url' in data:
+            value = str(data['logo_url'] or '').strip()
+            if value and (len(value) > 500 or not re.match(r'^(https?://|/(?!/))', value) or any(ord(c) < 32 for c in value)):
+                raise A.AuctionError("Use a full HTTPS logo URL or a local image path.")
+            row.logo_url = value or None
+        if 'sort_order' in data:
+            row.sort_order = integer(data['sort_order'], 'Team display order', 0, 100000)
         ids = data.get('co_owners', [])
         if not isinstance(ids, list) or len(ids) > 30:
             raise A.AuctionError("Give a list of up to 30 co-owner ids.")
         A.set_co_owners(db, row, [integer(x, 'Co-owner id', 1, 10**16) for x in ids])
+        if 'team_managers' in data:
+            manager_ids = data['team_managers']
+            if not isinstance(manager_ids, list) or len(manager_ids) > 30:
+                raise A.AuctionError("Give a list of up to 30 Team Manager ids.")
+            A.set_team_managers(db, row, [integer(x, 'Team Manager id', 1, 10**16) for x in manager_ids])
     elif action == 'franchise_remove':
         row = team(db, season, data.get('team_id'))
         if str(data.get('confirm_name', '')).strip() != row.name:
@@ -684,6 +777,14 @@ def admin_action(db, season, tg_id, data):
         A.correct_purse(db, season, team(db, season, data.get('team_id')),
                         integer(data.get('amount_lakh'), 'Correction', -1_000_000),
                         note=str(data.get('note', 'Miniapp correction'))[:200], by_tg_id=tg_id)
+    elif action == 'purse_reconcile':
+        repair = boolean(data.get('repair', False), 'Repair ledger')
+        if repair:
+            confirm_name(season, data)
+        drift = A.reconcile_purses(db, season, repair=repair, by_tg_id=tg_id)
+        return dict(message=(f'{len(drift)} purse ledger differences reconciled.' if repair else f'Purse ledger check complete: {len(drift)} differences.'),
+                    drift=[dict(team_id=f.id, team=f.name, balance_lakh=cached,
+                                ledger_lakh=summed, difference_lakh=delta) for f, cached, summed, delta in drift])
     elif action in ('team_purse', 'team_add_player', 'team_remove_player'):
         from services import auction_management as M
         row = team(db, season, data.get('team_id'))
@@ -722,9 +823,10 @@ def admin_action(db, season, tg_id, data):
     elif action == 'accelerated':
         season.auto_accelerated = int(boolean(data.get('enabled'), 'Accelerated round'))
     elif action == 'pool_range':
-        A.add_rating_range_to_pool(db, season, integer(data.get('low'), 'Minimum rating', 1, 100),
-                                   integer(data.get('high'), 'Maximum rating', 1, 100),
-                                   set_name=str(data.get('set_name', '')).strip()[:120] or None)
+        A.add_rating_range_to_pool(db, season, integer(data.get('low'), 'Minimum rating', 1, 999),
+                                   integer(data.get('high'), 'Maximum rating', 1, 999),
+                                   set_name=str(data.get('set_name', '')).strip()[:120] or None,
+                                   editions=boolean(data.get('editions', False), 'Include editions'))
     elif action == 'pool_players':
         ids = data.get('player_ids')
         if not isinstance(ids, list) or not 1 <= len(ids) <= 500:
@@ -733,12 +835,29 @@ def admin_action(db, season, tg_id, data):
                               set_name=str(data.get('set_name', '')).strip()[:120] or None)
     elif action == 'pool_auto_sets':
         from services.auction_auto_sets import auto_build_sets
-        auto_build_sets(db, season)
+        options = data.get('options') or {}
+        if not isinstance(options, dict) or set(options) - {'marquee', 'set_size', 'min_rating', 'pool_size', 'editions', 'versions'}:
+            raise A.AuctionError("Give valid automatic set options.")
+        options = dict(options)
+        for key, low, high in (('marquee', 0, 50), ('set_size', 2, 50),
+                               ('min_rating', 1, 999), ('pool_size', 1, 100000)):
+            if key in options and options[key] is not None:
+                options[key] = integer(options[key], key.replace('_', ' '), low, high)
+        if 'editions' in options:
+            options['editions'] = boolean(options['editions'], 'Include editions')
+        if 'versions' in options:
+            versions = options['versions']
+            if not isinstance(versions, list) or len(versions) > 100 or not all(isinstance(v, str) and 0 < len(v) <= 100 for v in versions):
+                raise A.AuctionError("Versions must be a list of edition names.")
+        auto_build_sets(db, season, replace=boolean(data.get('replace', False), 'Replace queued sets'), **options)
+    elif action == 'pool_clear':
+        confirm_name(season, data)
+        A.clear_pool(db, season, by_tg_id=tg_id)
     elif action == 'sets_import':
         from services import auction_sets_io as S
         raw = data.get('sets')
         groups = S.parse_sets_file(json.dumps(raw).encode('utf-8'), fmt='json')
-        report = S.import_sets(db, season, groups)
+        report = S.import_sets(db, season, groups, replace=boolean(data.get('replace', False), 'Replace queued sets'))
         return dict(message=S.summary_text(report), report=report)
     elif action in ('set_forward', 'set_delete', 'set_move'):
         label = str(data.get('set_name', ''))[:120]
@@ -777,7 +896,7 @@ def admin_action(db, season, tg_id, data):
         if action == 'unretain':
             A.unretain(db, season, row, lot_for(db, season, data.get('lot_id')), by_tg_id=tg_id)
         else:
-            price = integer(data['amount_lakh'], 'Price', 1) if data.get('amount_lakh') is not None else None
+            price = integer(data['amount_lakh'], 'Price', 0) if data.get('amount_lakh') not in (None, '') else None
             player = player_for(db, data.get('player_id'))
             if action == 'retention_offer':
                 A.offer_retention(db, season, row, player, price, by_tg_id=tg_id)
@@ -788,6 +907,21 @@ def admin_action(db, season, tg_id, data):
         if offer is None or offer.season_id != season.id:
             raise A.AuctionError("That offer is not in this auction.")
         A.cancel_retention_offer(db, season, offer)
+    elif action == 'retention_confirm':
+        P.confirm_retention(db, season, team(db, season, data.get('team_id')),
+                            data.get('token'), by_tg_id=tg_id)
+    elif action == 'retention_talk_cancel':
+        talk = db.get(AuctionRetentionTalk, integer(data.get('talk_id'), 'Talk id', 1))
+        if talk is None or talk.season_id != season.id:
+            raise A.AuctionError("That negotiation is not in this auction.")
+        RN.withdraw_talk(db, season, talk, tg_id, admin=True)
+    elif action in ('retention_slots_preset', 'retention_rules_reset'):
+        if season.status != A.STATUS_SETUP or A.retention_locked(season):
+            raise A.AuctionError("Edit retention rules before retention closes.")
+        if action == 'retention_slots_preset':
+            RN.save_slots(db, season, RN.preset(integer(data.get('count', 3), 'Slot count', 1, 30)), by_tg_id=tg_id)
+        else:
+            RN.reset_rules(db, season)
     elif action == 'rtm_cards':
         A.set_rtm_cards(db, season, team(db, season, data.get('team_id')), integer(data.get('cards'), 'Cards', 0, 100))
     elif action == 'draft_picks':
@@ -798,14 +932,41 @@ def admin_action(db, season, tg_id, data):
             raise A.AuctionError("Give a list of team ids.")
         A.set_draft_order(db, season, [team(db, season, fid).id for fid in ids])
     elif action == 'draft_clock':
-        P.set_clock(db, season, seconds=integer(data.get('seconds', season.draft_pick_seconds), 'Seconds', 0, 3600),
+        P.set_clock(db, season, seconds=integer(data.get('seconds', season.draft_pick_seconds), 'Seconds', 0, 86400),
                     action=data.get('timeout_action', season.draft_timeout_action), operation=data.get('operation', 'save'))
-    elif action in ('trade_approve', 'trade_veto', 'trade_reverse'):
+    elif action in ('draft_pick', 'draft_skip', 'shortlist'):
+        row = team(db, season, data.get('team_id'))
+        if action == 'draft_pick':
+            price = integer(data['amount_lakh'], 'Pick price', 0) if data.get('amount_lakh') not in (None, '') else None
+            A.draft_pick(db, season, row, player_for(db, data.get('player_id')), price, by_tg_id=tg_id)
+        elif action == 'draft_skip':
+            A.skip_pick(db, season, row, by_tg_id=tg_id)
+        else:
+            operation = data.get('operation')
+            player = player_for(db, data.get('player_id')) if operation != 'clear' else None
+            P.edit_shortlist(db, season, row, operation, player)
+    elif action in ('trade_approve', 'trade_veto', 'trade_reverse', 'trade_cancel'):
         trade = db.get(AuctionTrade, integer(data.get('trade_id'), 'Trade id', 1))
         if trade is None or trade.season_id != season.id:
             raise A.AuctionError("That trade is not in this auction.")
-        fn = {'trade_approve': T.approve, 'trade_veto': T.veto, 'trade_reverse': T.reverse}[action]
+        fn = {'trade_approve': T.approve, 'trade_veto': T.veto, 'trade_reverse': T.reverse, 'trade_cancel': T.cancel}[action]
         fn(db, trade, by_tg_id=tg_id)
+    elif action == 'trade_deadline':
+        raw_matches = data.get('deadline_matches')
+        matches = integer(raw_matches, 'Deadline matches', 1, 100000) if raw_matches not in (None, '') else None
+        T.set_deadline(db, season, at=optional_date(data.get('deadline_at'), 'the trade deadline'),
+                       matches=matches, by_tg_id=tg_id)
+    elif action == 'trade_force':
+        a, b = team(db, season, data.get('team_a_id')), team(db, season, data.get('team_b_id'))
+        selections = []
+        for key in ('lot_ids_a', 'lot_ids_b'):
+            ids = data.get(key, [])
+            if not isinstance(ids, list) or len(ids) > 100:
+                raise A.AuctionError("Choose a list of up to 100 traded player lots.")
+            selections.append([lot_for(db, season, lid) for lid in ids])
+        T.admin_trade(db, season, a, b, *selections,
+                       cash_lakh=integer(data.get('cash_lakh', 0), 'Trade cash', -1000000),
+                       by_tg_id=tg_id, note=str(data.get('note', ''))[:200])
     elif action == 'trade_window':
         T.set_window(db, season, boolean(data.get('open'), 'Trade window'), by_tg_id=tg_id)
     elif action == 'trade_rules':
@@ -830,7 +991,7 @@ def admin_action(db, season, tg_id, data):
 
 
 def save_settings(db, season, tg_id, settings):
-    """Explicit allowlist; never mass-assign lifecycle, purses or clock state."""
+    """Validated auction rulebook; lifecycle and derived purse state stay separate."""
     if not isinstance(settings, dict):
         raise A.AuctionError("Give settings as an object.")
     if season.status != A.STATUS_SETUP:
@@ -838,32 +999,35 @@ def save_settings(db, season, tg_id, settings):
     scalar = {
         'min_squad_size': (0, 100), 'max_squad_size': (1, 100),
         'min_overseas': (0, 100), 'max_overseas': (0, 100),
-        'min_retentions': (0, 100), 'max_retentions': (0, 100),
-        'retention_max_spend_lakh': (0, 1_000_000),
-        'retention_min_rating': (0, 100), 'retention_max_rating': (0, 100),
+        'retention_min_rating': (0, 999), 'retention_max_rating': (0, 999),
     }
-    special = {'opening_purse_lakh', 'home_country', 'bid_seconds', 'staged_clock',
+    special = {'name', 'currency_label', 'opening_purse_lakh', 'home_country', 'bid_seconds', 'staged_clock',
                'countdown_seconds', 'bid_gap_seconds', 'focus_mode', 'direct_bids',
                'auto_accelerated', 'snipe_window_seconds', 'snipe_extend_seconds', 'max_extensions',
                'role_minimums', 'role_maximums', 'rating_rules', 'base_prices', 'increments',
+               'min_retentions', 'max_retentions', 'retention_max_spend_lakh',
                'retention_mode', 'retention_slots', 'retention_rules', 'retention_ranges',
-               'draft_ranges', 'retention_prices', 'expansion_picks', 'rtm_enabled',
-               'rtm_per_team', 'rtm_window_seconds', 'rtm_extra_lakh', 'retention_deadline'}
+               'retention_categories', 'retention_range_max_total', 'draft_ranges',
+               'draft_pick_seconds', 'draft_timeout_action', 'retention_prices', 'expansion_picks',
+               'rtm_enabled', 'rtm_per_team', 'rtm_window_seconds', 'rtm_extra_lakh',
+               'retention_deadline', 'trades_open', 'trade_rules'}
     unknown = set(settings) - set(scalar) - special
     if unknown:
         raise A.AuctionError("Unknown settings: " + ', '.join(sorted(unknown)))
     for key, bounds in scalar.items():
         if key in settings:
             value = settings[key]
-            if value is None and key.startswith('retention_'):
-                setattr(season, key, None)
-            else:
-                setattr(season, key, integer(value, key.replace('_', ' '), *bounds))
-    if 'home_country' in settings:
-        country = str(settings['home_country']).strip()[:60]
-        if not country:
-            raise A.AuctionError("Give the home country.")
-        season.home_country = country
+            setattr(season, key, None if value is None and key.startswith('retention_')
+                    else integer(value, key.replace('_', ' '), *bounds))
+    for key, limit, label in (('name', 120, 'Auction name'), ('currency_label', 10, 'Currency label'),
+                              ('home_country', 60, 'Home country')):
+        if key in settings:
+            value = settings[key]
+            if not isinstance(value, str) or not 0 < len(value.strip()) <= limit or any(ord(c) < 32 for c in value):
+                raise A.AuctionError(f"{label} must contain 1–{limit} characters.")
+            if key == 'currency_label' and any(c in value for c in '<>&'):
+                raise A.AuctionError("Use a currency symbol or plain text, without markup.")
+            setattr(season, key, value.strip())
     A.validate_squad_limits(season)
     A.set_role_rules(db, season, settings.get('role_minimums', A.role_minimums(season)),
                       settings.get('role_maximums', A.role_maximums(season)))
@@ -888,8 +1052,10 @@ def save_settings(db, season, tg_id, settings):
     if 'bid_gap_seconds' in settings:
         A.set_bid_gap(db, season, integer(settings['bid_gap_seconds'], 'Bid gap', 0, 60))
     if any(k in settings for k in ('snipe_window_seconds', 'snipe_extend_seconds', 'max_extensions')):
-        A.set_anti_snipe(db, season, *[integer(settings.get(k, getattr(season, k)), k, 0, 3600)
-                                      for k in ('snipe_window_seconds', 'snipe_extend_seconds', 'max_extensions')])
+        A.set_anti_snipe(db, season,
+                        integer(settings.get('snipe_window_seconds', season.snipe_window_seconds), 'Anti-snipe window', 0, 3600),
+                        integer(settings.get('snipe_extend_seconds', season.snipe_extend_seconds), 'Anti-snipe extension', 1, 3600),
+                        integer(settings.get('max_extensions', season.max_extensions), 'Maximum extensions', 0, 100))
     if 'increments' in settings:
         A.set_increment_rules(db, season, settings['increments'], by_tg_id=tg_id)
     if 'base_prices' in settings:
@@ -900,44 +1066,103 @@ def save_settings(db, season, tg_id, settings):
         for row in rows:
             if not isinstance(row, dict):
                 raise A.AuctionError("A base-price band is an object.")
-            low = integer(row.get('min_rating'), 'Minimum rating', 0, 100)
-            high = integer(row.get('max_rating', 100), 'Maximum rating', low, 100)
+            low = integer(row.get('min_rating'), 'Minimum rating', 0, 999)
+            high = integer(row['max_rating'], 'Maximum rating', low, 999) if row.get('max_rating') is not None else None
             cleaned.append(dict(min_rating=low, max_rating=high,
                                 base_lakh=integer(row.get('base_lakh'), 'Base price', 1)))
         season.base_price_rules_json = json.dumps(cleaned)
+    # Range edits go through the shared turn lock and signing/finalization guards.
+    for key, draft in (('retention_ranges', False), ('draft_ranges', True)):
+        if key not in settings:
+            continue
+        value = settings[key]
+        if value is None or value == []:
+            if A.range_rules(season, draft=draft):
+                if not draft and settings.get('retention_mode', RN.mode(season)) == RN.MODE_RANGES:
+                    raise A.AuctionError("Keep at least one retention range while ranges mode is active.")
+                A._range_rules_editable(db, season)
+                setattr(season, 'draft_ranges_json' if draft else 'retention_ranges_json', None)
+        elif not isinstance(value, list):
+            raise A.AuctionError("Rating ranges must be a list of rule objects.")
+        elif value != A.range_rules(season, draft=draft):
+            options = {}
+            if not draft:
+                if 'min_retentions' in settings:
+                    options['min_total'] = integer(settings['min_retentions'], 'Minimum retentions', 0, 30)
+                if 'retention_range_max_total' in settings:
+                    options['max_total'] = 'auto' if settings['retention_range_max_total'] is None else settings['retention_range_max_total']
+            A.set_range_rules(db, season, value, draft=draft, **options)
     if 'retention_mode' in settings:
         RN.set_mode(db, season, settings['retention_mode'], by_tg_id=tg_id)
-    if 'retention_slots' in settings and settings['retention_slots'] != RN.slots(season):
-        RN.save_slots(db, season, settings['retention_slots'], by_tg_id=tg_id)
+    if 'retention_slots' in settings:
+        value = RN.preset(3) if settings['retention_slots'] is None else settings['retention_slots']
+        if value != RN.slots(season):
+            RN.save_slots(db, season, value, by_tg_id=tg_id)
     if 'retention_rules' in settings:
-        RN.save_rules(db, season, settings['retention_rules'])
-    for key, draft in (('retention_ranges', False), ('draft_ranges', True)):
-        if key in settings and settings[key] != A.range_rules(season, draft=draft):
-            A.set_range_rules(db, season, settings[key], draft=draft)
+        if settings['retention_rules'] is None:
+            if A.retention_locked(season):
+                raise A.AuctionError("Retention is closed — its rules are final.")
+            RN.reset_rules(db, season)
+        else:
+            RN.save_rules(db, season, settings['retention_rules'])
+    if any(k in settings for k in ('min_retentions', 'max_retentions', 'retention_range_max_total')):
+        minimum = integer(settings.get('min_retentions', season.min_retentions), 'Minimum retentions', 0, 100)
+        if RN.mode(season) == RN.MODE_RANGES or 'retention_range_max_total' in settings:
+            maximum = settings.get('retention_range_max_total',
+                                   settings.get('max_retentions', season.retention_range_max_total))
+            if maximum not in (None, 'auto'):
+                maximum = integer(maximum, 'Overall retention cap', 0, 30)
+            A.set_range_retention_limits(db, season, minimum, maximum)
+        if RN.mode(season) != RN.MODE_RANGES:
+            season.min_retentions = minimum
+            if 'max_retentions' in settings:
+                season.max_retentions = integer(settings['max_retentions'], 'Maximum retentions', 0, 100)
+            A.sync_rtm_cards(db, season)
+    if season.min_retentions > season.max_retentions:
+        raise A.AuctionError("Minimum retentions cannot exceed maximum retentions.")
+    if season.retention_min_rating is not None and season.retention_max_rating is not None and season.retention_min_rating > season.retention_max_rating:
+        raise A.AuctionError("Minimum retention rating cannot exceed maximum retention rating.")
+    if 'retention_max_spend_lakh' in settings:
+        value = settings['retention_max_spend_lakh']
+        if value is None:
+            season.retention_max_spend_lakh = None
+        elif RN.is_dynamic(season):
+            RN.set_budget(db, season, integer(value, 'Retention budget', 1))
+        else:
+            season.retention_max_spend_lakh = integer(value, 'Retention budget', 0)
+    if 'retention_categories' in settings:
+        value = settings['retention_categories']
+        if value is not None and (not isinstance(value, list) or len(value) > 30 or
+                                  not all(isinstance(v, str) and 0 < len(v.strip()) <= 60 for v in value)):
+            raise A.AuctionError("Retention categories must be a list of role names, or null for no restriction.")
+        categories = list(dict.fromkeys(v.strip() for v in (value or [])))
+        season.retention_categories_json = json.dumps(categories) if categories else None
     if 'retention_prices' in settings:
         rows = settings['retention_prices']
-        if not isinstance(rows, list):
-            raise A.AuctionError("Retention prices are a list of slab / price_lakh rows.")
-        season.retention_price_rules_json = json.dumps([
-            dict(slab=integer(r.get('slab'), 'Slab', 1, 100),
-                 price_lakh=integer(r.get('price_lakh'), 'Price', 1)) for r in rows])
+        if rows is not None and (not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows)):
+            raise A.AuctionError("Retention prices are a list of slab / price_lakh rows, or null to reset.")
+        cleaned = [dict(slab=integer(r.get('slab'), 'Slab', 1, 100),
+                        price_lakh=integer(r.get('price_lakh'), 'Price', 0)) for r in (rows or [])]
+        if len({r['slab'] for r in cleaned}) != len(cleaned):
+            raise A.AuctionError("Retention slab numbers must be unique.")
+        season.retention_price_rules_json = json.dumps(cleaned) if cleaned else None
     if 'retention_deadline' in settings:
-        raw = settings['retention_deadline']
-        try:
-            from datetime import timezone
-            value = datetime.fromisoformat(str(raw).replace('Z', '+00:00')) if raw else None
-            if value and value.tzinfo:
-                value = value.astimezone(timezone.utc).replace(tzinfo=None)
-            season.retention_deadline_at = value
-        except ValueError:
-            raise A.AuctionError("Use an ISO date for the retention deadline.")
+        season.retention_deadline_at = optional_date(settings['retention_deadline'], 'the retention deadline')
     if 'expansion_picks' in settings:
         A.set_expansion_picks(db, season, integer(settings['expansion_picks'], 'Expansion picks', 0, 100))
+    if any(k in settings for k in ('draft_pick_seconds', 'draft_timeout_action')):
+        P.set_clock(db, season,
+                    seconds=integer(settings.get('draft_pick_seconds', season.draft_pick_seconds), 'Pick seconds', 0, 86400),
+                    action=settings.get('draft_timeout_action', season.draft_timeout_action))
     if any(k in settings for k in ('rtm_enabled', 'rtm_per_team', 'rtm_window_seconds', 'rtm_extra_lakh')):
         A.set_rtm_rules(db, season,
                         enabled=boolean(settings.get('rtm_enabled', bool(season.rtm_enabled)), 'RTM'),
                         per_team=integer(settings.get('rtm_per_team', season.rtm_per_team), 'RTM cards', 0, 100),
                         window_seconds=integer(settings.get('rtm_window_seconds', season.rtm_window_seconds), 'RTM seconds', 1, 3600),
                         extra_lakh=integer(settings.get('rtm_extra_lakh', season.rtm_extra_lakh), 'RTM premium'))
-    if season.min_retentions > season.max_retentions:
-        raise A.AuctionError("Minimum retentions cannot exceed maximum retentions.")
+    if 'trades_open' in settings:
+        T.set_window(db, season, boolean(settings['trades_open'], 'Trade window'), by_tg_id=tg_id)
+    if 'trade_rules' in settings:
+        if not isinstance(settings['trade_rules'], dict):
+            raise A.AuctionError("Give trade rules as an object.")
+        T.set_trade_rules(db, season, settings['trade_rules'], by_tg_id=tg_id)

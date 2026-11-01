@@ -6,9 +6,9 @@
   <meta name="theme-color" content="#0d1829">
   <meta name="description" content="Your franchise, your season. Live cricket auctions, retentions, draft picks, squads and trades in one workspace.">
   <title>Franchise HQ · Cricket Auction & Season Management</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/auction_miniapp.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/auction_arena.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/franchise_site.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/auction_miniapp.css', v='auction-settings-v1') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/auction_arena.css', v='auction-settings-v1') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/franchise_site.css', v='auction-settings-v1') }}">
 </head>
 <body class="franchise-website">
   <a class="fs-skip" href="#fs-main">Skip to content</a>
@@ -24,7 +24,7 @@
         <button type="button" data-fs-view="preseason" data-fs-access="manager"><span data-fs-icon="picks"></span>Retention & picks</button>
         <button type="button" data-fs-view="trades" data-fs-access="manager"><span data-fs-icon="trades"></span>Trade centre</button>
         <button type="button" data-fs-view="rules" data-fs-access="owner"><span data-fs-icon="rules"></span>Rulebook</button>
-        <button type="button" data-fs-view="admin" data-fs-access="manager"><span data-fs-icon="settings"></span>Season setup</button>
+        <button type="button" data-fs-view="admin" data-fs-access="manager"><span data-fs-icon="settings"></span>Auction settings</button>
       </nav>
       <div class="fs-sidebar-bottom"><div class="fs-sidebar-note"><span class="fs-small-label">BUILT FOR THE WHOLE SEASON</span><p>From the first retention to the final winning bid.</p><span class="fs-note-line" aria-hidden="true"></span></div><div class="fs-account" id="fs-account"><span class="fs-avatar" aria-hidden="true">F</span><div><b>Your franchise awaits</b><small>Sign in with Telegram</small></div></div></div>
     </aside>
@@ -46,8 +46,8 @@
   <div id="fs-toast" class="fs-toast" role="status" aria-live="polite" hidden></div>
   <script id="fs-config" type="application/json">{{ {'bot_username': bot_username, 'login_configured': login_configured, 'csrf_token': csrf_token}|tojson }}</script>
   <script src="{{ url_for('static', filename='js/auction_updates.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/franchise_site.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/auction_miniapp.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/auction_arena.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/franchise_site.js', v='auction-settings-v1') }}"></script>
+  <script src="{{ url_for('static', filename='js/auction_miniapp.js', v='auction-settings-v1') }}"></script>
+  <script src="{{ url_for('static', filename='js/auction_arena.js', v='auction-settings-v1') }}"></script>
 </body>
 </html>

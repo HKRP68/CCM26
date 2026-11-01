@@ -6,7 +6,7 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --bind 0.0.0.0:$PORT --worker-class gthread --workers 2 --threads 32 --timeout 60 website:app
+    startCommand: python website.py init-db && exec gunicorn --bind 0.0.0.0:$PORT --worker-class gthread --workers 2 --threads 32 --timeout 60 website:app
     healthCheckPath: /
     envVars:
       - key: PYTHON_VERSION
@@ -18,6 +18,8 @@ services:
       - key: BOT_USERNAME
         sync: false
       - key: BOT_ADMIN_IDS
+        sync: false
+      - key: OWNER_IDS
         sync: false
       - key: WEBSITE_SECRET
         generateValue: true

@@ -92,7 +92,7 @@ def test_probe_uses_one_query_and_detects_deadline_purse_and_roles(site):
     finally:
         event.remove(engine, 'before_cursor_execute', statement)
     assert len(statements) == 1
-    assert initial.authority[2] == ((site.owner.id, 'owner'),)
+    assert initial.authority[2] == ((site.owner.id, ('team_owner',)),)
     lot = site.A.current_lot(site.db, site.season)
     lot.deadline_at = datetime.utcnow() + timedelta(seconds=60)
     site.db.commit()

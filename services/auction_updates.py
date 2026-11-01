@@ -65,6 +65,7 @@ def snapshot(db, season_id, tg_id):
     """
     from models import AuctionAdmin, AuctionEvent, AuctionFranchise, AuctionLot, AuctionSeason
     from services import auction_service as A
+    from services.auction_webapp import global_roles, team_roles
     from services.admin_ids import is_bot_admin
 
     delegated = select(AuctionAdmin.id).where(AuctionAdmin.tg_id == tg_id).exists()
@@ -79,7 +80,7 @@ def snapshot(db, season_id, tg_id):
             delegated.label("delegated"),
         )
         rows = db.execute(statement).all()
-        authority = (bot_admin, bool(rows[0][-1]), ())
+        authority = (bot_admin, tuple(global_roles(tg_id, appointed=bool(rows[0][-1]))), ())
     else:
         event_cursor = select(func.max(AuctionEvent.id)).where(
             AuctionEvent.season_id == season_id).scalar_subquery()
@@ -100,11 +101,11 @@ def snapshot(db, season_id, tg_id):
         for result in rows:
             values = result._mapping
             franchise = SimpleNamespace(owner_tg_id=values["franchise__owner_tg_id"],
-                                        co_owner_ids_json=values["franchise__co_owner_ids_json"])
+                                        co_owner_ids_json=values["franchise__co_owner_ids_json"],
+                                        team_manager_ids_json=values.get("franchise__team_manager_ids_json"))
             if A.may_bid_for(franchise, tg_id):
-                owned.append((values["franchise__id"],
-                              "owner" if franchise.owner_tg_id == tg_id else "co_owner"))
-        authority = (bot_admin, bool(rows[0]._mapping["delegated"]) if rows else False,
+                owned.append((values["franchise__id"], tuple(team_roles(franchise, tg_id))))
+        authority = (bot_admin, tuple(global_roles(tg_id, appointed=bool(rows[0]._mapping["delegated"]) if rows else False)),
                      tuple(owned), bool(rows))
     raw = json.dumps([authority, [list(row) for row in rows]], default=str,
                      ensure_ascii=True, separators=(",", ":"))

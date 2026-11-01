@@ -28,7 +28,7 @@ const AuctionArena = (() => {
   const own=()=>data?.teams?.find(t=>t.id===teamId);
   const context=lot=>({lot_id:lot.id,stage:lot.rtm_stage,expected_bids:lot.bids});
   const liveEnough=()=>connected&&Date.now()-updatedAt+roundTrip<6500;
-  const roles=()=>data?.role_labels?.length?data.role_labels:data?.bot_admin?['Bot Admin']:data?.admin?['Auction Manager']:data?.my_team_ids?.length?['Team Owner']:['Spectator'];
+  const roles=()=>data?.role_labels?.length?data.role_labels:data?.bot_owner?['Bot Owner']:data?.bot_admin?['Bot Admin']:data?.admin?['Auction Manager']:data?.my_team_ids?.length?['Team Owner']:['Spectator'];
   const pollDelay=()=>updateState==='live'?4000:1000;
   const isWorking=()=>busy||!!AuctionApp.isBusy?.();
   const action=(label,name,args={},disabled=false,style='')=>`<button type="button" class="aa-button ${style}" data-aa-action="${name}" data-aa-args="${esc(JSON.stringify(args))}" ${disabled?'disabled':''}>${esc(label)}</button>`;
@@ -131,7 +131,7 @@ const AuctionArena = (() => {
   }
   function reflectIdentity(next) {
     if(!data||next.season?.id!==seasonId)return;
-    for(const key of ['admin','bot_admin','my_team_ids','role','roles','role_labels','permissions'])data[key]=next[key];
+    for(const key of ['admin','bot_owner','bot_admin','my_team_ids','role','roles','role_labels','permissions'])data[key]=next[key];
     renderHeader();
   }
   function leaveTools() {if(toolView){AuctionApp.stopTools();toolView=null;connected=false;}}
@@ -178,7 +178,8 @@ const AuctionArena = (() => {
       const contextChanged=!!data&&(data.season?.id!==next.season?.id||data.season?.status!==next.season?.status||
         data.lot?.id!==next.lot?.id||data.lot?.status!==next.lot?.status||data.lot?.rtm_stage!==next.lot?.rtm_stage||
         (!!next.lot?.rtm_stage&&data.lot?.bidder_id!==next.lot?.bidder_id));
-      const accessChanged=!!data&&(!!data.admin!==!!next.admin||!!data.bot_admin!==!!next.bot_admin||
+      const accessChanged=!!data&&(!!data.admin!==!!next.admin||!!data.bot_owner!==!!next.bot_owner||!!data.bot_admin!==!!next.bot_admin||
+        (data.roles||[]).join(',')!==(next.roles||[]).join(',')||
         (data.my_team_ids||[]).join(',')!==(next.my_team_ids||[]).join(','));
       roundTrip=Math.max(0,Date.now()-sent);offset=Date.parse(next.server_time)-(sent+Date.now())/2;updatedAt=Date.now();
       if(data?.lot&&next.lot?.id===data.lot.id&&next.my_team_ids?.includes(data.lot.bidder_id)&&next.lot.bidder_id&&!next.my_team_ids.includes(next.lot.bidder_id)) {haptic('heavy');notice('You have been outbid. Next bid: '+money(next.lot.next_lakh));}
@@ -257,7 +258,7 @@ const AuctionArena = (() => {
     if(!l) return chooser+empty(data.season.status==='completed'?'Auction complete':data.season.status==='setup'?'The stage is set':'Waiting for the next player',data.season.status==='setup'?'Your auction admin is preparing the room. Squads and budgets are ready below.':'Follow the results in Logs or review every franchise in Squads.')+`<div class="aa-mini-stats"><span><b>${data.counts?.sold||0}</b> SOLD</span><span><b>${data.counts?.unsold||0}</b> UNSOLD</span><span><b>${data.counts?.queued||0}</b> IN QUEUE</span></div>`;
     const paused=data.season.status==='paused', c={...context(l),team_id:teamId};
     let controls='', customBid='';
-    if(!t) controls='<p class="aa-watch-note">Spectator view · Franchise owners and co-owners can bid.</p>';
+    if(!t) controls='<p class="aa-watch-note">Spectator view · Team Owners, Co-owners and Team Managers can bid for their assigned franchise.</p>';
     else if(l.status==='rtm_offered'&&l.rtm_holder_id===t.id&&['intent','decision'].includes(l.rtm_stage)) controls=`<p class="aa-watch-note">${l.rtm_stage==='intent'?'Use your Right To Match?':'Match the final price?'} ${money(l.rtm_price_lakh)}</p><div class="aa-split-actions">${action('Match / use RTM','rtm',{...c,accept:true},paused,'aa-primary')}${action('Pass','rtm',{...c,accept:false},paused)}</div>`;
     else {
       controls=action((l.rtm_stage==='final_offer'?'FINAL RAISE: ':'PLACE BID: ')+money(l.next_lakh),'bid',{...c,amount_lakh:l.next_lakh},!!t.bid_reason||paused,'aa-bid-button');
@@ -279,7 +280,7 @@ const AuctionArena = (() => {
     return `<div class="aa-section-heading"><span>THE FRANCHISES</span><h1>Auction squads</h1><p>Every team. Every signing. Every rupee.</p></div><label class="aa-field aa-search">Find a team<input id="aa-team-search" type="search" placeholder="Search franchises…" value="${esc(teamQuery)}"></label><div class="aa-squad-list">${data.teams.map((t,i)=>{
       const size=t.squad?.length||0, spent=(t.squad||[]).reduce((n,p)=>n+(p.price_lakh||0),0), average=size?((t.squad||[]).reduce((n,p)=>n+p.rating,0)/size).toFixed(1):'—';
       const logo=/^(https?:\/\/|\/(?!\/))/.test(t.logo_url||'')?`<img src="${esc(t.logo_url)}" alt="" loading="lazy">`:'';
-      return `<details data-aa-team="${t.id}" data-aa-team-name="${esc(t.name.toLowerCase())}" ${t.name.toLowerCase().includes(teamQuery.trim().toLowerCase())?'':'hidden'}><summary><span class="aa-team-rank">${i+1}</span><span class="aa-team-logo">${logo||esc(t.short_name||initials(t.name))}</span><span class="aa-team-name"><strong>${esc(t.name)}</strong><small class="${t.mine?'mine':''}">${t.mine?esc(t.my_role_label||'Team Owner'):size>=data.season.max_squad?'SQUAD COMPLETE':'AVAILABLE'}</small></span><span class="aa-team-budget"><b data-aa-purse="${t.id}">${money(t.purse_lakh)}</b><small>${t.size}/${data.season.max_squad}</small></span>${icon('chevron')}</summary><div class="aa-squad-detail"><div class="aa-squad-metrics"><span>USED (NET) <b>${money(t.used_lakh??(t.opening_lakh-t.purse_lakh))}</b></span><span>CONTRACTS <b>${money(spent)}</b></span><span>RATING <b>${average}</b></span><span>OS <b>${t.overseas}/${data.max_overseas}</b></span></div>${size?(t.squad||[]).map(p=>renderSquadPlayer(t,p)).join(''):'<p class="aa-no-players">No players signed yet</p>'}${(t.warnings||[]).map(w=>`<p class="aa-warning">${esc(w.message)}</p>`).join('')}${data.admin?`<button type="button" class="aa-button" data-aa-ui="manage-team" data-team="${t.id}">Manage players & purse →</button>`:''}</div></details>`;
+      return `<details data-aa-team="${t.id}" data-aa-team-name="${esc(t.name.toLowerCase())}" ${t.name.toLowerCase().includes(teamQuery.trim().toLowerCase())?'':'hidden'}><summary><span class="aa-team-rank">${i+1}</span><span class="aa-team-logo">${logo||esc(t.short_name||initials(t.name))}</span><span class="aa-team-name"><strong>${esc(t.name)}</strong><small class="${t.mine?'mine':''}">${t.mine?esc(t.my_role_labels?.length?t.my_role_labels.join(' · '):t.my_role_label||'Team Owner'):size>=data.season.max_squad?'SQUAD COMPLETE':'AVAILABLE'}</small></span><span class="aa-team-budget"><b data-aa-purse="${t.id}">${money(t.purse_lakh)}</b><small>${t.size}/${data.season.max_squad}</small></span>${icon('chevron')}</summary><div class="aa-squad-detail"><div class="aa-squad-metrics"><span>USED (NET) <b>${money(t.used_lakh??(t.opening_lakh-t.purse_lakh))}</b></span><span>CONTRACTS <b>${money(spent)}</b></span><span>RATING <b>${average}</b></span><span>OS <b>${t.overseas}/${data.max_overseas}</b></span></div>${size?(t.squad||[]).map(p=>renderSquadPlayer(t,p)).join(''):'<p class="aa-no-players">No players signed yet</p>'}${(t.warnings||[]).map(w=>`<p class="aa-warning">${esc(w.message)}</p>`).join('')}${data.admin?`<button type="button" class="aa-button" data-aa-ui="manage-team" data-team="${t.id}">Manage players & purse →</button>`:''}</div></details>`;
     }).join('')||empty('No franchises yet','Your auction admin will add the teams.')}</div>`;
   }
   function ago(at) {const seconds=Math.max(0,Math.floor((Date.now()+offset-Date.parse(at))/1000));return seconds<60?seconds+'s ago':seconds<3600?Math.floor(seconds/60)+'m ago':new Date(at).toLocaleString();}

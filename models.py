@@ -4349,6 +4349,9 @@ class AuctionFranchise(Base):
     owner_name = Column(String(120), nullable=True)
     # Extra Telegram ids allowed to bid for this franchise, as a JSON list.
     co_owner_ids_json = Column(Text, nullable=True)
+    # Explicit team operators, separate from ownership and global auction
+    # managers. NULL is unconfigured; [] is an authoritative empty list.
+    team_manager_ids_json = Column(Text, nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)
 
     # ── Purse ──────────────────────────────────────────────────────────

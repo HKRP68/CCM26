@@ -101,6 +101,19 @@ async function boot(options={}) {
   const coowner=await boot({user:{id:43,first_name:'Co-owner'},auction:coownerData});
   assert.match(coowner.els['fs-dashboard-content'].innerHTML,/Team Co-owner · 2/);
   assert.match(coowner.els['fs-account'].innerHTML,/Team Co-owner/);
+  const multipleData={...baseAuction(),admin:true,bot_admin:true,bot_owner:true,
+    roles:['bot_owner','bot_admin','auction_manager','team_owner','team_manager'],
+    role_labels:['Bot Owner','Bot Admin','Auction Manager','Team Owner','Team Manager']};
+  multipleData.teams[0].my_roles=['team_owner','team_manager'];
+  const multiple=await boot({user:{id:45,first_name:'Owner and manager'},auction:multipleData});
+  for(const label of multipleData.role_labels)assert(multiple.els['fs-current-roles'].innerHTML.includes(label),'Every assigned role must be visible: '+label);
+  assert.match(multiple.els['fs-dashboard-content'].innerHTML,/Team Owner · Team Manager · 2/,'Franchise cards retain simultaneous team assignments');
+  const teamManager=await boot({user:{id:46,first_name:'Team operator'},auction:{...baseAuction(),
+    roles:['team_manager'],role_labels:['Team Manager'],teams:[{...baseAuction().teams[0],my_roles:['team_manager']}]}});
+  assert.equal(teamManager.managerNav.hidden,true,'Team Manager does not grant auction settings authority');
+  assert.equal(teamManager.ownerNav.hidden,false,'Assigned Team Managers have their team screens');
+  teamManager.handlers.click({target:{closest:selector=>selector==='[data-fs-view]'?{dataset:{fsView:'admin'}}:null}});
+  await tick();assert.equal(teamManager.opened.length,0,'A forged settings shortcut cannot enter global management');
   const managerData={...baseAuction(),admin:true,roles:['auction_manager','team_owner'],role_labels:['Auction Manager','Team Owner']};
   const manager=await boot({user:{id:42,first_name:'Manager owner'},auction:managerData});
   assert.match(manager.els['fs-current-roles'].innerHTML,/Auction Manager/);

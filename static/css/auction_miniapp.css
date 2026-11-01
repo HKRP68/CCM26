@@ -124,3 +124,5 @@
   .au-row-main { min-width:140px; }
 }
 .au-role{display:inline-flex;border:1px solid rgba(197,237,185,.3);border-radius:5px;padding:.25rem .45rem;color:#d7efce;background:rgba(197,237,185,.06);font-size:.72rem;font-weight:700;line-height:1.2}
+
+.au-settings-jumps{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}.au-settings-jumps a{padding:8px 11px;border:1px solid var(--au-line);border-radius:8px;color:var(--accent,#d4a82a);font-size:13px;text-decoration:none}.au-settings-jumps a:focus-visible{outline:2px solid var(--accent,#d4a82a);outline-offset:3px}.au-settings-section{scroll-margin-top:130px}

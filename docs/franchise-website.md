@@ -18,7 +18,7 @@ management and scoreboard website is outside this migration.
 ## Access
 
 Sign in with the same Telegram account that owns a franchise or has been
-appointed as an Auction Manager. Owners/co-owners can bid and answer RTM for
+appointed as an Auction Manager. Owners, co-owners and assigned Team Managers can bid and answer RTM for
 their assigned franchise and view its auction information. Auction Managers
 manage retentions, draft picks, trades, purses and setup using the existing
 permissions. Spectators opening a season link must pass a Telegram group
@@ -36,7 +36,8 @@ Keep that existing Render service and create a **second Web Service** from the
 same repository for the standalone website. The included
 [`render.franchise.yaml`](../render.franchise.yaml) declares only this new
 Python web service; it creates no database and does not replace the bot's start
-command. The current Python backend cannot run unchanged on Sites/Cloudflare
+command. The website start command applies idempotent schema updates before
+starting its web workers. The current Python backend cannot run unchanged on Sites/Cloudflare
 Workers.
 
 In Render, select **New → Blueprint**, connect this repository and set the
@@ -61,7 +62,7 @@ If creating the service manually, use these settings:
 | Runtime | Python 3 |
 | Root directory | Repository root; leave blank |
 | Build command | `pip install -r requirements.txt` |
-| Start command | `gunicorn --bind 0.0.0.0:$PORT --worker-class gthread --workers 2 --threads 32 --timeout 60 website:app` |
+| Start command | `python website.py init-db && exec gunicorn --bind 0.0.0.0:$PORT --worker-class gthread --workers 2 --threads 32 --timeout 60 website:app` |
 | Health check path | `/` |
 | Python version environment | `PYTHON_VERSION=3.11.9` |
 
@@ -96,7 +97,7 @@ service to `website:app`; the bot still owns clocks and announcements.
 4. Start the web service:
 
    ```sh
-   gunicorn --bind 0.0.0.0:$PORT --worker-class gthread --workers 2 --threads 32 --timeout 60 website:app
+   python website.py init-db && exec gunicorn --bind 0.0.0.0:$PORT --worker-class gthread --workers 2 --threads 32 --timeout 60 website:app
    ```
 
    Render gives the service an HTTPS `https://<assigned-name>.onrender.com`
@@ -159,7 +160,7 @@ In a development test environment, install `pytest` in addition to the runtime
 requirements, then run:
 
 ```sh
-python -m pytest -q tests/test_franchise_website.py
+python -m pytest -q tests/test_franchise_website.py tests/test_auction_website_settings.py tests/test_multi_auction_roles.py tests/test_auction_team_managers.py tests/test_auction_settings_ui.py
 python -m unittest discover -s tests -p 'test_franchise_website_links.py'
 python -m unittest discover -s tests -p 'test_auction_webapp.py'
 ```
@@ -202,10 +203,11 @@ Keep this cap below the configured thread count. The normal bot
 start command remains `python bot.py`. An always-on Render instance avoids
 free-tier cold starts during live auctions; no instance plan is changed by code.
 
-Bot Admin, Auction Manager, Team Owner, Team Co-owner and Spectator badges are
+Bot Owner, Bot Admin, Auction Manager, Team Owner, Team Co-owner, Team Manager and Spectator badges are
 derived from the verified Telegram identity and current permissions. Multiple
-roles appear together. Bot Admin includes auction management, so it is shown
-instead of a redundant Auction Manager badge. Being a team owner or Telegram
+explicitly assigned roles appear together, including global and team roles on
+the same account. Bot Owner comes only from configured owner IDs; an admin is
+not relabelled as owner when owner IDs are empty. Being a team owner or Telegram
 group administrator does not grant management access. Role removal updates
 the next authorized payload; every action still rechecks its permissions.
 
@@ -214,6 +216,36 @@ server state is reread, and uncertain requests are never automatically submitted
 again. While typing a custom bid, current price and leader still update. A new
 player, RTM stage, pause or role change replaces obsolete controls. Typed amounts
 are never automatically raised.
+
+## Complete auction settings and multiple roles
+
+Bot Owners, Bot Admins and appointed Auction Managers use **Auction settings**
+to configure the season, franchises, purses, squad and rating limits, bidding,
+clocks, retention, expansion draft, RTM, player sets and trades. Managers can
+select any franchise for supported retention and draft operations; they do not
+need to temporarily make themselves its owner. Server-side turn, price, window,
+lock and roster checks still apply.
+
+Assign a Team Manager in **Auction settings → Franchises and team roles** using
+the manager's Telegram user ID. Team Owners, Co-owners and Team Managers are
+separate lists. A user can hold several of these roles, alongside Bot Owner,
+Bot Admin or Auction Manager. Removing one assignment leaves other assignments
+intact. Global roles apply across auctions; team assignments belong to each
+franchise and carry into cloned seasons with its ownership configuration.
+Team Managers have the current owner/co-owner team rights: bidding, RTM
+and reading their franchise; team roles alone cannot edit global auction settings.
+Only Bot Owners and Bot Admins appoint or remove global Auction Managers.
+
+Copy explicit owner IDs (`OWNER_IDS` or `BOT_OWNER_IDS`) and administrator IDs
+from the bot service into the website service. Do not infer these identities
+from the bot token or maintenance bypass list.
+
+This release adds nullable `auction_franchises.team_manager_ids_json`. Existing
+owners, co-owners, bids and purses are preserved. Apply `python website.py init-db`
+against the shared database before starting this release's website workers. The
+updated Render start command does this explicitly; the normal bot startup also
+runs the idempotent migration. For a manually configured Render service, update
+its Start Command to match the Blueprint. Importing `website` alone never migrates.
 
 ## Suggested next additions
 

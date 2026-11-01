@@ -1061,6 +1061,9 @@ def _migrate_add_columns():
     _try_add("auction_seasons", "draft_announced_event_id", "INTEGER DEFAULT 0")
     _try_add("auction_franchises", "draft_shortlist_json", "TEXT")
     _try_add("auction_franchises", "retention_finalized_at", "TIMESTAMP")
+    # Team Managers have only their assigned franchise's rights. Existing
+    # rows remain unconfigured; no manager authority is inferred or granted.
+    _try_add("auction_franchises", "team_manager_ids_json", "TEXT")
     _try_add("auction_seasons", "retention_mode", "VARCHAR(12)")
     _try_add("auction_seasons", "retention_slots_json", "TEXT")
     _try_add("auction_seasons", "retention_rules_json", "TEXT")

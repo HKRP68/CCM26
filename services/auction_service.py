@@ -731,7 +731,7 @@ SEASON_RULE_FIELDS = (
 # it. Everything else — the purse, the squad, the cards — is this season's
 # result, and starts again.
 FRANCHISE_CARRY_FIELDS = ("short_name", "city", "logo_url", "owner_tg_id",
-                          "owner_name", "co_owner_ids_json", "sort_order")
+                          "owner_name", "co_owner_ids_json", "team_manager_ids_json", "sort_order")
 
 
 def clone_season(session, source, name, *, chat_id=None, by_tg_id=None):
@@ -962,8 +962,41 @@ def co_owner_ids(franchise):
     return list(dict.fromkeys(uid for value in raw if (uid := _telegram_user_id(value))))
 
 
+def team_manager_ids(franchise):
+    """Explicit Team Managers, without treating malformed stored JSON as IDs."""
+    raw = _loads(getattr(franchise, "team_manager_ids_json", None), [])
+    if not isinstance(raw, list):
+        return []
+    return list(dict.fromkeys(uid for value in raw
+                             if 0 < (uid := _telegram_user_id(value)) < 2**63))
+
+
+def set_team_managers(session, franchise, tg_ids):
+    """Replace a franchise's Team Managers; [] explicitly revokes every one.
+
+    A manager may also be an owner or co-owner. Keep those explicit assignments
+    so the website can display every role without changing global authority.
+    The caller remains responsible for checking auction-management permission.
+    """
+    if tg_ids is None:
+        tg_ids = []
+    if not isinstance(tg_ids, (list, tuple)):
+        raise AuctionError("Team managers must be a list of positive Telegram user ids.")
+    cleaned = []
+    for raw in tg_ids:
+        value = _telegram_user_id(raw)
+        if not 0 < value < 2**63:
+            raise AuctionError("Each Team Manager needs a positive Telegram user id.")
+        if value not in cleaned:
+            cleaned.append(value)
+    # Validate the complete list before changing the row, so bad input cannot
+    # leave a partially changed assignment even before the caller rolls back.
+    franchise.team_manager_ids_json = _dumps(cleaned)
+    return cleaned
+
+
 def may_bid_for(franchise, tg_id):
-    """True when this Telegram user owns or co-owns the franchise.
+    """True for this franchise's owner, co-owner or assigned Team Manager.
 
     Deliberately *not* widened to bot admins, the same call ``may_pick_for``
     makes for ``/pick``: an admin who has to act for an owner who is not in the
@@ -974,18 +1007,21 @@ def may_bid_for(franchise, tg_id):
     if tg_id is None or franchise is None:
         return False
     tg_id = _telegram_user_id(tg_id)
-    return tg_id > 0 and (tg_id == _telegram_user_id(franchise.owner_tg_id) or tg_id in co_owner_ids(franchise))
+    return tg_id > 0 and (tg_id == _telegram_user_id(franchise.owner_tg_id)
+                         or tg_id in co_owner_ids(franchise)
+                         or tg_id in team_manager_ids(franchise))
 
 
 def restore_retention_owners(session, season, franchise):
     """Fill unconfigured ownership from the exact previous-team link.
 
-    Explicit owners and explicit co-owner lists (including []) win. No name-only
+    Explicit owners, co-owner and manager lists (including []) win. No name-only
     match across unrelated leagues, and no inheritance for expansion teams.
     """
     if franchise.season_id != season.id or not season.previous_league_id:
         return
-    if franchise.co_owner_ids_json is not None:
+    if (franchise.co_owner_ids_json is not None
+            and franchise.team_manager_ids_json is not None):
         return
     from models import ChallengeTeam, Tournament, TournamentTeam, PlayerDraft, DraftTeam
     team = (session.query(ChallengeTeam).filter_by(id=franchise.previous_team_id,
@@ -1023,6 +1059,10 @@ def restore_retention_owners(session, season, franchise):
     if source is None:
         return
     owner = _telegram_user_id(source.owner_tg_id)
+    # Historically an explicit co-owner list also prevented filling an empty
+    # primary owner. Looking up unconfigured managers must preserve that rule.
+    if franchise.co_owner_ids_json is not None and not franchise.owner_tg_id:
+        return
     if franchise.owner_tg_id:
         if _telegram_user_id(franchise.owner_tg_id) != owner:
             return
@@ -1033,6 +1073,8 @@ def restore_retention_owners(session, season, franchise):
         return
     if franchise.co_owner_ids_json is None:
         franchise.co_owner_ids_json = _dumps(co_owner_ids(source))
+    if franchise.team_manager_ids_json is None:
+        franchise.team_manager_ids_json = _dumps(team_manager_ids(source))
     session.flush()
 
 
@@ -1227,6 +1269,7 @@ def export_franchises(session, season):
                for key in FRANCHISE_FILE_FIELDS}
         row["purse_total_lakh"] = int(franchise.purse_total_lakh or 0)
         row["co_owner_tg_ids"] = co_owner_ids(franchise)
+        row["team_manager_tg_ids"] = team_manager_ids(franchise)
         row["rtm_cards_total"] = int(franchise.rtm_cards_total or 0)
         row["draft_picks_total"] = int(franchise.draft_picks_total or 0)
         # Read-only, and ignored on the way back in — see the note above.
@@ -1358,6 +1401,10 @@ def import_franchises(session, season, payload, *, replace=False,
         if "co_owner_tg_ids" in row or "co_owners" in row:
             set_co_owners(session, franchise,
                           row.get("co_owner_tg_ids") or row.get("co_owners") or [])
+        if "team_manager_tg_ids" in row:
+            set_team_managers(session, franchise, row["team_manager_tg_ids"])
+        elif "team_managers" in row:
+            set_team_managers(session, franchise, row["team_managers"])
         if "rtm_cards_total" in row:
             franchise.rtm_cards_total = max(0, _as_int(row["rtm_cards_total"], 0))
         if "draft_picks_total" in row:
@@ -7430,12 +7477,12 @@ def remove_auction_admin(session, tg_id, *, by_tg_id=None):
 
 
 def owner_ids(franchise):
-    """The owner and every co-owner — everyone a /acall should reach."""
+    """Every assigned team operator a /acall should reach, without duplicates."""
     ids = []
     owner = _telegram_user_id(franchise.owner_tg_id)
     if owner:
         ids.append(owner)
-    for tg_id in co_owner_ids(franchise):
+    for tg_id in (*co_owner_ids(franchise), *team_manager_ids(franchise)):
         if tg_id not in ids:
             ids.append(tg_id)
     return ids
