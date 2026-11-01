@@ -170,7 +170,7 @@ NOT_A_BREAK_MESSAGE = (
 
 def cipl_break_label(state, next_action):
     """Human label for the current window, or None when it is not a legal one."""
-    if next_action not in CIPL_LEGAL_ACTIONS:
+    if state.get("concussion_pending") or next_action not in CIPL_LEGAL_ACTIONS:
         return None
     innings = state.get("innings") or 1
     first_over = (state.get("current_over") or 1) <= 1
@@ -260,8 +260,16 @@ def cipl_bench_for(state, side, usage=None):
         usage = (state.get("impact_players") or {}).get("usage") or {}
     xi = active_players(state.get(f"{side}_xi") or [])
     spent = _spent_roster_ids(usage)
+    medical_out = [p for p in state.get(f"{side}_xi") or [] if p.get("concussion_replaced")]
+    spent.update(p.get("roster_id") for p in medical_out)
+    injured_bases = {p.get("parent_player_id") or p.get("player_id") or p.get("roster_id")
+                     for p in medical_out}
+    injured_names = {str(p.get("name") or "").casefold() for p in medical_out}
     return [p for p in (state.get(f"{side}_bench") or [])
-            if p.get("roster_id") not in spent
+            if is_active(p) and not p.get("injured")
+            and (p.get("parent_player_id") or p.get("player_id") or p.get("roster_id")) not in injured_bases
+            and str(p.get("name") or "").casefold() not in injured_names
+            and p.get("roster_id") not in spent
             and not any(x.get("roster_id") == p.get("roster_id") for x in xi)]
 
 
@@ -620,7 +628,18 @@ def rebuild_batting_order(xi, usage, user_id):
     ``list(xi)`` would both send a player who has left the field out to open and
     bury the substitute at number 12.
     """
-    order = active_players(xi)
+    # A medical reserve inherits the injured player's original batting slot.
+    # Keep historical identities in xi, while selecting only the final active
+    # replacement (which may itself have been tactically substituted later).
+    medical = {p.get("replaced_roster_id"): p for p in xi or []
+               if p.get("concussion_replacement") and is_active(p)}
+    medical_ids = {p.get("roster_id") for p in medical.values()}
+    order = []
+    for p in xi or []:
+        if p.get("concussion_replaced") and p.get("roster_id") in medical:
+            order.append(medical[p["roster_id"]])
+        elif is_active(p) and p.get("roster_id") not in medical_ids:
+            order.append(p)
     rec = (usage or {}).get(str(user_id))
     if not isinstance(rec, dict) or not rec.get("used"):
         return order
@@ -630,7 +649,12 @@ def rebuild_batting_order(xi, usage, user_id):
         return order
     sub = next((p for p in order if p.get("roster_id") == in_rid), None)
     if sub is None:
+        # An Impact Player may subsequently be medically replaced. Its medical
+        # successor inherits the batting slot already chosen by the captain.
+        sub = medical.get(in_rid)
+    if sub is None:
         return order
+    in_rid = sub.get("roster_id")
     order = [p for p in order if p.get("roster_id") != in_rid]
     order.insert(max(0, min(int(pos), len(order))), sub)
     return order

@@ -55,10 +55,12 @@ from services.match_state_store import (
     A_PICK_BOWL_APPROACH,
     A_PICK_BAT_APPROACH,
     A_PICK_CIPL_NEW_BATSMAN,
+    A_PICK_CONCUSSION,
     A_COMPLETED,
 )
 from services import cipl_match
 from services import impact_player
+from services import concussion_substitute as medical
 from services import milestones
 from services import rich_message as R
 from engine.approach_modifiers import (
@@ -958,6 +960,8 @@ def _impact_button(state, mid=None):
     the swap, so offering them a button whose only answer is "No substitutes
     available outside your Playing XI" is worse than not offering it.
     """
+    if medical.pending(state):
+        return None
     try:
         sides = [state.get("bat_team_id"), state.get("bowl_team_id")]
         bot_uid = state.get("bot_user_id") if _is_bot_match(state) else None
@@ -1126,6 +1130,10 @@ async def _recover_from_error(context, mid, where):
 def _idle_actor(state, expected):
     """Return (idle_uid, idle_tg, idle_name, win_uid, win_tg, win_name) for a
     live-match timeout, based on whose turn it is to act."""
+    if expected == A_PICK_CONCUSSION:
+        incident = medical.pending(state) or {}
+        if str(incident.get("user_id")) == str(state.get("bat_team_id")):
+            expected = A_PICK_BAT_APPROACH
     if expected in (A_PICK_BAT_APPROACH, A_PICK_CIPL_NEW_BATSMAN):
         return (state.get("bat_team_id"), state.get("bat_user_tg"),
                 state.get("bat_team_name", "Batting side"),
@@ -1161,7 +1169,11 @@ async def _on_remind(context):
         # A practice match against the bot costs nothing to walk away from, so
         # don't threaten a fine that will never be charged.
         where = " in the Mini App" if _app_mode(state) else ""
-        if expected == A_PICK_CIPL_NEW_BATSMAN:
+        if expected == A_PICK_CONCUSSION:
+            nag = (f"🩺 {_mention(idle_tg, idle_name)}, choose your concussion "
+                   f"substitute within <b>{secs} seconds</b>. The closest legal "
+                   "reserve is selected automatically if you do not choose. No fine.")
+        elif expected == A_PICK_CIPL_NEW_BATSMAN:
             nag = (f"⏳ {_mention(idle_tg, idle_name)}, pick your next batsman"
                    f"{where} within <b>{secs} seconds</b> — or the next in your "
                    f"batting order walks in.")
@@ -1208,6 +1220,15 @@ async def _on_timeout(context):
             except Exception:
                 logger.exception("cipl timeout re-prompt failed for match %s", mid)
                 _arm_timer(context, mid, expected)
+            return
+        if expected == A_PICK_CONCUSSION:
+            try:
+                await _clear_action_reminder(context, state)
+                ok, _message = await _resolve_concussion(context, mid, state)
+                if not ok and not timer_armed(context, mid):
+                    await _prompt_concussion(context, mid, state)
+            except Exception:
+                await _recover_from_error(context, mid, "auto concussion substitute")
             return
         if expected == A_PICK_CIPL_NEW_BATSMAN:
             # Nobody is fined or forfeited for this one: the next batsman in
@@ -2442,6 +2463,9 @@ async def _prompt_bowler(context, mid, state=None, first=False):
         state = await _gs(context, mid)
     if not state:
         return
+    if medical.pending(state):
+        await _prompt_concussion(context, mid, state)
+        return
     if first:
         from services.league_record_publications import watch
         await watch(context,state)
@@ -2862,6 +2886,9 @@ async def _resume_locked(context, mid, only_if_stalled=False):
         cleanup_state(context, mid)
         release_match_lock(mid)
         return False
+    if medical.pending(state):
+        await _prompt_concussion(context, mid, state)
+        return True
     # The innings has already used its full quota (20 overs / 100 balls, all
     # out, or the chase won). /rcl must NEVER re-prompt a pick here: doing so
     # played a 21st over whenever an end-of-innings handler had failed
@@ -3150,6 +3177,7 @@ PICK_BOWLER = "bowler"
 PICK_BOWL_APPROACH = "bowl_approach"
 PICK_BAT_APPROACH = "bat_approach"
 PICK_NEW_BATSMAN = "new_batsman"
+PICK_CONCUSSION = "concussion"
 
 _PICK_ACTION = {
     PICK_BOWLER: A_PICK_CIPL_BOWLER,
@@ -3206,6 +3234,9 @@ async def submit_pick(context, mid, actor_tg, kind, value, on_accept=None,
 
     Returns ``(True, None)`` when the pick was taken, else ``(False, reason)``.
     """
+    if kind == PICK_CONCUSSION:
+        return await submit_concussion(context, mid, actor_tg, value,
+                                       on_accept=on_accept, source=source)
     if kind not in _PICK_ACTION:
         return False, "Invalid selection."
     try:
@@ -3218,6 +3249,8 @@ async def submit_pick(context, mid, actor_tg, kind, value, on_accept=None,
             return False, "Match not found."
         if _super_over_active(context, mid):
             return False, "🔥 Super Over in progress — the main match is over."
+        if medical.pending(state):
+            return False, "Play is paused. The affected captain must choose a concussion substitute."
         err = _pick_actor_error(state, kind, actor_tg)
         if err:
             return False, err
@@ -3416,6 +3449,138 @@ async def _refresh_tournament_impact_benches(state):
     except Exception:
         logger.exception("cipl: could not check tournament impact injuries")
         return False
+
+
+async def _prompt_concussion(context, mid, state):
+    """A persisted medical decision; no normal pick is live alongside it."""
+    incident = medical.pending(state)
+    if not incident:
+        return
+    _cancel_timer(context, mid)
+    if not await _refresh_tournament_impact_benches(state):
+        await _mark_prompt_delivered(context, mid, state, False, A_PICK_CONCUSSION)
+        return
+    opts = medical.options(state, incident['user_id'])
+    if _is_bot_match(state) and incident['user_id'] == state.get('bot_user_id') and opts.get('can_use'):
+        ok, _message = await _resolve_concussion(context, mid, state)
+        if not ok:
+            await _mark_prompt_delivered(context, mid, state, False, A_PICK_CONCUSSION)
+        return
+    side = opts.get('side') or impact_player.cipl_side(state, incident['user_id'])
+    actor = state.get(f'{side}_user_tg')
+    text = (f"{_header(state)}\n\n🩺 <b>MEDICAL TIMEOUT</b>\n"
+            f"{html.escape(incident['out_player'])} — {html.escape(incident['injury'])}.\n"
+            f"{_mention_tg(state, actor)}, choose one concussion substitute.\n"
+            "Same role and overseas status; both ratings within 10 points.\n"
+            "✅ Playing XI rules apply · Impact Player unchanged.\n"
+            "The injured player cannot return. No wicket is charged.\n\n")
+    rows = [[InlineKeyboardButton(
+        f"{p['name']} · BAT {p.get('bat_rating', 0)} / BOWL {p.get('bowl_rating', 0)}",
+        callback_data=_imp_cb('cipl_cs_', actor, mid, p['roster_id']))]
+        for p in opts.get('incoming_options') or []]
+    if not rows:
+        text += html.escape(opts['message'])
+    elif _app_mode(state):
+        # The medical choice is available in the app and on this recovery
+        # prompt, so switching surfaces cannot strand an injured side.
+        text += 'Choose below or open the Mini App. Closest legal reserve is chosen on timeout.'
+    else:
+        text += 'Choose below. Closest legal reserve is chosen on timeout; no fine.'
+    try:
+        await _new_action_message(context, state, text, rows)
+        delivered = True
+    except Exception:
+        logger.exception('cipl: medical prompt failed for match %s', mid)
+        delivered = False
+    await _mark_prompt_delivered(context, mid, state, delivered, A_PICK_CONCUSSION)
+
+
+async def _resolve_concussion(context, mid, state, roster_id=None, on_accept=None):
+    """Caller holds the match lock. Bots and timeouts share captain validation."""
+    incident = medical.pending(state)
+    if not incident:
+        return False, 'No concussion substitute is pending.'
+    if not await _refresh_tournament_impact_benches(state):
+        return False, "Couldn't check injured reserves. Please try again."
+    if roster_id is None:
+        choice = medical.best_reserve(medical.options(state, incident['user_id']))
+        if not choice:
+            await _prompt_concussion(context, mid, state)
+            return False, 'No fit like-for-like reserve; play remains paused.'
+        roster_id = choice['roster_id']
+    ok, message, rec = medical.use(state, incident['user_id'], roster_id, A_PICK_CONCUSSION)
+    if not ok:
+        return False, message
+    # Commit the medical budget, retired identity and new XI before acknowledging
+    # the pick or resuming. Duplicate/stale requests then cannot consume it twice.
+    await _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
+    _cancel_timer(context, mid)
+    if on_accept is not None:
+        try:
+            await on_accept()
+        except Exception:
+            logger.debug('medical acknowledgement failed', exc_info=True)
+    try:
+        await context.bot.send_message(state['chat_id'], html.escape(message), parse_mode='HTML')
+    except Exception:
+        logger.exception('medical substitution notice failed for match %s', mid)
+    try:
+        await _prompt_bowler(context, mid, state, first=True)
+    except Exception:
+        await _recover_from_error(context, mid, 'bowler prompt after medical substitute')
+    return True, message
+
+
+async def submit_concussion(context, mid, actor_tg, roster_id, on_accept=None, source='chat'):
+    try:
+        roster_id = int(roster_id)
+    except (TypeError, ValueError):
+        return False, 'Choose a reserve.'
+    async with get_match_lock(mid):
+        state = await _gs(context, mid)
+        if not is_cipl_state(state) or _super_over_active(context, mid):
+            return False, 'No live medical pause in this match.'
+        incident = medical.pending(state)
+        if not incident:
+            return False, 'This medical selection has already been resolved.'
+        uid = _user_id_for_tg(state, actor_tg)
+        if uid is None or str(uid) != str(incident['user_id']):
+            return False, 'Only the injured team’s captain can choose the substitute.'
+        if await _get_next_action(context, mid) != A_PICK_CONCUSSION:
+            return False, 'The match moved on; reopen the medical prompt.'
+        try:
+            return await _resolve_concussion(context, mid, state, roster_id, on_accept)
+        except StaleMatchState:
+            return False, 'The match moved on while you chose. Reopen the medical prompt.'
+
+
+async def cipl_concussion_callback(update, context):
+    q = update.callback_query
+    parsed = _imp_parse('cipl_cs_', q.data, 2)
+    if parsed is None:
+        await q.answer('Invalid medical selection.', show_alert=True)
+        return
+    mid, roster_id = parsed
+    ok, message = await submit_concussion(context, mid, q.from_user.id, roster_id,
+                                         on_accept=lambda: q.answer('Concussion substitute confirmed.'))
+    if not ok:
+        await q.answer(message, show_alert=True)
+
+
+async def concussion_handler(update, context):
+    """/concussion reopens a pending assessment after a deleted prompt/restart."""
+    mid, state = await _find_cipl_match_in_chat(context, update.effective_chat.id)
+    if mid is None or not medical.pending(state):
+        await update.effective_message.reply_text('No concussion substitute is pending in this chat.')
+        return
+    async with get_match_lock(mid):
+        state = await _gs(context, mid)
+        incident = medical.pending(state)
+        uid = _user_id_for_tg(state, update.effective_user.id)
+        if not incident or uid is None or str(uid) != str(incident['user_id']):
+            await update.effective_message.reply_text('Only the affected captain can reopen this medical selection.')
+            return
+        await _prompt_concussion(context, mid, state)
 
 
 async def _impact_guard(context, q, mid):
@@ -4039,6 +4204,9 @@ async def _simulate_live_final_over(context, mid, state, pause):
 
 
 async def _run_over(context, mid, state):
+    if medical.pending(state):
+        await _prompt_concussion(context, mid, state)
+        return
     # Hard stop on the format limit. Once the innings quota is used — 20 overs,
     # or 100 balls (20 sets) in The Hundred — no further over may be simulated,
     # no matter how we got here (a stale approach button, a /rcl on a match whose
@@ -4110,7 +4278,8 @@ async def _run_over(context, mid, state):
     if innings_over:
         await _ss(context, mid, state)
     else:
-        await _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
+        next_action = A_PICK_CONCUSSION if medical.pending(state) else A_PICK_CIPL_BOWLER
+        await _ss(context, mid, state, next_action=next_action)
 
     # The final match summary contains the finished score. Do not put another
     # cosmetic over post and Telegram deletion in front of the result.
@@ -4325,6 +4494,10 @@ def _render_over_summary(state, summary):
         if bat_t:
             lines.append("🏏 Traits: " + ", ".join(html.escape(t) for t in bat_t))
     lines.extend(_impact_summary_lines(state))
+    for rec in state.get("concussion_substitutions") or []:
+        lines.append(f"🩺 {html.escape(str(rec.get('team') or 'Team'))}: "
+                     f"{html.escape(str(rec.get('in_player') or 'Reserve'))} -CS "
+                     f"for {html.escape(str(rec.get('out_player') or 'Injured player'))}")
     return "\n".join(lines)
 
 

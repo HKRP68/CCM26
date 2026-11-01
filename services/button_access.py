@@ -347,6 +347,7 @@ OWNER_RULES: dict[str, str] = {
     # substitution, so the other captain must not be able to drive it — not even
     # after a restart has emptied the registry, which is why these are owner-
     # tagged rather than left to it. Both captains get their own via 🔄/-impact.
+    "cipl_cs_": "⛔ Only the affected team's captain can choose this concussion substitute.",
     "cipl_impo_": ("⛔ That Impact Player picker belongs to the other captain. "
                    "Tap 🔄 Impact Player, or send /impact, for your own."),
     "cipl_impi_": ("⛔ That Impact Player picker belongs to the other captain. "

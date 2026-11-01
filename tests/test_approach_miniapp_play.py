@@ -713,7 +713,7 @@ class ApproachPickValueTests(unittest.TestCase):
             APPROACH_ACTION_TYPES, approach_pick_value as _approach_pick_value)
         self.assertEqual(set(APPROACH_ACTION_TYPES.values()),
                          {cp.PICK_BOWLER, cp.PICK_BOWL_APPROACH,
-                          cp.PICK_BAT_APPROACH, cp.PICK_NEW_BATSMAN})
+                          cp.PICK_BAT_APPROACH, cp.PICK_NEW_BATSMAN, cp.PICK_CONCUSSION})
         self.assertEqual(_approach_pick_value("bat_approach", {"key": "ultra"}), 4)
         self.assertEqual(_approach_pick_value("bowl_approach", {"key": "Variation"}), 4)
         self.assertIsNone(_approach_pick_value("bowl_approach", {"key": "ultra"}))

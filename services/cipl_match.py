@@ -757,7 +757,11 @@ def max_bowler_overs(state):
 
 def _overs_bowled(state, rid):
     """Units (overs / sets) a bowler has completed so far."""
-    return state["bowl_stats"].get(str(rid), {}).get("balls", 0) // balls_per_unit(state)
+    balls = state["bowl_stats"].get(str(rid), {}).get("balls", 0)
+    player = find_player(state.get("bowl_xi") or [], rid) or {}
+    if player.get("concussion_quota_innings") == state.get("innings"):
+        balls += int(player.get("concussion_bowling_offset") or 0)
+    return balls // balls_per_unit(state)
 
 
 # Emergency part-time bowlers (batsmen) are capped well below the regular quota
@@ -806,6 +810,7 @@ def eligible_bowlers(state):
     # outgoing player as an inactive entry, and they must never be handed the
     # ball again.
     xi = impact_player.active_players(state.get("bowl_xi") or [])
+    xi = [p for p in xi if not p.get("concussion_replacement") or overs_left(state, p) > 0]
     # Which bowler is blocked from taking the next unit. In T20 it is simply the
     # previous over's bowler (no back-to-back overs). In The Hundred a bowler may
     # bowl two consecutive sets (a 10-ball spell), so only block them once that
@@ -816,6 +821,11 @@ def eligible_bowlers(state):
         blocked = spell_rid if spell_units >= _spec(state)["max_consecutive_units"] else None
     else:
         blocked = state.get("prev_bowler_rid")
+
+    # Medical replacements inherit the previous bowler's restriction even in
+    # the emergency fallback; they cannot be used to create a longer spell.
+    xi = [p for p in xi if not p.get("concussion_replacement")
+          or p.get("roster_id") != blocked]
 
     def _avail(pool, enforce_quota=True, enforce_prev=True):
         out = list(pool)
@@ -1928,6 +1938,8 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
     finale save and reveal a ball before the next one is sampled. Wicket picks
     take priority and still return ``paused``.
     """
+    if state.get("concussion_pending"):
+        raise ValueError("Play is paused for a concussion substitute.")
     bat_app = state.get("batting_approach")
     bowl_app = state.get("bowling_approach")
     bowler = state["current_bowler"]
@@ -3180,6 +3192,8 @@ def _dismissal_text(how_out, bowler_name, fielder=""):
 
 def end_first_innings(state):
     """Archive innings 1, set the target and swap batting/bowling sides."""
+    if state.get("concussion_pending"):
+        raise ValueError("Resolve the concussion substitute before the innings break.")
     state["inn1_runs"] = state["total_runs"]
     state["inn1_wickets"] = state["total_wickets"]
     state["inn1_overs"] = format_overs(state)

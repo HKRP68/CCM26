@@ -63,20 +63,43 @@ their shared approach engine. Older scorecards and manual/deadline results
 cannot supply batter/bowler encounters. Captain records use existing results
 where both participating user IDs were recorded.
 
-Tournament approach matches have a single 0.5% roll for an in-match concussion
-incident. A medical assessment is announced between overs, while play can still
-continue. The incident requires a batter currently at the crease who has faced
-a delivery and a suitable unused reserve. The substitute must match the role,
-overseas status and bowling style for bowlers/all-rounders, stay within ten
-points of both ratings, and satisfy the XI's rating rules. Without a suitable
-reserve, no substitution is generated. Thus the actual incidence is below 0.5%.
+Tournament approach matches can now pause for a mid-match injury. Each team has
+one 5% roll per match (not per over), scheduled between completed overs while
+play can still continue. A batter who has faced a delivery or a bowler who has
+just bowled may be assessed unfit. An incident is generated only when a fit,
+unused like-for-like reserve can keep a legal XI.
 
-The injured batter retires hurt without a wicket, keeps their recorded figures,
-and cannot return to field, bowl or bat in a Super Over. The substitute appears
-with `-CS` on live scorecards. The Impact Player allowance is unchanged, including
-when already used. This is an IPL-inspired simulation mechanic, not a complete
-implementation of IPL medical regulations. It does not create a multi-match
-injury layoff; the existing post-match injury system remains separate.
+The affected captain chooses their **one concussion/medical substitute per team
+per match** from the chat buttons or Mini App. `/concussion` (`/medicalsub`)
+reopens a deleted prompt. The match stays paused until the decision is saved;
+normal picks, Impact swaps and stale buttons cannot advance it. The bot and the
+normal turn timeout select the closest legal reserve automatically, without a
+fine or forfeit. An undelivered prompt is retried. Save, restart and `/rcl`
+preserve the outstanding medical choice and the used allowance.
+
+Only unused, fit squad members qualify. They must match role, overseas status
+and bowling style for bowlers/all-rounders, remain within ten points of both
+ratings, and preserve **exactly eleven active players** and all applicable XI
+rules: keeper, bowling options, overseas limits, rating requirements, roster
+role limits and no duplicate versions of a player. Current tournament injuries
+are rechecked before the choice is accepted. If every legal reserve becomes
+unavailable during the pause, play remains paused for an admin to restore an
+eligible reserve; the system never fields an illegal XI.
+
+The injured player's recorded figures are retained and they cannot return to
+bat, bowl, field or play a Super Over. A batter retires hurt without a wicket;
+the replacement takes the same batting position and strike. A bowler's
+replacement shares the remaining bowling quota and inherits the consecutive
+spell restriction. The replacement appears with `-CS` on live scorecards and
+the medical event is saved with tournament statistics. Impact Player retains
+its own separate allowance, including when already used.
+
+This is a simulation medical-replacement rule, including bowling injuries,
+rather than a claim to reproduce formal concussion regulations. The existing
+opt-in post-match injury/layoff system remains separate: a medical substitution
+rules the player out for this match and does not itself create a multi-match
+layoff. Casual games and standalone Super Overs do not roll medical incidents;
+`concussion_enabled=False` disables new incidents on a match state.
 
 Suggested next features: a live win-probability graph, tournament rivalry cards,
 qualification scenarios, and a post-match turning-point recap.

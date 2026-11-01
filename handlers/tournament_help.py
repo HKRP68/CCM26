@@ -44,6 +44,7 @@ PLAYER_SECTIONS = (
         ("/clsquad", "/csquad /ctsquad",
          "Challenge League squads: player, category, Overall/Bat/Bowl and squad rating; no name shows your tournament team"),
         ("/ctinjuries", "/ctinjury", "Who is injured, and for how many matches"),
+        ("/concussion", "/medicalsub", "Reopen a mid-match medical pause and choose a legal reserve"),
         ("/clsd", "/clschedule /ctsd",
          "One team's schedule: standing, form, next matches, results"),
         ("/teamowner", "/teamowners /towner",

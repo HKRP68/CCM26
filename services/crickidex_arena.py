@@ -769,6 +769,9 @@ def _serialize_match_state_impl(session, match, viewer_user):
             injury_service.filter_impact_benches(session, state)
             impact_player = _approach_impact_payload(state, viewer_uid, next_action)
         except Exception:
+            if state.get("concussion_pending"):
+                state["bat_bench"] = []
+                state["bowl_bench"] = []
             logger.exception("approach impact player options failed (non-fatal)")
     elif viewer_uid and status != "completed" and not approach_mode:
         try:
@@ -1025,7 +1028,7 @@ def _approach_payload(state, next_action, my_role):
     from engine import approach_modifiers as am
     from services import cipl_match as cm
     from services.match_state_store import (
-        A_PICK_CIPL_BOWLER, A_PICK_CIPL_NEW_BATSMAN)
+        A_PICK_CIPL_BOWLER, A_PICK_CIPL_NEW_BATSMAN, A_PICK_CONCUSSION)
     payload = {
         "battingOptions": _approach_options(am.BATTING_APPROACHES, am.BATTING_BLURBS),
         "bowlingOptions": _approach_options(am.BOWLING_APPROACHES, am.BOWLING_BLURBS),
@@ -1070,6 +1073,19 @@ def _approach_payload(state, next_action, my_role):
                 "name": out.get("name"), "runs": bs.get("runs", 0),
                 "balls": bs.get("balls", 0),
                 "dismissal": bs.get("dismissal") or bs.get("how_out") or "out"}
+        from services import concussion_substitute as medical
+        incident = medical.pending(state)
+        if incident:
+            # The feed is public; legal choices are only returned to the
+            # affected captain, after the current injury check in serialization.
+            side = "bat" if incident.get("user_id") == state.get("bat_team_id") else "bowl"
+            own = (side == "bat" and my_role == "batting") or (side == "bowl" and my_role == "bowling")
+            opts = medical.options(state, incident["user_id"]) if own else {}
+            payload["medical"] = {
+                "player": incident.get("out_player"), "injury": incident.get("injury"),
+                "team": incident.get("team"), "message": opts.get("message"),
+                "incomingOptions": [_p(p) for p in opts.get("incoming_options") or []],
+            }
         payload["lastOver"] = _approach_last_over(state, my_role)
 
         hints = {"phase": cm.approach_phase(state),

@@ -652,6 +652,31 @@ class ImpactBenchTests(InjuryCase):
         self.inj.filter_impact_benches(self.session, state)
         self.assertIn(victim.id, [p["roster_id"] for p in state["bat_bench"]])
 
+    def test_a_medical_pause_rechecks_injuries_and_recovers_when_declared_fit(self):
+        from services import concussion_substitute as medical
+        state = self._live_state()
+        # A legal XI, with a batter requiring a medical substitute.
+        roles = ["Batsman"] * 4 + ["Wicket Keeper"] + ["Bowler"] * 6
+        for p, role in zip(state["bat_xi"], roles):
+            p["category"] = role
+        victim = self.squad(0)[12]
+        reserve = next(p for p in state["bat_bench"] if p["roster_id"] == victim.id)
+        state["concussion_pending"] = {
+            "user_id": self.users[0].id, "out_roster_id": self.squad(0)[0].id}
+        state["concussion_reserve_pool"] = [dict(reserve)]
+        row = self.inj.add_manual(self.session, self.tour.id, self.tteams[0].id,
+                                  victim.id, matches=2, player_name=victim.name)
+        self.session.commit()
+        self.inj.filter_impact_benches(self.session, state)
+        self.assertFalse(medical.options(state, self.users[0].id)["can_use"])
+        self.assertEqual(state["bat_bench"], [])
+        self.inj.heal(self.session, row.id)
+        self.session.commit()
+        self.inj.filter_impact_benches(self.session, state)
+        opts = medical.options(state, self.users[0].id)
+        self.assertTrue(opts["can_use"])
+        self.assertEqual([p["roster_id"] for p in opts["incoming_options"]], [victim.id])
+
 
 class ReportTests(InjuryCase):
     def test_the_chat_card_names_the_player_the_team_and_the_layoff(self):

@@ -305,6 +305,7 @@ def _xi_to_engine(session, pairs, with_traits=True):
         out.append({
             "roster_id": int(entry.id),
             "player_id": int(player.id),
+            "parent_player_id": getattr(player, "parent_player_id", None),
             "name": player.name or "Player",
             "rating": int(player.rating or 50),
             "category": player.category or "Batsman",

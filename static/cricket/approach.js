@@ -144,6 +144,7 @@ function renderApproachControls({ promptText, promptSubtitle, waitingBlock }) {
       batting_approach: bowling ? [`${opp.toUpperCase()} IS PLANNING`, `${opp} is choosing how to bat this ${unitWord()}…`]
         : ['⏳ SETTING UP', 'Getting the next over ready…'],
       selecting_wicket_batsman: ['⚠️ NEW BATSMAN INCOMING', 'The next batsman is walking out…'],
+      selecting_concussion_substitute: ['🩺 MEDICAL TIMEOUT', `${a.medical?.player || 'A player'} is injured. The affected captain is choosing a reserve.`],
     };
     const [h, m] = waits[matchState.turnState] || ['⏳ PLEASE WAIT', 'The match is moving on…'];
     if (matchState.myRole === 'spectator' && a.playMode === 'chat') {
@@ -164,7 +165,7 @@ function renderApproachControls({ promptText, promptSubtitle, waitingBlock }) {
   // The app polls several times a second. Rebuilding the list on every poll
   // would swap the buttons out from under a finger mid-tap, so keep the DOM
   // while this pick (and what it offers) is unchanged.
-  const renderKey = `${sig}|${matchState.turnState}|${(a.overBowlers || []).length}|${(a.incomingBatsmen || []).length}|${a.hints?.repeat}`;
+  const renderKey = `${sig}|${matchState.turnState}|${(a.overBowlers || []).length}|${(a.incomingBatsmen || []).length}|${a.hints?.repeat}` + (matchState.turnState === 'selecting_concussion_substitute' ? JSON.stringify(a.medical || {}) : '');
   const impactKey = `${matchState.impactPlayer?.canUse}|${matchState.impactPlayer?.used}`;
   const unchanged = section.dataset.renderKey === `${renderKey}|${impactKey}`
     && !section.classList.contains('hidden') && section.childElementCount > 0;
@@ -181,7 +182,11 @@ function renderApproachControls({ promptText, promptSubtitle, waitingBlock }) {
   }
   section.dataset.renderKey = `${renderKey}|${impactKey}`;
 
-  if (matchState.turnState === 'selecting_over_bowler') {
+  if (matchState.turnState === 'selecting_concussion_substitute') {
+    promptText.innerText = '🩺 CONCUSSION SUBSTITUTE';
+    promptSubtitle.innerText = `${a.medical?.player || 'A player'} is injured — choose a like-for-like reserve.`;
+    renderMedicalReserves(section, a.medical || {});
+  } else if (matchState.turnState === 'selecting_over_bowler') {
     promptText.innerText = '🎳 PICK YOUR BOWLER';
     promptSubtitle.innerText = `${unitWord(true)} ${a.currentOver || ''} — who bowls it?`;
     renderApproachBowlers(section, a);
@@ -203,6 +208,33 @@ function renderApproachControls({ promptText, promptSubtitle, waitingBlock }) {
     section.classList.add('hidden');
     showWaiting('⏳ PLEASE WAIT', 'The match is moving on…');
   }
+}
+
+function renderMedicalReserves(section, medical) {
+  section.innerHTML = `<p class="warning-text">${escHtml(medical.injury || 'Medical timeout')} · ${escHtml(medical.team || '')}</p>
+    <p>One replacement per team. Playing XI rules apply. Impact Player is unchanged.</p>
+    <div class="selection-list mb-3" id="medical-reserve-list"></div>`;
+  const box = section.querySelector('#medical-reserve-list');
+  const list = medical.incomingOptions || [];
+  if (!list.length) {
+    box.textContent = medical.message || 'Play is paused while an eligible reserve is restored.';
+  }
+  list.forEach(p => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'selection-item';
+    button.innerHTML = `<span class="selection-item-name">${escHtml(p.name)}</span>
+      <span class="selection-item-meta">${escHtml(p.category || '')} · BAT ${escHtml(p.bat_rating ?? '')} / BOWL ${escHtml(p.bowl_rating ?? '')}</span>`;
+    button.onclick = () => {
+      if (approachSubmitInFlight) return;
+      const accept = () => submitApproach('cipl_concussion', { rosterId: p.roster_id ?? p.id },
+        '🩺 SUBSTITUTE CONFIRMED', `${p.name} is coming on…`);
+      const question = `Confirm ${p.name} as your one concussion substitute? The injured player cannot return.`;
+      if (window.Telegram?.WebApp?.showConfirm) window.Telegram.WebApp.showConfirm(question, ok => { if (ok) accept(); });
+      else if (window.confirm(question)) accept();
+    };
+    box.appendChild(button);
+  });
 }
 
 function renderApproachBowlers(section, a) {

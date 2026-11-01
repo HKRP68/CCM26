@@ -16,6 +16,11 @@ else in the bot, including in another tournament running at the same time.
 
 ---
 
+The live medical-substitute system is documented in
+[tournament match updates](tournament-match-updates.md). It pauses tournament
+matches for the captain to choose one legal reserve; the settings on this page
+control post-match layoffs.
+
 ## How an injury is decided
 
 The victim is drawn from the players who **actually did the work** in the match

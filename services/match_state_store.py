@@ -63,6 +63,8 @@ A_PICK_BOWL_APPROACH = "PICK_BOWL_APPROACH"  # bowling side picks bowling approa
 A_PICK_BAT_APPROACH = "PICK_BAT_APPROACH"    # batting side picks batting approach
 # batting side picks the new batsman after a mid-over wicket (bot matches)
 A_PICK_CIPL_NEW_BATSMAN = "PICK_CIPL_NEW_BATSMAN"
+# A tournament medical assessment pauses play for the affected captain.
+A_PICK_CONCUSSION = "PICK_CONCUSSION"
 
 
 def _mem_key(mid):

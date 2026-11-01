@@ -2126,6 +2126,7 @@ def main():
             cipl_impact_callback, cipl_impact_out_callback,
             cipl_impact_in_callback, cipl_impact_pos_callback,
             cipl_impact_cancel_callback, impact_handler,
+            cipl_concussion_callback, concussion_handler,
         )
         app.add_handler(CallbackQueryHandler(cipl_coin_callback, pattern=r"^cipl_coin_"))
         app.add_handler(CallbackQueryHandler(cipl_toss_callback, pattern=r"^cipl_toss_"))
@@ -2144,6 +2145,8 @@ def main():
         app.add_handler(CallbackQueryHandler(cipl_impact_cancel_callback, pattern=r"^cipl_impx_"))
         app.add_handler(CallbackQueryHandler(cipl_impact_callback, pattern=r"^cipl_imp_"))
         app.add_handler(CommandHandler(["impact", "ip"], impact_handler))
+        app.add_handler(CallbackQueryHandler(cipl_concussion_callback, pattern=r"^cipl_cs_"))
+        app.add_handler(CommandHandler(["concussion", "medicalsub"], concussion_handler))
         # /rcl — resume a stuck Challenge League match from where it left off
         app.add_handler(CommandHandler(["rcl", "resumecl"], rcl_handler))
         # Pause / save / continue a Challenge League or Lets Play match, and

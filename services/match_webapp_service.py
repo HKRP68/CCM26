@@ -23,7 +23,7 @@ from services.match_state_store import (
     A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_SHOT, A_PICK_NEW_BATSMAN,
     A_PICK_NEW_BOWLER, A_INNINGS_BREAK, A_COMPLETED, CasAbort,
     A_PICK_CIPL_BOWLER, A_PICK_BOWL_APPROACH, A_PICK_BAT_APPROACH,
-    A_PICK_CIPL_NEW_BATSMAN,
+    A_PICK_CIPL_NEW_BATSMAN, A_PICK_CONCUSSION,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,7 +80,7 @@ def is_view_only_match(state):
 HIDDEN_PLAN_KEYS = ("bowling_approach", "batting_approach", "approach_log",
                     "inn1_approach_log", "last_bat_approach",
                     "last_bowl_approach", "bat_repeat", "bowl_repeat",
-                    "_planned_super_overs", "_planned_winner_user_id", "_concussion_plan")
+                    "_planned_super_overs", "_planned_winner_user_id", "_concussion_plan", "_medical_plans")
 
 
 def strip_hidden_plans(state):
@@ -113,6 +113,7 @@ APPROACH_ACTION_TYPES = {
     "cipl_bowl_approach": "bowl_approach",
     "cipl_bat_approach": "bat_approach",
     "cipl_new_batsman": "new_batsman",
+    "cipl_concussion": "concussion",
 }
 
 
@@ -124,7 +125,7 @@ def approach_pick_value(kind, act):
     """
     from engine.approach_modifiers import BATTING_APPROACHES, BOWLING_APPROACHES
     act = act if isinstance(act, dict) else {}
-    if kind in ("bowler", "new_batsman"):
+    if kind in ("bowler", "new_batsman", "concussion"):
         try:
             return int(act.get("rosterId", act.get("roster_id")))
         except (TypeError, ValueError):
@@ -952,6 +953,7 @@ def turn_state_name(next_action):
         A_PICK_BOWL_APPROACH: "bowling_approach",
         A_PICK_BAT_APPROACH: "batting_approach",
         A_PICK_CIPL_NEW_BATSMAN: "selecting_wicket_batsman",
+        A_PICK_CONCUSSION: "selecting_concussion_substitute",
     }.get(next_action)
 
 
@@ -960,6 +962,15 @@ def whose_turn(state, next_action, user_id):
     Returns (turn_side, is_my_turn) where turn_side is 'bowler'/'batsman'/None.
     Based on status/turnState + batting team id + current user (per spec)."""
     turn_side = None
+    if next_action == A_PICK_CONCUSSION:
+        from services.concussion_substitute import pending
+        incident = pending(state) or {}
+        affected = incident.get("user_id")
+        if state.get("captain_controllers"):
+            from services.match_handover import seat_for_user
+            user_id = seat_for_user(state, user_id)
+        side = "batsman" if affected == state.get("bat_team_id") else "bowler"
+        return side, user_id is not None and str(user_id) == str(affected)
     if next_action in (A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_NEW_BOWLER,
                        A_PICK_CIPL_BOWLER, A_PICK_BOWL_APPROACH):
         turn_side = "bowler"

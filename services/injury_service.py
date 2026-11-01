@@ -175,6 +175,15 @@ def filter_impact_benches(session, state):
     if not state.get("tournament_id"):
         return
     tour = session.get(Tournament, int(state["tournament_id"]))
+    # A reserve temporarily filtered during a medical pause can become fit
+    # again, or an admin can disable injuries. Keep recovery possible in both
+    # cases without rebuilding or re-rolling the injury itself.
+    medical = state.get("concussion_pending") or {}
+    medical_pool = state.get("concussion_reserve_pool")
+    if isinstance(medical_pool, list):
+        for side in ("bat", "bowl"):
+            if str(medical.get("user_id")) == str(state.get(f"{side}_team_id")):
+                state[f"{side}_bench"] = [dict(p) for p in medical_pool]
     if not enabled_for(tour):
         return
     mapping = state.get("tournament_team_by_user") or {}
