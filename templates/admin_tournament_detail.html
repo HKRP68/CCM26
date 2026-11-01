@@ -180,7 +180,7 @@
             Players can be ruled out of matches
           </label>
         </div>
-        <div><label>Injury chance (% per team, per match)</label>
+        <div><label>Post-match injury chance (% per team, per match)</label>
           <input type="number" name="injury_chance" min="0" max="100"
                  value="{{ t.injury_chance if t.injury_chance is not none else 12 }}"></div>
         <div><label>Max matches out</label>
@@ -252,6 +252,14 @@
         and a squad is never injured below a fieldable XI.
       </p>
       {% endif %}
+      <div class="tour-form-grid" style="margin-top:.6rem;">
+        <div><label for="mid-match-injury-chance">🩺 Mid-match injury chance (% per team, per match)</label>
+          <input id="mid-match-injury-chance" type="number" name="mid_match_injury_chance" min="0" max="100" step="1"
+                 value="{{ t.mid_match_injury_chance if t.mid_match_injury_chance is not none else 5 }}">
+          <small style="color:var(--muted);">0% disables new mid-match injuries; 5% is the default. Applies to new matches.
+            A legal like-for-like reserve is still required, including at 100%. Each team keeps one medical substitute.</small>
+        </div>
+      </div>
       <div style="margin-top:.6rem;">
         <label style="color:var(--muted); font-size:.78rem; text-transform:uppercase; letter-spacing:.06em;">Description</label>
         <textarea name="description" rows="2" style="width:100%;">{{ t.description or '' }}</textarea>

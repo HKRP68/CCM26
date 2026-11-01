@@ -653,6 +653,7 @@ def _migrate_add_columns():
     _try_add("tournaments", "injuries_enabled", "BOOLEAN DEFAULT FALSE")
     _try_add("tournaments", "injury_chance", "INTEGER DEFAULT 12")
     _try_add("tournaments", "injury_max_matches", "INTEGER DEFAULT 3")
+    _try_add("tournaments", "mid_match_injury_chance", "INTEGER NOT NULL DEFAULT 5")
     _try_add("tournament_teams", "home_pitch", "VARCHAR(20)")
     _try_add("tournament_matches", "pitch_type", "VARCHAR(20)")
     _try_add("tournament_matches", "home_team_id", "INTEGER")

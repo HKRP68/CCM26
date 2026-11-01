@@ -64,8 +64,13 @@ cannot supply batter/bowler encounters. Captain records use existing results
 where both participating user IDs were recorded.
 
 Tournament approach matches can now pause for a mid-match injury. Each team has
-one 5% roll per match (not per over), scheduled between completed overs while
-play can still continue. A batter who has faced a delivery or a bowler who has
+one roll per match (not per over), scheduled between completed overs while
+play can still continue. Admins can increase or decrease **Mid-match injury chance**
+under **Tournament → Manage → Settings**, from **0% to 100%**, with **5%** as the default.
+It is available for both Challenge League and Lets Play tournaments. **0%** disables
+new incidents; even at **100%**, an incident still requires a legal reserve.
+The setting applies to newly launched matches; a running or saved match retains
+its original chance and its already-rolled injury plan. A batter who has faced a delivery or a bowler who has
 just bowled may be assessed unfit. An incident is generated only when a fit,
 unused like-for-like reserve can keep a legal XI.
 

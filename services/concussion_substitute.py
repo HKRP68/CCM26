@@ -11,7 +11,20 @@ from services import impact_player
 
 # One roll per team per match, never one roll per over. Actual incidence is
 # lower because a safe unused reserve and a player with workload are required.
-MATCH_CHANCE = 0.05
+DEFAULT_CHANCE_PERCENT = 5
+
+
+def chance_percent(value):
+    """A whole 0..100 percentage, retaining an explicit zero."""
+    try:
+        value = int(value) if value is not None else DEFAULT_CHANCE_PERCENT
+    except (TypeError, ValueError, OverflowError):
+        value = DEFAULT_CHANCE_PERCENT
+    return max(0, min(100, value))
+
+
+def chance_for(tour):
+    return chance_percent(getattr(tour, 'mid_match_injury_chance', None))
 
 
 def _role(player):
@@ -143,6 +156,7 @@ def maybe_replace(state, *, rng=None):
             or state.get('standalone_super_over') or pending(state)):
         return None
     rng = rng or random
+    chance = chance_percent(state.get('mid_match_injury_chance')) / 100
     if '_medical_plans' not in state:
         plans = {}
         legacy = state.get('_concussion_plan', 'new')
@@ -152,7 +166,7 @@ def maybe_replace(state, *, rng=None):
             if legacy != 'new':
                 plan = legacy if side == 'bat' else None
             elif not _used(state, uid) and int(state.get('overs') or 0) >= 3:
-                if rng.random() < MATCH_CHANCE:
+                if chance > 0 and rng.random() < chance:
                     plan = {'innings': rng.choice((1, 2)),
                             'over': rng.randint(2, int(state['overs']) - 1)}
             plans[str(uid)] = plan

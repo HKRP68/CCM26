@@ -1890,6 +1890,7 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
             from models import Tournament as _Tourn
             from services import league_schedule_service as _lss
             _tour = session.get(_Tourn, int(tid))
+            draft["mid_match_injury_chance"] = medical.chance_for(_tour)
             if _tour and (_tour.schedule_generated or _tour.knockout_generated):
                 _fx = _lss.reserve_fixture_by_names(session, tid, host_team, target_team)
                 if not _fx:
@@ -2203,6 +2204,7 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
     # the active Challenge League Tournament when it completes.
     if draft:
         state["tournament_id"] = draft.get("tournament_id")
+        state["mid_match_injury_chance"] = medical.chance_percent(draft.get("mid_match_injury_chance"))
         state["tournament_team_by_user"] = draft.get("tournament_team_by_user") or {}
         state["reserved_fixture_id"] = draft.get("reserved_fixture_id")
         state["_planned_super_overs"] = draft.get("_planned_super_overs", 0)

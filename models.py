@@ -2880,6 +2880,9 @@ class Tournament(Base):
     # for. Clamped to 1..5 when read; 3 is the default the severity ladder is
     # built around.
     injury_max_matches = Column(Integer, default=3, nullable=False)
+    # Mid-match medical incidents are independent of post-match layoffs.
+    # Percentage per team per match; 0 disables new incidents.
+    mid_match_injury_chance = Column(Integer, default=5, server_default="5", nullable=False)
 
     # ── Round watch: announcements, deadlines, recaps, ceremony ───────────
     # The group the bot posts tournament news into (round recaps, deadline

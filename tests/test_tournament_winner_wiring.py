@@ -16,7 +16,8 @@ from test_super_over import (
 )
 
 
-def test_challenge_kickoff_preserves_the_selected_winner_in_saved_state(monkeypatch):
+@pytest.mark.parametrize("injury_chance", [0, 35, 100])
+def test_challenge_kickoff_preserves_the_selected_winner_in_saved_state(monkeypatch, injury_chance):
     import handlers.challenge as challenge
 
     saved = []
@@ -36,6 +37,7 @@ def test_challenge_kickoff_preserves_the_selected_winner_in_saved_state(monkeypa
         "tournament_id": 77, "reserved_fixture_id": 12,
         "tournament_team_by_user": {HOST_UID: 10, GUEST_UID: 20},
         "_planned_winner_user_id": GUEST_UID, "_planned_super_overs": 2,
+        "mid_match_injury_chance": injury_chance,
         "conditions": {"day_night": "Night"},
     }
     asyncio.run(cp.begin_cipl_match(
@@ -43,6 +45,7 @@ def test_challenge_kickoff_preserves_the_selected_winner_in_saved_state(monkeypa
         "Host XI", "Guest XI", "Hard", draft=draft))
 
     assert len(saved) == 1
+    assert saved[0]["mid_match_injury_chance"] == injury_chance
     assert saved[0]["_planned_winner_user_id"] == GUEST_UID
     assert saved[0]["_planned_super_overs"] == 2
     public = strip_hidden_plans(saved[0])

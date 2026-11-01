@@ -152,6 +152,42 @@ class PreferredPitchAdminTests(unittest.TestCase):
         self.session.expire_all()
         return response.get_data(as_text=True)
 
+    def test_mid_match_injury_probability_can_be_created_changed_and_disabled(self):
+        t = self.create(mid_match_injury_chance="25")
+        self.assertEqual(t.mid_match_injury_chance, 25)
+        body = self.detail(t)
+        self.assertIn('name="mid_match_injury_chance"', body)
+        for value in (75, 0, 100):
+            self.detail(t, {"action": "save_settings", "name": t.name,
+                            "mid_match_injury_chance": str(value)})
+            self.assertEqual(t.mid_match_injury_chance, value)
+        self.detail(t, {"action": "save_settings", "name": t.name})
+        self.assertEqual(t.mid_match_injury_chance, 100,
+                         "older forms must not reset the medical chance")
+
+    def test_mid_match_injury_probability_is_clamped_and_defaults_to_five(self):
+        t = self.create()
+        self.assertEqual(t.mid_match_injury_chance, 5)
+        for value, expected in (("-1", 0), ("101", 100), ("invalid", 100)):
+            self.detail(t, {"action": "save_settings", "name": t.name,
+                            "mid_match_injury_chance": value})
+            self.assertEqual(t.mid_match_injury_chance, expected)
+
+    def test_letsplay_admin_can_set_the_mid_match_injury_probability(self):
+        from models import Tournament
+        name = f"Medical LP {next(_PID)}"
+        response = self.client.post("/lptournaments", data={
+            "action": "create", "name": name, "mid_match_injury_chance": "0"},
+            follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.session.expire_all()
+        t = self.session.query(Tournament).filter_by(name=name).one()
+        self.assertEqual(t.mid_match_injury_chance, 0)
+        body = self.detail(t, {"action": "save_settings", "name": name,
+                               "mid_match_injury_chance": "35"})
+        self.assertEqual(t.mid_match_injury_chance, 35)
+        self.assertIn('name="mid_match_injury_chance"', body)
+
     def test_create_with_a_tournament_list(self):
         t = self.create(pitch_mode="tour_preferred", preferred_pitch_pct="70",
                         preferred_pitch_limit="3",

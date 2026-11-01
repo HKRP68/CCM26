@@ -17008,6 +17008,7 @@ def admin_tournaments_list():
                             injuries_enabled=_checked("injuries_enabled"),
                             injury_chance=max(0, min(100, _int_form("injury_chance", 12))),
                             injury_max_matches=max(1, min(5, _int_form("injury_max_matches", 3))),
+                            mid_match_injury_chance=max(0, min(100, _int_form("mid_match_injury_chance", 5))),
                             pitch_mode=pitch_mode,
                             preferred_pitch_pct=max(0, min(100, _int_form(
                                 "preferred_pitch_pct", _lss.DEFAULT_PREFERRED_PCT))),
@@ -17291,6 +17292,9 @@ def admin_tournament_detail(tournament_id):
                     t.injury_max_matches = max(1, min(5, _int_form(
                         "injury_max_matches", t.injury_max_matches
                         if t.injury_max_matches is not None else 3)))
+                    t.mid_match_injury_chance = max(0, min(100, _int_form(
+                        "mid_match_injury_chance", t.mid_match_injury_chance
+                        if t.mid_match_injury_chance is not None else 5)))
                     if request.form.get("stadiums_present"):
                         from services import tournament_stadiums as _tstad
                         before = _tstad.tour_stadiums(t)
@@ -18350,6 +18354,7 @@ def admin_lp_tournaments_list():
                         points_tie=_int_form("points_tie", 1),
                         points_loss=_int_form("points_loss", 0),
                         points_no_result=_int_form("points_no_result", 1))
+                    t.mid_match_injury_chance = max(0, min(100, _int_form("mid_match_injury_chance", 5)))
                     # Stays in draft: the field is entered next, and going live
                     # early would let two players start a fixture that has no
                     # schedule behind it yet.

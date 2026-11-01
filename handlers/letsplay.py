@@ -2305,6 +2305,8 @@ async def _launch_match(context, draft, decision, winner_side):
                     "Nothing was recorded — start it again when it's playable.")
                 return
             tournament_id = tour.id
+            from services import concussion_substitute as medical
+            draft["mid_match_injury_chance"] = medical.chance_for(tour)
             draft["lpt_reserved_fixture_id"] = fixture_id
             draft["lpt_team_ids"] = {host.id: host_team.id, guest.id: guest_team.id}
             if fixture_id:
@@ -2401,6 +2403,8 @@ async def _launch_match(context, draft, decision, winner_side):
     # ChallengeTeam to resolve it through.
     if lpt and not _fixed_guest(draft):
         state["tournament_id"] = tournament_id
+        from services import concussion_substitute as medical
+        state["mid_match_injury_chance"] = medical.chance_percent(draft.get("mid_match_injury_chance"))
         state["tournament_tteam_by_user"] = {
             int(k): int(v) for k, v in (draft.get("lpt_team_ids") or {}).items()}
         state["reserved_fixture_id"] = draft.get("lpt_reserved_fixture_id")

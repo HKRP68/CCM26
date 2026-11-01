@@ -498,3 +498,49 @@ def test_a_concurrent_state_save_never_acknowledges_an_uncommitted_medical_swap(
     assert not ok and 'moved on' in message
     accept.assert_not_awaited()
     prompt.assert_not_awaited()
+
+
+@pytest.mark.parametrize('value,expected', [
+    (None, 5), ('bad', 5), (-20, 0), (0, 0), ('0', 0),
+    (25, 25), ('75', 75), (100, 100), (500, 100),
+])
+def test_injury_probability_is_bounded_and_retains_zero(value, expected):
+    assert C.chance_percent(value) == expected
+    assert C.chance_for(SimpleNamespace(mid_match_injury_chance=value)) == expected
+
+
+@pytest.mark.parametrize('chance,roll,scheduled', [
+    (0, 0.0, False), (10, 0.2, False), (30, 0.2, True),
+    (100, 0.99999, True), (None, 0.049, True),
+])
+def test_tournament_probability_controls_each_teams_single_roll(chance, roll, scheduled):
+    s = state()
+    s.pop('_medical_plans')
+    s.update(current_over=1, mid_match_injury_chance=chance)
+    rng = SimpleNamespace(random=lambda: roll, choice=lambda values: 1, randint=lambda a, b: 4)
+    assert C.maybe_replace(s, rng=rng) is None
+    assert bool(s['_medical_plans']['1']) is scheduled
+    assert bool(s['_medical_plans']['2']) is scheduled
+
+
+def test_zero_probability_does_not_roll_or_invalidate_a_pending_substitution():
+    s = state()
+    s.pop('_medical_plans')
+    s['mid_match_injury_chance'] = 0
+    with patch.object(C.random, 'random') as roll:
+        assert C.maybe_replace(s) is None
+        roll.assert_not_called()
+    s = state()
+    reveal(s)
+    s['mid_match_injury_chance'] = 0
+    replace(s)  # once injured, the captain can still make their legal decision
+
+
+def test_match_probability_snapshot_survives_tournament_edits_and_save_restore():
+    tournament = SimpleNamespace(mid_match_injury_chance=25)
+    s = state()
+    s['mid_match_injury_chance'] = C.chance_for(tournament)
+    tournament.mid_match_injury_chance = 80
+    restored = json.loads(json.dumps(s))
+    assert restored['mid_match_injury_chance'] == 25
+    assert C.chance_for(tournament) == 80
