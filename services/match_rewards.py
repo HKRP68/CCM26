@@ -2,7 +2,7 @@
 
 Both the bot's Telegram match flow and the Mini App use this so rewards are
 identical regardless of how the match was played. No Telegram/ctx code here —
-just the DB writes for coins, gems, season points, W/L counters and the career
+just the DB writes for coins, gems, W/L counters and the career
 streak / active-day counters shown by /myprofile.
 """
 
@@ -110,9 +110,8 @@ def award_match_rewards_core(session, winner_user_id, loser_user_id, overs,
     """Apply match-end rewards. Returns (w_coins, w_gems, l_coins, l_gems).
 
     - Coins/gems scale with overs via GameConfig.
-    - PvP (not vsbot) also gets the active event coin multiplier + season points.
-    - vsbot gives the same coin/gem rewards but NO season points (matches the
-      bot's existing policy).
+    - PvP (not vsbot) also gets the active event coin multiplier.
+    - Season points are awarded separately by the ranked post-match hook.
     - The win streak and the active-day counter move here too, so every flow
       that pays match rewards keeps /myprofile's streaks honest. Flows that end
       a match WITHOUT paying rewards (a tie, a forfeit) call
@@ -180,16 +179,5 @@ def award_match_rewards_core(session, winner_user_id, loser_user_id, overs,
                          coins_change=l_coins, gems_change=l_gems)
         except Exception:
             pass
-
-    # Season points — PvP only (matches existing policy).
-    if not is_vsbot:
-        try:
-            from services.season_service import safe_add_season_points
-            if w:
-                safe_add_season_points(session, w, points=25, wins=1)
-            if l:
-                safe_add_season_points(session, l, points=5)
-        except Exception:
-            logger.exception("season points failed (non-fatal)")
 
     return w_coins, w_gems, l_coins, l_gems

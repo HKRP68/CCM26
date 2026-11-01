@@ -1,6 +1,6 @@
 """Ranked ladder — a 1v1 skill rating that rewards beating strong opponents.
 
-Every completed player-vs-player match moves both captains' rating with an Elo
+Every eligible ranked player-vs-player match moves both captains' rating with an Elo
 update: beating a higher-rated side pays more than beating a lower one, and a
 tie moves the two ratings towards each other. The global leaderboard counts
 wins; this counts *who* you beat.
@@ -10,7 +10,8 @@ Rules:
     a /letsplay mismatch flagged for anti stat-farming (``count_result=False``)
     and anything a caller does not hand in are never rated.
   • Anti-boosting: the same pair can only move each other's rating
-    ``PAIR_DAILY_CAP`` times per UTC day. Further matches still count for the
+    ``PAIR_DAILY_CAP`` times per rolling 24 hours, with positive gains reduced
+    to 100%, 50%, then 25%. Losses are not discounted. Further matches count for the
     rivalry and for rewards, just not for the ladder.
   • New players are placed faster: K is higher for the first ``PLACEMENT_GAMES``.
   • The ladder runs on the monthly season (``services.season_service``). When a
@@ -32,6 +33,10 @@ PLACEMENT_GAMES = 10
 K_PLACEMENT = 40
 K_STANDARD = 24
 PAIR_DAILY_CAP = 3
+PAIR_GAIN_MULTIPLIERS = (1.0, 0.5, 0.25)
+# Beating someone this far below you is no longer a competitive achievement.
+MAX_REWARDED_RATING_GAP = 400
+SEASON_WIN_BASE = 25
 # Custom-length friendlies (/letsplay 5, /cipl 6) shorter than this are not
 # rated — a two-over slog is a coin flip, not a measure of skill.
 MIN_RANKED_OVERS = 5
@@ -88,15 +93,33 @@ def k_factor(played):
     return K_PLACEMENT if (played or 0) < PLACEMENT_GAMES else K_STANDARD
 
 
-def rating_delta(rating, opponent, score, played):
+def pair_gain_multiplier(pair_games):
+    """Positive-gain multiplier for the pair's next game in a rolling 24h."""
+    if pair_games >= PAIR_DAILY_CAP:
+        return 0.0
+    index = min(max(0, pair_games), len(PAIR_GAIN_MULTIPLIERS) - 1)
+    return PAIR_GAIN_MULTIPLIERS[index]
+
+
+def season_win_points(rating, opponent, pair_games=0):
+    """Ranked win points: 25 against an equal; more for an upset, less below."""
+    if rating - opponent >= MAX_REWARDED_RATING_GAP:
+        return 0
+    return int(2 * SEASON_WIN_BASE * (1 - expected_score(rating, opponent))
+               * pair_gain_multiplier(pair_games))
+
+
+def rating_delta(rating, opponent, score, played, pair_games=0):
     """Points ``rating`` gains (or loses, negative) for ``score`` (1 / 0.5 / 0)."""
     raw = k_factor(played) * (score - expected_score(rating, opponent))
+    if raw > 0:
+        if score == 1 and rating - opponent >= MAX_REWARDED_RATING_GAP:
+            return 0
+        # Round gains down: a tiny reward must not become a guaranteed +1
+        # that can be farmed indefinitely. Draw gains are discounted too.
+        return int(raw * pair_gain_multiplier(pair_games))
     delta = int(round(raw))
-    # A win is never worth nothing, and a loss always costs something — an
-    # upset-proof 0 reads as a bug on the result card.
-    if score == 1 and delta < 1:
-        delta = 1
-    elif score == 0 and delta > -1:
+    if score == 0 and delta > -1:
         delta = -1
     return delta
 
@@ -174,17 +197,16 @@ def get_rating(session, user_id, create=False, live_key=None):
     return _roll_season(row, live_key, session)
 
 
-def _pair_games_today(session, a_id, b_id, exclude_match_id=None, now=None):
-    """Rated games already played between this pair since UTC midnight."""
+def _pair_games_recent(session, a_id, b_id, exclude_match_id=None, now=None):
+    """Rated games between this unordered pair in the previous 24 hours."""
     from models import Match, MatchPostResult
     from sqlalchemy import and_, or_
     now = now or datetime.utcnow()
-    midnight = datetime(now.year, now.month, now.day)
     q = (session.query(Match.id)
          .join(MatchPostResult, MatchPostResult.match_id == Match.id)
          .filter(MatchPostResult.rated.is_(True),
-                 Match.completed_at >= midnight,
-                 Match.completed_at < midnight + timedelta(days=1),
+                 Match.completed_at > now - timedelta(hours=24),
+                 Match.completed_at <= now,
                  or_(and_(Match.user1_id == a_id, Match.user2_id == b_id),
                      and_(Match.user1_id == b_id, Match.user2_id == a_id))))
     if exclude_match_id is not None:
@@ -208,11 +230,14 @@ def apply_result(session, user1_id, user2_id, winner_id=None, tie=False,
         out["reason"] = "no winner"
         return out
 
-    if _pair_games_today(session, user1_id, user2_id, exclude_match_id=match_id,
-                         now=now) >= PAIR_DAILY_CAP:
+    pair_games = _pair_games_recent(session, user1_id, user2_id,
+                                    exclude_match_id=match_id, now=now)
+    if pair_games >= PAIR_DAILY_CAP:
         out["reason"] = (f"daily cap — this pair has already played "
-                         f"{PAIR_DAILY_CAP} rated matches today")
+                         f"{PAIR_DAILY_CAP} rated matches in the last 24 hours")
         return out
+    out["pair_game"] = pair_games + 1
+    out["gain_multiplier"] = pair_gain_multiplier(pair_games)
 
     live_key = _live_key(session)
     r1 = get_rating(session, user1_id, create=True, live_key=live_key)
@@ -228,11 +253,12 @@ def apply_result(session, user1_id, user2_id, winner_id=None, tie=False,
     else:
         s1 = 1.0 if winner_id == user1_id else 0.0
         s2 = 1.0 - s1
-    d1 = rating_delta(before1, before2, s1, r1.played)
-    d2 = rating_delta(before2, before1, s2, r2.played)
+    d1 = rating_delta(before1, before2, s1, r1.played, pair_games)
+    d2 = rating_delta(before2, before1, s2, r2.played, pair_games)
 
-    for row, delta, score, before, uid in ((r1, d1, s1, before1, user1_id),
-                                           (r2, d2, s2, before2, user2_id)):
+    for row, delta, score, before, opponent, uid in (
+            (r1, d1, s1, before1, before2, user1_id),
+            (r2, d2, s2, before2, before1, user2_id)):
         old_div, _ = division_for(before)
         row.rating = max(MIN_RATING, before + delta)
         row.played = (row.played or 0) + 1
@@ -254,6 +280,10 @@ def apply_result(session, user1_id, user2_id, winner_id=None, tie=False,
             "emoji": new_emoji,
             "promoted": order.index(new_div) < order.index(old_div),
             "relegated": order.index(new_div) > order.index(old_div),
+            "season_points": (season_win_points(before, opponent, pair_games)
+                              if score == 1 else 0),
+            "low_opponent": (score == 1 and
+                             before - opponent >= MAX_REWARDED_RATING_GAP),
         }
     out["rated"] = True
     return out

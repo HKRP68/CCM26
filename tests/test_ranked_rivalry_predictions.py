@@ -19,6 +19,8 @@ _MODULE_NAMES = (
     "services.ranked_service", "services.rivalry_service",
     "services.prediction_service", "services.post_match",
     "services.hall_of_fame",
+    "services.match_rewards", "services.login_streak_service",
+    "services.quest_service", "services.quick_match_service",
 )
 _PREV = None
 _SAVED = {}
@@ -107,6 +109,36 @@ class RankedMathTests(unittest.TestCase):
         from services import ranked_service as rs
         self.assertGreater(rs.rating_delta(1000, 1000, 1, played=0),
                            rs.rating_delta(1000, 1000, 1, played=50))
+
+    def test_repeat_wins_shrink_but_losses_keep_full_cost(self):
+        from services import ranked_service as rs
+        self.assertEqual([rs.rating_delta(1000, 1000, 1, 20, n)
+                          for n in range(4)], [12, 6, 3, 0])
+        self.assertEqual([rs.rating_delta(1000, 1000, 0, 20, n)
+                          for n in range(3)], [-12, -12, -12])
+
+    def test_season_points_reward_difficulty_and_reduce_repeats(self):
+        from services import ranked_service as rs
+        self.assertEqual([rs.season_win_points(1000, 1000, n)
+                          for n in range(4)], [25, 12, 6, 0])
+        self.assertGreater(rs.season_win_points(1000, 1200), 25)
+        self.assertLess(rs.season_win_points(1200, 1000), 25)
+
+    def test_low_opponent_cutoff_has_no_minimum_point_loophole(self):
+        from services import ranked_service as rs
+        self.assertGreater(rs.rating_delta(1399, 1000, 1, 20), 0)
+        self.assertGreater(rs.season_win_points(1399, 1000), 0)
+        for gap in (400, 401, 800):
+            self.assertEqual(rs.rating_delta(1000 + gap, 1000, 1, 20), 0)
+            self.assertEqual(rs.season_win_points(1000 + gap, 1000), 0)
+        self.assertGreater(rs.rating_delta(1000, 1400, 1, 20), 12)
+        self.assertLess(rs.rating_delta(1400, 1000, 0, 20), -12)
+
+    def test_repeated_unequal_draws_cannot_farm_full_rating_gains(self):
+        from services import ranked_service as rs
+        gains = [rs.rating_delta(1000, 1300, 0.5, 20, n) for n in range(3)]
+        self.assertGreater(gains[0], gains[1])
+        self.assertGreater(gains[1], gains[2])
 
     def test_divisions(self):
         from services import ranked_service as rs
@@ -346,6 +378,198 @@ class PostMatchTests(Case):
         self.assertIn("Ranked", card)
         self.assertIn("Asha", card)
 
+    def test_ranked_season_points_are_paid_once_and_only_to_the_winner(self):
+        from services import post_match
+        a, b = self.user(), self.user()
+        m = self.match(a, b, winner=a)
+        result = post_match.process_completed_match(self.s, m)
+        self.assertEqual(result["ranked"]["players"][a.id]["season_points"], 25)
+        self.assertEqual((a.season_points, a.season_wins), (25, 1))
+        self.assertEqual((b.season_points, b.season_wins), (0, 0))
+        post_match.process_completed_match(self.s, m)
+        self.assertEqual((a.season_points, a.season_wins), (25, 1))
+        self.assertIn("Season points", post_match.render_card(result, {}))
+
+    def test_repeat_points_decline_and_stop_at_the_pair_cap(self):
+        from services import post_match
+        a, b = self.user(), self.user()
+        awards = []
+        for n in range(4):
+            # Deliberately swap sides: it must still be the same pair.
+            sides = (a, b) if n % 2 == 0 else (b, a)
+            m = self.match(*sides, winner=a)
+            result = post_match.process_completed_match(self.s, m)
+            awards.append(result["ranked"]["players"].get(a.id, {}).get("season_points", 0))
+            if n in (1, 2):
+                self.assertIn("Repeat opponent", post_match.render_card(result, {}))
+        self.assertGreater(awards[0], awards[1])
+        self.assertGreater(awards[1], awards[2])
+        self.assertEqual(awards[3], 0)
+        self.assertEqual((a.season_points, a.season_wins), (sum(awards), 3))
+
+    def test_new_opponent_receives_full_gain_after_repeat_cap(self):
+        from services import post_match
+        a, b, c = self.user(), self.user(), self.user()
+        for _ in range(3):
+            post_match.process_completed_match(self.s, self.match(a, b, winner=a))
+        out = post_match.process_completed_match(self.s, self.match(a, c, winner=a))
+        self.assertTrue(out["ranked"]["rated"])
+        self.assertEqual(out["ranked"]["gain_multiplier"], 1)
+
+    def test_rolling_limit_survives_midnight_and_expires_after_24_hours(self):
+        from services import post_match, ranked_service as rs
+        a, b = self.user(), self.user()
+        now = datetime.utcnow()
+        prior = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(minutes=1)
+        for _ in range(3):
+            post_match.process_completed_match(
+                self.s, self.match(a, b, winner=a, when=prior))
+        out = rs.apply_result(self.s, b.id, a.id, winner_id=a.id, now=prior + timedelta(minutes=2))
+        self.assertFalse(out["rated"])
+        self.assertIn("24 hours", out["reason"])
+        out = rs.apply_result(self.s, a.id, b.id, winner_id=a.id, now=prior + timedelta(hours=24))
+        self.assertTrue(out["rated"])
+        self.assertEqual(out["gain_multiplier"], 1)
+
+    def test_weak_opponent_win_pays_nothing_and_explains_why(self):
+        from services import post_match, ranked_service as rs
+        a, b = self.user(), self.user()
+        rs.get_rating(self.s, a.id, create=True).rating = 1400
+        out = post_match.process_completed_match(self.s, self.match(a, b, winner=a))
+        self.assertTrue(out["ranked"]["rated"])
+        self.assertEqual(out["ranked"]["players"][a.id]["delta"], 0)
+        self.assertEqual((a.season_points, a.season_wins), (0, 0))
+        self.assertIn("400+", post_match.render_card(out, {}))
+
+    def test_draw_does_not_earn_season_points_or_wins(self):
+        from services import post_match
+        a, b = self.user(), self.user()
+        out = post_match.process_completed_match(self.s, self.match(a, b))
+        self.assertTrue(out["ranked"]["rated"])
+        self.assertEqual((a.season_points, b.season_points), (0, 0))
+        self.assertEqual((a.season_wins, b.season_wins), (0, 0))
+
+    def test_unranked_state_and_modes_never_earn_season_points(self):
+        from services import post_match
+        from services.match_outcome import TYPE_SUPER_OVER, TYPE_VSBOT
+        for state, mode in (({"unranked": True}, None),
+                            ({"stats_disabled": True}, None),
+                            ({"is_vsbot": True}, None),
+                            ({}, TYPE_SUPER_OVER), ({}, TYPE_VSBOT),
+                            ({}, "casual")):
+            with self.subTest(state=state, mode=mode):
+                a, b = self.user(), self.user()
+                m = self.match(a, b, winner=a)
+                m.match_type = mode
+                out = post_match.process_completed_match(self.s, m, state=state)
+                self.assertFalse(out["ranked"]["rated"])
+                self.assertEqual((a.season_points, a.season_wins), (0, 0))
+
+    def test_bot_opponent_never_earns_ranked_or_season_points(self):
+        from services import post_match
+        a, bot = self.user(), self.user(tg=-1)
+        out = post_match.process_completed_match(self.s, self.match(a, bot, winner=a))
+        self.assertIsNone(out["ranked"])
+        self.assertEqual((a.season_points, a.season_wins), (0, 0))
+
+    def test_unfinished_and_resultless_matches_are_not_treated_as_ranked_draws(self):
+        from services import post_match
+        a, b = self.user(), self.user()
+        m = self.match(a, b, status="playing")
+        self.assertIsNone(post_match.process_completed_match(self.s, m))
+        m.status = "completed"
+        m.margin_type = "cancelled"
+        m.end_reason = "cleared_by_user"
+        self.assertFalse(post_match.process_completed_match(self.s, m)["ranked"]["rated"])
+        m = self.match(a, b)
+        m.margin_type = None
+        self.assertFalse(post_match.process_completed_match(self.s, m)["ranked"]["rated"])
+        self.assertEqual((a.season_points, b.season_points), (0, 0))
+
+    def test_season_write_failure_rolls_back_rating_and_can_be_retried(self):
+        from unittest import mock
+        from services import post_match, ranked_service as rs, season_service as ss
+        a, b = self.user(), self.user()
+        m = self.match(a, b, winner=a)
+        with mock.patch.object(ss, "add_ranked_season_points", side_effect=RuntimeError("db down")):
+            self.assertIsNone(post_match.process_completed_match(self.s, m))
+        self.assertIsNone(rs.get_rating(self.s, a.id))
+        self.assertEqual(a.season_points, 0)
+        out = post_match.process_completed_match(self.s, m)
+        self.assertTrue(out["ranked"]["rated"])
+        self.assertEqual((a.season_points, a.season_wins), (25, 1))
+
+    def test_ranked_win_resets_last_seasons_counters_before_crediting(self):
+        from services import post_match, season_service as ss
+        a, b = self.user(), self.user()
+        a.season_key, a.season_points, a.season_wins = "2001-01", 900, 40
+        post_match.process_completed_match(self.s, self.match(a, b, winner=a))
+        self.assertEqual(a.season_key, ss.current_season_key())
+        self.assertEqual((a.season_points, a.season_wins), (25, 1))
+
+    def test_generic_match_rewards_pay_currency_without_season_points(self):
+        from services.match_rewards import award_match_rewards_core
+        a, b = self.user(coins=0), self.user(coins=0)
+        payout = award_match_rewards_core(self.s, a.id, b.id, overs=20)
+        self.assertGreater(payout[0], 0)
+        self.assertEqual(a.total_coins, payout[0])
+        self.assertEqual((a.season_points, a.season_wins), (0, 0))
+        self.assertEqual((b.season_points, b.season_wins), (0, 0))
+
+    def test_login_reward_adds_activity_points_without_season_wins(self):
+        from models import UserStats
+        from services.login_streak_service import claim_login_reward
+        a = self.user(coins=0)
+        stats = UserStats(user_id=a.id)
+        self.s.add(stats)
+        self.s.flush()
+        out = claim_login_reward(self.s, a, stats)
+        self.assertTrue(out["ok"])
+        self.assertGreater(a.total_coins, 0)
+        self.assertEqual((a.season_points, a.season_wins), (3, 0))
+        self.assertFalse(claim_login_reward(self.s, a, stats)["ok"])
+        self.assertEqual(a.season_points, 3)
+
+    def test_quest_claim_adds_activity_points_without_season_wins(self):
+        from models import Quest, UserQuestProgress
+        from services.quest_service import claim_quest_reward, period_key_for
+        a = self.user(coins=0)
+        quest = Quest(name="Ranked-only season regression", description="Win one match",
+                      quest_type="daily",
+                      event_key="match_won", target_count=1, reward_points=10,
+                      reward_coins=50, reward_gems=0)
+        self.s.add(quest)
+        self.s.flush()
+        self.s.add(UserQuestProgress(
+            user_id=a.id, quest_id=quest.id, period_key=period_key_for("daily"),
+            progress=1, completed=True, claimed=False))
+        self.s.flush()
+        ok, _message, reward = claim_quest_reward(self.s, a.id, quest.id)
+        self.assertTrue(ok)
+        self.assertEqual(reward["points"], 10)
+        self.assertEqual(a.quest_points, 10)
+        self.assertGreater(a.total_coins, 0)
+        self.assertEqual((a.season_points, a.season_wins), (3, 0))
+        self.assertFalse(claim_quest_reward(self.s, a.id, quest.id)[0])
+        self.assertEqual(a.season_points, 3)
+
+    def test_quick_match_win_pays_currency_without_season_points(self):
+        from unittest import mock
+        from services import quick_match_service as qm
+        a = self.user(coins=0)
+        state = {
+            "innings_1": {"runs": 150, "wickets": 5, "balls": 120, "phase_history": []},
+            "innings_2": {"runs": 100, "wickets": 10, "balls": 100, "phase_history": []},
+            "target": 151, "user_bats_first": True,
+            "user_xi": [], "bot_xi": [], "user_rating": 80, "bot_rating": 80}
+        with mock.patch.object(qm, "_generate_batting_card", return_value=[]), \
+                mock.patch.object(qm, "_generate_bowling_card", return_value=[]):
+            result = qm._finalize_match(self.s, a, state, target_chased=False)
+        self.assertTrue(result["user_won"])
+        self.assertGreater(a.total_coins, 0)
+        self.assertEqual(a.quick_matches_won, 1)
+        self.assertEqual((a.season_points, a.season_wins), (0, 0))
+
     def test_short_custom_match_is_unrated_but_counts_for_the_rivalry(self):
         from services import post_match
         a, b = self.user(), self.user()
@@ -356,6 +580,7 @@ class PostMatchTests(Case):
         self.assertIn("under 5 overs", out["ranked"]["reason"])
         self.assertEqual(out["rivalry"]["played"], 1)
         self.assertIn("Unrated", post_match.render_card(out, {}))
+        self.assertEqual((a.season_points, a.season_wins), (0, 0))
 
     def test_uncounted_match_is_not_rated(self):
         from services import post_match

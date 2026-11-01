@@ -8,10 +8,12 @@ which detects a month change, finalizes the previous season (pays top finishers,
 archives standings), and opens the new one. A background job also calls this
 hourly as a safety net so rollover happens even if no one is active at midnight.
 
-Scoring (tunable):
-  - Each season point comes from gameplay; callers use add_season_points().
-  - Quick Match does NOT feed the season (it's casual). Real wins, quests, etc.
-    can call add_season_points() to contribute.
+Eligible ranked wins and capped game activity bonuses feed the season. The
+ranked service calculates opponent-strength and repeat-opponent adjustments
+before points are applied inside the idempotent post-match transaction.
+Activity bonuses have their own
+daily limits and never increment season wins or change ranked rating. Casual
+match results, losses and draws award no season points.
 """
 
 import logging
@@ -162,20 +164,43 @@ def _finalize_season(session, season):
 def _sync_user_season(session, user, live_key):
     """Reset a user's season counters if they belong to an old season."""
     if user.season_key != live_key:
-        user.season_key = live_key
-        user.season_points = 0
-        user.season_wins = 0
+        _credit_season_points(session, user, live_key, points=0)
 
 
-def add_season_points(session, user, points=0, wins=0):
-    """Add to a user's season tally, auto-resetting if they're on an old season.
-    Caller commits."""
+def _credit_season_points(session, user, live_key, *, points, wins=0):
+    """Atomically credit a current-season balance, resetting stale counters.
+
+    SQL arithmetic preserves simultaneous ranked and activity awards even when
+    another request loaded its User object before the first request committed.
+    """
+    from sqlalchemy import case, func
+    session.query(User).filter(User.id == user.id).update({
+        User.season_points: case(
+            (User.season_key == live_key, func.coalesce(User.season_points, 0)),
+            else_=0) + points,
+        User.season_wins: case(
+            (User.season_key == live_key, func.coalesce(User.season_wins, 0)),
+            else_=0) + wins,
+        User.season_key: live_key,
+    }, synchronize_session="fetch")
+
+
+def add_ranked_season_points(session, user, *, ranked_result):
+    """Credit this player's points from an eligible ranked result.
+
+    Called only by the idempotent post-match hook, in its savepoint. Keeping
+    the calculated award in the ranked result prevents independent reward
+    flows from granting fixed points or crediting an unrated match.
+    """
+    if not ranked_result or not ranked_result.get("rated"):
+        return 0
+    player = ranked_result.get("players", {}).get(user.id, {})
+    points = player.get("season_points", 0)
+    if points <= 0:
+        return 0
     live = ensure_current_season(session)
-    _sync_user_season(session, user, live.season_key)
-    if points:
-        user.season_points = (user.season_points or 0) + points
-    if wins:
-        user.season_wins = (user.season_wins or 0) + wins
+    _credit_season_points(session, user, live.season_key, points=points, wins=1)
+    return points
 
 
 def get_season_leaderboard(session, limit=20):
@@ -229,6 +254,8 @@ def get_season_info(session, user=None):
             "top10": {"coins": live.prize_top10, "gems": 0},
         },
     }
+    from services.season_activity_service import get_activity_progress
+    info["activity"] = get_activity_progress(session, user.id if user is not None else None)
     if user is not None:
         _sync_user_season(session, user, live.season_key)
         info["me"] = {
@@ -237,11 +264,3 @@ def get_season_info(session, user=None):
             "rank": get_user_season_rank(session, user),
         }
     return info
-
-
-def safe_add_season_points(session, user, points=0, wins=0):
-    """Exception-swallowing wrapper for use inside other handlers."""
-    try:
-        add_season_points(session, user, points=points, wins=wins)
-    except Exception:
-        logger.exception("add_season_points failed")

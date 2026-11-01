@@ -482,6 +482,10 @@ def apply_trait_to_player(session, user, inventory_id, roster_id):
 
     player = session.get(Player, roster.player_id)
     player_name = player.name if player else f"Player #{roster.player_id}"
+    from services.activity_service import log_activity
+    log_activity(session, user.id, "trait_apply",
+                 f"Applied {trait.name} Lv.{pt.level} to {player_name}",
+                 player_name=player_name)
     return True, f"✨ Applied {trait.emoji} {trait.name} Lv.{pt.level} to {player_name}!"
 
 

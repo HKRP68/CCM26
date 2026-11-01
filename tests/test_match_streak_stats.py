@@ -235,16 +235,12 @@ def test_reward_core_awards_nothing_when_not_counted():
                   matches_won=1, matches_lost=2, win_streak=6, best_streak=6)
     session = _FakeSession({1: winner, 2: loser})
 
-    season_calls = []
+    from unittest.mock import patch
     import services.season_service as ss
-    orig_season = getattr(ss, "safe_add_season_points", None)
-    ss.safe_add_season_points = lambda *a, **k: season_calls.append((a, k))
-    try:
+    with patch.object(ss, "add_ranked_season_points") as season_award:
         wc, wg, lc, lg = mr.award_match_rewards_core(
             session, 1, 2, overs=20, is_vsbot=False, count_result=False)
-    finally:
-        if orig_season is not None:
-            ss.safe_add_season_points = orig_season
+    season_award.assert_not_called()
 
     # Nothing awarded, nothing recorded.
     assert (wc, wg, lc, lg) == (0, 0, 0, 0)
@@ -254,4 +250,3 @@ def test_reward_core_awards_nothing_when_not_counted():
     assert winner.win_streak == 1 and winner.best_streak == 1
     assert loser.matches_lost == 2 and loser.matches_played == 3
     assert loser.win_streak == 6
-    assert season_calls == []

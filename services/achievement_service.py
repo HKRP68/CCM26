@@ -405,6 +405,10 @@ def check_and_award(session, user_id):
                     user.total_coins = (user.total_coins or 0) + a["coins"]
                 if a.get("gems"):
                     user.total_gems = (user.total_gems or 0) + a["gems"]
+                from services.activity_service import log_activity
+                log_activity(session, user.id, "achievement",
+                             f"Unlocked {a['name']} ({a['key']})",
+                             coins_change=a.get("coins", 0), gems_change=a.get("gems", 0))
                 newly.append(a)
             except IntegrityError:
                 # Race condition — already unlocked from another path

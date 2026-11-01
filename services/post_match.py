@@ -5,7 +5,8 @@ Every flow that finishes a match with a result calls
 after it has written the winner onto the ``Match`` row. That one call:
 
   1. rates the match on the ranked ladder (``services.ranked_service``),
-  2. folds it into the pair's rivalry (``services.rivalry_service``),
+  2. credits season points only for eligible ranked wins,
+  3. folds it into the pair's rivalry (``services.rivalry_service``),
 
 and stores what happened in a ``MatchPostResult`` row, keyed on the match id,
 so a replayed finalize changes nothing the second time. After the caller has
@@ -67,7 +68,7 @@ def process_completed_match(session, match, *, count_result=True, state=None):
     Call inside the finalize transaction after the result is written; the
     caller commits. Idempotent on ``match.id``.
     """
-    if match is None or not match.id:
+    if match is None or not match.id or match.status != "completed":
         return None
     from models import MatchPostResult
     try:
@@ -86,8 +87,7 @@ def process_completed_match(session, match, *, count_result=True, state=None):
             else:
                 row.counted = bool(count_result)
 
-            tie = (match.margin_type == "tie"
-                   or (match.winner_id is None and match.loser_id is None))
+            tie = match.margin_type in ("tie", "tied") and match.winner_id is None
             summary = {"match_id": match.id, "user1_id": match.user1_id,
                        "user2_id": match.user2_id, "winner_id": match.winner_id,
                        "tie": tie, "team_owner": _team_owner(state),
@@ -96,7 +96,26 @@ def process_completed_match(session, match, *, count_result=True, state=None):
 
             if count_result and _humans(session, match):
                 from services import ranked_service, rivalry_service
-                if (match.overs or 20) < ranked_service.MIN_RANKED_OVERS:
+                from services.match_outcome import (
+                    TYPE_CRIC, TYPE_PLAYMATCH, TYPE_WSP, TYPE_CHALLENGE,
+                    TYPE_LETSPLAY, TYPE_CIPL, END_COMPLETED, derive_end_reason)
+                if ((state or {}).get("unranked")
+                        or (state or {}).get("stats_disabled")
+                        or (state or {}).get("is_vsbot")
+                        or (state or {}).get("is_bot_match")
+                        or (state or {}).get("is_spectator")
+                        or (state or {}).get("is_bot_vs_bot")
+                        or match.match_type not in (
+                            None, TYPE_CRIC, TYPE_PLAYMATCH, TYPE_WSP,
+                            TYPE_CHALLENGE, TYPE_LETSPLAY, TYPE_CIPL)):
+                    summary["ranked"] = {
+                        "rated": False, "players": {},
+                        "reason": "unranked match mode"}
+                elif derive_end_reason(match)[0] != END_COMPLETED:
+                    summary["ranked"] = {
+                        "rated": False, "players": {},
+                        "reason": "match was not played to completion"}
+                elif (match.overs or 0) < ranked_service.MIN_RANKED_OVERS:
                     summary["ranked"] = {
                         "rated": False, "players": {},
                         "reason": (f"matches under {ranked_service.MIN_RANKED_OVERS}"
@@ -105,6 +124,13 @@ def process_completed_match(session, match, *, count_result=True, state=None):
                     summary["ranked"] = ranked_service.apply_result(
                         session, match.user1_id, match.user2_id,
                         winner_id=match.winner_id, tie=tie, match_id=match.id)
+                    if summary["ranked"]["rated"]:
+                        from models import User
+                        from services.season_service import add_ranked_season_points
+                        for uid in (match.user1_id, match.user2_id):
+                            add_ranked_season_points(
+                                session, session.get(User, uid),
+                                ranked_result=summary["ranked"])
                 summary["rivalry"] = rivalry_service.record_match(session, match)
 
             row.rated = bool((summary["ranked"] or {}).get("rated"))
@@ -146,8 +172,20 @@ def render_card(summary, users):
             parts.append(f"{_name(users, uid)} {p['after']} "
                          f"({sign}{p['delta']}) {p.get('emoji', '')}{move}")
         lines.append("📈 <b>Ranked</b> · " + "  ·  ".join(parts))
-    elif ranked.get("reason") and ("daily cap" in ranked["reason"]
-                                   or "overs don't count" in ranked["reason"]):
+        season_parts = [
+            f"{_name(users, int(uid))} +{p['season_points']}"
+            for uid, p in (ranked.get("players") or {}).items()
+            if p.get("season_points")]
+        if season_parts:
+            lines.append("🏅 <b>Season points</b> · " + "  ·  ".join(season_parts))
+        if ranked.get("gain_multiplier", 1) < 1:
+            percent = int(ranked["gain_multiplier"] * 100)
+            lines.append(f"🔁 <i>Repeat opponent: gains reduced to {percent}%. "
+                         "Play different opponents for full gains.</i>")
+        if any(p.get("low_opponent") for p in ranked.get("players", {}).values()):
+            lines.append("📉 <i>Opponent 400+ rating below: no ranked gain "
+                         "or season points for the win.</i>")
+    elif ranked.get("reason"):
         lines.append(f"📈 <i>Unrated — {html.escape(ranked['reason'], quote=False)}.</i>")
 
     riv = summary.get("rivalry") or {}

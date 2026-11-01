@@ -1333,12 +1333,9 @@ def claim_quest_reward(session, user_id, quest_id):
     if quest.reward_gems:
         user.total_gems = (user.total_gems or 0) + quest.reward_gems
 
-    # Quests contribute to the monthly season
-    try:
-        from services.season_service import safe_add_season_points
-        safe_add_season_points(session, user, points=10)
-    except Exception:
-        pass
+    from services.activity_service import log_activity
+    log_activity(session, user.id, "quest_claim", f"Claimed quest #{quest.id}: {quest.name}",
+                 coins_change=coins, gems_change=quest.reward_gems or 0)
 
     reward = {
         "points": quest.reward_points or 0,

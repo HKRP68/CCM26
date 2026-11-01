@@ -667,9 +667,10 @@ real in-bot performances.
 
 ### Ranked ladder
 
-Every completed match between two players (Lets Play, CIPL/Challenge League,
-`/playmatch`, `/wpm`, Super Over and bowl-out finishes) moves both ratings.
-Beating a stronger player pays more.
+Eligible completed PvP matches of 5+ overs (Lets Play, CIPL/Challenge League,
+`/playmatch`, `/wpm`, including their Super Over and bowl-out finishes) affect
+ranked ratings. Beating a stronger player pays more. Standalone Super Over
+practice is unranked.
 
 | Division | Rating |
 |----------|--------|
@@ -683,9 +684,23 @@ Beating a stronger player pays more.
 * First 10 matches are placements (bigger swings).
 * Monthly season: with 5+ ranked matches you're paid by division (Silver 1,000
   coins → Legend 20,000 coins + 10 💎); ratings then reset halfway to 1000.
-* The same pair can move each other's rating 3 times per UTC day.
+* The same pair can affect ratings 3 times in a **rolling 24 hours**. Positive
+  gains fall to **100%, 50%, 25%** for the first, second and third meeting;
+  subsequent meetings award no ranked or season points. Swapping sides or
+  crossing midnight does not reset the limit. Rated losses keep their full Elo cost.
+* Wins against an opponent **400+ rating below** give **zero ranked gain and
+  zero season points**. Smaller gaps already reduce rewards through Elo.
+* Match season points come **only from eligible ranked wins**: 25 against an
+  equal-rated player, scaled up for stronger opponents and down for weaker
+  opponents, then reduced by the same repeat-opponent multiplier. Losses and
+  draws give no season points. Quick Match results give no match points.
+* Game activities also earn small season bonuses: claims, daily/login rewards,
+  packs, quest claims, upgrades, trades, traits, achievements and reward drops.
+  Each category has a daily limit, with **40 activity points maximum per UTC
+  day** across all categories. These bonuses do not change ranked ratings or
+  season wins. See [the full activity table](ranked-season-scoring.md#game-activity-points).
 * Never rated: bot matches, `/lpmulti`, under-5-over friendlies, "won't count"
-  mismatches.
+  mismatches, unranked practice and matches stopped without a completed result.
 
 `/rank` · `/ranked` · `/rivalry @user` · `/h2h @user`
 

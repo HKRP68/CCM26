@@ -772,14 +772,8 @@ async def pack_open_inventory_callback(update: Update, context: ContextTypes.DEF
         await context.bot.send_message(
             chat_id, "\n".join(summary), parse_mode="HTML")
 
-        # Activity log + quest tracking
-        try:
-            names = ", ".join(p.name for p, _ in rolled)
-            log_activity(session, user.id, "open_pack",
-                         f"Opened {pack.name}: {names}", coins_change=0)
-            session.commit()
-        except Exception:
-            session.rollback()
+        # The shared pack service logs the opening inside its transaction.
+        # Quest tracking runs once the result has been presented.
         try:
             from services.quest_service import safe_track
             safe_track(session, user.id, "pack_open", 1)

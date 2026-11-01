@@ -207,13 +207,6 @@ def claim_login_reward(session, user, stats):
     if gems:
         user.total_gems = (user.total_gems or 0) + gems
 
-    # Contribute to the monthly season (engagement points)
-    try:
-        from services.season_service import safe_add_season_points
-        safe_add_season_points(session, user, points=5)
-    except Exception:
-        pass
-
     # Day-7 bonus: also grant a free pack if a pack named "Bronze Pack" exists
     if reward["kind"] == "pack" or ladder_day == LADDER_LENGTH:
         try:

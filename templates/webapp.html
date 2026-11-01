@@ -2891,8 +2891,21 @@
     <p class="card-title">🎁 Season prizes</p>
     <div id="season-prizes" style="font-size:0.82rem;line-height:1.7;color:var(--muted);"></div>
     <p style="font-size:0.72rem;color:var(--muted);margin:0.5rem 0 0;">
-      Earn points from quests, login rewards, and match wins.
+      Ranked PvP wins of 5+ overs earn season points: 25 against
+      an equal-rated opponent, more for upsets and less against weaker players.
+      Same opponent in a rolling 24h: 100%, 50%, then 25% gains; after 3 rated
+      meetings, no points. Wins against players 400+ rating below earn no points.
+      Earn extra points from the activities below, up to 40 per UTC day.
+      Practice, bots, Quick Match results, losses and draws give no match points.
     </p>
+  </div>
+
+  <div class="card" style="margin-top:0.7rem;">
+    <p class="card-title">✨ Daily activity points</p>
+    <p id="season-activity-progress" style="font-size:0.82rem;color:var(--muted);" aria-live="polite">Loading today's progress…</p>
+    <progress id="season-activity-meter" value="0" max="40" aria-label="Today's season activity points" style="width:100%;accent-color:var(--accent);"></progress>
+    <div id="season-activity-rules" style="margin-top:0.6rem;font-size:0.8rem;"></div>
+    <p style="font-size:0.72rem;color:var(--muted);margin:0.6rem 0 0;">Limits reset at 00:00 UTC. Only successful actions count. Activity points do not change ranked rating or ranked wins.</p>
   </div>
 
   <div class="card" style="margin-top:0.7rem;">
@@ -8185,6 +8198,21 @@ async function loadSeason() {
   const season = data.season;
   document.getElementById('season-name').textContent = season.name || 'Season';
 
+  const activity = season.activity || {};
+  const activityCap = activity.daily_cap || 40;
+  const activityEarned = activity.earned || 0;
+  document.getElementById('season-activity-progress').textContent =
+    `${activityEarned} / ${activityCap} activity points earned today · ${Math.max(0, activityCap - activityEarned)} remaining`;
+  const activityMeter = document.getElementById('season-activity-meter');
+  activityMeter.max = activityCap;
+  activityMeter.value = activityEarned;
+  document.getElementById('season-activity-rules').innerHTML = (activity.activities || []).map(a => `
+    <div style="display:flex;justify-content:space-between;gap:0.6rem;padding:0.4rem 0;border-bottom:1px solid var(--border);">
+      <span>${escapeHtml(a.label)}</span>
+      <span style="white-space:nowrap;color:var(--muted);">+${a.points} pts · ${a.completed}/${a.daily_limit} today</span>
+    </div>
+  `).join('');
+
   // My standing
   if (season.me) {
     document.getElementById('season-me-card').style.display = 'block';
@@ -8205,7 +8233,7 @@ async function loadSeason() {
   // Board
   const rows = data.leaderboard || [];
   if (!rows.length) {
-    board.innerHTML = `<div class="empty" style="padding:0.8rem;"><div style="font-size:0.85rem;">No ranked players yet. Be the first!</div></div>`;
+    board.innerHTML = `<div class="empty" style="padding:0.8rem;"><div style="font-size:0.85rem;">No season points yet. Complete an activity or win a ranked match!</div></div>`;
     return;
   }
   board.innerHTML = rows.map(r => {

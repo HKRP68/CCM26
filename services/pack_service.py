@@ -610,6 +610,10 @@ def open_unopened_pack(session, user, inventory_id):
     session.delete(inv)
     session.flush()
 
+    from services.activity_service import log_activity
+    names = ", ".join(p.name for p, _slot in rolled)
+    log_activity(session, user.id, "open_pack", f"Opened {pack.name}: {names}")
+
     return {"success": True, "pack": pack, "players": rolled,
             "added": added, "players_to_claim": to_claim,
             "pity_triggered": pity_was_triggered,

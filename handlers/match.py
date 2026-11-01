@@ -1037,18 +1037,6 @@ async def _award_match_rewards(ctx, s, winner_tg, loser_tg, overs):
             log_activity(session, l.id, "match_reward", f"Loss reward: +{l_coins} coins, +{l_gems} gems",
                          coins_change=l_coins, gems_change=l_gems)
 
-        # ── Monthly season: PvP is the heaviest contributor ──
-        # Only real PvP (not vsbot) — winner +25 & a win, loser +5 for playing.
-        if not s.get("is_vsbot"):
-            try:
-                from services.season_service import safe_add_season_points
-                if w:
-                    safe_add_season_points(session, w, points=25, wins=1)
-                if l:
-                    safe_add_season_points(session, l, points=5)
-            except Exception:
-                logger.exception("Season points for PvP failed (non-fatal)")
-
         session.commit()
         return w_coins, w_gems, l_coins, l_gems
     except Exception: session.rollback(); return 0,0,0,0

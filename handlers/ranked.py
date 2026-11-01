@@ -38,8 +38,10 @@ def render_rank_card(user, row, rank):
         lines += [f"{emoji} <b>{div}</b> · {rating} rating",
                   "No ranked matches this season yet.",
                   "",
-                  "<i>Every completed match against another player counts — "
-                  "/letsplay, /cipl, /playmatch, /wpm…</i>"]
+                  "<i>Complete ranked PvP matches of 5+ overs to climb. "
+                  "Practice, bot matches and casual games give no ranked rating.</i>",
+                  "<i>Same opponent in 24h: 100%, 50%, 25% gains, then capped. "
+                  "Wins against players 400+ rating below give no points.</i>"]
         return "\n".join(lines)
     div, emoji = ranked_service.division_for(row.rating)
     lines.append(f"{emoji} <b>{div}</b> · <b>{row.rating}</b> rating"
@@ -53,13 +55,18 @@ def render_rank_card(user, row, rank):
     if row.played < ranked_service.PLACEMENT_GAMES:
         left = ranked_service.PLACEMENT_GAMES - row.played
         lines.append(f"🧭 Placement: {left} more match{'es' if left != 1 else ''} "
-                     f"at double rating swings")
+                     f"at larger rating swings")
     coins, gems = ranked_service.division_reward(row.rating)
     if coins or gems:
         need = max(0, ranked_service.MIN_GAMES_FOR_REWARD - row.played)
         tail = f" (play {need} more to qualify)" if need else ""
         lines.append(f"🎁 Season-end reward at this division: {coins:,} coins"
                      + (f" + {gems} 💎" if gems else "") + tail)
+    lines += ["", "<i>Ranked wins earn season points: 25 against an equal, "
+              "more against stronger players, less against weaker players. "
+              "Repeat-opponent gains: 100%, 50%, 25% per 24h, then capped. "
+              "Losses keep their normal rating cost. Daily game activities "
+              "can add up to 40 season points without changing rating.</i>"]
     return "\n".join(lines)
 
 
@@ -105,7 +112,9 @@ def render_ladder(rows, season_key, me_line=None):
         lines += ["", me_line]
     lines += ["", "<i>Divisions: 🥉 Bronze · 🥈 Silver 1050 · 🥇 Gold 1150 · "
                   "🔷 Platinum 1250 · 💎 Diamond 1350 · 👑 Legend 1450</i>",
-              "<i>Rewards are paid by division when the month ends.</i>"]
+              "<i>Rewards are paid by division when the month ends.</i>",
+              "<i>Face varied opponents: repeat gains drop to 50%, then 25%, "
+              "with 3 rated meetings per pair in a rolling 24h.</i>"]
     return "\n".join(lines)
 
 

@@ -19,13 +19,29 @@ def log_activity(session, user_id: int, action: str, detail: str = "",
     entry = ActivityLog(
         user_id=user_id,
         action=action,
-        detail=detail,
+        detail=(detail or "")[:500],
         coins_change=coins_change,
         gems_change=gems_change,
         player_name=player_name,
         player_rating=player_rating,
     )
     session.add(entry)
+    # Successful game actions share one capped activity budget across the bot
+    # and Mini App. Telemetry-only and reward-payout log rows are not eligible.
+    from services.season_activity_service import (
+        ACTIVITY_RULES, activity_key, award_activity_points)
+    if activity_key(action) in ACTIVITY_RULES:
+        session.flush()
+        try:
+            with session.begin_nested():
+                points = award_activity_points(
+                    session, user_id, action,
+                    event_key=f"log:{entry.id}:{entry.created_at.isoformat()}")
+                if points:
+                    suffix = f" · +{points} season pts"
+                    entry.detail = (detail or "")[:500 - len(suffix)] + suffix
+        except Exception:
+            logger.exception("season activity bonus failed for %s/%s", user_id, action)
 
 
 # ── Daily "start" activity (for User Retention stats) ──────────────────────

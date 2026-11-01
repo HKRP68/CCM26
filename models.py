@@ -2422,6 +2422,25 @@ class Season(Base):
     prize_gems_top3 = Column(Integer, default=5)
 
 
+class SeasonActivityAward(Base):
+    """One capped, deduplicated season bonus for a completed game activity."""
+    __tablename__ = "season_activity_awards"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    season_key = Column(String(7), nullable=False)
+    activity_date = Column(String(10), nullable=False)  # UTC YYYY-MM-DD
+    activity = Column(String(40), nullable=False)
+    event_key = Column(String(180), nullable=False)
+    points = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "event_key", name="uq_season_activity_event"),
+        Index("ix_season_activity_user_day", "user_id", "activity_date"),
+    )
+
+
 class SeasonStanding(Base):
     """Archived final standings for a finalized season (top N snapshot)."""
     __tablename__ = "season_standings"
