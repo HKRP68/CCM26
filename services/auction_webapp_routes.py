@@ -5,7 +5,7 @@ import logging
 import threading
 import time
 
-from flask import request
+from flask import Response, request, stream_with_context
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from services import auction_webapp as W
@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 def register(app, authenticate, csrf_exempt, member_rpc):
     member_cache = {}
     cache_lock = threading.Lock()
+    from services import auction_updates as U
+    stream_slots = U.StreamSlots()
 
     def member(chat_id, tg_id):
         key = (chat_id, tg_id)
@@ -42,6 +44,106 @@ def register(app, authenticate, csrf_exempt, member_rpc):
                 member_cache.clear()
             member_cache[key] = (allowed, now)
         return allowed
+
+    def updates():
+        if request.content_length and request.content_length > 2_000_000:
+            return dict(ok=False, message='Auction requests must be under 2 MB.'), 413
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return dict(ok=False, message='Send a JSON object.'), 400
+        if request.headers.get('Authorization', '').removeprefix('tma ').startswith('DEV_'):
+            return dict(ok=False, error='bad_init_data',
+                        message='Shared auctions require a verified Telegram login.'), 401
+
+        last_authorized = 0.0
+        current_identity = None
+        selected_season = data.get('season_id')
+        previous_authority = None
+
+        def authorize():
+            nonlocal last_authorized, current_identity, selected_season, previous_authority
+            auth, tg_id, error = authenticate(allow_not_debuted=True)
+            if error:
+                payload, status = error
+                raise U.AccessChanged(payload, status)
+            db, user, tg_id = auth
+            try:
+                from services.miniapp_buttons import auction_launch
+                launch = auction_launch(request.headers.get('X-Tg-Start-Param', ''))
+                origin = launch['chat_id'] if launch else None
+                origin = origin or (getattr(user, 'last_miniapp_chat_id', None) if user else None)
+                requested = selected_season or (launch['season_id'] if launch else None)
+                season, _rows = W.resolve(db, tg_id, requested, check_member=member,
+                                         origin_chat_id=origin)
+                selected_season = season.id if season else None
+                current_identity = tg_id
+                state = U.snapshot(db, selected_season, tg_id)
+                previous_authority = state.authority
+                last_authorized = time.monotonic()
+                return state
+            except W.AccessError as exc:
+                raise U.AccessChanged(dict(ok=False, error='forbidden', message=str(exc)), 403)
+            except (A.AuctionError, ValueError, TypeError) as exc:
+                raise U.AccessChanged(dict(ok=False, error='invalid_input', message=W.plain(str(exc))), 400)
+            finally:
+                db.close()
+
+        def read_snapshot():
+            if time.monotonic() - last_authorized >= U.REAUTHORIZE_SECONDS:
+                return authorize()
+            from database import get_session
+            db = get_session()
+            try:
+                state = U.snapshot(db, selected_season, current_identity)
+            finally:
+                db.close()
+            # A manager/owner loses or gains authority on the next probe. Fresh
+            # payload requests independently enforce their current permissions.
+            return authorize() if state.authority != previous_authority else state
+
+        try:
+            initial = authorize()
+        except U.AccessChanged as exc:
+            return exc.payload, exc.status
+        except Exception:
+            logger.exception('Auction updates could not start')
+            return dict(ok=False, error='unavailable', message='Live updates are temporarily unavailable.'), 503
+
+        try:
+            limit = max(0, min(64, int(app.config.get('AUCTION_STREAM_MAX_CLIENTS', 12))))
+        except (TypeError, ValueError):
+            limit = 12
+        if not stream_slots.acquire(limit):
+            return Response(json.dumps(dict(ok=False, error='stream_capacity',
+                                             message='Use automatic refresh while live updates reconnect.')),
+                            status=503, mimetype='application/json', headers={'Retry-After': '10'})
+        released = False
+        release_lock = threading.Lock()
+
+        def release():
+            nonlocal released
+            with release_lock:
+                if not released:
+                    released = True
+                    stream_slots.release()
+
+        def generate():
+            try:
+                yield from U.notifications(read_snapshot, initial)
+            except Exception:
+                logger.exception('Auction updates interrupted')
+                yield U.encode('access', dict(ok=False, status=503, error='unavailable',
+                                             message='Live updates interrupted. Refresh before bidding.'))
+            finally:
+                release()
+
+        response = Response(stream_with_context(generate()), mimetype='text/event-stream',
+                            headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'})
+        response.call_on_close(release)
+        return response
+
+    app.add_url_rule('/api/webapp/auction/updates', 'webapp_auction_updates',
+                     csrf_exempt(updates), methods=['POST'])
 
     def run(kind):
         if request.content_length and request.content_length > 2_000_000:

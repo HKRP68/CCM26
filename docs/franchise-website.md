@@ -41,7 +41,7 @@ Workers.
 
 In Render, select **New → Blueprint**, connect this repository and set the
 Blueprint file path to `render.franchise.yaml`. Supply the requested
-`DATABASE_URL`, `BOT_TOKEN` and `BOT_USERNAME` values from the existing bot.
+`DATABASE_URL`, `BOT_TOKEN`, `BOT_USERNAME` and explicit `BOT_ADMIN_IDS` values from the existing bot.
 Render generates a separate `WEBSITE_SECRET` for the website. Review the new
 service before creating it; adding this file to the repository alone does not
 deploy a service.
@@ -61,7 +61,7 @@ If creating the service manually, use these settings:
 | Runtime | Python 3 |
 | Root directory | Repository root; leave blank |
 | Build command | `pip install -r requirements.txt` |
-| Start command | `gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 60 website:app` |
+| Start command | `gunicorn --bind 0.0.0.0:$PORT --worker-class gthread --workers 2 --threads 32 --timeout 60 website:app` |
 | Health check path | `/` |
 | Python version environment | `PYTHON_VERSION=3.11.9` |
 
@@ -78,6 +78,7 @@ service to `website:app`; the bot still owns clocks and announcements.
    | `DATABASE_URL` | The same shared PostgreSQL database used by the bot; use its Render internal URL for services in the same region |
    | `BOT_TOKEN` | The existing bot's token, stored as a server secret |
    | `BOT_USERNAME` | The corresponding bot username without `@` |
+   | `BOT_ADMIN_IDS` | The same explicit administrator Telegram IDs as the bot; copy `OWNER_IDS`/`BOT_OWNER_IDS` too if configured |
    | `WEBSITE_SECRET` | Render-generated secret from the Blueprint, or a new stable random secret of at least 32 characters |
    | `WEBSITE_HTTPS` | `true` for production secure cookies |
    | `PYTHON_VERSION` | `3.11.9` |
@@ -95,7 +96,7 @@ service to `website:app`; the bot still owns clocks and announcements.
 4. Start the web service:
 
    ```sh
-   gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 60 website:app
+   gunicorn --bind 0.0.0.0:$PORT --worker-class gthread --workers 2 --threads 32 --timeout 60 website:app
    ```
 
    Render gives the service an HTTPS `https://<assigned-name>.onrender.com`
@@ -175,6 +176,42 @@ rotate it. Sessions carry identity, not permanent permissions.
 An explicitly supplied Mini App authorization header is verified independently;
 an invalid header cannot fall back to a browser cookie. `DEV_` identities cannot
 access the shared auction. Browser login does not set the password-admin flag.
+
+## Live updates and visible roles
+
+The auction room and dashboard subscribe to authenticated server-sent change
+notifications. A lightweight database probe checks for committed changes every
+500 ms, so actions made by the bot or another web worker reach the same room.
+Actual arrival time includes database and network latency; zero delay is not a
+guarantee. Full viewer-specific payloads are fetched after changes and periodically
+to keep bidding state fresh. Heartbeats alone never renew stale bidding data.
+
+Streams last at most 25 seconds, reconnect automatically, and release their
+database session between probes. Hidden or offline tabs suspend connections.
+The website uses one stream for its active screen. If streaming is unavailable
+or full, the live room polls every second and tools/dashboard refresh every two
+seconds. Live connection status, the last confirmed update, and measured request
+round-trip time are shown in the room.
+
+The Render command uses two `gthread` workers with 32 threads each.
+`AUCTION_STREAM_MAX_CLIENTS=12` caps streams per worker, leaving threads for bids
+and sign-ins. Use the new start command when updating an existing website
+service. Keep this cap below the configured thread count. The normal bot
+start command remains `python bot.py`. An always-on Render instance avoids
+free-tier cold starts during live auctions; no instance plan is changed by code.
+
+Bot Admin, Auction Manager, Team Owner, Team Co-owner and Spectator badges are
+derived from the verified Telegram identity and current permissions. Multiple
+roles appear together. Bot Admin includes auction management, so it is shown
+instead of a redundant Auction Manager badge. Being a team owner or Telegram
+group administrator does not grant management access. Role removal updates
+the next authorized payload; every action still rechecks its permissions.
+
+A committed bid is acknowledged immediately. Controls remain busy until the
+server state is reread, and uncertain requests are never automatically submitted
+again. While typing a custom bid, current price and leader still update. A new
+player, RTM stage, pause or role change replaces obsolete controls. Typed amounts
+are never automatically raised.
 
 ## Suggested next additions
 

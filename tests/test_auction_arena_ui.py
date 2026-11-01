@@ -12,31 +12,66 @@ class AuctionArenaUITests(unittest.TestCase):
         script = r"""
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const source=fs.readFileSync(process.argv[1],'utf8');
-async function boot(data,gate=true) {
- const elements={},events={},calls=[],toolCalls=[],homes=[],blobs=[],downloads=[];let toolBusy=false;
- let editing=false,backgroundPoll=null,readFailure=null;
+const settle=()=>new Promise(setImmediate);
+async function boot(data,gate=true,options={}) {
+ const elements={},events={},windowEvents={},calls=[],toolCalls=[],homes=[],blobs=[],downloads=[],subscriptions=[];let toolBusy=false;
+ let editing=false,backgroundPoll=null,readFailure=null,bodyWrites=0,customInput=null,quickBid=null,customContext=null;
+ let holdRead=false,releaseRead=null,holdAction=false,releaseAction=null,activeReads=0,maxActiveReads=0,nextTimer=1;
+ const timers=new Map();
+ let clockNow=Date.now();
+ class MockDate extends Date {static now(){return clockNow;}}
+ const decode=value=>value.replaceAll('&quot;','"').replaceAll('&lt;','<');
  function node(id) {
-   const item={id,dataset:{},open:false,textContent:'',hidden:false,className:'',style:{},
+   const item={id,dataset:{},open:false,textContent:'',hidden:false,className:'',style:{},disabled:false,value:'',
      classList:{toggle(){}},setAttribute(){},contains(){return editing;},
-     querySelectorAll(){return [];},addEventListener(type,fn){if(id==='dialog')events[type]=fn;},
+     querySelectorAll(selector){return quickBid&&id==='dialog'&&((selector==='[data-aa-action="bid"]')||selector.includes('[data-aa-action="bid"]')||selector==='button,input,select')?[quickBid]:[];},addEventListener(type,fn){if(id==='dialog')events[type]=fn;},
      showModal(){this.open=true;},close(){this.open=false;events.close();},click(){downloads.push(this.download);}};
-   let html='';Object.defineProperty(item,'innerHTML',{get(){return html;},set(value){html=value;for(const m of value.matchAll(/id="([^"]+)"/g))if(!elements[m[1]])elements[m[1]]=node(m[1]);}});
+   let html='';Object.defineProperty(item,'innerHTML',{get(){return html;},set(value){
+     html=value;for(const m of value.matchAll(/id="([^"]+)"/g))if(!elements[m[1]])elements[m[1]]=node(m[1]);
+     if(id==='aa-body') {
+       bodyWrites++;customInput=null;quickBid=null;customContext=null;
+       const input=value.match(/<input name="amount_lakh"[^>]*value="([^"]*)"/);
+       if(input){customInput=node('custom-input');customInput.value=input[1];}
+       const form=value.match(/data-aa-form="bid" data-aa-args="([^"]+)"/);
+       if(form)customContext=JSON.parse(decode(form[1]));
+       const bid=value.match(/<button[^>]*data-aa-action="bid" data-aa-args="([^"]+)"([^>]*)>([^<]*)<\/button>/);
+       if(bid){quickBid=node('quick-bid');quickBid.dataset.aaArgs=decode(bid[1]);quickBid.disabled=bid[2].includes('disabled');quickBid.textContent=bid[3];quickBid.closest=()=>null;}
+     }
+   }});
    return item;
  }
  const context=vm.createContext({document:{hidden:false,activeElement:null,getElementById:id=>elements[id],
      createElement:tag=>{if(tag==='a')return node('link');const root=node('dialog');elements['auction-arena']=root;return root;},body:{style:{overflow:'auto'},append(){}},addEventListener(){}},
-   window:{addEventListener(){},confirm(){return true;}},tg:undefined,
+   window:{addEventListener(name,fn){windowEvents[name]=fn;},confirm(){return true;}},tg:undefined,Date:MockDate,
    Blob,URL:{createObjectURL(blob){blobs.push(blob);return 'blob:test';},revokeObjectURL(){}},
    navigate(screen){homes.push(screen);},
    escapeHtml:v=>String(v??'').replaceAll('<','&lt;').replaceAll('"','&quot;'),haptic(){},
-   api:async(url,body)=>{calls.push({url,body});if(readFailure&&!url.endsWith('/action'))return {ok:false,status:readFailure,data:{message:'Access revoked.'}};return body.view==='admin'?{ok:gate,data:{...data,admin:gate,bot_admin:data.bot_admin&&gate}}:{ok:true,data:url.endsWith('/action')?{}:data};},
+   api:async(url,body)=>{
+     calls.push({url,body});const mutation=url.endsWith('/action');
+     if(!mutation){activeReads++;maxActiveReads=Math.max(maxActiveReads,activeReads);}
+     try {
+       if(mutation&&holdAction){holdAction=false;await new Promise(resolve=>{releaseAction=resolve;});}
+       if(!mutation&&holdRead){holdRead=false;await new Promise(resolve=>{releaseRead=resolve;});}
+       if(readFailure&&!mutation)return {ok:false,status:readFailure,data:{message:'Access revoked.'}};
+       return body.view==='admin'?{ok:gate,data:{...data,admin:gate,bot_admin:data.bot_admin&&gate}}:{ok:true,data:mutation?{message:body.action==='bid'?'Bid placed.':'Auction updated.'}:data};
+     } finally {if(!mutation)activeReads--;}
+   },
    AuctionApp:{openTools:async(...args)=>{toolCalls.push(args);},stopTools(){},setSeason(){},isBusy:()=>toolBusy,refreshTools:async()=>{}},
-   setTimeout(fn,delay){if([2000,5000].includes(delay))backgroundPoll=fn;return 1;},clearTimeout(){},setInterval(){return 1;},clearInterval(){}});
+   ...(options.updates?{AuctionUpdates:{watch(config){const subscription={...config,stopped:false};subscriptions.push(subscription);return ()=>{subscription.stopped=true;};}}}:{}),
+   setTimeout(fn,delay){const id=nextTimer++;timers.set(id,{fn,delay});if([1000,2000,4000,5000].includes(delay))backgroundPoll=id;return id;},
+   clearTimeout(id){timers.delete(id);if(backgroundPoll===id)backgroundPoll=null;},setInterval(){return nextTimer++;},clearInterval(){}});
  vm.runInContext(source,context);vm.runInContext('AuctionArena.open(1)',context);await new Promise(setImmediate);
- return {elements,calls,toolCalls,homes,blobs,downloads,setToolBusy:value=>{toolBusy=value;},
+ return {elements,calls,toolCalls,homes,blobs,downloads,subscriptions,setToolBusy:value=>{toolBusy=value;},
    workspace:async view=>vm.runInContext('AuctionArena.openWorkspace('+JSON.stringify(view)+',1)',context),
-   setData:value=>{data=value;},setEditing:value=>{editing=value;context.document.activeElement=value?{matches:()=>true}:null;},denyReads:status=>{readFailure=status;},
-   poll:async()=>{assert(backgroundPoll,'A live refresh must be scheduled');const run=backgroundPoll;backgroundPoll=null;await run();},
+   setData:value=>{data=value;},setEditing:value=>{editing=value;context.document.activeElement=value?(customInput||{matches:()=>true}):null;if(value)context.document.activeElement.matches=()=>true;},denyReads:status=>{readFailure=status;},
+   bodyWrites:()=>bodyWrites,input:()=>customInput,quickBid:()=>quickBid,customContext:()=>customContext,maxReads:()=>maxActiveReads,
+   advanceTime:milliseconds=>{clockNow+=milliseconds;},windowEvent:name=>windowEvents[name]?.(),
+   holdNextRead:()=>{holdRead=true;},releaseRead:()=>{assert(releaseRead,'A read must be waiting');const release=releaseRead;releaseRead=null;release();},
+   holdNextAction:()=>{holdAction=true;},releaseAction:()=>{assert(releaseAction,'An action must be waiting');const release=releaseAction;releaseAction=null;release();},
+   emit:()=>{const sub=subscriptions.findLast(s=>!s.stopped);assert(sub,'A live subscription must exist');sub.onChange();},
+   streamState:state=>subscriptions.findLast(s=>!s.stopped).onStatus({state}),
+   flushPending:async()=>{for(const [id,timer] of [...timers])if(timer.delay===0){timers.delete(id);await timer.fn();await settle();}},
+   poll:async()=>{assert(backgroundPoll,'A live refresh must be scheduled');const timer=timers.get(backgroundPoll);assert(timer,'The refresh timer must remain active');timers.delete(backgroundPoll);backgroundPoll=null;await timer.fn();},
    body:context.document.body,click:async(key,args={})=>events.click({target:{closest:selector=>selector==='[data-aa-ui]'?{dataset:{aaUi:key,...args}}:null}}),
    act:async(name,args)=>events.click({target:{closest:selector=>selector==='[data-aa-action]'?{dataset:{aaAction:name,aaArgs:JSON.stringify(args)}}:null}})};
 }
@@ -47,6 +82,14 @@ async function boot(data,gate=true) {
    lot:{id:9,player_id:4,name:'Player',rating:90,bat_rating:88,bowl_rating:75,version:'Base',role:'Batsman',country:'India',
         number:1,set_name:'Marquee',base_lakh:20,next_lakh:20,bid_lakh:null,bids:0,rtm_stage:null,status:'on_block',
         deadline:new Date(Date.now()+30000).toISOString()},events:[],bids:[],counts:{},last_result:null};
+ const botOwner=await boot({...base,admin:true,bot_admin:true,role_labels:['Bot Admin','Team Owner']});
+ assert.match(botOwner.elements['aa-header'].innerHTML,/Bot Admin/);
+ assert.match(botOwner.elements['aa-header'].innerHTML,/Team Owner/);
+ const roleManager=await boot({...base,admin:true,bot_admin:false,role_labels:['Auction Manager','Team Owner']});
+ assert.match(roleManager.elements['aa-header'].innerHTML,/Auction Manager<\/span>/);
+ roleManager.setData({...base,role_labels:['Team Owner']});await roleManager.poll();
+ assert.doesNotMatch(roleManager.elements['aa-header'].innerHTML,/Auction Manager/,'Revoked manager badge disappears with its controls');
+ assert.match(roleManager.elements['aa-header'].innerHTML,/Team Owner/);
  const owner=await boot(base);
  assert.equal(owner.body.style.overflow,'hidden');
  assert.match(owner.elements['aa-body'].innerHTML,/PLACE BID: ₹0.20 Cr/);
@@ -126,6 +169,72 @@ async function boot(data,gate=true) {
  assert(csv.includes('"\'=SUM(1,2)"'), 'Formula-like team names export as text');
  assert(csv.includes('"\'@Player"'), 'Formula-like player names export as text');
  assert(csv.includes('"125"'));assert(csv.includes('Purse remaining (lakh)'));
+
+ const typing=await boot({...base,direct_bids:true});
+ const originalInput=typing.input();assert(originalInput,'The custom bid input must be rendered');
+ originalInput.value='37';typing.setEditing(true);
+ const originalContext=typing.customContext(),beforeTyping=typing.bodyWrites();
+ typing.setData({...base,direct_bids:true,teams:[...base.teams,{...base.teams[0],id:2,name:'Chennai',mine:false}],
+   lot:{...base.lot,bid_lakh:25,next_lakh:30,bids:1,bidder_id:2}});
+ await typing.poll();
+ assert.equal(typing.bodyWrites(),beforeTyping,'Same-player price updates keep the focused form mounted');
+ assert.equal(typing.input(),originalInput);assert.equal(typing.input().value,'37','A background bid never replaces a typed amount');
+ assert.deepEqual(typing.customContext(),originalContext,'Typed bids retain the original context for server stale checks');
+ assert.equal(typing.elements['aa-current-price'].textContent,'₹0.25 Cr');
+ assert.equal(typing.elements['aa-current-bidder'].textContent,'Chennai');
+ assert.match(typing.quickBid().textContent,/₹0.30 Cr/);
+ assert.deepEqual(JSON.parse(typing.quickBid().dataset.aaArgs),{lot_id:9,stage:null,expected_bids:1,team_id:1,amount_lakh:30},'Quick bids display and submit the new explicit price');
+
+ for(const [change,next] of [
+   ['player',{...base,lot:{...base.lot,id:10,name:'Next player'}}],
+   ['lot status',{...base,lot:{...base.lot,status:'rtm_offered'}}],
+   ['RTM stage',{...base,lot:{...base.lot,rtm_stage:'final_offer'}}],
+   ['auction status',{...base,season:{...base.season,status:'paused'}}]
+ ]) {
+   const changing=await boot({...base,direct_bids:true});changing.setEditing(true);
+   const beforeChange=changing.bodyWrites();changing.setData({...next,direct_bids:true});await changing.poll();
+   assert(changing.bodyWrites()>beforeChange,change+' changes must replace controls even while an input has focus');
+ }
+ const recovering=await boot({...base,direct_bids:true});recovering.setEditing(true);recovering.denyReads(503);
+ await recovering.poll();assert.equal(recovering.quickBid().disabled,true,'Disconnected bidding is disabled');
+ const beforeRecovery=recovering.bodyWrites();recovering.denyReads(null);await recovering.poll();
+ assert(recovering.bodyWrites()>beforeRecovery,'A recovered connection refreshes controls despite input focus');
+ assert.equal(recovering.quickBid().disabled,false,'Bidding becomes usable again after recovery');
+
+ const slowResponse=await boot(base);slowResponse.holdNextRead();
+ const waitingResponse=slowResponse.poll();await settle();slowResponse.advanceTime(7000);
+ slowResponse.releaseRead();await waitingResponse;
+ assert.equal(slowResponse.quickBid().disabled,true,'A seven-second-old response cannot enable bids just because it has arrived');
+ assert.match(slowResponse.elements['aa-connection'].textContent,/Updates delayed/);
+ const disconnected=await boot(base);assert.equal(disconnected.quickBid().disabled,false);
+ disconnected.windowEvent('offline');
+ assert.equal(disconnected.quickBid().disabled,true,'Going offline disables bidding immediately');
+ assert.match(disconnected.elements['aa-connection'].textContent,/Updates delayed/);
+ disconnected.windowEvent('online');await settle();
+ assert.equal(disconnected.quickBid().disabled,false,'A successful reconnect refresh restores usable bids');
+
+ const acknowledged=await boot(base);acknowledged.holdNextRead();let finished=false;
+ const acknowledgedAction=acknowledged.act('bid',{lot_id:9,expected_bids:0,stage:null,team_id:1,amount_lakh:20}).then(()=>{finished=true;});
+ await settle();assert.equal(finished,false,'State readback is still waiting');
+ assert.equal(acknowledged.elements['aa-toast'].textContent,'Bid placed.','Committed bid feedback appears before a delayed readback');
+ assert.equal(acknowledged.elements['aa-toast'].hidden,false);
+ acknowledged.releaseRead();await acknowledgedAction;
+
+ const streamed=await boot(base,true,{updates:true});assert.equal(streamed.subscriptions.length,1);
+ streamed.streamState('live');assert.match(streamed.elements['aa-connection'].textContent,/Live connection/);
+ const beforeBurst=streamed.calls.filter(c=>!c.url.endsWith('/action')).length;
+ streamed.holdNextRead();streamed.emit();streamed.emit();streamed.emit();await settle();
+ assert.equal(streamed.calls.filter(c=>!c.url.endsWith('/action')).length,beforeBurst+1,'A burst shares the in-flight state refresh');
+ streamed.releaseRead();await settle();await streamed.flushPending();await settle();
+ assert.equal(streamed.calls.filter(c=>!c.url.endsWith('/action')).length,beforeBurst+2,'A single follow-up catches changes received during a refresh');
+ assert.equal(streamed.maxReads(),1,'Live notifications do not overlap state reads');
+ streamed.holdNextAction();const duringMutation=streamed.calls.filter(c=>!c.url.endsWith('/action')).length;
+ const pendingMutation=streamed.act('bid',{lot_id:9,expected_bids:0,stage:null,team_id:1,amount_lakh:20});await settle();
+ streamed.emit();streamed.emit();await settle();
+ assert.equal(streamed.calls.filter(c=>!c.url.endsWith('/action')).length,duringMutation,'Live notifications wait while a mutation is pending');
+ streamed.releaseAction();await pendingMutation;
+ assert.equal(streamed.maxReads(),1);
+ await streamed.click('close');assert(streamed.subscriptions.every(s=>s.stopped),'Closing the room releases its live subscriptions');
 
 })().catch(e=>{console.error(e);process.exit(1)});
 """

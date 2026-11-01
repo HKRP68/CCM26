@@ -16,7 +16,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(process.argv[1], 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
-const baseAuction = () => ({ok:true,admin:false,auctions:[{id:7,name:'Real season'}],season:{id:7,name:'Real season',status:'setup',max_squad:20,currency:'₹'},my_team_ids:[12],teams:[{id:12,name:'Actual franchise',mine:true,size:2,purse_lakh:7500,short_name:'AF',warnings:[{message:'Needs a wicket keeper'}]}],counts:{total:8,sold:2,unsold:1,retained:1,drafted:0},events:[]});
+const baseAuction = () => ({ok:true,admin:false,roles:['team_owner'],role_labels:['Team Owner'],auctions:[{id:7,name:'Real season'}],season:{id:7,name:'Real season',status:'setup',max_squad:20,currency:'₹'},my_team_ids:[12],teams:[{id:12,name:'Actual franchise',mine:true,my_role:'team_owner',size:2,purse_lakh:7500,short_name:'AF',warnings:[{message:'Needs a wicket keeper'}]}],counts:{total:8,sold:2,unsold:1,retained:1,drafted:0},events:[]});
 async function boot(options={}) {
   const handlers={},calls=[],opened=[];let stops=0,failNext=0;
   let serverUser=options.user || null;
@@ -28,7 +28,7 @@ async function boot(options={}) {
       addEventListener(name,fn){handlers[id+':'+name]=fn;},
       replaceChildren(...children){this.children=children;},scrollIntoView(){}};
   }
-  const ids=['fs-config','fs-main','fs-signout','fs-navigation','fs-account','fs-title','fs-landing','fs-dashboard','fs-login-box','fs-login-error','fs-login-setup','fs-telegram-login','fs-page-status','fs-season','fs-updated','fs-refresh','fs-dashboard-content','fs-toast'];
+  const ids=['fs-config','fs-main','fs-signout','fs-navigation','fs-account','fs-current-roles','fs-title','fs-landing','fs-dashboard','fs-login-box','fs-login-error','fs-login-setup','fs-telegram-login','fs-page-status','fs-season','fs-updated','fs-refresh','fs-dashboard-content','fs-toast'];
   const els=Object.fromEntries(ids.map(id=>[id,element(id)]));
   els['fs-config'].textContent=JSON.stringify({bot_username:'example_bot',login_configured:true,csrf_token:'initial-token'});
   const managerNav=element('manager-nav');managerNav.dataset.fsAccess='manager';
@@ -84,7 +84,33 @@ async function boot(options={}) {
   assert.equal(loggedOut.ownerNav.hidden,false);
   assert.match(loggedOut.els['fs-dashboard-content'].innerHTML,/Actual franchise/);
   assert.match(loggedOut.els['fs-dashboard-content'].innerHTML,/Needs a wicket keeper/);
+  assert.match(loggedOut.els['fs-account'].innerHTML,/Team Owner/);
+  assert.match(loggedOut.els['fs-current-roles'].innerHTML,/Team Owner/);
+  assert.match(loggedOut.els['fs-dashboard-content'].innerHTML,/What your roles allow/);
+  assert.match(loggedOut.els['fs-dashboard-content'].innerHTML,/Bids and answers RTM for assigned franchises/);
   assert(!loggedOut.els['fs-account'].innerHTML.includes('<script>'),'Authenticated profile is escaped');
+  assert.equal(loggedOut.site.requestHeaders()['X-CSRF-Token'],'authenticated-token','Live transport reads the latest rotated CSRF token');
+
+  const privilegedData={...baseAuction(),admin:true,bot_admin:true,roles:['bot_admin','team_owner'],role_labels:['Bot Admin','Team Owner']};
+  const privileged=await boot({user:{id:42,first_name:'Administrator'},auction:privilegedData});
+  assert.match(privileged.els['fs-account'].innerHTML,/Bot Admin · Team Owner/);
+  assert.match(privileged.els['fs-current-roles'].innerHTML,/Bot Admin/);
+  assert.doesNotMatch(privileged.els['fs-current-roles'].innerHTML,/fs-role-auction_manager/,'Bot Admin is identified separately from a delegated Auction Manager');
+  const coownerData={...baseAuction(),roles:['team_co_owner'],role_labels:['Team Co-owner']};
+  coownerData.teams[0].my_role='team_co_owner';
+  const coowner=await boot({user:{id:43,first_name:'Co-owner'},auction:coownerData});
+  assert.match(coowner.els['fs-dashboard-content'].innerHTML,/Team Co-owner · 2/);
+  assert.match(coowner.els['fs-account'].innerHTML,/Team Co-owner/);
+  const managerData={...baseAuction(),admin:true,roles:['auction_manager','team_owner'],role_labels:['Auction Manager','Team Owner']};
+  const manager=await boot({user:{id:42,first_name:'Manager owner'},auction:managerData});
+  assert.match(manager.els['fs-current-roles'].innerHTML,/Auction Manager/);
+  managerData.admin=false;managerData.roles=['team_owner'];managerData.role_labels=['Team Owner'];
+  await manager.site.home();
+  assert.equal(manager.managerNav.hidden,true,'Current role changes remove manager navigation');
+  assert.doesNotMatch(manager.els['fs-account'].innerHTML,/Auction Manager/,'Revoked role labels do not survive a refresh');
+  const spectator=await boot({user:{id:44,first_name:'Viewer'},auction:{...baseAuction(),roles:['spectator'],role_labels:['Spectator'],my_team_ids:[],teams:[]}});
+  assert.match(spectator.els['fs-current-roles'].innerHTML,/Spectator/);
+  assert.equal(spectator.ownerNav.hidden,true);
 
   loggedOut.fail(401);await loggedOut.api('/api/webapp/auction',{});await tick();
   assert.equal(loggedOut.stops(),1);assert.equal(loggedOut.els['fs-landing'].hidden,false);

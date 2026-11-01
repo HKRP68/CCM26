@@ -40,6 +40,7 @@ def create_app(test_config=None):
         PERMANENT_SESSION_LIFETIME=timedelta(seconds=SESSION_MAX_AGE_SECONDS),
         SESSION_REFRESH_EACH_REQUEST=False,
         MAX_CONTENT_LENGTH=2_000_000,
+        AUCTION_STREAM_MAX_CLIENTS=os.getenv("AUCTION_STREAM_MAX_CLIENTS", "12"),
     )
     if test_config:
         app.config.update(test_config)

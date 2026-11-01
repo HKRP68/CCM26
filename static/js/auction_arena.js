@@ -6,6 +6,7 @@ const AuctionArena = (() => {
   let lastEvent=null, resultCard=null, resultUntil=0, logTab='activity', teamQuery='';
   let toolView=null, exitingToHome=false;
   let bodyOverflow='', noticeTimer=null;
+  let stopUpdates=null, updateSeason=null, updateState='fallback', reads=0, refreshPending=false, roundTrip=0;
   const artShapes=new Map();
   const $=id=>document.getElementById(id);
   const esc=value=>escapeHtml(String(value??''));
@@ -26,7 +27,9 @@ const AuctionArena = (() => {
   }[name]||''}</svg>`;
   const own=()=>data?.teams?.find(t=>t.id===teamId);
   const context=lot=>({lot_id:lot.id,stage:lot.rtm_stage,expected_bids:lot.bids});
-  const liveEnough=()=>connected&&Date.now()-updatedAt<6500;
+  const liveEnough=()=>connected&&Date.now()-updatedAt+roundTrip<6500;
+  const roles=()=>data?.role_labels?.length?data.role_labels:data?.bot_admin?['Bot Admin']:data?.admin?['Auction Manager']:data?.my_team_ids?.length?['Team Owner']:['Spectator'];
+  const pollDelay=()=>updateState==='live'?4000:1000;
   const isWorking=()=>busy||!!AuctionApp.isBusy?.();
   const action=(label,name,args={},disabled=false,style='')=>`<button type="button" class="aa-button ${style}" data-aa-action="${name}" data-aa-args="${esc(JSON.stringify(args))}" ${disabled?'disabled':''}>${esc(label)}</button>`;
   const ui=(label,name,ico='')=>`<button type="button" class="aa-icon-button" data-aa-ui="${name}" aria-label="${esc(label)}" title="${esc(label)}">${icon(ico||name)}</button>`;
@@ -106,7 +109,31 @@ const AuctionArena = (() => {
     }
     await openTools(view);
   }
-  function suspend() {clearTimeout(poll);clearInterval(clock);poll=null;clock=null;epoch++;connected=false;}
+  function suspend() {clearTimeout(poll);clearInterval(clock);poll=null;clock=null;epoch++;connected=false;stopLiveUpdates();refreshPending=false;}
+  function stopLiveUpdates() {const stop=stopUpdates;stopUpdates=null;updateSeason=null;updateState='fallback';stop?.();}
+  function updateHeaders() {
+    if(typeof FranchiseSite!=='undefined')return FranchiseSite.requestHeaders();
+    return {'Content-Type':'application/json',Authorization:typeof AUTH_VALUE==='undefined'?'':AUTH_VALUE,
+      ...(typeof START_PARAM!=='undefined'&&START_PARAM?{'X-Tg-Start-Param':START_PARAM}:{})};
+  }
+  function requestLiveRefresh() {
+    if(!root?.open||document.hidden)return;
+    if(toolView){AuctionApp.liveRefresh?.();return;}
+    if(busy||reads){refreshPending=true;return;}
+    refreshPending=false;refresh(true);
+  }
+  function ensureLiveUpdates() {
+    if(typeof AuctionUpdates==='undefined'||!root?.open||!seasonId)return;
+    if(stopUpdates&&updateSeason===seasonId)return;
+    stopLiveUpdates();updateSeason=seasonId;
+    stopUpdates=AuctionUpdates.watch({seasonId,headers:updateHeaders,onChange:requestLiveRefresh,
+      onAccess:requestLiveRefresh,onStatus:status=>{updateState=status.state;tick();}});
+  }
+  function reflectIdentity(next) {
+    if(!data||next.season?.id!==seasonId)return;
+    for(const key of ['admin','bot_admin','my_team_ids','role','roles','role_labels','permissions'])data[key]=next[key];
+    renderHeader();
+  }
   function leaveTools() {if(toolView){AuctionApp.stopTools();toolView=null;connected=false;}}
   function stop() {exitingToHome=false;suspend();leaveTools();if(root?.open)root.close();}
   function close() {if(isWorking()||!root?.open)return;exitingToHome=true;root.close();}
@@ -124,6 +151,7 @@ const AuctionArena = (() => {
     $('aa-body').innerHTML='<section class="auction-app aa-tools" id="auction-app" aria-label="Auction tools"></section>';
     renderNav();root.scrollTop=0;
     await AuctionApp.openTools(view,seasonId,team);
+    ensureLiveUpdates();
     tick();
   }
   async function syncSeason(id) {seasonId=id;data=null;lastEvent=null;resultCard=null;if(root?.open)await refresh();}
@@ -139,14 +167,20 @@ const AuctionArena = (() => {
     clearTimeout(poll);if(!root?.open||document.hidden)return;
     if(!toolView&&!clock)clock=setInterval(tick,250);
     const request=++epoch, sent=Date.now();
+    reads++;
+    try {
     const result=await api('/api/webapp/auction',{season_id:seasonId,view:'arena'},10000);
     if(request!==epoch||!root.open)return;
+    const recovered=!connected&&!!result.ok;
     connected=!!result.ok;
     if(result.ok) {
       const next=result.data;
+      const contextChanged=!!data&&(data.season?.id!==next.season?.id||data.season?.status!==next.season?.status||
+        data.lot?.id!==next.lot?.id||data.lot?.status!==next.lot?.status||data.lot?.rtm_stage!==next.lot?.rtm_stage||
+        (!!next.lot?.rtm_stage&&data.lot?.bidder_id!==next.lot?.bidder_id));
       const accessChanged=!!data&&(!!data.admin!==!!next.admin||!!data.bot_admin!==!!next.bot_admin||
         (data.my_team_ids||[]).join(',')!==(next.my_team_ids||[]).join(','));
-      offset=Date.parse(next.server_time)-(sent+Date.now())/2;updatedAt=Date.now();
+      roundTrip=Math.max(0,Date.now()-sent);offset=Date.parse(next.server_time)-(sent+Date.now())/2;updatedAt=Date.now();
       if(data?.lot&&next.lot?.id===data.lot.id&&next.my_team_ids?.includes(data.lot.bidder_id)&&next.lot.bidder_id&&!next.my_team_ids.includes(next.lot.bidder_id)) {haptic('heavy');notice('You have been outbid. Next bid: '+money(next.lot.next_lakh));}
       if(next.last_result?.event_id!==lastEvent) {
         if(next.last_result&&(data||!next.lot)) {resultCard=next.last_result;resultUntil=Date.now()+3200;}
@@ -157,23 +191,42 @@ const AuctionArena = (() => {
       if(panel&&!next.admin)panel=false;
       renderHeader();renderNav();
       const editing=$('aa-body').contains(document.activeElement)&&document.activeElement?.matches('input,select,textarea');
-      if(accessChanged||!background||!editing)renderBody();
+      if(accessChanged||contextChanged||recovered||!background||!editing)renderBody();
+      else syncLiveReadout();
       root.querySelectorAll('[data-aa-purse]').forEach(el=>{const team=data.teams?.find(t=>t.id===Number(el.dataset.aaPurse));if(team)el.textContent=money(team.purse_lakh);});
+      ensureLiveUpdates();
     } else {
       if([401,403].includes(result.status)) {
-        data=null;panel=false;teamId=null;resultCard=null;renderHeader();renderNav();
+        stopLiveUpdates();data=null;panel=false;teamId=null;resultCard=null;renderHeader();renderNav();
         $('aa-body').innerHTML=empty('Auction access denied',result.data?.message||'Your account cannot access this auction.');
       }
       else if(!data)$('aa-body').innerHTML=empty('Arena unavailable',result.data?.message||'Check your connection and retry.');
       notice(result.data?.message||'Connection interrupted. Refresh before bidding.');
     }
-    tick();if(root.open&&!toolView)poll=setTimeout(()=>refresh(true),result.ok?2000:5000);
+    tick();if(root.open&&!toolView)poll=setTimeout(()=>refresh(true),result.ok?pollDelay():2000);
+    } finally {
+      reads--;
+      if(!reads&&refreshPending&&!busy&&root?.open&&!toolView){refreshPending=false;clearTimeout(poll);poll=setTimeout(requestLiveRefresh,0);}
+    }
+  }
+  function syncLiveReadout() {
+    const lot=data?.lot;if(!lot||tab!=='arena'||panel)return;
+    if($('aa-current-price'))$('aa-current-price').textContent=money(lot.bid_lakh);
+    if($('aa-current-bidder'))$('aa-current-bidder').textContent=lot.bidder_id?(data.teams.find(t=>t.id===lot.bidder_id)?.name||'Leading franchise'):'Opening bid: '+money(lot.base_lakh);
+    // Quick bids show the latest explicit price. A typed custom amount and its
+    // original context stay intact, so a price move can never raise that bid.
+    root.querySelectorAll('[data-aa-action="bid"]').forEach(button=>{
+      if(button.closest?.('[data-aa-form]'))return;
+      button.textContent=(lot.rtm_stage==='final_offer'?'FINAL RAISE: ':'PLACE BID: ')+money(lot.next_lakh);
+      button.dataset.aaArgs=JSON.stringify({...context(lot),team_id:teamId,amount_lakh:lot.next_lakh});
+      button.disabled=!!own()?.bid_reason||data.season.status!=='live'||busy;
+    });
   }
   function render() {renderHeader();renderNav();renderBody();tick();}
   function renderHeader() {
     if(!$('aa-header'))return;
     const seasons=data?.auctions||[];
-    $('aa-header').innerHTML=`<div class="aa-room-identity"><span class="aa-eyebrow">FRANCHISE AUCTION · ${data?.admin?'MANAGER':data?.my_team_ids?.length?'TEAM':'SPECTATOR'}</span><select id="aa-season" aria-label="Select auction">${seasons.length?seasons.map(s=>`<option value="${s.id}" ${s.id===seasonId?'selected':''}>${esc(s.name)}</option>`).join(''):'<option>Auction Arena</option>'}</select></div><div class="aa-header-actions"><span class="aa-room-state"><i class="${data?.season?.status==='live'?'live':''}"></i>${esc(data?.season?.status||'Connecting')}</span>${ui('Refresh auction','refresh')}${ui('Open in Telegram','telegram')}${data?.admin?ui('Auction Manager panel','admin','settings'):''}${ui(window.FRANCHISE_WEBSITE?'Back to dashboard':'Back to Mini App','close','back')}</div>`;
+    $('aa-header').innerHTML=`<div class="aa-room-identity"><span class="aa-eyebrow">FRANCHISE AUCTION</span><div class="aa-role-badges" aria-label="Your auction roles">${roles().map(role=>`<span>${esc(role)}</span>`).join('')}</div><select id="aa-season" aria-label="Select auction">${seasons.length?seasons.map(s=>`<option value="${s.id}" ${s.id===seasonId?'selected':''}>${esc(s.name)}</option>`).join(''):'<option>Auction Arena</option>'}</select></div><div class="aa-header-actions"><span class="aa-room-state"><i class="${data?.season?.status==='live'?'live':''}"></i>${esc(data?.season?.status||'Connecting')}</span>${ui('Refresh auction','refresh')}${ui('Open in Telegram','telegram')}${data?.admin?ui('Auction Manager panel','admin','settings'):''}${ui(window.FRANCHISE_WEBSITE?'Back to dashboard':'Back to Mini App','close','back')}</div>`;
   }
   function renderNav() {
     const current=toolView?'more':tab;
@@ -213,7 +266,7 @@ const AuctionArena = (() => {
       if(data.direct_bids&&!t.bid_reason)customBid=`<details class="aa-custom-bid"><summary>Enter a custom bid</summary><form data-aa-form="bid" data-aa-args="${esc(JSON.stringify(c))}"><label class="aa-field">Bid in lakh · 100 = 1 Cr<input name="amount_lakh" type="number" min="${l.next_lakh}" step="1" value="${l.next_lakh}" required></label><button type="submit" class="aa-button">Place custom bid</button></form></details>`;
     }
     const tiles=[['Overall',l.rating,'white'],['Batting',l.bat_rating,'gold'],['Bowling',l.bowl_rating,'green'],['Edition',l.version||'Base','purple']];
-    return chooser+lotStrip(l)+`<article class="aa-player-stage"><div class="aa-timer-line" id="aa-timer-line"></div><span class="aa-lot-number">LOT ${l.number}</span>${portrait(l)}<div class="aa-player-tags"><span>${esc(l.role)}</span><span>${l.overseas?'OVERSEAS':esc(l.country)}</span></div><h1>${esc(l.name)}</h1><div class="aa-player-stats">${tiles.map(([label,value,color])=>`<div><span>${label}</span><strong class="aa-${color}">${esc(value??'—')}</strong></div>`).join('')}</div></article><div class="aa-bid-dock"><div class="aa-price-row"><div><span>CURRENT BID</span><strong>${money(l.bid_lakh)}</strong><small>${l.bidder_id?esc(data.teams.find(t=>t.id===l.bidder_id)?.name||'Leading franchise'):'Opening bid: '+money(l.base_lakh)}</small></div><div class="aa-timer" id="aa-timer"><strong id="aa-seconds">—</strong><span id="aa-timer-label">SEC</span></div></div>${t?`<div class="aa-purse-strip"><span>SQUAD <b>${t.size}/${data.season.max_squad}</b></span><span>OS <b>${t.overseas}/${data.max_overseas}</b></span><span>PURSE LEFT <b data-aa-purse="${t.id}">${money(t.purse_lakh)}</b></span></div>`:''}<div class="aa-bid-controls">${controls}</div>${t?.standing_bid_lakh?`<p class="aa-dock-limit">Standing bid ${money(t.standing_bid_lakh)} · purse after winning <b>${money(t.after_bid_lakh)}</b></p>`:''}<div class="aa-dock-meta">${customBid}${t?`<p class="aa-dock-limit">Max legal bid <b>${money(t.max_bid_lakh)}</b> · ${Math.max(0,data.season.max_squad-t.size)} squad slots left</p>`:''}</div></div>${t?`<p class="aa-legal-max">Maximum legal bid <b>${money(t.max_bid_lakh)}</b> · ${esc(t.name)}</p>${(t.warnings||[]).map(w=>`<p class="aa-warning">${esc(w.message)}</p>`).join('')}`:''}`;
+    return chooser+lotStrip(l)+`<article class="aa-player-stage"><div class="aa-timer-line" id="aa-timer-line"></div><span class="aa-lot-number">LOT ${l.number}</span>${portrait(l)}<div class="aa-player-tags"><span>${esc(l.role)}</span><span>${l.overseas?'OVERSEAS':esc(l.country)}</span></div><h1>${esc(l.name)}</h1><div class="aa-player-stats">${tiles.map(([label,value,color])=>`<div><span>${label}</span><strong class="aa-${color}">${esc(value??'—')}</strong></div>`).join('')}</div></article><div class="aa-bid-dock"><div class="aa-price-row"><div><span>CURRENT BID</span><strong id="aa-current-price">${money(l.bid_lakh)}</strong><small id="aa-current-bidder">${l.bidder_id?esc(data.teams.find(t=>t.id===l.bidder_id)?.name||'Leading franchise'):'Opening bid: '+money(l.base_lakh)}</small></div><div class="aa-timer" id="aa-timer"><strong id="aa-seconds">—</strong><span id="aa-timer-label">SEC</span></div></div>${t?`<div class="aa-purse-strip"><span>SQUAD <b>${t.size}/${data.season.max_squad}</b></span><span>OS <b>${t.overseas}/${data.max_overseas}</b></span><span>PURSE LEFT <b data-aa-purse="${t.id}">${money(t.purse_lakh)}</b></span></div>`:''}<div class="aa-bid-controls">${controls}</div>${t?.standing_bid_lakh?`<p class="aa-dock-limit">Standing bid ${money(t.standing_bid_lakh)} · purse after winning <b>${money(t.after_bid_lakh)}</b></p>`:''}<div class="aa-dock-meta">${customBid}${t?`<p class="aa-dock-limit">Max legal bid <b>${money(t.max_bid_lakh)}</b> · ${Math.max(0,data.season.max_squad-t.size)} squad slots left</p>`:''}</div></div>${t?`<p class="aa-legal-max">Maximum legal bid <b>${money(t.max_bid_lakh)}</b> · ${esc(t.name)}</p>${(t.warnings||[]).map(w=>`<p class="aa-warning">${esc(w.message)}</p>`).join('')}`:''}`;
   }
   function renderResult(p) {
     const sold=p.status==='sold', team=data.teams.find(t=>t.id===p.sold_to_id);
@@ -226,7 +279,7 @@ const AuctionArena = (() => {
     return `<div class="aa-section-heading"><span>THE FRANCHISES</span><h1>Auction squads</h1><p>Every team. Every signing. Every rupee.</p></div><label class="aa-field aa-search">Find a team<input id="aa-team-search" type="search" placeholder="Search franchises…" value="${esc(teamQuery)}"></label><div class="aa-squad-list">${data.teams.map((t,i)=>{
       const size=t.squad?.length||0, spent=(t.squad||[]).reduce((n,p)=>n+(p.price_lakh||0),0), average=size?((t.squad||[]).reduce((n,p)=>n+p.rating,0)/size).toFixed(1):'—';
       const logo=/^(https?:\/\/|\/(?!\/))/.test(t.logo_url||'')?`<img src="${esc(t.logo_url)}" alt="" loading="lazy">`:'';
-      return `<details data-aa-team="${t.id}" data-aa-team-name="${esc(t.name.toLowerCase())}" ${t.name.toLowerCase().includes(teamQuery.trim().toLowerCase())?'':'hidden'}><summary><span class="aa-team-rank">${i+1}</span><span class="aa-team-logo">${logo||esc(t.short_name||initials(t.name))}</span><span class="aa-team-name"><strong>${esc(t.name)}</strong><small class="${t.mine?'mine':''}">${t.mine?'● Your franchise':size>=data.season.max_squad?'SQUAD COMPLETE':'AVAILABLE'}</small></span><span class="aa-team-budget"><b data-aa-purse="${t.id}">${money(t.purse_lakh)}</b><small>${t.size}/${data.season.max_squad}</small></span>${icon('chevron')}</summary><div class="aa-squad-detail"><div class="aa-squad-metrics"><span>USED (NET) <b>${money(t.used_lakh??(t.opening_lakh-t.purse_lakh))}</b></span><span>CONTRACTS <b>${money(spent)}</b></span><span>RATING <b>${average}</b></span><span>OS <b>${t.overseas}/${data.max_overseas}</b></span></div>${size?(t.squad||[]).map(p=>renderSquadPlayer(t,p)).join(''):'<p class="aa-no-players">No players signed yet</p>'}${(t.warnings||[]).map(w=>`<p class="aa-warning">${esc(w.message)}</p>`).join('')}${data.admin?`<button type="button" class="aa-button" data-aa-ui="manage-team" data-team="${t.id}">Manage players & purse →</button>`:''}</div></details>`;
+      return `<details data-aa-team="${t.id}" data-aa-team-name="${esc(t.name.toLowerCase())}" ${t.name.toLowerCase().includes(teamQuery.trim().toLowerCase())?'':'hidden'}><summary><span class="aa-team-rank">${i+1}</span><span class="aa-team-logo">${logo||esc(t.short_name||initials(t.name))}</span><span class="aa-team-name"><strong>${esc(t.name)}</strong><small class="${t.mine?'mine':''}">${t.mine?esc(t.my_role_label||'Team Owner'):size>=data.season.max_squad?'SQUAD COMPLETE':'AVAILABLE'}</small></span><span class="aa-team-budget"><b data-aa-purse="${t.id}">${money(t.purse_lakh)}</b><small>${t.size}/${data.season.max_squad}</small></span>${icon('chevron')}</summary><div class="aa-squad-detail"><div class="aa-squad-metrics"><span>USED (NET) <b>${money(t.used_lakh??(t.opening_lakh-t.purse_lakh))}</b></span><span>CONTRACTS <b>${money(spent)}</b></span><span>RATING <b>${average}</b></span><span>OS <b>${t.overseas}/${data.max_overseas}</b></span></div>${size?(t.squad||[]).map(p=>renderSquadPlayer(t,p)).join(''):'<p class="aa-no-players">No players signed yet</p>'}${(t.warnings||[]).map(w=>`<p class="aa-warning">${esc(w.message)}</p>`).join('')}${data.admin?`<button type="button" class="aa-button" data-aa-ui="manage-team" data-team="${t.id}">Manage players & purse →</button>`:''}</div></details>`;
     }).join('')||empty('No franchises yet','Your auction admin will add the teams.')}</div>`;
   }
   function ago(at) {const seconds=Math.max(0,Math.floor((Date.now()+offset-Date.parse(at))/1000));return seconds<60?seconds+'s ago':seconds<3600?Math.floor(seconds/60)+'m ago':new Date(at).toLocaleString();}
@@ -304,15 +357,18 @@ const AuctionArena = (() => {
       const message={admin_sold:'Sell the current player at the displayed winning price?',admin_unsold:'Mark the current player unsold?',release:'Release this retained player into the auction pool and refund the original retention price? RTM cards stay unchanged.',rtm:'Confirm your Right To Match decision?'}[name];
       if(message&&!(await confirm(message)))return;
       const result=await api('/api/webapp/auction/action',{...args,action:name,season_id:seasonId},10000);
-      if(root.open)await refresh();
       if(result.ok){haptic('medium');notice(result.data.message||'Auction updated.');}
       else notice(result.status===0?'Connection interrupted. Refresh to check the result before retrying.':result.data?.message||'Action refused. Refresh and try again.');
-    } finally {setBusy(false);tick();if(root.open&&!poll)poll=setTimeout(()=>refresh(true),2000);}
+      if(root.open)await refresh();
+    } finally {setBusy(false);tick();if(root.open&&!poll)poll=setTimeout(()=>refresh(true),refreshPending?0:pollDelay());}
   }
   function tick() {
     if(!root?.open)return;
     const live=liveEnough();
-    const connection=$('aa-connection');connection.textContent=toolView?'Auction tools · shared with Telegram':live?'Live updates · shared with Telegram':'Updates delayed · refresh before bidding';connection.classList.toggle('delayed',!toolView&&!live);
+    const age=updatedAt?Math.max(0,Math.floor((Date.now()-updatedAt)/1000)):null;
+    const freshness=age===null?'Connecting':age===0?'updated just now':'updated '+age+'s ago';
+    const mode=updateState==='live'?'Live connection':updateState==='connecting'?'Connecting live updates':updateState==='reconnecting'?'Reconnecting · automatic refresh':'Automatic refresh';
+    const connection=$('aa-connection');connection.textContent=toolView?mode+' · auction tools':live?mode+' · '+freshness+' · '+roundTrip+' ms round trip':'Updates delayed · '+freshness+' · refresh before bidding';connection.classList.toggle('delayed',!toolView&&!live);
     const l=data?.lot;
     const left=l?.deadline?Math.max(0,Math.ceil((Date.parse(l.deadline)-Date.now()-offset)/1000)):null;
     if($('aa-seconds')&&data?.season) {
@@ -329,5 +385,6 @@ const AuctionArena = (() => {
   }
   document.addEventListener('visibilitychange',()=>{clearTimeout(poll);if(root?.open&&!document.hidden)refresh();});
   window.addEventListener('online',()=>{if(root?.open)refresh();});
-  return {open,openWorkspace,close,stop,showTab,syncSeason,reflectToolBusy,notify:notice};
+  window.addEventListener('offline',()=>{connected=false;tick();});
+  return {open,openWorkspace,close,stop,showTab,syncSeason,reflectToolBusy,reflectIdentity,notify:notice};
 })();

@@ -26,6 +26,23 @@ class AccessError(A.AuctionError):
     pass
 
 
+ROLE_LABELS = {
+    'bot_admin': 'Bot Admin',
+    'auction_manager': 'Auction Manager',
+    'team_owner': 'Team Owner',
+    'team_co_owner': 'Team Co-owner',
+    'spectator': 'Spectator',
+}
+
+
+def team_role(franchise, tg_id):
+    """The verified viewer's relationship to this franchise, without IDs."""
+    if not A.may_bid_for(franchise, tg_id):
+        return None
+    return ('team_owner' if int(franchise.owner_tg_id or 0) == int(tg_id)
+            else 'team_co_owner')
+
+
 def integer(value, name, low=0, high=1_000_000):
     if isinstance(value, bool) or not re.fullmatch(r"-?\d+", str(value)):
         raise A.AuctionError(f"{name} must be a whole number.")
@@ -136,8 +153,10 @@ def lot_row(lot):
 
 def team_row(db, season, row, tg_id, *, current=None):
     purse = A.purse_summary(season, row, current)
+    viewer_role = team_role(row, tg_id)
     return dict(id=row.id, name=row.name, short_name=row.short_name, logo_url=row.logo_url,
-                mine=A.may_bid_for(row, tg_id), purse_lakh=purse['remaining_lakh'],
+                mine=viewer_role is not None, my_role=viewer_role,
+                my_role_label=ROLE_LABELS.get(viewer_role), purse_lakh=purse['remaining_lakh'],
                 opening_lakh=purse['total_lakh'], used_lakh=purse['used_lakh'],
                 standing_bid_lakh=purse['standing_bid_lakh'],
                 after_bid_lakh=purse['after_bid_lakh'], size=row.squad_size,
@@ -171,11 +190,20 @@ def telegram_link(season):
 
 def base_payload(db, season, tg_id, rows):
     manager = admin_for(db, tg_id)
-    owned = [f.id for f in A.franchises(db, season.id) if A.may_bid_for(f, tg_id)] if season else []
+    bot_admin = is_bot_admin(tg_id)
+    field = A.franchises(db, season.id) if season else []
+    relationships = {f.id: team_role(f, tg_id) for f in field}
+    owned = [fid for fid, relationship in relationships.items() if relationship]
+    roles = ['bot_admin'] if bot_admin else ['auction_manager'] if manager else []
+    roles.extend(role for role in ('team_owner', 'team_co_owner')
+                 if role in relationships.values())
+    roles = roles or ['spectator']
     result = dict(ok=True, auctions=[season_row(s) for s in rows],
-                  admin=manager, bot_admin=is_bot_admin(tg_id),
+                  admin=manager, bot_admin=bot_admin,
                   role='manager' if manager else 'team' if owned else 'spectator',
-                  permissions=dict(manage=manager, manage_admins=is_bot_admin(tg_id), bid=bool(owned)),
+                  roles=roles, role_labels=[ROLE_LABELS[role] for role in roles],
+                  primary_role=roles[0], role_label=ROLE_LABELS[roles[0]], my_team_ids=owned,
+                  permissions=dict(manage=manager, manage_admins=bot_admin, bid=bool(owned)),
                   server_time=stamp(datetime.utcnow()), season=None)
     if season is None:
         return result

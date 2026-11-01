@@ -6,7 +6,7 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 60 website:app
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --worker-class gthread --workers 2 --threads 32 --timeout 60 website:app
     healthCheckPath: /
     envVars:
       - key: PYTHON_VERSION
@@ -17,7 +17,11 @@ services:
         sync: false
       - key: BOT_USERNAME
         sync: false
+      - key: BOT_ADMIN_IDS
+        sync: false
       - key: WEBSITE_SECRET
         generateValue: true
       - key: WEBSITE_HTTPS
         value: "true"
+      - key: AUCTION_STREAM_MAX_CLIENTS
+        value: "12"

@@ -61,7 +61,7 @@ async function boot(data,view='teams') {
       if(holdRead&&!url.endsWith('/action')) await new Promise(resolve=>{releaseRead=resolve;});
       return {ok: true, data:url.endsWith('/action')?{}:data};
     },
-    setTimeout(fn,delay) { if(delay===5000)backgroundPoll=fn;return 1; }, clearTimeout() {}, setInterval() { return 1; }, clearInterval() {}
+    setTimeout(fn,delay) { if([2000,5000].includes(delay))backgroundPoll=fn;return 1; }, clearTimeout() {}, setInterval() { return 1; }, clearInterval() {}
   });
   vm.runInContext(source, context);
   await vm.runInContext(`AuctionApp.openTools(${JSON.stringify(view)},${data.season?.id||null})`, context);
@@ -145,7 +145,7 @@ async function boot(data,view='teams') {
   const pending=manager.submit('admin_team_purse',{mode:'add',amount_lakh:'25',expected_purse_lakh:'1000',note:'Wait for refresh'},{team_id:1});
   await new Promise(setImmediate);
   assert.equal(manager.control.disabled,true,'Form controls remain busy during the post-action refresh');
-  assert.equal(manager.notices.length,count,'Success feedback waits for refreshed forms');
+  assert.equal(manager.notices.length,count+1,'Committed success is acknowledged while refreshed forms are still loading');
   manager.releaseRead();await pending;
   assert.equal(manager.control.disabled,false);
   assert.equal(manager.notices.length,count+1);

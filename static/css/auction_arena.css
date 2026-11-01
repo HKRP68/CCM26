@@ -13,6 +13,8 @@ dialog.auction-arena { --aa-bg:#080a09; --aa-panel:#111412; --aa-border:#ffffff1
 .auction-arena .aa-header { position:sticky; top:0; z-index:4; display:flex; align-items:center; justify-content:space-between; gap:12px; background:#090b0af5; border-bottom:1px solid var(--aa-border); padding:18px 24px; padding-top:max(18px,env(safe-area-inset-top)); }
 .auction-arena .aa-room-identity { min-width:0; flex:1; }
 .auction-arena .aa-eyebrow { color:var(--aa-gold); display:block; font-size:9px; letter-spacing:.16em; font-weight:850; margin-bottom:6px; }
+.auction-arena .aa-role-badges { display:flex; flex-wrap:wrap; gap:5px; margin:6px 0 9px; }
+.auction-arena .aa-role-badges span { padding:4px 7px; border:1px solid #ffffff24; border-radius:6px; color:#d7e5d9; font-size:11px; font-weight:650; letter-spacing:0; }
 .auction-arena #aa-season { display:block; width:100%; max-width:350px; color:var(--aa-text); font-size:13px; font-weight:750; background:transparent; border:0; padding:0 15px 0 0; text-overflow:ellipsis; }
 .auction-arena .aa-header-actions { display:flex; align-items:center; gap:7px; }
 .auction-arena .aa-icon-button { display:grid; place-items:center; padding:8px; width:36px; height:36px; border:1px solid var(--aa-border); border-radius:11px; color:#a8afb1; background:#ffffff04; }

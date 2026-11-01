@@ -19,6 +19,7 @@ const FranchiseSite = (() => {
   let startHint = selectedSeason && chatHint ? `auction_${selectedSeason}_c${chatHint}` : '';
   let csrfToken = config.csrf_token || '', user = null, data = null, timer = null, requestId = 0;
   let loginBusy = false, expired = false, toastTimer = null, widgetLoaded = false;
+  let stopUpdates=null, updateSeason=null, updateState='fallback', dashboardReading=false, dashboardPending=false;
   const icons = {
     overview:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
     arena:'<path d="m14 3 7 7-4 4-7-7zM11 8l-8 9 4 4 9-8M2 22h11"/>',
@@ -37,6 +38,11 @@ const FranchiseSite = (() => {
   const initials = value => String(value || 'F').trim().split(/\s+/).map(v => v[0]).slice(0,2).join('').toUpperCase();
   const viewNames = {home:'Overview',arena:'Live auction',squads:'Franchises & squads',pool:'Player pool',preseason:'Retention & picks',trades:'Trade centre',rules:'Rulebook',admin:'Season setup',teams:'Players & purses',logs:'Auction activity'};
   const button = (label, view, style = 'fs-button') => `<button type="button" class="${style}" data-fs-view="${view}">${escapeHtml(label)}${icon('arrow')}</button>`;
+  const roleNames = {bot_admin:'Bot Admin',auction_manager:'Auction Manager',team_owner:'Team Owner',team_co_owner:'Team Co-owner',spectator:'Spectator'};
+  const roleHelp = {bot_admin:'Manages auctions and appoints Auction Managers.',auction_manager:'Manages season setup, squads, purses, retention, picks and trades.',team_owner:'Bids and answers RTM for assigned franchises.',team_co_owner:'Bids and answers RTM for assigned franchises.',spectator:'Watches live bidding, squads and auction results.'};
+  const roleIds = () => Array.isArray(data?.roles) ? data.roles.filter(role => Object.hasOwn(roleNames,role)) : !data ? [] : [data.bot_admin?'bot_admin':data.admin?'auction_manager':data.my_team_ids?.length?'team_owner':'spectator'];
+  const roleBadges = () => roleIds().map(role => `<span class="fs-role fs-role-${role}">${roleNames[role]}</span>`).join('');
+  const roleGuide = () => `<details class="fs-role-guide"><summary>What your roles allow</summary>${roleIds().map(role => `<p><b>${roleNames[role]}</b> ${roleHelp[role]}</p>`).join('')}</details>`;
 
   function renderIcons() { document.querySelectorAll('[data-fs-icon]').forEach(el => {el.innerHTML = icon(el.dataset.fsIcon);}); }
   function toast(message) {
@@ -51,11 +57,15 @@ const FranchiseSite = (() => {
     const el = $('fs-login-error');el.hidden = !message;
     el.innerHTML = escapeHtml(message) + (retry ? '<button type="button" data-fs-widget-retry="true">Retry sign-in</button>' : '');
   }
+  function requestHeaders(path = '/api/webapp/auction') {
+    const headers = {'Content-Type':'application/json','X-CSRF-Token':csrfToken};
+    if(startHint && path.startsWith('/api/webapp/auction')) headers['X-Tg-Start-Param'] = startHint;
+    return headers;
+  }
   async function request(path, body = {}, timeout = 15000) {
     const controller = new AbortController(), limit = setTimeout(() => controller.abort(), timeout);
     try {
-      const headers = {'Content-Type':'application/json','X-CSRF-Token':csrfToken};
-      if(startHint && path.startsWith('/api/webapp/auction')) headers['X-Tg-Start-Param'] = startHint;
+      const headers = requestHeaders(path);
       const response = await fetch(path, {method:'POST',credentials:'same-origin',cache:'no-store',headers,body:JSON.stringify(body),signal:controller.signal});
       let result;
       try { result = await response.json(); }
@@ -72,10 +82,12 @@ const FranchiseSite = (() => {
     });
     $('fs-signout').hidden = !user;
     const name = user ? user.first_name || user.username || 'Telegram user' : 'Your franchise awaits';
-    $('fs-account').innerHTML = `<span class="fs-avatar" aria-hidden="true">${escapeHtml(initials(name))}</span><div><b>${escapeHtml(name)}</b><small>${user ? 'Telegram account' : 'Sign in with Telegram'}</small></div>`;
+    $('fs-account').innerHTML = `<span class="fs-avatar" aria-hidden="true">${escapeHtml(initials(name))}</span><div><b>${escapeHtml(name)}</b><small>${user ? data ? roleIds().map(role => roleNames[role]).join(' · ') : 'Checking auction role…' : 'Sign in with Telegram'}</small></div>`;
+    const roles = $('fs-current-roles');
+    if(roles) {roles.hidden = !user || !data;roles.innerHTML = roleBadges();}
   }
   function showLanding() {
-    clearTimeout(timer);data = null;updateAccess();
+    clearTimeout(timer);stopDashboardUpdates();data = null;updateAccess();
     $('fs-landing').hidden = false;$('fs-dashboard').hidden = true;
     $('fs-title').innerHTML = 'Build a team.<br>Own the season.';
     $('fs-login-box').hidden = !config.login_configured;
@@ -137,7 +149,7 @@ const FranchiseSite = (() => {
   }
   async function sessionExpired() {
     if(expired) return;
-    expired = true;clearTimeout(timer);user = null;data = null;requestId++;
+    expired = true;clearTimeout(timer);stopDashboardUpdates();user = null;data = null;requestId++;
     if(typeof AuctionApp !== 'undefined') AuctionApp.stop();
     currentScreen = 'home';setStatus('');showLanding();toast('Your session expired. Sign in with Telegram to continue.');
     await refreshCsrf();
@@ -164,20 +176,38 @@ const FranchiseSite = (() => {
   async function refreshDashboard(background = false) {
     clearTimeout(timer);
     if(!user || currentScreen !== 'home' || document.hidden) return;
+    if(dashboardReading){dashboardPending=true;return;}
+    dashboardReading=true;
     const id = ++requestId;
+    const sent=Date.now();
+    try {
     if(!background) {$('fs-refresh').disabled = true;setStatus('Loading your auctions…');}
     const result = await request('/api/webapp/auction',{season_id:selectedSeason,view:'arena'},12000);
     if(id !== requestId || !user || currentScreen !== 'home') return;
     $('fs-refresh').disabled = false;
     if(!result.ok) {
+      if([401,403].includes(result.status)){data=null;updateAccess();$('fs-dashboard-content').innerHTML='';stopDashboardUpdates();}
       setStatus(result.data.message || 'The auction could not be loaded. Please try again.',true);
       if(selectedSeason && [400,403,404].includes(result.status)) $('fs-page-status').innerHTML += '<button type="button" data-fs-clear-season="true">Show my auctions</button>';
-      timer = setTimeout(() => refreshDashboard(true),15000);return;
+      timer = setTimeout(() => refreshDashboard(true),4000);return;
     }
     data = result.data;selectedSeason = data.season?.id || null;
     updateAccess();setStatus('');renderDashboard();
-    $('fs-updated').textContent = 'Updated '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    timer = setTimeout(() => refreshDashboard(true),15000);
+    $('fs-updated').textContent = (updateState==='live'?'Live connection':'Automatic refresh')+' · updated just now · '+Math.max(0,Date.now()-sent)+' ms round trip';
+    ensureDashboardUpdates();
+    timer = setTimeout(() => refreshDashboard(true),updateState==='live'?4000:2000);
+    } finally {
+      dashboardReading=false;
+      if(dashboardPending&&user&&currentScreen==='home'&&!document.hidden){dashboardPending=false;clearTimeout(timer);timer=setTimeout(()=>refreshDashboard(true),0);}
+    }
+  }
+  function stopDashboardUpdates() {const stop=stopUpdates;stopUpdates=null;updateSeason=null;updateState='fallback';stop?.();}
+  function ensureDashboardUpdates() {
+    if(typeof AuctionUpdates==='undefined'||!selectedSeason||!user||currentScreen!=='home')return;
+    if(stopUpdates&&updateSeason===selectedSeason)return;
+    stopDashboardUpdates();updateSeason=selectedSeason;
+    stopUpdates=AuctionUpdates.watch({seasonId:selectedSeason,headers:()=>requestHeaders(),
+      onChange:()=>refreshDashboard(true),onAccess:()=>refreshDashboard(true),onStatus:status=>{updateState=status.state;}});
   }
   function renderDashboard() {
     const seasons = data.auctions || [], season = data.season;
@@ -192,14 +222,14 @@ const FranchiseSite = (() => {
     const description = season.status === 'live' && data.lot ? `${data.lot.name} is on the block. Follow the clock and place your next bid in the live room.` : season.status === 'paused' ? 'The room is paused. Review squads and budgets while you prepare for the next bid.' : season.status === 'completed' ? 'The auction has finished. Review the squads and every signing from the season.' : season.status === 'cancelled' ? 'This auction has been cancelled. Its recorded squads and auction activity are available to review.' : 'Your season is taking shape. Review the squads, prepare your picks, and be ready when bidding opens.';
     const metrics = [['Franchises',teams.length],['Auction player pool',total],['Players sold at auction',Number(counts.sold || 0)],['Remaining team purses',money(teams.reduce((sum,t) => sum + Number(t.purse_lakh || 0),0))]];
     const displayedTeams = mine.length ? [...mine,...teams.filter(t => !t.mine)] : teams;
-    const teamList = displayedTeams.slice(0,5).map(t => `<div class="fs-team ${t.mine ? 'mine' : ''}"><span class="fs-team-avatar" aria-hidden="true">${escapeHtml(t.short_name || initials(t.name))}</span><div class="fs-team-info"><b>${escapeHtml(t.name)}</b><small>${t.mine ? 'Your franchise · ' : ''}${Number(t.size || 0)} / ${Number(season.max_squad || 0)} players</small></div><div class="fs-team-purse"><strong>${escapeHtml(money(t.purse_lakh))}</strong><small>purse remaining</small></div></div>`).join('');
+    const teamList = displayedTeams.slice(0,5).map(t => `<div class="fs-team ${t.mine ? 'mine' : ''}"><span class="fs-team-avatar" aria-hidden="true">${escapeHtml(t.short_name || initials(t.name))}</span><div class="fs-team-info"><b>${escapeHtml(t.name)}</b><small>${t.mine ? escapeHtml(roleNames[t.my_role] || 'Team Owner')+' · ' : ''}${Number(t.size || 0)} / ${Number(season.max_squad || 0)} players</small></div><div class="fs-team-purse"><strong>${escapeHtml(money(t.purse_lakh))}</strong><small>purse remaining</small></div></div>`).join('');
     const actions = [['arena','arena','Live auction','Bids, countdown & Right To Match'],['squads','squads','Franchises & squads','Every signing and remaining purse']];
     if(data.admin) actions.push(['preseason','picks','Retention & picks','Retain your core, run draft & expansion'],['trades','trades','Trade centre','Offers, approvals & completed moves'],['admin','settings','Season setup','Teams, player pool, rules & publication']);
     else if(mine.length) actions.push(['pool','pool','Player pool','Search upcoming and available players'],['rules','rules','Season rulebook','Squad rules, bidding & RTM']);
     const actionList = actions.map(([view,ico,title,detail]) => `<button type="button" data-fs-view="${view}"><span>${icon(ico)}</span><span><b>${escapeHtml(title)}</b><small>${escapeHtml(detail)}</small></span><span class="fs-action-arrow" aria-hidden="true">${icon('arrow')}</span></button>`).join('');
     const warnings = mine.flatMap(t => (t.warnings || []).map(w => ({name:t.name,message:w.message}))).slice(0,3);
     const events = (data.events || []).slice(0,4).map(e => `<div class="fs-activity"><p>${escapeHtml(e.text)}</p>${e.at ? `<time datetime="${escapeHtml(e.at)}">${escapeHtml(new Date(e.at).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}))}</time>` : ''}</div>`).join('');
-    $('fs-dashboard-content').innerHTML = `<section class="fs-season-banner"><div><span class="fs-small-label">${data.admin ? 'AUCTION MANAGER' : mine.length ? 'YOUR FRANCHISE SEASON' : 'AUCTION SPECTATOR'}</span><span class="fs-state fs-state-${escapeHtml(season.status)}">${escapeHtml(season.status)}</span><h2>${escapeHtml(season.name)}</h2><p>${escapeHtml(description)}</p></div>${button(season.status === 'live' ? 'Enter live auction' : 'Open auction room','arena','fs-button fs-button-primary')}</section><dl class="fs-metrics">${metrics.map(([label,value]) => `<div class="fs-metric"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl><div class="fs-dashboard-grid"><section class="fs-panel"><div class="fs-panel-head"><h2>${mine.length ? 'Your franchise & the field' : 'The franchises'}</h2><span>TEAM OVERVIEW</span></div>${teamList || '<div class="fs-empty"><p>No franchises have been added yet.</p></div>'}${button('View all squads','squads','fs-text-link')}${warnings.map(w => `<div class="fs-warning"><b>${escapeHtml(w.name)}:</b> ${escapeHtml(w.message)}</div>`).join('')}</section><section class="fs-panel"><div class="fs-panel-head"><h2>Your next move</h2><span>SEASON WORKSPACE</span></div><div class="fs-actions-list">${actionList}</div></section><section class="fs-panel"><div class="fs-panel-head"><h2>Auction progress</h2><span>${progress}% RESOLVED</span></div><div class="fs-progress" role="progressbar" aria-label="Auction lots resolved" aria-valuenow="${progress}" aria-valuemin="0" aria-valuemax="100"><span style="width:${progress}%"></span></div><div class="fs-progress-line"><span>${resolved} of ${total} auction lots resolved</span><span>${Number(counts.unsold || 0)} unsold</span></div><div class="fs-progress-line"><span>${Number(counts.retained || 0)} retained</span><span>${Number(counts.drafted || 0)} draft signings</span></div>${(data.admin || mine.length) ? button('Explore the player pool','pool','fs-text-link') : ''}</section><section class="fs-panel"><div class="fs-panel-head"><h2>From the auction room</h2><span>RECENT ACTIVITY</span></div>${events || '<div class="fs-activity"><p>No activity yet. Season updates will appear here.</p></div>'}${button('View auction activity','logs','fs-text-link')}</section></div>`;
+    $('fs-dashboard-content').innerHTML = `<section class="fs-season-banner"><div><div class="fs-role-badges" aria-label="Your auction roles">${roleBadges()}</div><span class="fs-state fs-state-${escapeHtml(season.status)}">${escapeHtml(season.status)}</span><h2>${escapeHtml(season.name)}</h2><p>${escapeHtml(description)}</p>${roleGuide()}</div>${button(season.status === 'live' ? 'Enter live auction' : 'Open auction room','arena','fs-button fs-button-primary')}</section><dl class="fs-metrics">${metrics.map(([label,value]) => `<div class="fs-metric"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl><div class="fs-dashboard-grid"><section class="fs-panel"><div class="fs-panel-head"><h2>${mine.length ? 'Your franchise & the field' : 'The franchises'}</h2><span>TEAM OVERVIEW</span></div>${teamList || '<div class="fs-empty"><p>No franchises have been added yet.</p></div>'}${button('View all squads','squads','fs-text-link')}${warnings.map(w => `<div class="fs-warning"><b>${escapeHtml(w.name)}:</b> ${escapeHtml(w.message)}</div>`).join('')}</section><section class="fs-panel"><div class="fs-panel-head"><h2>Your next move</h2><span>SEASON WORKSPACE</span></div><div class="fs-actions-list">${actionList}</div></section><section class="fs-panel"><div class="fs-panel-head"><h2>Auction progress</h2><span>${progress}% RESOLVED</span></div><div class="fs-progress" role="progressbar" aria-label="Auction lots resolved" aria-valuenow="${progress}" aria-valuemin="0" aria-valuemax="100"><span style="width:${progress}%"></span></div><div class="fs-progress-line"><span>${resolved} of ${total} auction lots resolved</span><span>${Number(counts.unsold || 0)} unsold</span></div><div class="fs-progress-line"><span>${Number(counts.retained || 0)} retained</span><span>${Number(counts.drafted || 0)} draft signings</span></div>${(data.admin || mine.length) ? button('Explore the player pool','pool','fs-text-link') : ''}</section><section class="fs-panel"><div class="fs-panel-head"><h2>From the auction room</h2><span>RECENT ACTIVITY</span></div>${events || '<div class="fs-activity"><p>No activity yet. Season updates will appear here.</p></div>'}${button('View auction activity','logs','fs-text-link')}</section></div>`;
   }
   async function openView(view) {
     if(view === 'home') {await home();return;}
@@ -208,10 +238,10 @@ const FranchiseSite = (() => {
     if(!data) {toast('Wait for your auctions to load, then try again.');return;}
     if(['preseason','trades','admin','teams'].includes(view) && !data.admin) {toast('Your Auction Manager can use these season tools.');return;}
     if(['pool','rules'].includes(view) && !data.admin && !data.my_team_ids?.length) {toast('This section is available to franchise owners and Auction Managers.');return;}
-    clearTimeout(timer);requestId++;currentScreen = 'auction';
+    clearTimeout(timer);stopDashboardUpdates();requestId++;currentScreen = 'auction';
     if(typeof AuctionArena === 'undefined' || typeof AuctionArena.openWorkspace !== 'function') {currentScreen = 'home';toast('The auction workspace could not load. Refresh the page and try again.');return;}
     try {await AuctionArena.openWorkspace(view,selectedSeason);}
-    catch (_) {currentScreen='home';toast('The auction could not be opened. Refresh and try again.');timer=setTimeout(() => refreshDashboard(true),15000);}
+    catch (_) {currentScreen='home';toast('The auction could not be opened. Refresh and try again.');timer=setTimeout(() => refreshDashboard(true),2000);}
   }
   function boot() {
     renderIcons();updateAccess();
@@ -223,11 +253,11 @@ const FranchiseSite = (() => {
     });
     $('fs-signout').addEventListener('click',signOut);
     $('fs-refresh').addEventListener('click',() => refreshDashboard());
-    $('fs-season').addEventListener('change',() => {selectedSeason=positiveId($('fs-season').value);refreshDashboard();});
+    $('fs-season').addEventListener('change',() => {selectedSeason=positiveId($('fs-season').value);requestId++;stopDashboardUpdates();refreshDashboard();});
     document.addEventListener('visibilitychange',() => {if(document.hidden)clearTimeout(timer);else if(user && currentScreen === 'home')refreshDashboard(true);});
     window.addEventListener('online',() => {if(user && currentScreen === 'home')refreshDashboard(true);});
     sessionCheck();
   }
   document.addEventListener('DOMContentLoaded',boot);
-  return {request,telegramLogin,home};
+  return {request,requestHeaders,telegramLogin,home};
 })();

@@ -29,7 +29,7 @@
       <div class="fs-sidebar-bottom"><div class="fs-sidebar-note"><span class="fs-small-label">BUILT FOR THE WHOLE SEASON</span><p>From the first retention to the final winning bid.</p><span class="fs-note-line" aria-hidden="true"></span></div><div class="fs-account" id="fs-account"><span class="fs-avatar" aria-hidden="true">F</span><div><b>Your franchise awaits</b><small>Sign in with Telegram</small></div></div></div>
     </aside>
     <div class="fs-workspace">
-      <header class="fs-topbar"><div class="fs-breadcrumb"><span>Franchise HQ</span><i aria-hidden="true">/</i><b>Overview</b></div><div class="fs-top-actions"><span class="fs-telegram-label"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m3 10 18-7-5 18-5-7-8-4ZM11 14l10-11" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>Connected by Telegram</span><button type="button" class="fs-button fs-button-quiet" id="fs-signout" hidden>Sign out</button></div></header>
+      <header class="fs-topbar"><div class="fs-breadcrumb"><span>Franchise HQ</span><i aria-hidden="true">/</i><b>Overview</b></div><div class="fs-top-actions"><div id="fs-current-roles" class="fs-role-badges fs-top-roles" aria-label="Your auction roles" hidden></div><span class="fs-telegram-label"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m3 10 18-7-5 18-5-7-8-4ZM11 14l10-11" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>Connected by Telegram</span><button type="button" class="fs-button fs-button-quiet" id="fs-signout" hidden>Sign out</button></div></header>
       <main id="fs-main" class="fs-main" tabindex="-1">
         <div class="fs-heading"><div><span class="fs-kicker">THE FRANCHISE WORKSPACE</span><h1 id="fs-title">Build a team.<br>Own the season.</h1></div><span class="fs-edition">AUCTIONS · RETENTIONS · DRAFTS</span></div>
         <div id="fs-page-status" class="fs-page-status" role="status" aria-live="polite">Opening your workspace…</div>
@@ -45,6 +45,7 @@
   </div>
   <div id="fs-toast" class="fs-toast" role="status" aria-live="polite" hidden></div>
   <script id="fs-config" type="application/json">{{ {'bot_username': bot_username, 'login_configured': login_configured, 'csrf_token': csrf_token}|tojson }}</script>
+  <script src="{{ url_for('static', filename='js/auction_updates.js') }}"></script>
   <script src="{{ url_for('static', filename='js/franchise_site.js') }}"></script>
   <script src="{{ url_for('static', filename='js/auction_miniapp.js') }}"></script>
   <script src="{{ url_for('static', filename='js/auction_arena.js') }}"></script>

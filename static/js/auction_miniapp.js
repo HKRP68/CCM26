@@ -3,6 +3,7 @@ const AuctionApp = (() => {
   'use strict';
   let seasonId = null, view = 'pool', data = null, toolsOpen = false;
   let poll = null, clock = null, epoch = 0, busy = false, loading = false;
+  let pendingLive=false;
   let offset = 0, selectedTeam = null;
   let filters = {query:'', status:'', role:'', set_name:'', page:1};
   let eligibleQuery = '';
@@ -34,7 +35,12 @@ const AuctionApp = (() => {
     (data.my_team_ids?.length&&['pool','rules'].includes(target)));
 
   function setSeason(id) { seasonId = id ? Number(id) : null; selectedTeam=null; managedTeamId=null; signingPlayer=null; cataloguePlayers=[]; catalogueQuery=''; filters={query:'',status:'',role:'',set_name:'',page:1}; data=null; epoch++; catalogueEpoch++; }
-  function pauseTools() { clearTimeout(poll); clearInterval(clock); poll=null; clock=null; epoch++; loading=false; }
+  function pauseTools() { clearTimeout(poll); clearInterval(clock); poll=null; clock=null; epoch++; loading=false; pendingLive=false; }
+  function liveRefresh() {
+    if(!active())return;
+    if(busy||loading){pendingLive=true;return;}
+    pendingLive=false;refresh(true);
+  }
   function stopTools() { pauseTools(); toolsOpen=false; catalogueEpoch++; }
   function stop() { stopTools(); AuctionArena.stop(); }
   function open() { stopTools(); AuctionArena.open(seasonId); }
@@ -131,6 +137,7 @@ const AuctionApp = (() => {
       // Estimate server time at the request midpoint, not from the phone clock.
       offset=Date.parse(next.server_time)-(sent+Date.now())/2;
       data=next;
+      AuctionArena.reflectIdentity?.(data);
       if(accessChanged){catalogueEpoch++;cataloguePlayers=[];signingPlayer=null;if(!data.admin)managedTeamId=null;}
       if(data.season) seasonId=data.season.id;
       if(view==='teams'&&data.admin) managedTeamId=data.managed_team_id;
@@ -144,18 +151,20 @@ const AuctionApp = (() => {
     } else {
       $('au-connection').innerHTML=`<span class="au-error">${esc(result.data.message||'Could not load the auction.')}</span> <button class="au-btn" data-au-ui="refresh">Retry</button>`;
       document.querySelectorAll('#au-body [data-au-action],#au-body button[type="submit"]').forEach(b=>b.disabled=true);
-      if(result.status===403) {if(data){data.admin=false;data.bot_admin=false;renderHeader();}$('au-body').innerHTML=empty('Access denied',result.data.message||'Your account cannot use these controls.');return;}
+      if(result.status===403) {if(data){data.admin=false;data.bot_admin=false;data.roles=[];data.role_labels=[];data.my_team_ids=[];renderHeader();AuctionArena.reflectIdentity?.(data);}$('au-body').innerHTML=empty('Access denied',result.data.message||'Your account cannot use these controls.');return;}
       if(!data) $('au-body').innerHTML=empty('The auction could not be loaded','Check your connection, then retry. Open the auction from its Telegram group if you are a spectator.');
     }
-    if(active() && (requestedSeason===seasonId || requestedSeason===null) &&
-       (data?.admin || ['teams','admin','preseason','trades'].includes(view))) {
-      poll=setTimeout(()=>refresh(true),5000);
+    if(active() && (requestedSeason===seasonId || requestedSeason===null)) {
+      const immediate=pendingLive&&!busy;if(immediate)pendingLive=false;
+      poll=setTimeout(()=>refresh(true),immediate?0:2000);
     }
   }
   function renderHeader() {
     const labels={pool:'Player pool',teams:data.admin?'Players & purses':'My purse & bids',preseason:'Retention & draft',trades:'Trades',rules:'Rulebook',admin:'Setup & rules'};
+    const roles=Array.isArray(data.role_labels)?data.role_labels:[data.bot_admin?'Bot Admin':data.admin?'Auction Manager':data.my_team_ids?.length?'Team Owner':'Spectator'];
+    const badges=roles.map(label=>`<span class="au-role">${esc(label)}</span>`).join('');
     if($('au-title')) $('au-title').textContent=labels[view]||'Auction tools';
-    $('au-status').innerHTML=data.season?`<span class="au-tag au-state-${esc(data.season.status)}">${esc(data.season.status)}</span><span class="au-dot ${data.season.status==='live'?'live':''}"></span>Shared with Telegram${data.admin?' · Auction admin':data.my_team_ids?.length?' · Owner / co-owner':' · Spectator'}${data.season.published?' · Published to league':''}`:(data.admin?'Create or manage an auction':'Your assigned auctions appear here');
+    $('au-status').innerHTML=data.season?`<span class="au-tag au-state-${esc(data.season.status)}">${esc(data.season.status)}</span><span class="au-dot ${data.season.status==='live'?'live':''}"></span>Shared with Telegram${badges}${data.season.published?' · Published to league':''}`:badges+(data.admin?'Create or manage an auction':'Your assigned auctions appear here');
     let tabs=[['pool','Players'],['teams',data.admin?'Players & purses':'My purse & bids'],['preseason','Retention & draft'],['trades','Trades'],['rules','Rulebook']];
     if(!data.admin) tabs=tabs.filter(([key])=>data.my_team_ids?.length?['pool','teams','rules'].includes(key):key==='teams');
     if(data.admin) tabs.push(['admin','Setup & rules']);
@@ -375,10 +384,11 @@ const AuctionApp = (() => {
       if(action==='admin_team_add_player') {signingPlayer=null;cataloguePlayers=[];}
       if(result.data.season_id) {setSeason(result.data.season_id);view='admin';await AuctionArena.syncSeason(seasonId);}
     }
-    if(active()) await refresh();
-    busy=false;disableBusy();tick();
     if(result.ok) {haptic('medium');notify(result.data.message||'Auction updated.','success');}
     else notify(result.status===0?'Connection interrupted. Refresh to check whether the action landed before retrying.':(result.data.message||'The action was refused.'),'error');
+    if(active()) await refresh();
+    busy=false;disableBusy();tick();
+    if(pendingLive)liveRefresh();
   }
   function tick() {
     const el=$('au-clock');
@@ -401,5 +411,5 @@ const AuctionApp = (() => {
     else if(active()) {clock=setInterval(tick,250);refresh();}
   });
   window.addEventListener('online',()=>{if(active())refresh();});
-  return {open,stop,setSeason,openTools,stopTools,refreshTools:refresh,isBusy:()=>busy&&toolsOpen};
+  return {open,stop,setSeason,openTools,stopTools,refreshTools:refresh,liveRefresh,isBusy:()=>busy&&toolsOpen};
 })();
