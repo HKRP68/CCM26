@@ -766,8 +766,11 @@ async def anew_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         season = A.create_season(session, name)
         A.apply_staged_defaults(season)
         A.bind_chat(session, season, chat.id)
+        dedicated = bool(getattr(context, 'bot_data', {}).get('franchise_dedicated'))
+        next_step = ("Use <code>/auction</code> for franchise setup, player imports and rules, then <code>/astart</code>. "
+                     if dedicated else "Build the pool and the franchises on the website, then <code>/astart</code>. ")
         return (f"🔨 <b>{html.escape(season.name)}</b> created and bound to this group.\n"
-                "Build the pool and the franchises on the website, then <code>/astart</code>. "
+                + next_step +
                 "<code>/auction</code> lists every command.")
     await _session_reply(update, work)
 

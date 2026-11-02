@@ -1,0 +1,23 @@
+# Dedicated Telegram bot: one poller, a separate token and a separate database.
+# HTTP serves /healthz only; it is not the former website.
+services:
+  - type: web
+    name: franchise-auction-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python franchise_bot.py
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: FRANCHISE_BOT_TOKEN
+        sync: false
+      - key: FRANCHISE_DATABASE_URL
+        sync: false
+      - key: FRANCHISE_OWNER_IDS
+        sync: false
+      - key: FRANCHISE_ADMIN_IDS
+        value: ""
+      - key: FRANCHISE_SOLO_LEAGUE
+        value: "false"

@@ -1,0 +1,5 @@
+name,rating,role,country,version,base_lakh,bat_rating,bowl_rating,overseas
+Example Batter,85,BAT,India,Base,20,85,50,false
+Example Bowler,86,BOWL,Australia,Base,30,45,86,true
+Example All-rounder,84,AR,India,Base,20,84,82,false
+Example Keeper,83,WK,India,Base,10,83,40,false
