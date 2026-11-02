@@ -1,8 +1,8 @@
 """Dedicated Franchise Auction Telegram bot.
 
-Run ``python franchise_bot.py`` with a new FRANCHISE_BOT_TOKEN and an isolated
-FRANCHISE_DATABASE_URL. Importing this module performs no database, network or
-scheduler work. The original ``python bot.py`` service remains independent.
+Run ``python franchise_bot.py`` with a new FRANCHISE_BOT_TOKEN and the existing
+DATABASE_URL (or an explicit FRANCHISE_DATABASE_URL). Importing this module
+performs no database, network or scheduler work. Both bots run in separate processes.
 """
 from __future__ import annotations
 
@@ -47,17 +47,16 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     token = values.get("FRANCHISE_BOT_TOKEN", "").strip()
     if not re.fullmatch(r"\d{5,}:[A-Za-z0-9_-]{20,}", token):
         raise ValueError("Set FRANCHISE_BOT_TOKEN to the new bot's BotFather token.")
-    database_url = values.get("FRANCHISE_DATABASE_URL", "").strip()
+    database_url = (values.get("FRANCHISE_DATABASE_URL", "").strip()
+                    or values.get("DATABASE_URL", "").strip())
     if (not database_url or "\n" in database_url or "\r" in database_url or
             not database_url.startswith(("sqlite:///", "postgresql://", "postgres://", "postgresql+psycopg2://"))):
-        raise ValueError("Set FRANCHISE_DATABASE_URL to a separate SQLite or PostgreSQL database.")
-    # A new identity and database are deliberate: never start a second poller
-    # for the existing bot or let two bot schedulers announce the same season.
+        raise ValueError("Set DATABASE_URL or FRANCHISE_DATABASE_URL to your SQLite or PostgreSQL database.")
+    # Sharing auction records is supported; polling the same Telegram identity
+    # from two processes is not. The old bot hands off its clock separately.
     if values.get("FRANCHISE_DEDICATED_RUNTIME") != "1":
         if token == values.get("BOT_TOKEN", "").strip():
             raise ValueError("Use a new bot token, not the existing cricket bot token.")
-        if database_url == values.get("DATABASE_URL", "").strip():
-            raise ValueError("Use a separate database, not the existing cricket bot database.")
     owners = _ids(values.get("FRANCHISE_OWNER_IDS", ""), "FRANCHISE_OWNER_IDS", required=True)
     admins = _ids(values.get("FRANCHISE_ADMIN_IDS", ""), "FRANCHISE_ADMIN_IDS")
     username = values.get("FRANCHISE_BOT_USERNAME", "").strip().lstrip("@")

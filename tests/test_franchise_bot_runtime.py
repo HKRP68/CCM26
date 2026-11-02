@@ -25,7 +25,7 @@ def valid(**extra):
                 FRANCHISE_OWNER_IDS='101, 102', **extra)
 
 
-@pytest.mark.parametrize('missing', ['FRANCHISE_BOT_TOKEN', 'FRANCHISE_DATABASE_URL', 'FRANCHISE_OWNER_IDS'])
+@pytest.mark.parametrize('missing', ['FRANCHISE_BOT_TOKEN', 'FRANCHISE_OWNER_IDS'])
 def test_dedicated_credentials_are_required_without_legacy_fallback(missing):
     values = valid()
     values.pop(missing)
@@ -47,11 +47,22 @@ def test_invalid_dedicated_configuration_fails_closed(change):
         runtime.load_settings(values)
 
 
-def test_new_bot_cannot_poll_old_identity_or_share_auction_database():
+def test_new_bot_cannot_poll_old_identity_but_can_share_auction_database():
     with pytest.raises(ValueError, match='new bot token'):
         runtime.load_settings(valid(BOT_TOKEN=TOKEN))
-    with pytest.raises(ValueError, match='separate database'):
-        runtime.load_settings(valid(DATABASE_URL=DB))
+    assert runtime.load_settings(valid(DATABASE_URL=DB)).database_url == DB
+
+
+def test_existing_database_url_is_supported_and_explicit_override_wins():
+    values=valid(DATABASE_URL='postgresql://example:example@localhost/shared')
+    assert runtime.load_settings(values).database_url==DB
+    values['FRANCHISE_DATABASE_URL']=''
+    assert runtime.load_settings(values).database_url==values['DATABASE_URL']
+    values.pop('FRANCHISE_DATABASE_URL')
+    assert runtime.load_settings(values).database_url==values['DATABASE_URL']
+    values.pop('DATABASE_URL')
+    with pytest.raises(ValueError,match='DATABASE_URL'):
+        runtime.load_settings(values)
 
 
 def test_dedicated_owner_admin_and_website_configuration_is_isolated(monkeypatch):
@@ -182,15 +193,15 @@ def test_polling_conflict_stops_the_extra_process():
     assert called==[True]
 
 
-def test_render_runs_the_dedicated_bot_without_old_credentials():
+def test_render_runs_the_dedicated_bot_with_shared_database_and_separate_identity():
     import yaml
     root=Path(__file__).resolve().parents[1]
     service=yaml.safe_load((root/'render.franchise-bot.yaml').read_text())['services'][0]
     assert service['startCommand']=='python franchise_bot.py'
     assert service['healthCheckPath']=='/healthz'
     keys={entry['key'] for entry in service['envVars']}
-    assert {'FRANCHISE_BOT_TOKEN','FRANCHISE_DATABASE_URL','FRANCHISE_OWNER_IDS'}<=keys
-    assert not {'BOT_TOKEN','DATABASE_URL','WEBSITE_SECRET'} & keys
+    assert {'FRANCHISE_BOT_TOKEN','DATABASE_URL','FRANCHISE_OWNER_IDS'}<=keys
+    assert not {'BOT_TOKEN','WEBSITE_SECRET'} & keys
 
 
 def test_real_builder_registers_only_auction_runtime_without_touching_database(tmp_path):

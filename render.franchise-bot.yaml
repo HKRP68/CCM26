@@ -1,4 +1,5 @@
-# Dedicated Telegram bot: one poller, a separate token and a separate database.
+# Dedicated Telegram bot: one poller, a separate token and the existing database.
+# First set AUCTION_BOT_ENABLED=false on the original bot service and redeploy it.
 # HTTP serves /healthz only; it is not the former website.
 services:
   - type: web
@@ -13,7 +14,7 @@ services:
         value: 3.11.9
       - key: FRANCHISE_BOT_TOKEN
         sync: false
-      - key: FRANCHISE_DATABASE_URL
+      - key: DATABASE_URL
         sync: false
       - key: FRANCHISE_OWNER_IDS
         sync: false

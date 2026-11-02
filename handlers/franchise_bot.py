@@ -30,6 +30,7 @@ PROMPT_KEY = 'franchise_prompt'
 # form key: shared service action, fields (key, label, parser).
 FORMS = {
     'new':('admin_create',[('name','Name of the new auction','text')]),
+    'fromleague':('native_from_league',[('league_id','Previous league ID from Existing leagues','id'),('name','Name of the next auction season','text')]),
     'bind':('admin_bind',[('chat_id','Telegram group ID (negative; use /id in the group)','int')]),
     'teamadd':('admin_franchise',[('name','Franchise name','text'),('owner_tg_id','Owner Telegram user ID','id'),('co_owners','Co-owner IDs, comma separated; skip for none','ids'),('team_managers','Team Manager IDs, comma separated; skip for none','ids')]),
     'pool':('admin_pool_range',[('low','Minimum player rating','int'),('high','Maximum player rating','int'),('set_name','Set name; skip uses the default','optional')]),
@@ -78,6 +79,14 @@ def _resolve(db, actor, sid, chat_id):
 
 def read_workspace(db, actor, sid, chat_id, view='home', argument=''):
     season,rows=_resolve(db,actor,sid,chat_id)
+    if view=='leagues':
+        if not W.admin_for(db,actor):raise W.AccessError('Only Auction Managers can browse previous leagues.')
+        from models import ChallengeLeague
+        page=max(1,int(argument or 1))
+        leagues=db.query(ChallengeLeague).order_by(ChallengeLeague.id.desc()).offset((page-1)*8).limit(9).all()
+        result=W.base_payload(db,season,actor,rows)
+        result.update(leagues=[dict(id=row.id,name=row.name) for row in leagues[:8]],has_more_leagues=len(leagues)>8)
+        return result
     if view in ('seasons','help','home','roles') and season is None:
         return W.base_payload(db,None,actor,rows)
     if season is None:raise A.AuctionError('Create or select an auction first. Use /auction.')
@@ -89,7 +98,10 @@ def read_workspace(db, actor, sid, chat_id, view='home', argument=''):
     request={'view':api_view}
     if api_view=='pool':request['page']=(max(1,int(argument or 1))-1)//4+1
     if api_view=='preseason' and argument:request['team_id']=int(argument)
-    return W.payload(db,season,actor,rows,request)
+    result=W.payload(db,season,actor,rows,request)
+    if view in ('preseason','draft'):
+        result['previous_league_id']=season.previous_league_id
+    return result
 
 
 def _native_perform(db, season, actor, action, values):
@@ -97,7 +109,7 @@ def _native_perform(db, season, actor, action, values):
     before=db.query(AuctionEvent.id).filter_by(season_id=season.id).order_by(AuctionEvent.id.desc()).first()
     result=W.perform(db,season,actor,dict(action=action,**values))
     # These shared, UI-independent services predate the dedicated bot. Keep
-    # native control changes labelled correctly in this isolated auction DB.
+    # native control changes labelled correctly in the shared auction DB.
     events=db.query(AuctionEvent).filter(AuctionEvent.season_id==season.id,
         AuctionEvent.kind=='miniapp_admin',AuctionEvent.by_tg_id==actor,
         AuctionEvent.id>(before[0] if before else 0)).all()
@@ -109,6 +121,14 @@ def _native_perform(db, season, actor, action, values):
 
 
 def execute_action(db, actor, sid, chat_id, action, values):
+    if action=='native_from_league':
+        if not W.admin_for(db,actor):raise W.AccessError('Only Auction Managers can create auctions from previous leagues.')
+        from models import ChallengeLeague
+        league=db.get(ChallengeLeague,whole(values.get('league_id')))
+        if league is None:raise A.AuctionError('That previous league does not exist. Open Existing leagues to choose one.')
+        season=A.season_from_league(db,league,str(values.get('name') or '').strip(),by_tg_id=actor)
+        A.apply_staged_defaults(season)
+        return dict(message='Auction created from the previous league. Assign franchise roles, then begin retention.',season_id=season.id)
     if action=='admin_create':
         if not W.admin_for(db,actor):raise W.AccessError('Only Auction Managers can create auctions.')
         result=W.perform(db,None,actor,dict(action=action,**values))
@@ -117,6 +137,11 @@ def execute_action(db, actor, sid, chat_id, action, values):
         return result
     season,_=_resolve(db,actor,sid,chat_id)
     if season is None:raise A.AuctionError('Select an auction first.')
+    if action=='admin_previous_league':
+        if not W.admin_for(db,actor):raise W.AccessError('Only Auction Managers can link previous leagues.')
+        from models import ChallengeLeague
+        if db.get(ChallengeLeague,whole(values.get('league_id'))) is None:
+            raise A.AuctionError('That previous league does not exist. Open Existing leagues to choose one.')
     return _native_perform(db,season,actor,action,values)
 
 
@@ -200,15 +225,26 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
                 header += ['','<b>Setup checklist</b>']+[('✅ ' if ready else '○ ')+label for label,ready in checks]
                 buttons += _rows(actor,sid,[[('🎛 Control room','v:control'),('⚙️ All settings','v:settings')],[('🏷 Teams & roles','v:teamroles'),('🛡 Retention','v:preseason')],[('🆕 Expansion draft','v:draft'),('🤝 Trades','v:trades')]])
         else:
-            header+=['','Fresh auctions start here. No debut, coins or collecting-game account is required.']
-            if manager:header+=['Create an auction, bind its group, assign franchises and import the player CSV.']
+            header+=['','Use existing competitions or create the next season. No debut, coins or collecting-game account is required.']
+            if manager:header+=['Choose an existing auction, or start from an existing league for retention.']
             else:header+=['Ask your organiser to assign your Telegram ID to a franchise. Open /auction in its group to watch.']
-        if manager:buttons+=_rows(actor,sid,[[('➕ New auction','f:new')]])
+        if manager:buttons+=_rows(actor,sid,[[('➕ New auction','f:new'),('📚 Existing leagues','v:leagues:1')]])
         buttons+=_rows(actor,sid,[[('🔀 Choose auction','v:seasons'),('❓ Help','v:help')]])
     elif view=='seasons':
         header+=['','<b>Choose an auction</b>']
         for row in (data.get('auctions') or [])[:30]:buttons+=_rows(actor,row['id'],[[(f"{row['name'][:30]} · {row['status']}",'v:home')]])
         if not data.get('auctions'):header+=['Your assigned auctions will appear here.']
+    elif view=='leagues':
+        page=max(1,int(argument or 1))
+        header+=['',f'<b>Existing leagues · page {page}</b>',
+                 'Create the next auction from a league to carry its franchises and previous-squad rights. Assign owners before starting.']
+        for league in data.get('leagues',[]):
+            header+=[f"#{league['id']} · {_e(league['name'],70)}"]
+            buttons+=_rows(actor,sid,[[(f"Next season: {league['name'][:25]}",f"f:fromleague:{league['id']}")]])
+        if not data.get('leagues'):header+=['No leagues found on this page.']
+        if page>1:buttons+=_rows(actor,sid,[[('← Previous leagues',f'v:leagues:{page-1}')]])
+        if data.get('has_more_leagues'):buttons+=_rows(actor,sid,[[('More leagues →',f'v:leagues:{page+1}')]])
+        if season:buttons+=_rows(actor,sid,[[('Link league to this auction','f:previous')]])
     elif view=='live':
         lot=data.get('lot')
         if lot:
@@ -250,7 +286,7 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
             buttons+=_rows(actor,sid,[[('💰 Adjust purse',f'f:purse:{tid}'),('🆕 Add player',f'f:teamplayer:{tid}')],
                 [('Remove player',f'f:removeplayer:{tid}'),('Team Manager IDs',f'role:team_managers:{tid}')],
                 [('Owner ID',f'role:owner_tg_id:{tid}'),('Co-owner IDs',f'role:co_owners:{tid}')],
-                [('Retention',f'v:preseason:{tid}'),('Expansion picks',f'f:picks:{tid}')],[('RTM cards',f'f:rtm:{tid}')]])
+                [('Retention',f'v:preseason:{tid}'),('Expansion picks',f'f:picks:{tid}')],[('RTM cards',f'f:rtm:{tid}'),('Previous team',f'f:previous_team:{tid}')]])
     elif view=='pool':
         page=max(1,int(argument or 1));start=((page-1)%4)*10
         header+=['',f'<b>Player pool · page {page}</b>']
@@ -282,8 +318,11 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
             buttons+=_rows(actor,sid,[[('All categories','v:settings')]])
     elif view in ('preseason','draft'):
         header+=['','<b>Retention & expansion draft</b>']
+        previous=data.get('previous_league_id')
+        header+=[f'Previous league: #{previous}' if previous else 'Link a previous league to load your existing squads and retention rights.']
+        buttons+=_rows(actor,sid,[[('Existing leagues','v:leagues:1'),('Link previous league','f:previous')]])
         if not data.get('team_id'):
-            header+=['Add franchises first. Retention candidates appear after publishing a season and linking it to the next auction.']
+            header+=['Add franchises or create the season from an existing league first.']
         else:
             tid=data['team_id'];review=data.get('retention') or {};ready=data.get('readiness') or {}
             header += [f"Selected: <b>{_e(review.get('name') or tid)}</b>",f"{len(review.get('players') or [])} retained · {_money(review.get('spent_lakh'),currency)} spent",'Next draft team: '+_e(ready.get('next_team') or 'No active turn')]
@@ -298,7 +337,7 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
                 buttons+=_rows(actor,sid,[[(f"Pick {player['name'][:28]}",'op:'+op)]])
             skip=_store_action(context,chat_id,sid,'admin_draft_skip',dict(team_id=tid))
             buttons+=_rows(actor,sid,[[('Skip selected team pick','op:'+skip),('Draft order','f:draftorder')]])
-        header+=['','For a fresh first season, retention starts empty. Publish squads and clone the season to carry previous-team rights.']
+        header+=['','Use /retain for player negotiations and /retainlock to finalize. After picks and bidding, publish squads from Finish & next season.']
     elif view=='trades':
         header+=['','<b>Trade centre</b>',_e(data.get('window'),250)]
         for team in data.get('teams',[]):header += [f"Team #{team['id']}: {_e(team['name'],45)}"]
@@ -321,11 +360,13 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
         header+=['','<b>Finish & next season</b>','Actions ask for the exact auction name. Existing clock, squad and trade safeguards remain active.']
         buttons+=_rows(actor,sid,[[('Publish squads','f:publish'),('Clone next season','f:clone')],[('Simulate remainder','f:simulate'),('Restart auction','f:restart')],[('Cancel auction','f:cancelauction')]])
     elif view=='help':
-        header+=['','<b>Start a fresh competition</b>','1. Create an auction in this menu, or /anew Name in its Telegram group.',
+        header+=['','<b>From retention to published squads</b>',
+            '1. Choose an existing auction, or Existing leagues → Next season to carry previous franchises and squad rights.',
             '2. Add this bot to the group; grant pin-message permission for its live board. Bind the group using its negative /id.',
             '3. Add franchises and their owners / co-owners / Team Managers.',
-            '4. In that group use /importplayers, then upload the CSV from /sampleplayers. No old bot database is needed.',
-            '5. Review rules, purses and setup, then start the auction.','',
+            '4. Link the previous league if needed, negotiate retentions, finalize them, and complete expansion picks.',
+            '5. Build rating sets from the shared catalogue in Player pool. /importplayers adds players using a CSV.',
+            '6. Review settings and start bidding. Finish the auction, publish squads, then clone the next season.','',
             '<b>In the group</b>','/bid 1.5 = 1.5 Cr; /bid 75L = 75 lakh. Shared bid buttons always carry their displayed price.',
             '/aboard · /asquad · /apurse · /arules · /adminhelp',
             'Private guided controls use whole lakh: 100 = 1 Cr. /cancel stops an unfinished input.',
@@ -352,7 +393,7 @@ async def _send(update,text,markup=None):
 async def _show(update,context,view='home',sid=None,argument=''):
     actor=_actor(update);chat_id=update.effective_chat.id
     sid=sid if sid is not None else (_current_sid(context) if chat_id>0 else None)
-    private_views={'control','settings','fields','form','teamroles','preseason','draft','trades','finish'}
+    private_views={'control','settings','fields','form','teamroles','preseason','draft','trades','finish','leagues'}
     if chat_id<0 and view in private_views:
         # Never show owner IDs, ledgers, private shortlists or forms in a group.
         data=await run_session(get_session,lambda db:read_workspace(db,actor,sid,chat_id,'roles'))
@@ -420,7 +461,7 @@ async def _start_form(update,context,key,sid,team_id=None,role_key=None):
     if update.effective_chat.id<0:
         await _show(update,context,'control',sid);return
     actor=_actor(update)
-    if key=='new':
+    if key in ('new','fromleague'):
         allowed=await run_session(get_session,lambda db:W.admin_for(db,actor))
         if not allowed:raise W.AccessError('Only Auction Managers can create an auction.')
         data={}
@@ -434,14 +475,18 @@ async def _start_form(update,context,key,sid,team_id=None,role_key=None):
         return
     if key not in FORMS:raise A.AuctionError('Choose a form from /auction.')
     payload={}
+    step=0
+    if key=='fromleague' and team_id:
+        payload['league_id']=int(team_id)
+        step=1
     if key in TEAM_FORMS:
         team=next((t for t in data.get('teams',[]) if t['id']==int(team_id or 0)),None)
         if not team:raise A.AuctionError('Choose a franchise first.')
         payload['team_id']=team['id']
         if key=='purse':payload['expected_purse_lakh']=team['purse_lakh']
-    record=dict(kind='form',sid=sid,key=key,payload=payload,step=0)
+    record=dict(kind='form',sid=sid,key=key,payload=payload,step=step)
     _prompt(context,update,record)
-    await _send(update,'✏️ '+_e(FORMS[key][1][0][1])+'\n\nSend /cancel to stop. Guided money values use whole lakh.')
+    await _send(update,'✏️ '+_e(FORMS[key][1][step][1])+'\n\nSend /cancel to stop. Guided money values use whole lakh.')
 
 
 async def new_handler(update,context):

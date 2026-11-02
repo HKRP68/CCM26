@@ -5,6 +5,7 @@ __pycache__/
 
 # Environment / secrets
 .env
+franchise-bot.env
 
 # Local virtualenvs (the test suite needs one; it is not part of the project)
 .venv/

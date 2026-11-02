@@ -1348,6 +1348,11 @@ def main():
         # ── Button-owner guard (group=-60, before callbacks) ──
         app.add_handler(TypeHandler(_TGUpdate, button_access_guard), group=-60)
 
+        # A dedicated auction bot may share this database. Hand commands and
+        # callbacks off before any game gates or mutation handlers run.
+        from services.auction_bot_handoff import register_main_auction_handoff
+        register_main_auction_handoff(app)
+
         # ── Chat-tracker middleware (group=-40) ──
         async def _track_chat(update, context):
             if _is_storage_only_command(update):
@@ -1665,6 +1670,9 @@ def main():
         # few seconds (auction_service invalidates it the moment an admin
         # starts, pauses, finishes or unlocks one).
         async def _auction_focus_check(update, context):
+            from services.auction_bot_handoff import main_auctions_enabled
+            if not main_auctions_enabled():
+                return
             if _is_storage_only_command(update):
                 return
             try:

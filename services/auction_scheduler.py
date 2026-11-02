@@ -1053,6 +1053,10 @@ async def _tick_one(context, session, season, now):
 
 def start_auction_scheduler(application):
     """Register the auction clock sweep. Idempotent — adds at most once."""
+    from services.auction_bot_handoff import auctions_enabled
+    if not auctions_enabled(application):
+        logger.info("Auction clock handed off to the dedicated auction bot")
+        return
     if not application.job_queue:
         logger.warning("JobQueue unavailable — auction clock not started")
         return
