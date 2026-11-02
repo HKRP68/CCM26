@@ -382,6 +382,10 @@ A draft is a group event; these run in the chat the draft is bound to.
 
 ## 13. Franchise Auction
 
+These commands now run in the **dedicated Franchise Auction bot**. The original
+cricket bot redirects old auction commands; its other games continue as before.
+The auction website keeps all its features and uses the same database.
+Use `/commands` in the new bot to search every command and alias.
 An auction is a group event; these run in the chat the auction is bound to.
 
 | Command | Aliases | What it does |
@@ -721,6 +725,8 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 
 ## A9 · Franchise Auction
 
+Available in the dedicated Franchise Auction bot; website features are retained.
+
 | Usage | Example |
 |-------|---------|
 | `/bid [amount]` | `/bid 15` · `/bid 75L` · `/bid` |
@@ -825,6 +831,9 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/dcancel` | Cancel the draft |
 
 ## B4 · Franchise Auction
+
+Available in the dedicated Franchise Auction bot; `/auction` opens its native
+workspace and `/adminhelp` shows the detailed organiser reference below.
 
 | Usage | What it does |
 |-------|--------------|

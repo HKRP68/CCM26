@@ -1,5 +1,5 @@
 # Dedicated Telegram bot: one poller, a separate token and the existing database.
-# First set AUCTION_BOT_ENABLED=false on the original bot service and redeploy it.
+# First redeploy the original bot from main; it no longer runs auction handlers.
 # HTTP serves /healthz only; it is not the former website.
 services:
   - type: web

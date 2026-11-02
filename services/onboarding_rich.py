@@ -268,16 +268,18 @@ def status_card(user, *, ready=(), streak=None, extra_html=""):
 
 # ── /commands ───────────────────────────────────────────────────────
 
-def commands_html():
+def commands_html(*, include_franchise_auction=True):
     from services.command_catalog import COMMAND_CATEGORIES
     parts = ["📋 <b>All commands</b> <i>(short aliases next to each)</i>"]
     for cat, lines in COMMAND_CATEGORIES:
+        if not include_franchise_auction and cat == '🔨 Franchise Auction':
+            continue
         parts.append(f"\n<b>{cat}</b>")
         parts += [html.escape(l, quote=False) for l in lines]
     return "\n".join(parts)
 
 
-def commands_card():
+def commands_card(*, include_franchise_auction=True):
     from services.command_catalog import COMMAND_CATEGORIES
 
     def build():
@@ -285,9 +287,11 @@ def commands_card():
                   R.paragraph("Tap a section to open it. Short aliases are "
                               "listed next to each command.")]
         for i, (cat, lines) in enumerate(COMMAND_CATEGORIES):
+            if not include_franchise_auction and cat == '🔨 Franchise Auction':
+                continue
             blocks.append(R.details(R.bold(cat), [R.list_block(list(lines))],
                                     is_open=(i == 0)))
         blocks.append(R.footer("New here? /start shows what to do next."))
         return blocks
 
-    return _safe_blocks(build, "commands"), commands_html(), None
+    return _safe_blocks(build, "commands"), commands_html(include_franchise_auction=include_franchise_auction), None

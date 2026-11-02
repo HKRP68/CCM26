@@ -207,8 +207,10 @@ def build_application(settings: Settings | None = None, *, register_extra=None):
     application.bot_data["franchise_dedicated"] = True
     from handlers.franchise_bot import register as register_menu
     from handlers.franchise_player_import import register as register_import
+    from handlers.franchise_commands import register as register_commands
     register_menu(application)
     register_import(application)
+    register_commands(application)
     register_auction_handlers(application, include_solo_league=settings.solo_league)
     if register_extra is not None:
         register_extra(application)

@@ -21,7 +21,7 @@ def ctx():
 
 @pytest.fixture
 def handed_off(monkeypatch):
-    monkeypatch.setenv('AUCTION_BOT_ENABLED','false')
+    monkeypatch.delenv('AUCTION_BOT_ENABLED',raising=False)
     monkeypatch.setenv('FRANCHISE_AUCTION_BOT_USERNAME','NewAuctionBot')
 
 
@@ -57,21 +57,20 @@ def test_other_games_and_commands_addressed_to_the_new_bot_are_untouched(handed_
         update.effective_message.reply_text.assert_not_awaited()
 
 
-def test_existing_bot_keeps_auctions_until_explicitly_handed_off(monkeypatch):
-    monkeypatch.delenv('AUCTION_BOT_ENABLED',raising=False)
+@pytest.mark.parametrize('value',[None,'true','false'])
+def test_original_bot_cannot_reenable_auction_mutations_with_a_stale_switch(monkeypatch,value):
+    if value is None:monkeypatch.delenv('AUCTION_BOT_ENABLED',raising=False)
+    else:monkeypatch.setenv('AUCTION_BOT_ENABLED',value)
     update=event('/apublish')
-    asyncio.run(H.auction_handoff_guard(update,ctx()))
-    update.effective_message.reply_text.assert_not_awaited()
+    with pytest.raises(ApplicationHandlerStop):asyncio.run(H.auction_handoff_guard(update,ctx()))
+    update.effective_message.reply_text.assert_awaited_once()
 
 
-def test_only_dedicated_bot_starts_a_clock_after_handoff(handed_off):
+def test_dedicated_bot_starts_one_clock_after_handoff(handed_off):
     from services.auction_scheduler import start_auction_scheduler,SWEEP_JOB_NAME
     jobs=[]
     queue=SimpleNamespace(get_jobs_by_name=lambda name:jobs,
                           run_repeating=lambda callback,**kw:jobs.append((callback,kw)))
-    app=SimpleNamespace(bot_data={},job_queue=queue)
-    start_auction_scheduler(app)
-    assert not jobs
-    app.bot_data['franchise_dedicated']=True
+    app=SimpleNamespace(bot_data={'franchise_dedicated':True},job_queue=queue)
     start_auction_scheduler(app);start_auction_scheduler(app)
     assert len(jobs)==1 and jobs[0][1]['name']==SWEEP_JOB_NAME

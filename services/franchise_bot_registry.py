@@ -6,6 +6,15 @@ No collecting-game handlers or website application are imported here.
 
 from importlib import import_module
 
+# The retired bot recognises these old shortcuts without loading auction
+# handlers. The dedicated bot's live mapping is verified against this list.
+DOT_ALIASES = frozenset({
+    'bid','bd','b','purse','bal','balance','apurse','squad','asquad','mysquad',
+    'board','status','aboard','rtm','artm','info','menu','ainfo','rules','arules',
+    'lb','leaderboard','mybids','bids','sold','unsold','next','trade','trades',
+    'tradeblock','tradehelp',
+})
+
 # module, command aliases, callable name. Kept explicit so the supported bot
 # surface can be reviewed without importing the main cricket application.
 COMMANDS = (

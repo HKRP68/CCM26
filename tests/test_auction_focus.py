@@ -8,12 +8,12 @@ What is pinned here:
   • **Talking is never blocked.** The gate sees commands and buttons; plain
     chatter, photos and service messages pass without even a lookup.
   • **Every auction command survives its own lock**, aliases included — the
-    set is pinned against bot.py's registrations in both directions, because a
+    set is pinned against the dedicated bot's registrations in both directions, because a
     new a-command missing from it would be locked out by the feature it
     belongs to.
   • **Admins are never locked out**, and the switch (``/afocus``) can turn the
     whole thing off.
-  • **The gate runs last** of the middleware and fails open.
+  • **The original bot no longer runs this lock or the auction clock.**
 """
 
 import ast
@@ -379,27 +379,13 @@ class MessagingTests(unittest.TestCase):
 
 
 class TheCommandSetIsRealTests(unittest.TestCase):
-    """The allow-list and bot.py's auction registrations must not drift.
-
-    Parses bot.py rather than importing it (see tests/test_bot_menu_commands.py).
-    The second direction is the one that would actually bite: an auction
-    command added later and forgotten here would be locked out by the very
-    feature it belongs to.
-    """
+    """The shared allow-list follows the dedicated bot's auction registry."""
 
     def _registered_auction_commands(self):
-        src = (ROOT / "bot.py").read_text()
-        start = src.index("from handlers.auction import (")
-        end = src.index('app.add_handler(CommandHandler(["unscramble"', start)
-        names = set()
-        for entry in re.findall(
-                r'CommandHandler\(\s*(\[[^\]]*\]|"[a-z0-9_]+")', src[start:end],
-                re.S):
-            names.update(re.findall(r'"([a-z0-9_]+)"', entry)
-                         if entry.startswith("[") else [entry.strip('"')])
-        return names
+        from services.franchise_bot_registry import COMMANDS
+        return {'auction'} | {name for _, names, _ in COMMANDS for name in names}
 
-    def test_every_auction_command_bot_py_registers_is_allowed(self):
+    def test_every_dedicated_auction_command_is_allowed(self):
         missing = sorted(self._registered_auction_commands() - F.AUCTION_COMMANDS)
         self.assertFalse(missing, (
             "handlers/auction.py registers commands auction_focus would lock "
@@ -412,6 +398,7 @@ class TheCommandSetIsRealTests(unittest.TestCase):
                 r'CommandHandler\(\s*(\[[^\]]*\]|"[a-z0-9_]+")', src):
             registered.update(re.findall(r'"([a-z0-9_]+)"', entry)
                               if entry.startswith("[") else [entry.strip('"')])
+        registered.update(self._registered_auction_commands())
         for name in sorted(F.AUCTION_COMMANDS | F.ALWAYS_ALLOWED):
             self.assertIn(name, registered, f"/{name} is not registered")
 
@@ -421,20 +408,18 @@ class TheCommandSetIsRealTests(unittest.TestCase):
 
 
 class TheMiddlewareTests(unittest.TestCase):
-    """Where the gate sits, and that it cannot take the bot down with it."""
+    """The original bot keeps its game middleware without auction locks."""
 
     def setUp(self):
         self.src = (ROOT / "bot.py").read_text()
         self.groups = {handler: int(group) for handler, group in re.findall(
             r"TypeHandler\(_TGUpdate,\s*(\w+)\),\s*group=(-?\d+)", self.src)}
 
-    def test_it_is_registered_and_runs_last_of_the_middleware(self):
-        self.assertIn("_auction_focus_check", self.groups)
-        mine = self.groups["_auction_focus_check"]
+    def test_original_game_middleware_remains_without_auction_focus(self):
+        self.assertNotIn("_auction_focus_check", self.groups)
         for other in ("_maintenance_check", "_ban_check", "_rookie_check"):
-            self.assertGreater(mine, self.groups[other], other)
-        # …and still before every command handler, which live in group 0+.
-        self.assertLess(mine, 0)
+            self.assertIn(other, self.groups)
+            self.assertLess(self.groups[other], 0)
 
     def test_each_middleware_still_has_a_group_of_its_own(self):
         groups = [int(g) for _h, g in re.findall(
@@ -442,19 +427,11 @@ class TheMiddlewareTests(unittest.TestCase):
         self.assertEqual(len(groups), len(set(groups)),
                          "two middlewares share a handler group")
 
-    def test_the_gate_swallows_its_own_failures(self):
-        """Everything but ApplicationHandlerStop is logged, not raised."""
+    def test_original_bot_never_starts_an_auction_clock(self):
         tree = ast.parse(self.src)
-        found = [node for node in ast.walk(tree)
-                 if isinstance(node, ast.AsyncFunctionDef)
-                 and node.name == "_auction_focus_check"]
-        self.assertEqual(len(found), 1)
-        handlers = [h for node in found
-                    for t in ast.walk(node) if isinstance(t, ast.Try)
-                    for h in t.handlers]
-        names = {getattr(h.type, "id", None) for h in handlers}
-        self.assertIn("Exception", names)
-        self.assertIn("ApplicationHandlerStop", names)
+        calls = [node.func.id for node in ast.walk(tree)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
+        self.assertNotIn('start_auction_scheduler', calls)
 
 
 if __name__ == "__main__":

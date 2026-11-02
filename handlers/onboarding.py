@@ -134,7 +134,7 @@ async def send_start_card(update: Update, context: ContextTypes.DEFAULT_TYPE,
 async def commands_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from services import onboarding_rich
     from services.rich_message import reply_rich
-    blocks, html_text, _ = onboarding_rich.commands_card()
+    blocks, html_text, _ = onboarding_rich.commands_card(include_franchise_auction=False)
     await reply_rich(update.effective_message, blocks, html_text)
 
 
@@ -239,7 +239,7 @@ async def onboarding_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if data == "onb_cmds":
         await query.answer()
-        blocks, html_text, _ = onboarding_rich.commands_card()
+        blocks, html_text, _ = onboarding_rich.commands_card(include_franchise_auction=False)
         await reply_rich(query.message, blocks, html_text)
         return
 

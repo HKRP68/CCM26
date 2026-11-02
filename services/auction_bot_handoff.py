@@ -1,26 +1,17 @@
 """Move the auction Telegram surface to a second bot on the same database.
 
-Set AUCTION_BOT_ENABLED=false on the original service before starting the
-dedicated bot. Its other games keep running, while auction commands, callbacks,
-focus locks and the scheduler are handed off together. No auction rows change.
+The original bot no longer registers auction commands, callbacks or clocks.
+This guard redirects historical entry points without changing auction rows.
 """
 import os
 import re
 
 
-def main_auctions_enabled():
-    return os.getenv('AUCTION_BOT_ENABLED', 'true').strip().lower() not in ('0', 'false', 'no', 'off')
-
-
-def auctions_enabled(application):
-    return bool(getattr(application, 'bot_data', {}).get('franchise_dedicated')) or main_auctions_enabled()
-
-
 async def auction_handoff_guard(update, context):
-    if auctions_enabled(context.application):
+    if getattr(context.application, 'bot_data', {}).get('franchise_dedicated'):
         return
     from services.command_token import command_name, command_token_from_text, is_command_for_this_bot
-    from services.franchise_bot_registry import COMMANDS
+    from services.franchise_bot_registry import COMMANDS, DOT_ALIASES
     from telegram.ext import ApplicationHandlerStop
 
     query = getattr(update, 'callback_query', None)
@@ -39,9 +30,8 @@ async def auction_handoff_guard(update, context):
             if command_name(token) not in commands:
                 return
         elif text.startswith('.'):
-            from handlers.auction import DOT_COMMANDS
             parts = text[1:].split(maxsplit=1)
-            if not parts or parts[0].casefold() not in DOT_COMMANDS:
+            if not parts or parts[0].casefold() not in DOT_ALIASES:
                 return
         else:
             return

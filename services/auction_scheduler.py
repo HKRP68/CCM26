@@ -30,9 +30,9 @@ pinned — the room is notified once per player and the pin always answers
 bids are announced as one short line per sweep however many landed in it, so
 a bidding war costs at most one message every two seconds.
 
-**Why the website never sends a message.** The Flask admin panel runs in a
-thread of this process. Rather than reaching across that boundary, an admin
-action writes its rows plus one ``AuctionEvent`` and commits; this job drains
+**Why the website never sends a message.** The Flask admin panel and dedicated
+auction bot share the same database. Rather than reaching across that boundary,
+an admin action writes its rows plus one ``AuctionEvent`` and commits; this job drains
 everything past ``AuctionSeason.announced_event_id`` and says it out loud, in
 id order, whether a command or a web form produced it. Nothing but the database
 crosses over.
@@ -1053,10 +1053,6 @@ async def _tick_one(context, session, season, now):
 
 def start_auction_scheduler(application):
     """Register the auction clock sweep. Idempotent — adds at most once."""
-    from services.auction_bot_handoff import auctions_enabled
-    if not auctions_enabled(application):
-        logger.info("Auction clock handed off to the dedicated auction bot")
-        return
     if not application.job_queue:
         logger.warning("JobQueue unavailable — auction clock not started")
         return

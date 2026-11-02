@@ -17,6 +17,13 @@ entry point for this deployment.
   steps, rather than requiring the organiser to remember every command.
 - Native buttons open the live room, squads, purses, player pool, retention,
   draft, trades, complete settings and season controls.
+- `/commands` (or `/cmds`) searches every command and alias, with short usage
+  examples and pages that fit Telegram. Try `/commands retention`,
+  `/commands trade` or an old alias such as `/commands apickpass`.
+- All **142 original command names/aliases and 12 callback handlers** are
+  preserved in the dedicated bot. `/auction` opens the native workspace;
+  `/adminhelp` retains the detailed organiser reference. Dot shortcuts and
+  captioned `/acall` images continue to work.
 - Common settings accept short replies. Role limits, price bands, rating
   requirements and ranges accept readable table formats; custom negotiation
   tables also accept JSON. Every guided money field uses **integer lakh**:
@@ -80,12 +87,15 @@ and Bot Admin environment IDs explicitly for the new service.
 Only one service should run the auction clock on this shared database:
 
 1. If an auction is live, use `/apause` in its current bot before the handoff.
-2. On the **original Render bot service**, set `AUCTION_BOT_ENABLED=false` and
-   `FRANCHISE_AUCTION_BOT_USERNAME` to the new bot's username without `@`.
-   Redeploy that service and wait for it to finish before starting the new bot.
-3. The original bot now skips the auction scheduler and auction focus lock.
-   Its auction commands and old auction buttons cannot change records. Private
-   or explicitly addressed auction commands point to the new bot; bare group
+2. Redeploy the **original Render bot service** from the current `main` branch
+   and wait for it to finish before starting the dedicated bot. Optionally set
+   `FRANCHISE_AUCTION_BOT_USERNAME` to the new bot's username without `@` so old
+   commands can link people to it.
+3. The original bot no longer registers franchise auction commands, callback
+   handlers, its scheduler, focus lock or slash-menu entries. Its old command
+   guide also omits auctions. Historical auction commands and buttons redirect;
+   they cannot change records. Private or explicitly addressed auction commands
+   point to the new bot; bare group
    bids are ignored so the two bots do not both reply. Other games keep running.
 4. Add the new bot to the same auction group, grant pin-message permission,
    and open `/auction` privately. Choose the existing auction and verify its
@@ -93,10 +103,12 @@ Only one service should run the auction clock on this shared database:
    The existing group binding is reused. The scheduler replaces the former
    bot's board when it cannot edit it; use the new bot's menus and bid buttons.
 
-The `AUCTION_BOT_ENABLED` switch defaults to `true` on the original service.
-It requires a Render environment change and restart there; changing the new
-service does not disable the old service remotely. To roll back, pause the
-auction, stop the dedicated service, re-enable the original service and resume.
+No `AUCTION_BOT_ENABLED` switch is needed: auction execution has been removed
+from the original entry point, and an old `true` value cannot re-enable it.
+The website's auction pages, API, settings, roles, retention, picks, trades,
+publishing and shared database remain available. Website actions are announced
+by the dedicated bot's scheduler. Keep the dedicated service running for live
+auctions even when managing them from the website.
 
 ## Render deployment
 
@@ -112,8 +124,8 @@ Deploy a **new service** from this repository with the **Python** runtime:
 
 The included [`render.franchise-bot.yaml`](../render.franchise-bot.yaml) can
 create a new Python Web Service through **New → Blueprint**. Choose that file
-as its Blueprint path. It creates no database. Configure the original service's
-handoff switch separately as described above. Its HTTP server serves only a
+as its Blueprint path. It creates no database. Redeploy the original service
+first as described above. Its HTTP server serves only a
 small readiness endpoint; there is no browser application. Readiness becomes successful only after Telegram
 initialization and the auction scheduler are ready.
 
@@ -200,7 +212,7 @@ Use a development bot and disposable database for testing. No Telegram or
 production database credentials are needed for the automated checks:
 
 ```sh
-python -m pytest -q tests/test_franchise_bot_runtime.py tests/test_franchise_bot_ui.py tests/test_franchise_player_import.py
+python -m pytest -q tests/test_franchise_bot_runtime.py tests/test_franchise_bot_ui.py tests/test_franchise_player_import.py tests/test_franchise_command_migration.py
 ```
 
 The earlier website source remains available in repository history and files;

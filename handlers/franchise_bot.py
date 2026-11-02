@@ -24,6 +24,7 @@ BOT_COMMANDS = [BotCommand(*row) for row in [
     ('sampleplayers','Download the player CSV example'),
     ('roles','Show your current roles'),('id','Show Telegram user and group IDs'),
     ('bid','Bid in the auction group'),('help','How auctions and setup work'),('cancel','Cancel a guided input'),
+    ('commands','Search every auction command and alias'),
 ]]
 PROMPT_KEY = 'franchise_prompt'
 
@@ -230,6 +231,8 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
             else:header+=['Ask your organiser to assign your Telegram ID to a franchise. Open /auction in its group to watch.']
         if manager:buttons+=_rows(actor,sid,[[('➕ New auction','f:new'),('📚 Existing leagues','v:leagues:1')]])
         buttons+=_rows(actor,sid,[[('🔀 Choose auction','v:seasons'),('❓ Help','v:help')]])
+        from handlers.franchise_commands import command_button
+        buttons.append([command_button(actor)])
     elif view=='seasons':
         header+=['','<b>Choose an auction</b>']
         for row in (data.get('auctions') or [])[:30]:buttons+=_rows(actor,row['id'],[[(f"{row['name'][:30]} · {row['status']}",'v:home')]])
@@ -369,6 +372,7 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
             '6. Review settings and start bidding. Finish the auction, publish squads, then clone the next season.','',
             '<b>In the group</b>','/bid 1.5 = 1.5 Cr; /bid 75L = 75 lakh. Shared bid buttons always carry their displayed price.',
             '/aboard · /asquad · /apurse · /arules · /adminhelp',
+            '/commands searches every command and alias, including retention, picks, settings, trades and publishing.',
             'Private guided controls use whole lakh: 100 = 1 Cr. /cancel stops an unfinished input.',
             'Only global auction roles change settings. Team roles bid and answer RTM for their assigned franchises.']
     else:raise A.AuctionError('Open /auction for a fresh menu.')

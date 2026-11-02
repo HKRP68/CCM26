@@ -120,7 +120,7 @@ def test_the_admin_bucket_alone_still_fits():
         f"{len(admin_only)} admin-only commands, over the {limit} Telegram "
         f"allows per scope — the tail of ADMIN_MENU_COMMANDS is now being "
         f"dropped silently. Retire some, or fold a family behind one "
-        f"reference card the way /auction and /lptadmin do.")
+        f"reference card the way /dadmin and /lptadmin do.")
 
 
 def test_the_admin_commands_always_survive_the_clamp():
@@ -147,6 +147,11 @@ def test_no_scope_has_duplicates():
 # This is an allowlist, not an amnesty: a command added without a menu entry
 # and without a line here still fails the test below.
 UNPUBLISHED_ON_PURPOSE = {
+    # Existing tournament/medical commands are on /tourhelp; pause/clear and
+    # website shortcuts are in /commands or BOT_COMMANDS.md. Player menus are
+    # still at their 100-entry limit after moving auction-only admin entries.
+    'awardceremony', 'concussion', 'controlaccess', 'controlhistory', 'cricinfo',
+    'tchannels', 'th2h', 'tvs', 'undoclear',
     # Cross-season matchups, franchise rivalries and captain handover are on
     # /tourhelp and in /commands. Player slash menus are at their 100-entry cap.
     "svs", "frivalry", "handover",
@@ -176,38 +181,9 @@ UNPUBLISHED_ON_PURPOSE = {
     # Tournament watch settings — on /tourhelp; admin bucket is full.
     "tsetchat", "tdeadline", "ttiebreak", "tstadiums", "thome", "tprize", "tteam", "tbracket",
     "tfixturemode",
-    # Franchise Auction — /auction card, the board's footer, and the RTM
-    # prompt itself, which names the owner and carries buttons.
-    "bid", "artm", "aboard", "apurse",
-    # Auto-building IPL-style sets — on the /adminhelp card's Pool & sets
-    # section and the website's pool card; the admin bucket is full.
-    "aautosets",
     # The full command catalogue. /start's card links it on every render
     # (footer + "📋 All commands" button), so it needs no menu slot of its own.
     "commands",
-    # The auction's team views — every one is a button on /ainfo, and the
-    # pinned board's footer names them.
-    "ainfo", "asets", "anextset", "anextplayer", "asquad", "asoldlist",
-    "aunsoldlist",
-    # Every number the auction runs by. Unpublished for the same ceiling
-    # reason as the views above, and named where somebody asking "what are the
-    # rules" already is: the /auction card, /ainfo's own buttons and the
-    # board's footer. docs/franchise-auction.md says so too.
-    "arules",
-    # Auction admin commands on the /adminhelp card rather than in the admin
-    # bucket, which would otherwise pass the 100-command ceiling.
-    "asetorder", "aretainforce", "aoffers", "aretcancel", "aaccelmode",
-    "aadminremove", "aadmins", "afinish",
-    "aretmode", "aretslot", "aretrule", "aretdemand", "asetsexport",
-    "asetsimport", "aprevious", "aprevteam",
-    # Dynamic retention's owner command — on /adminhelp's player section, the
-    # /aretlock readout and every negotiation card, which is where an owner
-    # retaining somebody already is.
-    "retain",
-    # Every team's retained players — a button on /ainfo (📋 Retained) and a
-    # line on /adminhelp; the squad rating rule sits on /adminhelp beside the
-    # other squad rules, and the admin bucket is already at the ceiling.
-    "aretained", "aratingrule",
     # The tournament rating rule — admin-only, set on the tournament's admin
     # page beside the overseas rule; the admin bucket is at the ceiling.
     "tratingrule",
@@ -220,12 +196,6 @@ UNPUBLISHED_ON_PURPOSE = {
     "seasons",
     # Player Draft trades — the precedent the auction followed.
     "dtrade", "dtrades", "dtradecancel",
-    # Franchise Auction trades — same call as /dtrade: both player scopes and
-    # the admin bucket are at the ceiling. Named on the /auction admin card,
-    # /ainfo, /help and the board's own footer.
-    "atrade", "atrades", "atradecash", "atradecancel", "atradeblock",
-    "atraderules", "atradewindow", "atradedeadline", "atradeapprove",
-    "atradeveto", "atradeundo", "atradehelp",
     # Challenge League tournament views — /help, the hub's buttons, and
     # whatever alias a league sets as its fixtures_command.
     "ctour", "cttable", "ctfixtures", "ctteams", "ctinjuries",
