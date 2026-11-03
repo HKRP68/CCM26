@@ -55,6 +55,7 @@ DEFAULTS = {
     # Scorecard accent colors (hex strings)
     "scorecard_color_inn1": "#c41e3a",
     "scorecard_color_inn2": "#00c9a7",
+    "scorecard_diwali_theme": False,
     "scorecard_text_settings": None,
     # The summary card's script flourish. Off means the reference's literal
     # "Game Changer!"; on names what the player actually did (Five For!,
@@ -147,6 +148,12 @@ MATCH_STYLES = {"telegram", "webapp"}
 
 CARD_STYLES = {"tier", "template"}
 
+
+def get_scorecard_theme(session=None):
+    """Read the theme fresh so website saves reach separate bot processes."""
+    return "diwali" if _refresh(session).get("scorecard_diwali_theme") else "normal"
+
+
 # Valid completion-card tokens for /wpm and /cm, in the order they should be
 # posted to the lobby chat (innings reading order, summary last).
 WPM_RESULT_CARD_TOKENS = ("bat1", "bowl1", "bat2", "bowl2", "summary")
@@ -208,12 +215,12 @@ def get_match_style(session=None):
 _CACHE = {"data": None, "loaded_at": None}
 
 
-def get_config(session=None):
-    """Return current config as a dict. Cheap — uses cache.
+def get_config(session=None, *, fresh=False):
+    """Return current config as a dict. Uses cache unless ``fresh=True``.
 
     If session is None, opens its own short-lived session.
     """
-    if _CACHE["data"] is not None:
+    if not fresh and _CACHE["data"] is not None:
         return _CACHE["data"]
     return _refresh(session)
 
@@ -256,6 +263,10 @@ def save_config(session, updates, updated_by=None, allow_null=()):
         row = GameConfig()
         session.add(row)
         session.flush()
+    theme_changed = (
+        updates.get("scorecard_diwali_theme") is not None
+        and bool(row.scorecard_diwali_theme) != bool(updates["scorecard_diwali_theme"])
+    )
     for k, v in updates.items():
         if k in DEFAULTS and (v is not None or k in allow_null):
             setattr(row, k, v)
@@ -263,6 +274,14 @@ def save_config(session, updates, updated_by=None, allow_null=()):
     if updated_by:
         row.updated_by = updated_by
     session.flush()
+    if theme_changed:
+        # Telegram file_ids refer to rendered pixels. Forget the old variant
+        # so /lastscorecard redraws using the newly selected theme. Payloads
+        # and delivery history stay intact; this commits with the setting.
+        from models import MatchScorecardImage
+        session.query(MatchScorecardImage).filter(
+            MatchScorecardImage.file_id.isnot(None)
+        ).update({MatchScorecardImage.file_id: None}, synchronize_session=False)
     # Invalidate cache so next get_config re-reads
     _CACHE["data"] = None
     return row

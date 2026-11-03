@@ -435,7 +435,7 @@ class SummaryVisualsTests(_Base):
         self.assertEqual(
             set(visuals),
             {"inn1_color", "inn2_color", "inn1_logo_png", "inn2_logo_png",
-             "potm_photo_png"})
+             "potm_photo_png", "theme"})
 
     def test_the_potm_card_is_only_fetched_when_asked_for(self):
         """The card is a full render, so it is not drawn for a caller that is
@@ -457,7 +457,7 @@ class SummaryVisualsTests(_Base):
         self.assertEqual(
             set(visuals),
             {"inn1_color", "inn2_color", "inn1_logo_png", "inn2_logo_png",
-             "potm_photo_png"})
+             "potm_photo_png", "theme"})
 
     def test_style_is_included_on_request(self):
         visuals = self.ci.summary_visuals(self.session, inn1_team="A")
@@ -502,7 +502,7 @@ class InningsVisualsTests(_Base):
     def test_it_returns_every_key_the_innings_cards_take(self):
         visuals = self.ci.innings_visuals(
             self.session, team_name="A", include_style=False)
-        self.assertEqual(set(visuals), {"accent_hex", "team_logo_png"})
+        self.assertEqual(set(visuals), {"accent_hex", "team_logo_png", "theme"})
 
     def test_a_team_colour_becomes_the_accent(self):
         user = self._user(team_name="Accent XI", colour="#aa001b")

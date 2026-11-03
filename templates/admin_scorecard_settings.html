@@ -4,11 +4,26 @@
 
 <h1>🎨 Scorecard Designer</h1>
 <p style="color:var(--muted); margin-bottom:1.5rem;">
-  Generate batting, bowling, and match-summary scorecards from the supplied Python templates: <code>Batting_Scorecard.py</code>, <code>bowling_scorecard_graphic.py</code>, and <code>match_summary_graphic-1.py</code>. The green team box stays as the active side marker: <strong>BATTING</strong> on batting cards and <strong>BOWLING</strong> on bowling cards. Use this page to preview, rename labels/values, choose each text object's font, fine-tune its template font size, and reposition it with X/Y offsets.
+  Choose a theme, team colours, and text settings for batting, bowling, and match-summary scorecards. Preview your changes before saving.
 </p>
 
 <form method="POST" action="{{ url_for('admin_scorecard_settings') }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <div class="form-card" style="max-width:100%; margin-bottom:1.5rem; border-color:#b88735;">
+    <h2 style="margin-top:0; color:#edc16d;">🪔 Diwali theme</h2>
+    <p id="scorecard_theme_hint" style="color:var(--muted); font-size:.85rem;">
+      Turn on for a festive navy-and-gold design with lights, fireworks, diyas, and a Happy Diwali greeting. Turn off to use the normal scorecards.
+    </p>
+    <label class="scorecard-theme-toggle">
+      <input type="checkbox" id="scorecard_diwali_theme" name="scorecard_diwali_theme"
+             role="switch" aria-label="Diwali theme" aria-describedby="scorecard_theme_hint"
+             {% if cfg.scorecard_diwali_theme %}checked{% endif %}>
+      <span class="scorecard-theme-track" aria-hidden="true"></span>
+      <span id="scorecard_theme_state" aria-live="polite">{{ 'Diwali · On' if cfg.scorecard_diwali_theme else 'Normal · Off' }}</span>
+    </label>
+    <p style="color:var(--muted); font-size:.78rem; margin-bottom:0;">Save Scorecard Settings to apply the theme to generated and redrawn cards.</p>
+  </div>
 
   <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.5rem;">
     {% for innings, label, input_id, color_value, emoji in [
@@ -66,7 +81,7 @@
       🏆 Match Summary Preview
     </h2>
     <p style="color:var(--muted); font-size:.85rem; margin-top:-.4rem;">
-      This preview uses the supplied <code>match_summary_graphic-1.py</code> layout: 1600×900 card, Bebas/Bricolage font controls, two innings blocks, result bar, and POTM bar.
+      Preview both innings, the match result, and the Player of the Match in your selected theme.
     </p>
     <a id="preview_link_summary_inn1"
        href="{{ url_for('admin_scorecard_preview', innings=1, card_type='summary') }}"
@@ -178,8 +193,18 @@
 </form>
 
 <div style="background:var(--card); padding:.85rem 1rem; border:1px solid var(--border); border-radius:8px; margin-top:1.2rem; font-size:.85rem; color:var(--muted);">
-  ℹ️ <strong>Tip:</strong> Previews update as soon as you change colours or text controls, so you can test before saving.
+  ℹ️ <strong>Tip:</strong> Previews update as soon as you change the theme, colours, or text controls, so you can test before saving.
 </div>
+
+<style>
+.scorecard-theme-toggle { display:inline-flex; align-items:center; gap:.75rem; cursor:pointer; position:relative; }
+.scorecard-theme-toggle input { position:absolute; width:1px; height:1px; opacity:0; }
+.scorecard-theme-track { display:inline-block; width:54px; height:30px; border-radius:18px; background:var(--border); border:1px solid #8b816e; position:relative; }
+.scorecard-theme-track::after { content:""; position:absolute; top:3px; left:3px; width:22px; height:22px; border-radius:50%; background:#fff; }
+.scorecard-theme-toggle input:checked + .scorecard-theme-track { background:#a36c18; border-color:#edc16d; }
+.scorecard-theme-toggle input:checked + .scorecard-theme-track::after { left:27px; background:#ffedc2; }
+.scorecard-theme-toggle input:focus-visible + .scorecard-theme-track { outline:2px solid #edc16d; outline-offset:4px; }
+</style>
 
 <script>
 function collectScorecardSettings() {
@@ -187,6 +212,10 @@ function collectScorecardSettings() {
   document.querySelectorAll('[data-preview-control]').forEach(input => {
     params.set(input.name, input.value);
   });
+  const diwaliOn = document.getElementById('scorecard_diwali_theme').checked;
+  params.set('theme', diwaliOn ? 'diwali' : 'normal');
+  ['1', '2'].forEach(innings => params.set(`scorecard_color_inn${innings}`, document.getElementById(`color_inn${innings}`).value));
+  document.getElementById('scorecard_theme_state').textContent = diwaliOn ? 'Diwali · On' : 'Normal · Off';
   return params;
 }
 
@@ -225,7 +254,7 @@ function schedulePreviewRefresh() {
   previewTimer = setTimeout(refreshAllScorecardPreviews, 250);
 }
 
-document.querySelectorAll('input[type="color"][id^="color_inn"], [data-preview-control]').forEach(input => {
+document.querySelectorAll('input[type="color"][id^="color_inn"], [data-preview-control], #scorecard_diwali_theme').forEach(input => {
   input.addEventListener('input', schedulePreviewRefresh);
   input.addEventListener('change', schedulePreviewRefresh);
 });

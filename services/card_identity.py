@@ -567,14 +567,17 @@ def summary_visuals(session, *, inn1_team=None, inn2_team=None,
     """Every branded argument the summary card takes.
 
     Spread this into ``generate_match_summary(**payload, **visuals)`` and the
-    card gets both crests, both colours, the portrait and — unless
-    ``include_style`` is off — the admin's text settings and flourish switch.
+    card gets both crests, both colours, the portrait and the current theme.
+    Unless ``include_style`` is off it also gets the admin's text settings and
+    flourish switch.
 
     ``inn1_team_id``/``inn2_team_id`` are ``TournamentTeam`` ids and
     ``inn1_challenge_team_id``/``inn2_challenge_team_id`` are ``ChallengeTeam``
     ids: pass whichever the mode has, and the event's crest is what the card
     wears. ``potm_card`` adds the award winner's collectible card to the strip.
     """
+    from services.config_service import get_scorecard_theme
+    theme = get_scorecard_theme(session)
     default1, default2, text_settings, dynamic = _admin_colours()
 
     event1 = {"league_key": league_key, "tournament_id": tournament_id,
@@ -609,6 +612,7 @@ def summary_visuals(session, *, inn1_team=None, inn2_team=None,
         "potm_photo_png": potm_portrait_png(session, player_id=potm_player_id,
                                             name=potm_name),
     }
+    visuals["theme"] = theme
     if potm_card:
         visuals["potm_card_png"] = potm_card_png(session, player_id=potm_player_id,
                                                  name=potm_name)
@@ -623,6 +627,8 @@ def innings_visuals(session, *, team_name=None, user_id=None,
                     tournament_id=None, tournament_team_id=None,
                     challenge_team_id=None, include_style=True):
     """The branded arguments the batting and bowling cards take."""
+    from services.config_service import get_scorecard_theme
+    theme = get_scorecard_theme(session)
     default1, default2, text_settings, _dynamic = _admin_colours()
     event = {"league_key": league_key, "tournament_id": tournament_id,
              "tournament_team_id": tournament_team_id,
@@ -633,6 +639,7 @@ def innings_visuals(session, *, team_name=None, user_id=None,
         "team_logo_png": team_logo_png(session, user_id=user_id,
                                        team_name=team_name, **event),
     }
+    visuals["theme"] = theme
     if include_style:
         visuals["text_settings"] = text_settings
     return visuals

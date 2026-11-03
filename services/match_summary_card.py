@@ -28,6 +28,11 @@ from functools import lru_cache
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
+from services.scorecard_themes import (
+    DIWALI, NORMAL, SUMMARY_FOOTER_H, draw_diwali_background,
+    draw_diwali_footer, normalize_theme,
+)
+
 try:
     from services.scorecard_card import normalize_scorecard_text_settings
 except Exception:  # pragma: no cover - defensive import fallback for legacy paths
@@ -573,7 +578,10 @@ def _initials(name, limit=3):
 # ══════════════════════════════════════════════════════════════════════
 
 def _draw_header(img, draw, ts, *, match_no, stadium, header_left, header_right,
-                 tagline):
+                 tagline, theme=NORMAL):
+    festive = theme == DIWALI
+    header_ink = WHITE if festive else INK
+    soft_ink = (225, 221, 235) if festive else INK_SOFT
     logo = _load_logo(LOGO_BOX)
     if logo:
         lx = LOGO_BOX[0] + ((LOGO_BOX[2] - LOGO_BOX[0]) - logo.width / SCALE) / 2
@@ -587,7 +595,7 @@ def _draw_header(img, draw, ts, *, match_no, stadium, header_left, header_right,
     cx, cy = _xy(ts, "brand_tagline", BRAND_CAPS_X, BRAND_CAPS_TOP)
     for i, word in enumerate(caps[:4]):
         _draw_text(draw, (cx, cy + i * BRAND_CAPS_LEAD), word.strip().upper(),
-                   caps_font, INK_SOFT, tracking=3.2, anchor="lm", weight=0.3)
+                   caps_font, soft_ink, tracking=3.2, anchor="lm", weight=0.3)
 
     # MATCH SUMMARY — two words, two colours, one italic display face.
     left = (header_left or _txt(ts, "header_title", "MATCH")).upper()
@@ -607,9 +615,10 @@ def _draw_header(img, draw, ts, *, match_no, stadium, header_left, header_right,
     wr = _tracked_w(draw, right, f_head, track)
     total = wl + gap + wr
     hx, hy = _xy(ts, "header_title", HEADLINE_CX - total / 2, HEADLINE_CY)
-    _draw_italic_text(img, (hx, hy), left, f_head, (*INK, 255),
+    _draw_italic_text(img, (hx, hy), left, f_head, (*header_ink, 255),
                       anchor="lm", tracking=track)
-    _draw_italic_text(img, (hx + wl + gap, hy), right, f_head, (*GOLD, 255),
+    _draw_italic_text(img, (hx + wl + gap, hy), right, f_head,
+                      (*(GOLD_BRIGHT if festive else GOLD), 255),
                       anchor="lm", tracking=track)
 
     draw.rectangle(sbox(*GOLD_RULE), fill=(*GOLD, 255))
@@ -625,6 +634,10 @@ def _draw_header(img, draw, ts, *, match_no, stadium, header_left, header_right,
     px0 = HEADLINE_CX - width / 2
     draw.rounded_rectangle(sbox(px0, y0, px0 + width, y1),
                            radius=s((y1 - y0) / 2), fill=(*INK, 255))
+    if festive:
+        draw.rounded_rectangle(sbox(px0, y0, px0 + width, y1),
+                               radius=s((y1 - y0) / 2), outline=(*GOLD_PALE, 255),
+                               width=s(1.4))
     sx, sy = _xy(ts, "stadium", HEADLINE_CX, (y0 + y1) / 2 + 1)
     _draw_text(draw, (sx, sy), label, pill_font, WHITE, tracking=2.4, anchor="mm")
 
@@ -634,12 +647,12 @@ def _draw_header(img, draw, ts, *, match_no, stadium, header_left, header_right,
     tx, ty = _xy(ts, "tagline", TAGLINE_X, TAGLINE_TOP)
     for i, word in enumerate(words[:3]):
         _draw_text(draw, (tx, ty + i * TAGLINE_LEAD), word.strip().upper(),
-                   tag_font, INK_SOFT if i else GOLD, tracking=3.4, anchor="lm",
+                   tag_font, soft_ink if i else GOLD, tracking=3.4, anchor="lm",
                    weight=0.3)
     mark_font = _font(62, family="headline")
     _draw_italic_text(img, ((WATERMARK_BOX[0] + WATERMARK_BOX[2]) / 2,
                             (WATERMARK_BOX[1] + WATERMARK_BOX[3]) / 2),
-                      "CMU", mark_font, (*INK, 34), anchor="mm")
+                      "CMU", mark_font, (*header_ink, 34), anchor="mm")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -774,7 +787,7 @@ def _draw_rows(draw, ts, rows, *, x_name, cx1, cx2, top, potm_name,
 
 def _draw_innings(img, draw, ts, y, *, team, runs, wickets, overs, overs_total,
                   is_hundred, batters, bowlers, color, crest_png, potm_name,
-                  score_text=None, meta_text=None):
+                  score_text=None, meta_text=None, theme=NORMAL):
     """One innings block at ``y``.
 
     ``score_text`` / ``meta_text`` replace the "180-5" score and the "20 OVERS"
@@ -893,6 +906,9 @@ def _draw_innings(img, draw, ts, y, *, team, runs, wickets, overs, overs_total,
     _draw_rows(draw, ts, _normalise_bowlers(bowlers), x_name=NAME_R_X,
                cx1=COL_R1_CX, cx2=COL_R2_CX, top=head_y1,
                potm_name=potm_name, max_name_w=COL_R1_CX - NAME_R_X - 96)
+    if theme == DIWALI:
+        draw.rounded_rectangle(sbox(PAD_L, y, CONTENT_R, block_y1), radius=s(16),
+                               outline=(*GOLD_BRIGHT, 255), width=s(2.5))
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1073,15 +1089,19 @@ def _draw_trophy(draw, cx, cy, h=52):
 
 
 def _draw_potm(img, draw, ts, *, name, team, photo_png, metrics, flourish,
-               card_png=None, y=POTM_Y):
+               card_png=None, y=POTM_Y, theme=NORMAL):
     y0, y1 = y, y + POTM_H
     band = Image.new("RGBA", (s(CANVAS_W), s(y1 - y0)), (0, 0, 0, 0))
     bd = ImageDraw.Draw(band, "RGBA")
+    bg_a, bg_b = ((16, 17, 43), (38, 19, 47)) if theme == DIWALI else (POTM_BG_A, POTM_BG_B)
     for i in range(s(CANVAS_W)):
         bd.line([(i, 0), (i, s(y1 - y0))],
-                fill=(*_mix(POTM_BG_A, POTM_BG_B, i / s(CANVAS_W)), 255))
+                fill=(*_mix(bg_a, bg_b, i / s(CANVAS_W)), 255))
     img.alpha_composite(band, (0, s(y0)))
     draw.line([(0, s(y0)), (s(CANVAS_W), s(y0))], fill=(*GOLD, 220), width=s(2))
+    if theme == DIWALI:
+        draw.rounded_rectangle(sbox(38, y0 + 2, CANVAS_W - 38, y1 - 2),
+                               radius=s(12), outline=(*GOLD_PALE, 255), width=s(1.5))
 
     _draw_trophy(draw, POTM_TROPHY_CX, (y0 + y1) / 2)
 
@@ -1179,7 +1199,8 @@ def _draw_potm(img, draw, ts, *, name, team, photo_png, metrics, flourish,
         _draw_text(draw, (mcx, cy + POTM_METRIC_LABEL_DY), str(label).upper(),
                    f_label, METRIC_LABEL, tracking=1.6, anchor="mm")
 
-    script = _txt(ts, "game_changer", flourish or "Game Changer!")
+    script = ("Happy Diwali" if theme == DIWALI
+              else _txt(ts, "game_changer", flourish or "Game Changer!"))
     f_script = _font_for(ts, "game_changer", 34, family="script")
     gx, gy = _xy(ts, "game_changer", POTM_SCRIPT_CX, (y0 + y1) / 2)
     _draw_script(img, draw, (gx, gy), script, f_script)
@@ -1354,19 +1375,26 @@ def generate_match_summary(*,
     conditions=None,
     inn1_score_text=None,
     inn2_score_text=None,
+    theme=NORMAL,
 ) -> bytes | None:
     """Render the match summary card. Returns PNG bytes or ``None`` on failure.
 
     ``conditions`` — ``[(kind, label, value), ...]`` chips (venue, pitch,
     weather, ball, toss) drawn in a strip under the header. The card grows by
     the strip's height; without chips it is the classic 1675×986 poster.
+    ``theme="diwali"`` adds festival artwork and a footer; the default keeps
+    the normal poster. Colours, crests and match values are shared by both.
     """
     try:
         ts = text_settings
+        theme = normalize_theme(theme)
         dy = (STRIP_H + STRIP_GAP * 2) if conditions else 0
-        canvas_h = CANVAS_H + dy
+        canvas_h = CANVAS_H + dy + (SUMMARY_FOOTER_H if theme == DIWALI else 0)
         img = Image.new("RGBA", (s(CANVAS_W), s(canvas_h)), (255, 255, 255, 255))
-        _draw_paper(img)
+        if theme == DIWALI:
+            draw_diwali_background(img, scale=SCALE)
+        else:
+            _draw_paper(img)
         draw = ImageDraw.Draw(img, "RGBA")
 
         colour_a = _hex_to_rgb(inn1_color, TEAM_A)
@@ -1376,7 +1404,7 @@ def generate_match_summary(*,
                             if isinstance(match_date, datetime) else "")
         _draw_header(img, draw, ts, match_no=match_no, stadium=venue,
                      header_left=header_left, header_right=header_right,
-                     tagline=tagline)
+                     tagline=tagline, theme=theme)
         if conditions:
             _draw_conditions_strip(img, draw, ts, HEADER_H + STRIP_GAP, conditions)
 
@@ -1390,7 +1418,7 @@ def generate_match_summary(*,
                       batters=inn1.get("batters", []),
                       bowlers=inn1.get("bowlers", []),
                       color=colour_a, crest_png=inn1_logo_png,
-                      potm_name=potm_name, score_text=inn1_score_text)
+                      potm_name=potm_name, score_text=inn1_score_text, theme=theme)
         _draw_innings(img, draw, ts, INN2_Y + dy,
                       team=inn2.get("team") or inn2_team,
                       runs=inn2_runs, wickets=inn2_wickets, overs=inn2_overs,
@@ -1398,7 +1426,7 @@ def generate_match_summary(*,
                       batters=inn2.get("batters", []),
                       bowlers=inn2.get("bowlers", []),
                       color=colour_b, crest_png=inn2_logo_png,
-                      potm_name=potm_name, score_text=inn2_score_text)
+                      potm_name=potm_name, score_text=inn2_score_text, theme=theme)
 
         # The winner's own colour would vanish against the navy bar, so the
         # margin keeps the reference's fixed cyan.
@@ -1414,7 +1442,9 @@ def generate_match_summary(*,
                    metrics=metrics,
                    flourish=(_flourish(potm_stats, potm_runs, potm_wickets)
                              if dynamic_flourish else "Game Changer!"),
-                   y=POTM_Y + dy)
+                   y=POTM_Y + dy, theme=theme)
+        if theme == DIWALI:
+            draw_diwali_footer(img, scale=SCALE)
 
         out = Image.new("RGB", img.size, (255, 255, 255))
         out.paste(img, mask=img.split()[-1])

@@ -21,6 +21,10 @@ from datetime import datetime
 from PIL import Image, ImageDraw
 
 from services import match_summary_card as msc
+from services.scorecard_themes import (
+    DIWALI, NORMAL, SUMMARY_FOOTER_H, draw_diwali_background,
+    draw_diwali_footer, normalize_theme,
+)
 from services.match_summary_card import (
     CANVAS_W, CONTENT_R, GOLD, GOLD_BRIGHT, GOLD_PALE, HEADER_H, INK, INN_H, LINE,
     PAD_L, POTM_H, RESULT_ACCENT, RESULT_H, STRIP_GAP, STRIP_H, TEAM_A, TEAM_B, WHITE,
@@ -119,7 +123,7 @@ def generate_test_summary(*, innings, winner_name, win_margin_text, result_headl
                           inn1_color=None, inn2_color=None,
                           inn1_logo_png=None, inn2_logo_png=None,
                           stadium=None, match_date=None, text_settings=None,
-                          match_no=None, **_ignored) -> bytes | None:
+                          match_no=None, theme=NORMAL, **_ignored) -> bytes | None:
     """Render a Test summary card. Returns PNG bytes or ``None`` on failure.
 
     ``innings`` is a list (1-4) of dicts: ``team``, ``runs``, ``wickets``,
@@ -130,10 +134,16 @@ def generate_test_summary(*, innings, winner_name, win_margin_text, result_headl
     """
     try:
         ts = text_settings
+        theme = normalize_theme(theme)
         innings = list(innings or [])[:4]
         blocks, timeline_y, result_y, potm_y, height = _layout(len(innings), bool(conditions))
+        if theme == DIWALI:
+            height += SUMMARY_FOOTER_H
         img = Image.new("RGBA", (s(CANVAS_W), s(height)), (255, 255, 255, 255))
-        msc._draw_paper(img)
+        if theme == DIWALI:
+            draw_diwali_background(img, scale=msc.SCALE)
+        else:
+            msc._draw_paper(img)
         draw = ImageDraw.Draw(img, "RGBA")
 
         colour_a = msc._hex_to_rgb(inn1_color, TEAM_A)
@@ -144,7 +154,7 @@ def generate_test_summary(*, innings, winner_name, win_margin_text, result_headl
                             if isinstance(match_date, datetime) else "")
         msc._draw_header(img, draw, ts, match_no=match_no, stadium=venue,
                          header_left="TEST", header_right="SUMMARY",
-                         tagline="FIVE DAYS|ONE RESULT|TEST CRICKET",)
+                         tagline="FIVE DAYS|ONE RESULT|TEST CRICKET", theme=theme)
         if conditions:
             msc._draw_conditions_strip(img, draw, ts, HEADER_H + STRIP_GAP, conditions)
 
@@ -158,7 +168,7 @@ def generate_test_summary(*, innings, winner_name, win_margin_text, result_headl
                 color=colour_a if is_a else colour_b,
                 crest_png=inn1_logo_png if is_a else inn2_logo_png,
                 potm_name=potm_name,
-                score_text=inn.get("score_text"), meta_text=inn.get("meta_text"))
+                score_text=inn.get("score_text"), meta_text=inn.get("meta_text"), theme=theme)
 
         _draw_timeline(img, draw, timeline_y, days)
 
@@ -171,7 +181,9 @@ def generate_test_summary(*, innings, winner_name, win_margin_text, result_headl
         msc._draw_potm(img, draw, ts, name=potm_name, team=potm_team,
                        photo_png=potm_photo_png, card_png=potm_card_png, metrics=metrics,
                        flourish=msc._flourish(potm_stats, potm_runs, potm_wickets),
-                       y=potm_y)
+                       y=potm_y, theme=theme)
+        if theme == DIWALI:
+            draw_diwali_footer(img, scale=msc.SCALE)
 
         out = Image.new("RGB", img.size, (255, 255, 255))
         out.paste(img, mask=img.split()[-1])

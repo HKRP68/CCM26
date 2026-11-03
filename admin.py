@@ -14807,7 +14807,7 @@ def admin_match_settings():
 @app.route("/settings/scorecard", methods=["GET", "POST"])
 @login_required
 def admin_scorecard_settings():
-    """Per-innings accent color customization for scorecard graphics."""
+    """Scorecard themes, per-innings colours, text controls and previews."""
     db = get_session()
     try:
         from services.config_service import get_config, save_config
@@ -14850,6 +14850,7 @@ def admin_scorecard_settings():
                 save_config(db, {
                     "scorecard_color_inn1": c1,
                     "scorecard_color_inn2": c2,
+                    "scorecard_diwali_theme": _checked("scorecard_diwali_theme"),
                     "scorecard_text_settings": _json.dumps(text_settings, separators=(",", ":")),
                     "wpm_result_cards": wpm_result_cards,
                     # The two places the Player of the Match's collectible card
@@ -14861,7 +14862,8 @@ def admin_scorecard_settings():
                 }, updated_by=session.get("admin_user", "admin"))
                 db.commit()
                 log_admin(db, "scorecard_settings_save", "config", 0,
-                          "scorecard", f"inn1={c1} inn2={c2} cards={wpm_result_cards}")
+                          "scorecard", f"inn1={c1} inn2={c2} cards={wpm_result_cards} "
+                          f"diwali={_checked('scorecard_diwali_theme')}")
                 db.commit()
                 flash("✅ Scorecard settings saved.", "info")
                 return redirect(url_for("admin_scorecard_settings"))
@@ -14869,7 +14871,7 @@ def admin_scorecard_settings():
                 db.rollback()
                 flash(f"Error: {e}", "error")
 
-        cfg = get_config(db)
+        cfg = get_config(db, fresh=True)
         from services.config_service import get_wpm_result_cards
         # An unwritten column reads None, and bool(None) would show the boxes
         # unticked on exactly the installs that have the feature on.
@@ -14905,7 +14907,10 @@ def admin_scorecard_preview():
             normalize_scorecard_text_settings,
         )
         import re as _re
-        cfg = get_config(db)
+        cfg = get_config(db, fresh=True)
+        from services.scorecard_themes import normalize_theme
+        saved_theme = "diwali" if cfg.get("scorecard_diwali_theme") else "normal"
+        theme = normalize_theme(request.args.get("theme", saved_theme))
         innings = request.args.get("innings", "1")
         is_first = (innings == "1")
         card_type = (request.args.get("card_type") or "batting").lower()
@@ -14952,6 +14957,11 @@ def admin_scorecard_preview():
         preview_color = requested_color if _re.fullmatch(r"#[0-9a-fA-F]{6}", requested_color or "") else saved_color
         if card_type == "summary":
             from services.match_summary_card import generate_match_summary
+            def _summary_colour(innings):
+                key = f"scorecard_color_inn{innings}"
+                requested = request.args.get(key)
+                return (requested if _re.fullmatch(r"#[0-9a-fA-F]{6}", requested or "")
+                        else cfg.get(key))
             png = generate_match_summary(
                 inn1_team="Very Touchables", inn1_runs=184, inn1_wickets=8, inn1_overs="20.0",
                 inn2_team="DaddyAlec", inn2_runs=185, inn2_wickets=4, inn2_overs="16.5",
@@ -14984,6 +14994,8 @@ def admin_scorecard_preview():
                 },
                 stadium="Wanderers Stadium", match_no=118722,
                 text_settings=text_settings,
+                theme=theme,
+                inn1_color=_summary_colour(1), inn2_color=_summary_colour(2),
             )
         elif card_type == "bowling":
             png = generate_bowling_scorecard(
@@ -15003,6 +15015,7 @@ def admin_scorecard_preview():
                 match_no=42,
                 accent_hex=preview_color,
                 text_settings=text_settings,
+                theme=theme,
             )
         else:
             png = generate_batting_scorecard(
@@ -15014,11 +15027,12 @@ def admin_scorecard_preview():
                 match_no=42,
                 accent_hex=preview_color,
                 text_settings=text_settings,
+                theme=theme,
             )
         if not png:
             return "Preview render failed", 500
         from flask import Response
-        return Response(png, mimetype="image/png")
+        return Response(png, mimetype="image/png", headers={"Cache-Control": "no-store"})
     finally:
         db.close()
 
