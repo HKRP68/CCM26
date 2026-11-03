@@ -6,6 +6,7 @@ game modes. Their squad, account and tournament information remain available.
 
 ```text
 /tournamentonly block @player Complete your pending tournament fixtures
+/tournamentonly warn @player Please finish this round
 /tournamentonly status @player
 /tournamentonly list
 /tournamentonly unblock @player
@@ -25,19 +26,33 @@ Use a Telegram ID if a stored username is outdated or ambiguous. The player must
 already have an account. Reasons are optional and limited to 500 characters.
 `/tournamentonly list 2` shows the next page of restrictions.
 
-Blocking now sends a DM warning and gives **24 hours of grace**. Other game
-modes remain available during grace. To choose a different grace period (0–168
-hours), add the option to the reason:
+`block` and the target-first shortcut **block other game modes immediately**.
+They also send the player a DM showing the active restriction and remaining
+fixtures. No grace option is needed for immediate enforcement.
+
+To warn without blocking immediately, explicitly request a grace period:
 
 ```text
-/touronly block @player --grace=0
-/touronly block @player --grace=12 Please finish the current round
+/touronly warn @player
+/touronly warn @player --grace=12 Please finish the current round
 ```
 
-The warning and `/touronly status @player` show the deadline and required fixture
-IDs. If Telegram cannot deliver the DM, the admin is told to relay the warning.
-Repeating a warning cannot extend an existing grace period; unblock first to
-make an exception or change the deadline.
+`warn` defaults to 24 hours. `--grace=0` through `--grace=168` is also supported
+on `block` for compatibility; a positive value explicitly allows other modes
+until its deadline. The response clearly labels **ACTIVE** or **GRACE PERIOD**.
+Existing blocks with future deadlines from the old implicit grace default take
+effect immediately after this update. New explicit warnings retain their grace.
+
+All restriction timestamps, including deadlines, list entries and status, use
+**IST (UTC+05:30)**. Required fixtures include the tournament name, round,
+match number and both teams. Players can use `/touronly status` (or `/touronly`)
+to inspect their own progress; only bot admins can inspect other accounts,
+change access, or list restrictions.
+
+If Telegram cannot deliver the DM, the admin is told to relay the notice.
+Repeating a warning cannot extend an existing grace period. Use `block` to
+activate an existing warning immediately without resetting its required
+fixtures; use `unblock` first to grant a new warning or exception.
 
 The player must finish **all their own unfinished fixtures from the currently
 released round/window**. Fixtures are captured when the warning is issued, so

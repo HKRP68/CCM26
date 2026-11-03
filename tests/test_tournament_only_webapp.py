@@ -93,6 +93,22 @@ class TournamentOnlyWebappTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertBlocked(self.client.post(path, json={}, headers=self.headers))
 
+    def test_future_start_does_not_allow_casual_play_without_explicit_warning(self):
+        from datetime import datetime, timedelta
+        self.me.tournament_only_starts_at = datetime.utcnow() + timedelta(hours=24)
+        self.db.commit()
+        self.assertBlocked(self.client.post("/api/webapp/quickmatch/start",
+                                           json={}, headers=self.headers))
+
+    def test_explicit_warning_keeps_other_modes_open_until_deadline(self):
+        from datetime import datetime, timedelta
+        self.me.tournament_only_starts_at = datetime.utcnow() + timedelta(hours=1)
+        self.me.tournament_only_warning = True
+        self.db.commit()
+        with self.admin.app.test_request_context("/api/webapp/quickmatch/start",
+                                                 method="POST", json={}):
+            self.assertIsNone(self.admin._tournament_only_webapp_block(self.db, self.me))
+
     def test_casual_match_actions_reject_a_forged_tournament_flag(self):
         self.assertBlocked(self.client.post(
             "/api/webapp/match/deliver", headers=self.headers,

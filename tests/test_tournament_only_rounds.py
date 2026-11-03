@@ -1,7 +1,7 @@
 """A round lock has a fixed completion target and a warning deadline."""
 import json
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from database import Base
@@ -50,6 +50,19 @@ class RoundRestrictionTests(unittest.TestCase):
         self.assertIn("warning", service.restriction_message(self.user, session=self.db))
         self.user.tournament_only_starts_at = datetime.utcnow() - timedelta(seconds=1)
         self.assertTrue(service.is_restricted(self.user))
+
+    def test_old_implicit_grace_does_not_allow_other_modes(self):
+        self.lock(24)
+        self.user.tournament_only_warning = False  # deployed rows before explicit warnings
+        self.db.commit()
+        self.assertTrue(service.is_restricted(self.user))
+        self.assertIn("ACTIVE", service.restriction_message(self.user, session=self.db))
+
+    def test_ist_display_rolls_over_day_and_handles_aware_timestamps(self):
+        naive = datetime(2026, 11, 3, 20, 0)
+        self.assertEqual(service.format_ist(naive), "04 Nov 2026, 01:30 AM IST")
+        aware = naive.replace(tzinfo=timezone.utc)
+        self.assertEqual(service.format_ist(aware), service.format_ist(naive))
 
     def test_own_round_only_not_other_teams_or_next_round(self):
         self.lock()

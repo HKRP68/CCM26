@@ -4543,10 +4543,8 @@ _TOURNAMENT_ONLY_MATCH_ACTION_PATHS = frozenset({
 
 
 def _tournament_only_error(user, db, *, opponent=False):
-    from services.tournament_only_service import restriction_message
-    message = ("A player in this match is restricted to tournament matches. "
-               "Ask an admin to remove their restriction before playing this mode."
-               if opponent else restriction_message(user, session=db))
+    from services.tournament_only_service import restriction_message, OPPONENT_NOTICE
+    message = OPPONENT_NOTICE if opponent else restriction_message(user, session=db)
     return {"ok": False, "error": "tournament_only", "message": message}, 403
 
 

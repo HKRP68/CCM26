@@ -142,6 +142,9 @@ class User(Base):
     tournament_only_by = Column(BigInteger, nullable=True)
     tournament_only_fixture_ids_json = Column(Text, nullable=True)
     tournament_only_starts_at = Column(DateTime, nullable=True)
+    # Grace is explicitly requested; existing blocks must not silently allow
+    # casual play just because an old default wrote a future starts_at.
+    tournament_only_warning = Column(Boolean, default=False, nullable=False)
     # Set by the admin "Reset user" action (services/user_reset_service.py):
     # the account has been emptied and the player must run /debut again. The
     # bot middleware sends them there; /debut re-runs the setup and clears it.

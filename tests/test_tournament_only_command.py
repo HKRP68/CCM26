@@ -92,9 +92,11 @@ class CommandTests(unittest.TestCase):
         self.assertFalse(self.user.tournament_only)
 
     def test_block_by_case_insensitive_username_persists_and_audits(self):
+        from services import tournament_only_service
         text = self.run_command("block", "@CRICKET_PLAYER", "Pending", "fixtures")
         self.assertIn("tournament-only access", text)
         self.assertTrue(self.user.tournament_only)
+        self.assertTrue(tournament_only_service.is_restricted(self.user))
         self.assertEqual(self.user.tournament_only_reason, "Pending fixtures")
         self.assertEqual(self.user.tournament_only_by, 90001)
         log = self.session.query(self.AdminLog).one()
@@ -117,11 +119,15 @@ class CommandTests(unittest.TestCase):
         update = SimpleNamespace(effective_user=SimpleNamespace(id=90001), effective_message=message)
         with patch.object(self.handler, "is_bot_admin", return_value=True):
             asyncio.run(self.handler.tournamentonly_handler(
-                update, SimpleNamespace(args=["block", "70001"], bot=bot)))
+                update, SimpleNamespace(args=["warn", "70001"], bot=bot)))
         self.assertEqual(bot.send_message.await_args.kwargs["chat_id"], 70001)
         notice = bot.send_message.await_args.kwargs["text"]
         self.assertIn("warning", notice)
-        self.assertIn("UTC", notice)
+        self.assertIn("IST", notice)
+        self.assertNotIn("UTC", notice)
+        self.session.expire_all()
+        from services import tournament_only_service
+        self.assertFalse(tournament_only_service.is_restricted(self.user))
         self.assertIn("M1", notice)
 
     def test_target_first_shortcut_and_manual_release(self):
@@ -135,7 +141,7 @@ class CommandTests(unittest.TestCase):
 
     def test_reply_status_and_unblock(self):
         self.run_command("block", reply_id=70001)
-        self.assertIn("tournament-only", self.run_command("status", reply_id=70001))
+        self.assertIn("tournament-only", self.run_command("status", reply_id=70001).lower())
         self.run_command("unblock", reply_id=70001)
         self.assertIn("normal game access", self.run_command("status", "70001"))
 
@@ -202,6 +208,27 @@ class CommandTests(unittest.TestCase):
         text = self.run_command()
         self.assertIn("/tournamentonly block", text)
         self.assertFalse(self.user.tournament_only)
+
+    def test_player_can_inspect_only_their_own_status(self):
+        self.run_command("block", "70001")
+        message = SimpleNamespace(reply_text=AsyncMock())
+        update = SimpleNamespace(effective_user=SimpleNamespace(id=70001), effective_message=message)
+        with patch.object(self.handler, "is_bot_admin", return_value=False):
+            asyncio.run(self.handler.tournamentonly_handler(update, SimpleNamespace(args=["status"])))
+        text = message.reply_text.await_args.args[0]
+        self.assertIn("ACTIVE", text)
+        self.assertIn("M1", text)
+        self.assertIn("A vs B", text)
+        self.assertIn("IST", text)
+
+    def test_block_activates_existing_warning_without_unblock(self):
+        from services import tournament_only_service
+        self.run_command("warn", "70001")
+        ids = self.user.tournament_only_fixture_ids_json
+        self.assertFalse(tournament_only_service.is_restricted(self.user))
+        self.run_command("block", "70001")
+        self.assertTrue(tournament_only_service.is_restricted(self.user))
+        self.assertEqual(ids, self.user.tournament_only_fixture_ids_json)
 
 
 if __name__ == "__main__":
