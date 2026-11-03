@@ -541,6 +541,7 @@ def _migrate_add_columns():
         "tournament_only_by": "BIGINT",
         "tournament_only_fixture_ids_json": "TEXT",
         "tournament_only_starts_at": "TIMESTAMP",
+        "tournament_only_warning": "BOOLEAN DEFAULT FALSE NOT NULL",
         "last_miniapp_chat_id": "BIGINT",
         "notifications_enabled": "BOOLEAN DEFAULT TRUE",
         "subscription_tier": "VARCHAR(20) DEFAULT 'none'",

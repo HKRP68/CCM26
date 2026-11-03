@@ -93,7 +93,8 @@ class TournamentOnlyServiceTests(unittest.TestCase):
         with self.engine.begin() as connection:
             for column in ("tournament_only", "tournament_only_reason",
                            "tournament_only_at", "tournament_only_by",
-                           "tournament_only_fixture_ids_json", "tournament_only_starts_at"):
+                           "tournament_only_fixture_ids_json", "tournament_only_starts_at",
+                           "tournament_only_warning"):
                 connection.execute(text(f"ALTER TABLE users DROP COLUMN {column}"))
         with patch.object(database, "engine", self.engine), \
                 patch.object(database, "SessionLocal", self.sessions), \
@@ -104,7 +105,27 @@ class TournamentOnlyServiceTests(unittest.TestCase):
             user = reader.get(User, user_id)
             self.assertFalse(service.is_restricted(user))
             self.assertIsNone(user.tournament_only_reason)
+            self.assertFalse(user.tournament_only_warning)
             self.assertEqual(user.username, "captain")
+
+    def test_upgrade_preserves_block_even_with_an_old_future_start_time(self):
+        import database
+        from datetime import datetime, timedelta
+        self.block()
+        self.user.tournament_only_starts_at = datetime.utcnow() + timedelta(hours=24)
+        self.session.commit()
+        user_id = self.user.id
+        self.session.close()
+        with self.engine.begin() as connection:
+            connection.execute(text("ALTER TABLE users DROP COLUMN tournament_only_warning"))
+        with patch.object(database, "engine", self.engine), \
+                patch.object(database, "SessionLocal", self.sessions), \
+                patch.object(database, "_is_postgres", False):
+            database._migrate_add_columns()
+        with self.sessions() as reader:
+            user = reader.get(User, user_id)
+            self.assertFalse(user.tournament_only_warning)
+            self.assertTrue(service.is_restricted(user))
 
 
 if __name__ == "__main__":
