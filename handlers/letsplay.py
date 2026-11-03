@@ -2190,6 +2190,27 @@ async def _launch_match(context, draft, decision, winner_side):
                                   "⚠️ A player no longer exists — match cancelled.")
             return
 
+        # Access may have changed since the invitation or XI confirmation.
+        # Check both captains here too: a bot election or an unrestricted host
+        # must not launch a saved friendly for a now-restricted opponent.
+        from services import tournament_only_service
+        official = bool((draft.get("lpt") or {}).get("tournament_id"))
+        if not official and any(tournament_only_service.is_restricted(
+                user, session=session) for user in (host, guest)):
+            invite_id = draft.get("invite_id")
+            _drop_draft(context, invite_id)
+            _cancel_invite_timeout(context, invite_id)
+            _cancel_setup_timeout(context, invite_id)
+            _cancel_trait_vote_timeout(context, invite_id)
+            draft["status"] = "cancelled"
+            draft["match_launched"] = False
+            await _abandon_launch(
+                context, draft,
+                "🔒 Match cancelled: a player has tournament-only access.\n"
+                "Play official tournament fixtures with /lptour or your "
+                "league's tournament command.")
+            return
+
         # Launch the EXACT XI each side confirmed (snapshot of roster ids taken
         # at confirm time), not whatever the live roster order is now. Fall back
         # to the current order only if a snapshot is somehow missing.

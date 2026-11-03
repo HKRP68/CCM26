@@ -1070,7 +1070,7 @@ async function submitSetup() {
       body: JSON.stringify(body)
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Failed to confirm lineup");
+    if (!res.ok) throw new Error(data.message || data.error || "Failed to confirm lineup");
     
     document.getElementById('submit-setup-btn').classList.add('hidden');
     // Hide the just-submitted picker so the stale dropdown doesn't linger
@@ -1829,7 +1829,7 @@ async function submitShot(shot) {
       } })
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Failed to submit shot");
+    if (!res.ok) throw new Error(data.message || data.error || "Failed to submit shot");
     // The response already carries the resolved outcome (server applies it
     // synchronously) — apply it the instant it arrives and bypass any older
     // poll response that was still in flight when the shot was tapped.
@@ -1935,7 +1935,7 @@ async function submitDelivery() {
       })
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Failed to submit delivery");
+    if (!res.ok) throw new Error(data.message || data.error || "Failed to submit delivery");
     selectedDelivery = null;
     document.getElementById('bowler-delivery-select').value = '';
     document.getElementById('bowler-delivery-grid').innerHTML = '';
@@ -2033,7 +2033,7 @@ async function selectNextBatsman(index) {
       })
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Failed to select batsman");
+    if (!res.ok) throw new Error(data.message || data.error || "Failed to select batsman");
     fetchState();
   } catch (err) {
     alert(err.message);
@@ -2142,7 +2142,7 @@ async function selectNextBowler(index) {
       })
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Failed to select bowler");
+    if (!res.ok) throw new Error(data.message || data.error || "Failed to select bowler");
     fetchState();
   } catch (err) {
     alert(err.message);
@@ -2682,14 +2682,17 @@ async function continuePastInningsBreak() {
   const btn = document.getElementById('ib-continue-btn');
   if (btn) btn.disabled = true;
   try {
-    await fetch('/api/match/innings-break/continue', {
+    const res = await fetch('/api/match/innings-break/continue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, matchId })
     });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || data.error || 'Could not continue the match');
     fetchState();
   } catch (err) {
     console.error('continuePastInningsBreak failed:', err);
+    alert(err.message);
   } finally {
     _ibContinueInFlight = false;
     if (btn) btn.disabled = false;
@@ -2894,6 +2897,16 @@ function renderAutoplayQuickCard(kind) {
 }
 
 
+function stopTournamentOnlyAutoplay(data) {
+  if (!data || data.error !== 'tournament_only') return false;
+  autoplayOffPending = false;
+  setAutoplayActive(false);
+  postAutoplayStatus(false);
+  const message = data.message || 'Other modes are restricted. Play your official tournament fixtures.';
+  if (tg && tg.showAlert) { tg.showAlert(message); } else { alert(message); }
+  return true;
+}
+
 async function postAutoplayStatus(active) {
   if (!matchId || !userId || userId === 'spectator') return;
   try {
@@ -2903,6 +2916,7 @@ async function postAutoplayStatus(active) {
       body: JSON.stringify({ userId, matchId, active: !!active }),
     });
     const data = await resp.json();
+    if (stopTournamentOnlyAutoplay(data)) return;
     // The server has the final say on entitlement: a refused ON (free user)
     // locks the pill and flips it straight back off.
     if (data && data.ok === false && data.error === 'premium_required') {
@@ -2993,6 +3007,7 @@ async function runAutoplayAction() {
     const data = await resp.json();
     // Entitlement lapsed mid-match (or the pill was forced on): stop the loop
     // and lock the pill instead of retrying every tick.
+    if (stopTournamentOnlyAutoplay(data)) return;
     if (data && data.ok === false && data.error === 'premium_required') {
       autoplayPremium = false;
       autoplayOffPending = false;

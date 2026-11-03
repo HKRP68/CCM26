@@ -797,6 +797,9 @@ Available in the dedicated Franchise Auction bot; website features are retained.
 | `/rsim <telegram_id>` (or reply with `/rsim`) | Bot admins: reset one player's /sim cooldown so they can sim again now — alias `/resetsim` |
 | `/clearmatches` | Group/bot admins: preview and confirm clearing matches in this chat (−5 Elo; shared 5 actions/24 hours) |
 | `/removematch @user` | Pull one user out of their active match |
+| `/tournamentonly block @user [reason]` | Bot admins: warn for 24 hours, then restrict to their current open-round fixtures; add `--grace=0` for immediate restriction; `/touronly @user` is a shortcut. Accepts a Telegram user ID or a reply |
+| `/tournamentonly unblock @user` | Restore all game modes; `/touronly off @user` also works |
+| `/tournamentonly status @user` · `/tournamentonly list [page]` | Inspect a player's restriction or list restricted players. Players automatically unlock after all captured open-round fixtures finish. [Details](docs/tournament-only.md) |
 | `/testwpm [match_id]` | Mini App match diagnostic |
 | `/cdraftset` | Read or change the `/cdraft` rating band and allowed editions |
 

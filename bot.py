@@ -474,6 +474,7 @@ ADMIN_MENU_COMMANDS = (
     ("tpointsclear", "Admin: clear a team's points adjustment"),
     ("taddmatch", "Admin: record a fixture from a bot match id or a replied scorecard"),
     ("tfixsync", "Admin: un-stick fixtures still showing as live"),
+    ("tournamentonly", "Admin: restrict a user to tournament games"),
     ("remindmatch", "Admin: nudge two teams to play their pending fixture"),
 )
 
@@ -1406,6 +1407,11 @@ def main():
                 raise ApplicationHandlerStop
         app.add_handler(TypeHandler(_TGUpdate, _ban_check), group=-20)
 
+        # Gameplay-only gate, after bans and before membership/command routing.
+        # Shared tournament/casual buttons are classified from server state.
+        from services.tournament_only_guard import tournament_only_guard
+        app.add_handler(TypeHandler(_TGUpdate, tournament_only_guard), group=-15)
+
         # ── Rookie membership gate (group=-10, last middleware) ──
         # While Rookie mode is ON, only members (any tier — Rookie and up) may
         # use the bot; everyone else gets the upsell and nothing else, apart
@@ -2154,6 +2160,9 @@ def main():
             ttiebreak_handler, tstadiums_handler, thome_handler,
             tprize_handler, tteam_handler, tbracket_handler, awardceremony_handler, tchannels_handler,
         )
+        from handlers.tournament_only import tournamentonly_handler
+        app.add_handler(CommandHandler(["tournamentonly", "touronly"],
+                                       tournamentonly_handler))
         app.add_handler(CommandHandler(["tpoints", "tpts"], tpoints_handler))
         app.add_handler(CommandHandler(["tpointsclear", "tptsclear"],
                                        tpointsclear_handler))
@@ -2733,6 +2742,9 @@ def main():
         try:
             from handlers.tournament_admin import tournament_watch_job
             if app.job_queue:
+                from services.tournament_only_service import refresh_job
+                app.job_queue.run_repeating(refresh_job, interval=60, first=15,
+                                             name="tournament_only_refresh")
                 app.job_queue.run_repeating(tournament_watch_job, interval=120,
                                              first=90, name="tournament_watch")
         except Exception:
