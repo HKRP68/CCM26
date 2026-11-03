@@ -1808,6 +1808,33 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
             await _fail("Players no longer exist.")
             return
 
+        # A saved setup can outlive an admin's access change. This launch also
+        # serves automatic bot elections, so recheck both users before making
+        # a Match even when no restricted user pressed the latest button.
+        from services import tournament_only_service
+        official = bool(draft.get("is_tournament") and draft.get("tournament_id"))
+        if not official and any(tournament_only_service.is_restricted(
+                user, session=session) for user in (host, target)):
+            from handlers.challenge import (
+                _cancel_selection_jobs, _clear_selection_reminder,
+                _release_draft_chat_lock,
+            )
+            _release_draft_chat_lock(context.bot_data, draft)
+            context.bot_data.pop(_draft_key(draft_id), None)
+            _cancel_selection_jobs(context, draft_id)
+            jq = getattr(context, "job_queue", None)
+            if jq:
+                for job in jq.get_jobs_by_name(f"cl_draft_{draft_id}"):
+                    job.schedule_removal()
+            draft["sel_awaiting"] = []
+            draft["turn"] = "cancelled"
+            await _clear_selection_reminder(context, draft)
+            await _fail(
+                "Match cancelled: a player has tournament-only access. "
+                "Play official tournament fixtures with /lptour or your "
+                "league's tournament command.")
+            return
+
         # Final concurrency gate at the commit point: one game per chat and one
         # match per player (any game mode). Guards against a race where either
         # side started another match while this Challenge League toss was open.

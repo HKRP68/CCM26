@@ -270,6 +270,9 @@ def set_status(session, tournament_id, status):
         tour.completed_at = datetime.utcnow()
     elif status == "active":
         tour.activated_at = tour.activated_at or datetime.utcnow()
+    if status in TERMINAL_STATUSES:
+        from services.tournament_only_service import refresh_restrictions
+        refresh_restrictions(session)
     return tour
 
 
@@ -1433,6 +1436,8 @@ def record_manual_result(session, fixture_id, *,
     from services.tournament_channels import queue_fixture_result
     queue_fixture_result(session, tm)
     logger.info("Manually recorded tournament fixture %s (winner_team=%s)", tm.id, win_id)
+    from services.tournament_only_service import refresh_restrictions
+    refresh_restrictions(session)
     return tm
 
 
@@ -1844,6 +1849,8 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
     tm._playoffs_created = maybe_auto_knockout(session, tid)
 
     logger.info("Recorded tournament match for tournament %s (match_id=%s)", tid, match_id)
+    from services.tournament_only_service import refresh_restrictions
+    refresh_restrictions(session)
     return tm
 
 

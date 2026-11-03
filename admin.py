@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 logger = logging.getLogger("admin")
 from functools import wraps
 from flask import (Flask, abort, render_template, request, redirect, url_for, flash,
-                   session, Response, send_file, jsonify)
+                   session, Response, send_file, jsonify, has_request_context)
 from sqlalchemy import func, and_, or_, desc, asc, case, cast, String
 from dotenv import load_dotenv
 
@@ -4477,6 +4477,11 @@ def _webapp_auth(allow_not_debuted=False):
         return None, tg_id, ({"ok": False, "error": "not_debuted",
                               "message": "Complete your debut to unlock the Mini App."}, 403)
 
+    blocked = _tournament_only_webapp_block(db, user)
+    if blocked:
+        db.close()
+        return None, tg_id, blocked
+
     # Heal any drift in the denormalized roster_count cache so every Mini App
     # surface (Home, Squad, Roster, packs) reports the same size as the live
     # UserRoster rows — the same number chat's /myroster shows. Best-effort:
@@ -4519,6 +4524,72 @@ def _webapp_auth(allow_not_debuted=False):
                 db.rollback()
 
     return (db, user, tg_id), None, None
+
+
+# Only actions that play a game belong here. Squad preparation, rewards,
+# spectators' snapshots, scorecards and abandoning a match remain available.
+_TOURNAMENT_ONLY_OTHER_GAME_PATHS = frozenset({
+    "/api/webapp/quickmatch", "/api/webapp/quickmatch/start",
+    "/api/webapp/quickmatch/phase", "/api/fantasy/save", "/api/ipl16/share",
+})
+_TOURNAMENT_ONLY_MATCH_ACTION_PATHS = frozenset({
+    "/api/webapp/match/init", "/api/webapp/match/select-openers",
+    "/api/webapp/match/select-bowler", "/api/webapp/match/ready",
+    "/api/webapp/match/deliver", "/api/webapp/match/play-shot",
+    "/api/webapp/match/new-bowler", "/api/match/select-players",
+    "/api/match/innings-break/continue", "/api/match/impact-player",
+    "/api/match/action", "/api/match/autoplay",
+})
+
+
+def _tournament_only_error(user, db, *, opponent=False):
+    from services.tournament_only_service import restriction_message
+    message = ("A player in this match is restricted to tournament matches. "
+               "Ask an admin to remove their restriction before playing this mode."
+               if opponent else restriction_message(user, session=db))
+    return {"ok": False, "error": "tournament_only", "message": message}, 403
+
+
+def _tournament_only_match_block(db, match, user=None):
+    """Refuse casual play if a participant or delegated captain is restricted.
+
+    The exemption uses the persisted match, never a client-supplied tournament
+    flag or id. This also covers the REST aliases that do not use _webapp_auth.
+    """
+    from services.tournament_only_service import is_restricted, is_tournament_match
+    if match is None:
+        return None
+    restricted = user if user is not None and is_restricted(user, session=db) else None
+    if restricted is None:
+        for uid in {match.user1_id, match.user2_id}:
+            participant = db.get(User, uid)
+            if participant is not None and is_restricted(participant, session=db):
+                restricted = participant
+                break
+    # Ordinary unrestricted games do not need a tournament-fixture query.
+    if restricted is None or is_tournament_match(db, match):
+        return None
+    return _tournament_only_error(restricted, db,
+                                  opponent=user is None or restricted.id != user.id)
+
+
+def _tournament_only_webapp_block(db, user):
+    if user is None:
+        return None
+    from services.tournament_only_service import is_restricted
+    path = request.path.rstrip("/")
+    if path in _TOURNAMENT_ONLY_OTHER_GAME_PATHS:
+        return (_tournament_only_error(user, db)
+                if is_restricted(user, session=db) else None)
+    if path not in _TOURNAMENT_ONLY_MATCH_ACTION_PATHS:
+        return None
+    data = request.get_json(silent=True) or {}
+    try:
+        match_id = int(data.get("match_id") or data.get("matchId") or 0)
+    except (TypeError, ValueError):
+        return None  # the endpoint reports malformed ids
+    match = db.get(Match, match_id)
+    return _tournament_only_match_block(db, match, user)
 
 
 
@@ -9022,9 +9093,13 @@ def _match_rest_user_and_match(db, user_id, match_id=None):
         from services.match_handover import seat_for_user
         if seat_for_user(live, user.id) is None:
             return user, match, ({"ok": False, "error": "not_participant"}, 403)
-        return user, match, None
-    if user.id not in (match.user1_id, match.user2_id):
+    elif user.id not in (match.user1_id, match.user2_id):
         return user, match, ({"ok": False, "error": "not_participant"}, 403)
+    if (has_request_context()
+            and request.path.rstrip("/") in _TOURNAMENT_ONLY_MATCH_ACTION_PATHS):
+        blocked = _tournament_only_match_block(db, match, user)
+        if blocked:
+            return user, match, blocked
     return user, match, None
 
 
@@ -9939,6 +10014,10 @@ def match_rest_autoplay_status():
         # bool("false") is True, so a client sending the string would both flip
         # the toggle ON and turn its own attempted disable into a 403.
         active = _as_bool(data.get("active"))
+        if active:
+            blocked = _tournament_only_match_block(db, match, user)
+            if blocked:
+                return blocked
         from services import subscription_service
         if active and not subscription_service.has_autoplay(user):
             return {"ok": False, "error": "premium_required",
