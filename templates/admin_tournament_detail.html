@@ -18,6 +18,13 @@
 .status-pill.draft, .status-pill.scheduled { color:#93c5fd; border-color:rgba(147,197,253,.4); background:rgba(59,130,246,.12); }
 .status-pill.completed { color:#c4b5fd; border-color:rgba(196,181,253,.4); background:rgba(139,92,246,.12); }
 .status-pill.cancelled { color:#fca5a5; border-color:rgba(252,165,165,.4); background:rgba(239,68,68,.12); }
+.status-pill.paid { color:#86efac; border-color:rgba(134,239,172,.4); background:rgba(34,197,94,.12); }
+.status-pill.pending { color:#fde68a; border-color:rgba(253,230,138,.4); background:rgba(234,179,8,.12); }
+.status-pill.failed { color:#fca5a5; border-color:rgba(252,165,165,.4); background:rgba(239,68,68,.12); }
+.prize-split-list { display:grid; gap:.8rem; grid-template-columns:repeat(auto-fit, minmax(250px, 1fr)); }
+.prize-split-team { border:1px solid var(--border); border-radius:12px; padding:.8rem; }
+.prize-split-member { display:flex; align-items:center; justify-content:space-between; gap:.6rem; margin:.45rem 0; }
+.prize-split-member input { width:6rem; }
 .lifecycle { display:flex; gap:.45rem; flex-wrap:wrap; }
 .team-list { display:flex; flex-direction:column; gap:.5rem; }
 .team-pill { display:flex; justify-content:space-between; align-items:center; gap:.6rem; background:var(--bg-soft); border:1px solid var(--border); border-radius:12px; padding:.55rem .8rem; }
@@ -213,7 +220,8 @@
             </span>
             {% endfor %}
           </span>
-          {% if t.awards_given_at %}<small style="color:var(--muted);">Already awarded on {{ t.awards_given_at.strftime('%d %b %Y') }}.</small>{% endif %}</div>
+          <small style="display:block;color:var(--muted);margin-top:.4rem;">All prizes earned by a team, including player awards, use its owner/co-owner split below. Default: 60K Champion + 30K Orange Cap = 45K each for two owners.</small>
+          {% if t.awards_given_at %}<small style="color:var(--muted);">Honours recorded on {{ t.awards_given_at.strftime('%d %b %Y') }}. Saving retries unpaid prizes; recorded shares and credited prizes stay unchanged.</small>{% endif %}</div>
         <div><label>⚖️ Tiebreak after points</label>
           <select name="tiebreak">
             <option value="nrr" {{ 'selected' if (t.tiebreak or 'nrr') == 'nrr' else '' }}>Wins → net run rate</option>
@@ -266,6 +274,92 @@
       </div>
       <button class="btn btn-primary" type="submit" style="margin-top:.7rem;">Save settings</button>
     </form>
+  </section>
+
+  <section class="tour-card" id="prize-sharing">
+    <h3 style="margin-top:0;">Prize sharing</h3>
+    <p style="color:var(--muted);font-size:.88rem;">Owner and co-owners share every prize earned by their team, including Orange Cap, MVP and Winning Captain. Equal shares are the default. Agree custom percentages before starting; recipients and percentages lock when the tournament starts. Whole coins and gems are divided so every share adds up to the full prize.</p>
+    {% if teams %}
+    <div class="prize-split-list">
+      {% for tt in teams %}
+      {% set split = prize_splits.get(tt.id, {}) %}
+      <div class="prize-split-team">
+        <strong>{{ tt.name }}</strong>
+        {% if split.get('error') %}<p style="color:#fca5a5;font-size:.84rem;">{{ split.error }}{% if not split.get('locked') %} Save equal shares or update the percentages before starting.{% endif %}</p>{% endif %}
+        {% if split.get('locked') %}
+        <span class="status-pill completed" style="margin-left:.4rem;">Locked</span>
+        <p style="color:var(--muted);font-size:.8rem;">{{ 'Custom percentages' if split.get('custom') else 'Equal shares' }}{% if split.get('locked_at') %} · {{ split.locked_at.strftime('%d %b %Y %H:%M UTC') }}{% endif %}</p>
+        {% for member in split.get('recipients', []) %}
+        <div class="prize-split-member"><code>{{ member.telegram_id }}</code><strong>{{ member.percent }}%</strong></div>
+        {% else %}<p style="color:var(--muted);">No payout recipients assigned.</p>{% endfor %}
+        {% elif split.get('recipients') %}
+        <form method="POST">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="set_prize_split">
+          <input type="hidden" name="team_id" value="{{ tt.id }}">
+          <label style="display:block;margin:.6rem 0;">Distribution
+            <select name="split_mode" style="width:100%;margin-top:.25rem;">
+              <option value="equal" {{ 'selected' if not split.get('custom') else '' }}>Equal shares (default)</option>
+              <option value="custom" {{ 'selected' if split.get('custom') else '' }}>Custom percentages</option>
+            </select>
+          </label>
+          {% for member in split.get('recipients', []) %}
+          <label class="prize-split-member"><code>{{ member.telegram_id }}</code><span><input type="number" name="share_{{ member.telegram_id }}" value="{{ member.percent }}" min="0.01" max="100" step="0.01" required aria-label="Prize percentage for {{ member.telegram_id }}"> %</span></label>
+          {% endfor %}
+          <small style="display:block;color:var(--muted);margin:.5rem 0;">Custom percentages must total 100%. Equal shares ignores the percentage boxes.</small>
+          <button class="btn" type="submit">Save prize split</button>
+        </form>
+        {% else %}
+        <p style="color:var(--muted);">Assign an owner or co-owner below to set prize sharing.</p>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}<p style="color:var(--muted);">Add participating teams to configure prize sharing.</p>{% endif %}
+  </section>
+
+  <section class="tour-card" id="prize-payouts">
+    <h3 style="margin-top:0;">Prize payouts</h3>
+    <p style="color:var(--muted);font-size:.88rem;">Each recipient has a separate receipt. Unregistered users keep their pending share; retry after they run <code>/debut</code>. Paid receipts stay unchanged and are never credited twice.</p>
+    <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.8rem;">
+      <span class="status-pill paid">Paid {{ payout_counts.get('paid', 0) }}</span>
+      <span class="status-pill pending">Pending {{ payout_counts.get('pending', 0) }}</span>
+      <span class="status-pill failed">Failed {{ payout_counts.get('failed', 0) }}</span>
+      <form method="GET" action="{{ url_for('admin_tournament_detail', tournament_id=t.id, _anchor='prize-payouts') }}" style="display:flex;align-items:center;gap:.4rem;">
+        <label for="payout-status">Show</label>
+        <select id="payout-status" name="payout_status">
+          {% for value, label in [('all', 'All receipts'), ('paid', 'Paid'), ('pending', 'Pending'), ('failed', 'Failed')] %}
+          <option value="{{ value }}" {{ 'selected' if payout_filter == value else '' }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <button class="btn" type="submit">Filter</button>
+      </form>
+      <form method="POST">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="retry_prize_payouts">
+        <button class="btn" type="submit">Retry pending and failed payouts</button>
+      </form>
+    </div>
+    {% if payout_rows %}
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;">
+        <thead><tr><th>Receipt</th><th>Award / team</th><th>Recipient</th><th>Share</th><th>Status</th><th>Balance after payment</th></tr></thead>
+        <tbody>
+        {% for payout in payout_rows %}
+          {% set user = payout_users.get(payout.recipient_tg_id) %}
+          <tr>
+            <td style="padding:.65rem;vertical-align:top;">#{{ payout.id }}{% if payout.paid_at %}<br><small style="color:var(--muted);">{{ payout.paid_at.strftime('%d %b %Y %H:%M UTC') }}</small>{% endif %}</td>
+            <td style="padding:.65rem;vertical-align:top;">{{ payout_award_labels.get(payout.award, payout.award) }}<br><small style="color:var(--muted);">{{ payout.team_name or '—' }}</small></td>
+            <td style="padding:.65rem;vertical-align:top;">{% if payout.recipient_tg_id %}{% if user %}{{ '@' ~ user.username if user.username else user.first_name or 'Registered user' }}<br>{% endif %}<code>{{ payout.recipient_tg_id }}</code>{% else %}<span style="color:var(--muted);">Unassigned — set team owner</span>{% endif %}</td>
+            <td style="padding:.65rem;vertical-align:top;white-space:nowrap;">{{ '{:,}'.format(payout.coins) }} coins<br>{{ '{:,}'.format(payout.gems) }} gems</td>
+            <td style="padding:.65rem;vertical-align:top;"><span class="status-pill {{ payout.status }}">{{ payout.status }}</span>{% if payout.failure_reason %}<br><small style="color:var(--muted);">{{ payout.failure_reason }}</small>{% endif %}</td>
+            <td style="padding:.65rem;vertical-align:top;white-space:nowrap;">{% if payout.balance_coins_after is not none %}{{ '{:,}'.format(payout.balance_coins_after) }} coins{% else %}—{% endif %}<br>{% if payout.balance_gems_after is not none %}{{ '{:,}'.format(payout.balance_gems_after) }} gems{% else %}—{% endif %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}<p style="color:var(--muted);">No {{ payout_filter ~ ' ' if payout_filter != 'all' else '' }}payout receipts yet. Receipts appear when a finished tournament has configured prizes and payout recipients.</p>{% endif %}
   </section>
 
   <!-- Participating teams -->

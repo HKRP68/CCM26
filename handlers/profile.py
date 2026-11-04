@@ -19,7 +19,8 @@ def _build_keyboard(active, user_id):
     for key, label in tabs:
         mark = "● " if key == active else ""
         row.append(InlineKeyboardButton(f"{mark}{label}", callback_data=f"mp_{key}_{user_id}"))
-    return InlineKeyboardMarkup([row])
+    receipts = InlineKeyboardButton("💰 Prize receipts", callback_data=f"mp_prizes_{user_id}")
+    return InlineKeyboardMarkup([row, [receipts]])
 
 
 def _team_value(session, user_id):
@@ -240,6 +241,9 @@ async def myprofile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not viewer or viewer.id != uid:
             await q.answer("This is not your profile!")
             return
+        if tab == "prizes" and (not update.effective_chat or update.effective_chat.type != "private"):
+            await q.answer("Open /myprofile in a private chat with the bot to view prize receipts.", show_alert=True)
+            return
         await q.answer()
 
         user = viewer
@@ -259,6 +263,20 @@ async def myprofile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             rows = kb.inline_keyboard + tuple(jump_btns)
             new_kb = InlineKeyboardMarkup(list(kb.inline_keyboard) + jump_btns)
             await q.edit_message_text(text, parse_mode="HTML", reply_markup=new_kb)
+        elif tab == "prizes":
+            from services.tournament_payouts import recipient_receipt_page, retry_for_recipient
+            retry_for_recipient(session, user.telegram_id)
+            session.commit()
+            before_id = int(parts[3]) if len(parts) > 3 else None
+            text, older = recipient_receipt_page(session, user.telegram_id, before_id=before_id)
+            navigation = []
+            if before_id:
+                navigation.append(InlineKeyboardButton("Newest receipts", callback_data=f"mp_prizes_{user.id}"))
+            if older:
+                navigation.append(InlineKeyboardButton("Older receipts", callback_data=f"mp_prizes_{user.id}_{older}"))
+            if navigation:
+                kb = InlineKeyboardMarkup(list(kb.inline_keyboard) + [navigation])
+            await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
     except Exception:
         logger.exception("MyProfile cb err")
     finally:

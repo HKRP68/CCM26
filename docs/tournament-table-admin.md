@@ -398,10 +398,23 @@ The logic is in `services/tournament_stadiums.py`.
 
 `/tprize champion 5000 50` (and runnerup / orange / purple / mvp), or the admin
 site, sets prizes. When the final is decided,
-`services/tournament_awards.py::finalize` runs once. It writes Champion,
+`services/tournament_awards.py::finalize` records honours and credits account balances. It writes Champion,
 Runner-up, Orange Cap, Purple Cap and MVP to `tournament_honours` and pays the
-prizes. Team awards go to the team's owner and player awards to the player's
-owner. Past winners appear in `/halloffame` → 🏆 Tournaments.
+prizes. All awards earned by a team, including player/captain awards, share its
+locked owner/co-owner split. The default is equal shares: Champion 60,000 and
+Orange Cap 30,000 pay 45,000 each to an owner and one co-owner. Custom percentages
+are set on Manage before the tournament starts. The payout view shows individual
+paid, pending and failed shares, balance receipts and a retry action. Missing
+accounts keep their exact shares pending and registration with `/debut` retries
+them automatically. Private `/myprofile` → Prize receipts shows each recipient
+their amounts, states, balances and dates, and retries unpaid shares. Unpaid
+payouts can also be retried by
+saving prize settings or opening `/awardceremony #<tournament-id>`, including
+after presentation. Existing entitlements and successful payments are never
+resized or duplicated after settings change. See
+[Tournament prize payouts](tournament-prize-payouts.md) for the full policy and
+recovery details.
+Past winners appear in `/halloffame` → 🏆 Tournaments.
 
 `/tteam` shows the Team of the Tournament: 1 keeper, 4 batters, 2 all-rounders
 and 4 bowlers by MVP impact points, captained by the MVP. It is drawn as an XI

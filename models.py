@@ -3019,6 +3019,13 @@ class TournamentTeam(Base):
     # distinguished by being the name shown on the team.
     co_owner_ids_json = Column(Text, nullable=True)
 
+    # Prize shares belong to the tournament entry, not the mutable franchise.
+    # Once play starts, the recipient ids and weights are copied into a frozen
+    # snapshot so a later ownership change cannot redirect an earned prize.
+    prize_split_json = Column(Text, nullable=True)
+    prize_split_snapshot_json = Column(Text, nullable=True)
+    prize_split_locked_at = Column(DateTime, nullable=True)
+
     # This team's home surface. Used by the schedule generator when the
     # tournament's ``pitch_mode`` is "home": every fixture the team hosts is
     # played on it. NULL falls back to a random surface.
@@ -3351,6 +3358,8 @@ class TournamentHonour(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="SET NULL"),
                            nullable=True, index=True)
+    tournament_team_id = Column(Integer, ForeignKey("tournament_teams.id", ondelete="SET NULL"),
+                                nullable=True, index=True)
     tournament_name = Column(String(120), nullable=False)
     award = Column(String(20), nullable=False, index=True)
     team_name = Column(String(120), nullable=True)
@@ -3359,8 +3368,41 @@ class TournamentHonour(Base):
     value = Column(String(60), nullable=True)      # "512 runs", "21 wkts"
     prize_coins = Column(Integer, default=0, nullable=False)
     prize_gems = Column(Integer, default=0, nullable=False)
+    prize_snapshot_coins = Column(Integer, nullable=True)
+    prize_snapshot_gems = Column(Integer, nullable=True)
     awarded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     announced_at = Column(DateTime, nullable=True)
+
+
+class TournamentPrizePayout(Base):
+    """One immutable recipient share and its durable account-credit receipt."""
+    __tablename__ = "tournament_prize_payouts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    honour_id = Column(Integer, ForeignKey("tournament_honours.id", ondelete="SET NULL"),
+                       nullable=True, index=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="SET NULL"),
+                           nullable=True, index=True)
+    tournament_name = Column(String(120), nullable=False)
+    award = Column(String(20), nullable=False, index=True)
+    team_name = Column(String(120), nullable=True)
+    recipient_tg_id = Column(BigInteger, nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    coins = Column(Integer, default=0, nullable=False)
+    gems = Column(Integer, default=0, nullable=False)
+    share_bps = Column(Integer, nullable=False)
+    status = Column(String(20), default="pending", nullable=False, index=True)
+    failure_reason = Column(String(500), nullable=True)
+    balance_coins_after = Column(Integer, nullable=True)
+    balance_gems_after = Column(Integer, nullable=True)
+    paid_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+                        nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("honour_id", "recipient_tg_id", name="uq_tournament_prize_recipient"),
+    )
 
 
 class TournamentMatchReminder(Base):

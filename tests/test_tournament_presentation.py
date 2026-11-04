@@ -194,6 +194,31 @@ class PresentationTests(F.FourTeamCase):
         photo = C.award_photo(self.session, self.tour, honour)
         self.assertEqual(Image.open(io.BytesIO(photo)).size, (1000, 1120))
 
+    def test_pending_prize_becomes_credited_only_when_the_account_is_paid(self):
+        from models import User
+        from services import tournament_awards as A, tournament_ceremony as C
+        A.set_prize(self.tour, 'champion', 5000, 50)
+        for team in self.teams.values():
+            team.owner_tg_id = F.next_tg()
+        self.session.commit()
+        self.finish_tournament()
+        honour = A.honours_for(self.session, self.tour.id)[0]
+        caption = C.award_caption(self.session, self.tour, honour)
+        self.assertIn('Pending: 5,000 coins + 50 gems', caption)
+        self.assertNotIn('Credited:', caption)
+        self.assertIn('Pending:', A.render_ceremony(self.session, self.tour))
+
+        owner = User(telegram_id=self.teams[honour.team_name].owner_tg_id,
+                     username='new_owner', total_coins=90, total_gems=2)
+        self.session.add(owner)
+        A.finalize(self.session, self.tour)
+        self.session.commit()
+        self.session.refresh(owner)
+        self.assertEqual((owner.total_coins, owner.total_gems), (5090, 52))
+        caption = C.award_caption(self.session, self.tour, honour)
+        self.assertIn('Credited: 5,000 coins + 50 gems → @new_owner', caption)
+        self.assertNotIn('Pending:', caption)
+
     def test_uploaded_team_logo_is_loaded_as_bytes_instead_of_telegram_file_id(self):
         import tempfile
         from pathlib import Path

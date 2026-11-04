@@ -30,8 +30,8 @@ def contribution(session, honour):
 
 
 def award_caption(session, tour, honour):
-    from services.tournament_awards import AWARD_LABEL, prize_text
-    prize = prize_text({'coins': honour.prize_coins, 'gems': honour.prize_gems}) or 'No prize configured'
+    from services.tournament_awards import AWARD_LABEL, payment_text
+    prize = payment_text(session, tour, honour) or 'No prize awarded'
     lines = [f'🎉 <b>{escape(tour.name)} — Awards Ceremony</b>',
              f"<b>{AWARD_LABEL.get(honour.award, honour.award)}</b>",
              f"<b>{escape(honour.player_name or honour.team_name or 'Not awarded')}</b>"]
@@ -141,7 +141,8 @@ async def present(context, tournament_id, chat_id):
                 raise ValueError('Finish the tournament final before starting the ceremony.')
             if tour.awards_announced_at:
                 if all(h.announced_at is not None for h in honours):
-                    raise ValueError('This tournament’s awards ceremony has already finished.')
+                    raise ValueError('Prize payments checked; any newly eligible prizes are now credited. '
+                                     'This tournament’s awards ceremony has already finished.')
                 # A previous version presented fewer award categories. Newly
                 # added awards can be presented without reposting the old ones.
                 tour.awards_announced_at = None

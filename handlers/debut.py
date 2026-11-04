@@ -245,6 +245,10 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             branding = ""
 
+        # Known Telegram recipients keep their prize shares while unregistered.
+        # Release them on the same account after its debut has been completed.
+        from services.tournament_payouts import retry_for_recipient
+        retry_for_recipient(session, user.telegram_id)
         session.commit()
 
         lines = []

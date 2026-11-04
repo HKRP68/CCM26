@@ -17409,6 +17409,7 @@ def admin_tournament_detail(tournament_id):
                                               _int_form(f"prize_{_award}_gems", 0) or 0)
                             except ValueError as e:
                                 flash(f"⚠️ {e}", "error")
+                        _ta.finalize(db, t)
                     if request.form.get("tiebreak") in ("nrr", "h2h", "nrr_wins_h2h"):
                         t.tiebreak = request.form.get("tiebreak")
                     if "round_hours" in request.form:
@@ -17485,6 +17486,31 @@ def admin_tournament_detail(tournament_id):
                     save_playoff_settings(db, t, request.form.getlist("playoff_pitches"), request.form.getlist("playoff_stadiums"))
                     log_admin(db, "tournament_playoff_conditions", "tournament", t.id, t.name)
                     flash("Playoff pitches and stadiums saved for unplayed fixtures.", "success")
+                elif action == "set_prize_split":
+                    from services import tournament_prize_splits as _splits
+                    tt = db.get(TournamentTeam, _int_form("team_id"))
+                    if not tt or tt.tournament_id != t.id:
+                        raise ValueError("Team not found in this tournament.")
+                    mode = request.form.get("split_mode", "equal")
+                    if mode not in ("equal", "custom"):
+                        raise ValueError("Choose equal shares or custom percentages.")
+                    shares = ({key[len("share_"):]: value
+                               for key, value in request.form.items()
+                               if key.startswith("share_")}
+                              if mode == "custom" else None)
+                    _splits.set_split(db, tt.id, shares)
+                    log_admin(db, "tournament_prize_split", "tournament", t.id,
+                              f"{tt.name}: {mode}")
+                    flash(f"Prize sharing saved for {tt.name}. It locks when the tournament starts.",
+                          "success")
+                elif action == "retry_prize_payouts":
+                    from services import tournament_awards as _ta
+                    from services import tournament_payouts as _payouts
+                    _ta.finalize(db, t)
+                    _ta.ensure_ceremony_honours(db, t)
+                    _payouts.retry_payouts(db, t)
+                    log_admin(db, "tournament_prize_retry", "tournament", t.id, t.name)
+                    flash("Payout retry complete. Review each recipient's status below.", "success")
                 elif action == "set_team_award_photo":
                     tt = db.get(TournamentTeam, _int_form("team_id"))
                     if not tt or tt.tournament_id != t.id:
@@ -18031,6 +18057,10 @@ def admin_tournament_detail(tournament_id):
             back = {"schedule": "admin_tournament_schedule",
                     "dashboard": "admin_tournament_dashboard"}.get(
                         request.form.get("return_to") or "", "admin_tournament_detail")
+            if action in ("set_prize_split", "retry_prize_payouts"):
+                anchor = "prize-sharing" if action == "set_prize_split" else "prize-payouts"
+                return redirect(url_for("admin_tournament_detail", tournament_id=t.id,
+                                        _anchor=anchor))
             return redirect(url_for(back, tournament_id=t.id))
 
         teams = (db.query(TournamentTeam).filter_by(tournament_id=t.id)
@@ -18083,11 +18113,25 @@ def admin_tournament_detail(tournament_id):
         from services import season_archive as _sa
         from services import tournament_stadiums as _tstad
         from services import tournament_awards as _tawards
+        from services import tournament_prize_splits as _splits
+        from services import tournament_payouts as _payouts
         from services import tournament_match_settings as _match_settings
         from services.knockout_service import qualifier_count
         from services import tournament_channels as _channels
         from models import TournamentChannelPost
         from sqlalchemy.orm import defer
+        prize_splits = {tt.id: _splits.split_settings(db, t, tt) for tt in teams}
+        all_payouts = _payouts.payout_rows(db, t.id)
+        payout_counts = {status: sum(row.status == status for row in all_payouts)
+                         for status in ("paid", "pending", "failed")}
+        payout_filter = request.args.get("payout_status", "all")
+        if payout_filter not in ("all", "paid", "pending", "failed"):
+            payout_filter = "all"
+        payout_rows = [row for row in all_payouts
+                       if payout_filter == "all" or row.status == payout_filter]
+        payout_tg_ids = {row.recipient_tg_id for row in all_payouts}
+        payout_users = {user.telegram_id: user for user in db.query(User).filter(
+            User.telegram_id.in_(payout_tg_ids)).all()} if payout_tg_ids else {}
         return render_template("admin_tournament_detail.html", t=t, teams=teams,
                                playoff_qualifiers=qualifier_count(t) if t.knockout_type == "top_n" else 4,
                                stadium_choices=[(r.get("name"), r.get("city") or "")
@@ -18095,8 +18139,12 @@ def admin_tournament_detail(tournament_id):
                                tour_stadiums=_tstad.tour_stadiums(t),
                                playoff_conditions=_match_settings.playoff_settings(t),
                                prize_awards=[(a, _tawards.AWARD_LABEL[a])
-                                             for a in _tawards.CEREMONY_AWARDS],
+                                             for a in _tawards.AWARDS],
                                prize_table=_tawards.prizes(t),
+                               prize_splits=prize_splits,
+                               payout_rows=payout_rows, payout_counts=payout_counts,
+                               payout_filter=payout_filter, payout_users=payout_users,
+                               payout_award_labels=_tawards.AWARD_LABEL,
                                tour_channels=_channels.channels(t),
                                channel_posts=db.query(TournamentChannelPost).options(defer(TournamentChannelPost.photo), defer(TournamentChannelPost.extra_photo)).filter_by(tournament_id=t.id).order_by(TournamentChannelPost.id.desc()).limit(30).all(),
                                rating_rules=_ts_rr.rating_rules(t),

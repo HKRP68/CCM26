@@ -116,6 +116,8 @@ def activate_tournament(session, tournament_id):
     tour = session.get(Tournament, int(tournament_id))
     if not tour:
         return None
+    from services.tournament_prize_splits import lock_splits
+    lock_splits(session, tour)
     kind = tournament_kind(tour)
     q = session.query(Tournament).filter(
         Tournament.id != tour.id, Tournament.is_active == True,  # noqa: E712
@@ -262,6 +264,9 @@ def set_status(session, tournament_id, status):
     tour = session.get(Tournament, int(tournament_id))
     if not tour:
         return None
+    if status == "active":
+        from services.tournament_prize_splits import lock_splits
+        lock_splits(session, tour)
     tour.status = status
     if status in TERMINAL_STATUSES:
         # Keep ``is_active`` so the tournament command still reports the precise
@@ -273,6 +278,8 @@ def set_status(session, tournament_id, status):
     if status in TERMINAL_STATUSES:
         from services.tournament_only_service import refresh_restrictions
         refresh_restrictions(session)
+    if status == "completed":
+        _finalize_awards(session, tour)
     return tour
 
 
@@ -323,6 +330,15 @@ def reset_tournament(session, tournament_id):
         tt.runs_for = tt.balls_for = tt.runs_against = tt.balls_against = 0
     tour = session.get(Tournament, tid)
     if tour:
+        from models import TournamentPrizePayout
+        has_entitlements = (tour.awards_given_at is not None or
+                            session.query(TournamentPrizePayout.id)
+                            .filter_by(tournament_id=tid).first() is not None)
+        if not has_entitlements:
+            for tt in session.query(TournamentTeam).filter_by(tournament_id=tid).all():
+                tt.prize_split_snapshot_json = None
+                tt.prize_split_locked_at = None
+            tour.activated_at = None
         tour.knockout_generated = False
         tour.completed_at = None
         if tour.status not in ("cancelled",):
@@ -1404,6 +1420,8 @@ def record_manual_result(session, fixture_id, *,
     result_text = ("No Result" if ws == "no_result" else
                    "Match Tied" if win_id is None else f"{_name(win_id)} won")
 
+    from services.tournament_prize_splits import lock_splits
+    lock_splits(session, tour)
     tm.status = "completed"
     tm.is_simulated = False  # simulate_fixture marks its own result afterwards
     tm.winner_team_id = win_id
@@ -1669,6 +1687,8 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
     tour = session.get(Tournament, tid)
     if not tour:
         return None
+    from services.tournament_prize_splits import lock_splits
+    lock_splits(session, tour)
     # The first group a tournament match is played in becomes where the
     # tournament's news is posted (recaps, deadlines, ceremony) — /tsetchat
     # overrides it.

@@ -1,16 +1,16 @@
 """Prizes and honours when a tournament's final is decided.
 
-:func:`finalize` runs once per tournament (guarded by
+:func:`finalize` records winners once per tournament (guarded by
 ``Tournament.awards_given_at``), from the same spot that writes the champion
 news story: the recording of a decided final, whichever path recorded it.
+Unpaid honours can be retried without changing winners or repaying prizes.
 
 Awards: 🏆 Champion and 🥈 Runner-up (the final's two teams), 🟠 Orange Cap
 (most runs), 🟣 Purple Cap (most wickets) and ⭐ MVP (``tournament_mvp``).
 Each award is written to ``tournament_honours`` — the Hall of Fame's
 tournament section — and, when the admin set a prize for it
-(``Tournament.prizes_json``), paid in coins and gems. Team awards go to the
-team's owner (a Lets Play team *is* its user); player awards to the user who
-owns the player. Prizes are created by the bot; nothing is deducted from
+(``Tournament.prizes_json``), paid in coins and gems. Every award earned by a
+team, including performance awards, shares its locked owner/co-owner split. Prizes are created by the bot; nothing is deducted from
 anyone.
 
 The ceremony is presented on demand by /awardceremony.
@@ -323,41 +323,55 @@ def emerging_player(session, tour):
 
 # ── Paying out ────────────────────────────────────────────────────────
 
+def _lock_tournament(session, tour):
+    from models import Tournament
+    # Refresh as well as lock: another worker may have awarded this tournament
+    # since the caller loaded its ORM object. Sessions disable autoflush, so
+    # explicitly preserve pending prize settings and balance edits first.
+    session.flush()
+    if session.get_bind().dialect.name == "sqlite":
+        # SQLite ignores FOR UPDATE. A no-op write obtains its writer lock
+        # before reading payment receipts, including across bot processes.
+        session.query(Tournament).filter_by(id=tour.id).update({
+            Tournament.awards_given_at: Tournament.awards_given_at,
+            Tournament.updated_at: Tournament.updated_at,
+        }, synchronize_session=False)
+    return (session.query(Tournament).filter_by(id=tour.id)
+            .populate_existing().with_for_update().one())
+
+
+def _pay_honours(session, tour, honours):
+    from services.tournament_payouts import pay_honours
+    pay_honours(session, tour, honours)
+
+
 def finalize(session, tour):
-    """Write honours and pay prizes, once. Returns the honour rows (or [])."""
-    from models import TournamentHonour, User
-    if tour is None or getattr(tour, "awards_given_at", None):
+    """Record winners once and retry unpaid prizes. Return only new honours."""
+    from models import TournamentHonour, TournamentTeam
+    if tour is None:
+        return []
+    tour = _lock_tournament(session, tour)
+    if tour.awards_given_at:
+        _pay_honours(session, tour, honours_for(session, tour.id, refresh=True))
+        session.flush()
         return []
     rows = winners(session, tour)
     if not rows:
         return []
-    table = prizes(tour)
     honours = []
     for award, team_name, player_name, user_id, value in rows:
-        p = table.get(award) or {}
-        coins, gems = int(p.get("coins") or 0), int(p.get("gems") or 0)
-        paid_to = session.get(User, int(user_id)) if user_id else None
-        if paid_to is not None and (coins or gems):
-            paid_to.total_coins = (paid_to.total_coins or 0) + coins
-            paid_to.total_gems = (paid_to.total_gems or 0) + gems
-            try:
-                from services.activity_service import log_activity
-                log_activity(session, paid_to.id, "tournament_prize",
-                             f"{AWARD_LABEL[award]} — {tour.name}: "
-                             f"+{coins} coins, +{gems} gems")
-            except Exception:
-                logger.exception("Could not log a tournament prize")
-        elif coins or gems:
-            # Nobody to pay (an ownerless team). The honour still stands.
-            coins = gems = 0
+        team = (session.query(TournamentTeam)
+                .filter_by(tournament_id=tour.id, name=team_name).first()) if team_name else None
         honour = TournamentHonour(
             tournament_id=tour.id, tournament_name=tour.name or "Tournament",
+            tournament_team_id=team.id if team else None,
             award=award, team_name=team_name, player_name=player_name,
-            user_id=paid_to.id if paid_to else (int(user_id) if user_id else None),
-            value=value, prize_coins=coins, prize_gems=gems)
+            user_id=int(user_id) if user_id else None,
+            value=value, prize_coins=0, prize_gems=0)
         session.add(honour)
         honours.append(honour)
     tour.awards_given_at = datetime.utcnow()
+    _pay_honours(session, tour, honours)
     session.flush()
     logger.info("Tournament %s: %s honours written", tour.id, len(honours))
     return honours
@@ -365,10 +379,9 @@ def finalize(session, tour):
 
 def ensure_ceremony_honours(session, tour):
     """Backfill newly introduced awards once, including already-finished finals."""
-    from models import Tournament, TournamentHonour, User
-    # Serialize upgrades and prize payments with the tournament row on Postgres.
-    session.query(Tournament).filter_by(id=tour.id).with_for_update().one()
-    existing = {h.award: h for h in honours_for(session, tour.id)}
+    from models import TournamentHonour
+    tour = _lock_tournament(session, tour)
+    existing = {h.award: h for h in honours_for(session, tour.id, refresh=True)}
     for award, team, player, uid, value in winners(session, tour):
         if award not in CEREMONY_AWARDS:
             continue
@@ -378,15 +391,15 @@ def ensure_ceremony_honours(session, tour):
         if h is None:
             h = TournamentHonour(tournament_id=tour.id, tournament_name=tour.name, award=award)
             session.add(h)
+            existing[award] = h
         h.team_name, h.player_name, h.user_id, h.value = team, player, uid, value
-        if uid and (team or player) and not (h.prize_coins or h.prize_gems):
-            prize = prizes(tour).get(award) or {}
-            user = session.get(User, uid)
-            if user:
-                h.prize_coins, h.prize_gems = prize.get('coins', 0), prize.get('gems', 0)
-                user.total_coins = (user.total_coins or 0) + h.prize_coins
-                user.total_gems = (user.total_gems or 0) + h.prize_gems
+    _pay_honours(session, tour, existing.values())
     session.flush()
+
+
+def payment_text(session, tour, honour):
+    from services.tournament_payouts import honour_payment_text
+    return honour_payment_text(session, tour, honour)
 
 
 def ceremony_honours(session, tid):
@@ -394,16 +407,18 @@ def ceremony_honours(session, tid):
     return [rows[key] for key in CEREMONY_AWARDS if key in rows]
 
 
-def honours_for(session, tid):
+def honours_for(session, tid, *, refresh=False):
     from models import TournamentHonour
     order = {a: i for i, a in enumerate(AWARDS)}
-    rows = session.query(TournamentHonour).filter_by(tournament_id=int(tid)).all()
+    query = session.query(TournamentHonour).filter_by(tournament_id=int(tid))
+    if refresh:
+        query = query.populate_existing()
+    rows = query.all()
     return sorted(rows, key=lambda h: order.get(h.award, 99))
 
 
 def render_ceremony(session, tour):
     """The awards ceremony card (HTML)."""
-    from models import User
     out = [f"🎉 <b>{escape(tour.name or 'Tournament')} — Awards Ceremony</b>", ""]
     for h in honours_for(session, tour.id):
         who = escape(h.player_name or h.team_name or "—")
@@ -412,13 +427,9 @@ def render_ceremony(session, tour):
         line = f"{AWARD_LABEL.get(h.award, h.award)}: <b>{who}</b>"
         if h.value:
             line += f" — {escape(h.value)}"
-        prize = prize_text({"coins": h.prize_coins, "gems": h.prize_gems})
+        prize = payment_text(session, tour, h)
         if prize:
-            user = session.get(User, h.user_id) if h.user_id else None
-            to = ""
-            if user is not None and (user.username or user.first_name):
-                to = f" → {escape('@' + user.username if user.username else user.first_name)}"
-            line += f"\n   💰 {prize}{to}"
+            line += f"\n   💰 {prize}"
         out.append(line)
     out += ["", "Congratulations to every team and player! 🏏",
             "<i>All past winners: /halloffame</i>"]

@@ -1383,7 +1383,7 @@ def reserve_fixture(session, tournament_id, team1_id, team2_id):
     fixture. Caller commits.
     """
     from sqlalchemy import or_, and_
-    from models import TournamentMatch
+    from models import Tournament, TournamentMatch
     tid = int(tournament_id)
     a, b = int(team1_id), int(team2_id)
     q = (session.query(TournamentMatch)
@@ -1397,6 +1397,10 @@ def reserve_fixture(session, tournament_id, team1_id, team2_id):
     fx = q.order_by(TournamentMatch.round_no, TournamentMatch.match_no).first()
     if not fx:
         return _claim_replay(session, tid, a, b)
+    from services.tournament_prize_splits import lock_splits
+    tour = session.get(Tournament, tid)
+    if tour:
+        lock_splits(session, tour)
     claimed = (session.query(TournamentMatch)
                .filter(TournamentMatch.id == fx.id,
                        TournamentMatch.status == "scheduled")
@@ -1418,10 +1422,14 @@ def _claim_replay(session, tid, a, b):
     ``reserve_fixture`` does on ``status`` for an unplayed fixture.
     """
     from datetime import datetime
-    from models import TournamentMatch
+    from models import Tournament, TournamentMatch
     fx = replayable_fixture(session, tid, a, b)
     if fx is None:
         return None
+    from services.tournament_prize_splits import lock_splits
+    tour = session.get(Tournament, tid)
+    if tour:
+        lock_splits(session, tour)
     claimed = (session.query(TournamentMatch)
                .filter(TournamentMatch.id == fx.id,
                        TournamentMatch.status == "completed",
@@ -1458,12 +1466,16 @@ def bind_fixture_match(session, fixture_id, match_id):
     Only fills a fixture that is actually reserved and unbound, so it can never
     overwrite the match id of a completed result.
     """
-    from models import TournamentMatch
+    from models import Tournament, TournamentMatch
     if not fixture_id or not match_id:
         return None
     fx = session.get(TournamentMatch, int(fixture_id))
     if fx is None or fx.status != "live" or fx.match_id:
         return None
+    from services.tournament_prize_splits import lock_splits
+    tour = session.get(Tournament, fx.tournament_id)
+    if tour:
+        lock_splits(session, tour)
     fx.match_id = int(match_id)
     session.flush()
     return fx

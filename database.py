@@ -654,6 +654,9 @@ def _migrate_add_columns():
     _try_add("tournament_teams", "owner_tg_id", "BIGINT")
     _try_add("tournament_teams", "owner_name", "VARCHAR(120)")
     _try_add("tournament_teams", "co_owner_ids_json", "TEXT")
+    _try_add("tournament_teams", "prize_split_json", "TEXT")
+    _try_add("tournament_teams", "prize_split_snapshot_json", "TEXT")
+    _try_add("tournament_teams", "prize_split_locked_at", "TIMESTAMP")
     # Injury system (the ``tournament_injuries`` table itself comes from
     # create_all above; these are the per-tournament switches).
     _try_add("tournaments", "injuries_enabled", "BOOLEAN DEFAULT FALSE")
@@ -689,6 +692,9 @@ def _migrate_add_columns():
     _try_add("tournament_matches", "planned_super_overs", "INTEGER NOT NULL DEFAULT 0")
     _try_add("tournament_matches", "planned_winner_team_id", "INTEGER")
     _try_add("tournament_honours", "announced_at", "TIMESTAMP")
+    _try_add("tournament_honours", "tournament_team_id", "INTEGER")
+    _try_add("tournament_honours", "prize_snapshot_coins", "INTEGER")
+    _try_add("tournament_honours", "prize_snapshot_gems", "INTEGER")
     _try_add("tournaments", "prizes_json", "TEXT")
     _try_add("tournaments", "awards_given_at", "TIMESTAMP")
     _try_add("tournaments", "awards_announced_at", "TIMESTAMP")

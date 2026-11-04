@@ -1471,7 +1471,11 @@ _PRIZE_USAGE = (
     "<code>/tprize orange 1000</code> · <code>/tprize purple 1000</code> · "
     "<code>/tprize mvp 1500 10</code>\n"
     "<code>/tprize champion 0</code> — remove a prize\n\n"
-    "Team awards go to the team's owner; caps and MVP to the player's owner. "
+    "All prizes earned by a team, including player awards, follow its owner/co-owner split. "
+    "The default is equal shares: 60K Champion + 30K Orange Cap pays 45K each to two owners. "
+    "Set custom percentages on Manage before starting; the split locks at tournament start. "
+    "For finished tournaments, saving prizes or opening /awardceremony retries unpaid awards. "
+    "Prizes already credited are never paid again or increased by later changes. "
     "Winners are listed in /halloffame → 🏆 Tournaments."
 )
 
@@ -1483,8 +1487,11 @@ def _prize_summary(tour):
     for award in TA.AWARDS:
         lines.append(f"{TA.AWARD_LABEL[award]}: "
                      + (TA.prize_text(table.get(award)) or "<i>none</i>"))
+    lines.append("\n<i>Team prizes and player awards share the same owner/co-owner split. "
+                 "Equal shares by default; custom splits lock before play.</i>")
     if tour.awards_given_at:
-        lines.append("\n<i>Already awarded — changes no longer pay out.</i>")
+        lines.append("\n<i>Honours recorded. Saving prizes or opening /awardceremony retries unpaid awards; "
+                     "prizes already credited stay unchanged.</i>")
     return "\n".join(lines)
 
 
@@ -1509,6 +1516,7 @@ async def tprize_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except ValueError:
                 raise ValueError("Amounts must be whole numbers: /tprize mvp 1500 10")
             TA.set_prize(tour, args[0], coins, gems)
+            TA.finalize(session, tour)
             session.commit()
         except ValueError as exc:
             session.rollback()
