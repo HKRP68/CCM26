@@ -338,6 +338,7 @@ def reset_tournament(session, tournament_id):
             for tt in session.query(TournamentTeam).filter_by(tournament_id=tid).all():
                 tt.prize_split_snapshot_json = None
                 tt.prize_split_locked_at = None
+                tt.prize_split_reopened_at = None
             tour.activated_at = None
         tour.knockout_generated = False
         tour.completed_at = None

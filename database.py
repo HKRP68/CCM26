@@ -259,6 +259,96 @@ def _restore_uploaded_assets():
         log.exception("could not restore uploaded assets")
 
 
+def _migrate_tournament_prize_corrections():
+    """Keep old receipts while allowing a new recipient row per revision.
+
+    SQLite cannot replace an inline unique constraint, so its payout table is
+    rebuilt in one explicitly started write transaction. PostgreSQL replaces
+    the constraint under a table lock. Neither path alters historical amounts,
+    account balances, receipt IDs or payment timestamps.
+    """
+    from sqlalchemy import MetaData, inspect
+    from sqlalchemy.schema import CreateTable
+    from models import (TournamentPrizeCorrection, TournamentPrizePayout,
+                        TournamentPrizeRedistribution)
+
+    TournamentPrizeRedistribution.__table__.create(bind=engine, checkfirst=True)
+    TournamentPrizeCorrection.__table__.create(bind=engine, checkfirst=True)
+    table = TournamentPrizePayout.__table__
+    table_name = table.name
+    table.create(bind=engine, checkfirst=True)
+    old_columns = {"honour_id", "recipient_tg_id"}
+    new_columns = {"honour_id", "revision", "recipient_tg_id"}
+    new_name = "uq_tournament_prize_revision_recipient"
+    with engine.begin() as connection:
+        dialect = connection.dialect.name
+        if dialect == "sqlite":
+            # sqlite3's legacy transaction mode does not begin for DDL. Begin
+            # before CREATE/DROP so any failure rolls the entire rebuild back.
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+        elif dialect == "postgresql":
+            connection.exec_driver_sql(
+                "LOCK TABLE tournament_prize_payouts IN ACCESS EXCLUSIVE MODE")
+        else:
+            raise RuntimeError("Tournament prize revisions require SQLite or PostgreSQL.")
+        inspector = inspect(connection)
+        if not inspector.has_table(table_name):
+            table.create(bind=connection, checkfirst=True)
+            return
+        constraints = inspector.get_unique_constraints(table_name)
+        indexes = inspector.get_indexes(table_name)
+        old_constraints = [item for item in constraints
+                           if set(item["column_names"]) == old_columns]
+        old_indexes = [item for item in indexes
+                       if item.get("unique") and set(item["column_names"]) == old_columns]
+        has_new = any(set(item["column_names"]) == new_columns
+                      for item in constraints + [item for item in indexes if item.get("unique")])
+        quote = connection.dialect.identifier_preparer.quote
+        if dialect == "sqlite" and (old_constraints or old_indexes):
+            saved_objects = connection.execute(text(
+                "SELECT type, name, sql FROM sqlite_master WHERE tbl_name=:table "
+                "AND type IN ('index', 'trigger') AND sql IS NOT NULL"),
+                {"table": table_name}).all()
+            # Retain custom indexes/triggers, but not a manual old-style unique
+            # index that would prohibit creating the replacement receipt.
+            old_index_names = {item["name"] for item in old_indexes}
+            saved_objects = [item.sql for item in saved_objects
+                             if item.type != "index" or item.name not in old_index_names]
+            metadata = MetaData()
+            for parent in ("users", "tournaments", "tournament_honours",
+                           "tournament_prize_corrections"):
+                Base.metadata.tables[parent].to_metadata(metadata)
+            temporary_name = "_tournament_prize_payouts_revision_upgrade"
+            replacement = table.to_metadata(metadata, name=temporary_name)
+            connection.execute(CreateTable(replacement))
+            columns = ", ".join(quote(column.name) for column in table.columns)
+            connection.exec_driver_sql(
+                f"INSERT INTO {quote(temporary_name)} ({columns}) "
+                f"SELECT {columns} FROM {quote(table_name)}")
+            connection.exec_driver_sql(f"DROP TABLE {quote(table_name)}")
+            connection.exec_driver_sql(
+                f"ALTER TABLE {quote(temporary_name)} RENAME TO {quote(table_name)}")
+            for sql in saved_objects:
+                connection.exec_driver_sql(sql)
+            for index in table.indexes:
+                index.create(bind=connection, checkfirst=True)
+        elif dialect == "postgresql":
+            for item in old_constraints:
+                connection.exec_driver_sql(
+                    f"ALTER TABLE {quote(table_name)} DROP CONSTRAINT {quote(item['name'])}")
+            for item in old_indexes:
+                if not item.get("duplicates_constraint"):
+                    connection.exec_driver_sql(f"DROP INDEX IF EXISTS {quote(item['name'])}")
+            if not has_new:
+                connection.exec_driver_sql(
+                    f"ALTER TABLE {quote(table_name)} ADD CONSTRAINT {quote(new_name)} "
+                    "UNIQUE (honour_id, revision, recipient_tg_id)")
+        elif not has_new:
+            connection.exec_driver_sql(
+                f"CREATE UNIQUE INDEX {quote(new_name)} ON {quote(table_name)} "
+                "(honour_id, revision, recipient_tg_id)")
+
+
 def _seed_competition_templates():
     """Idempotent seed for default competition templates. Only inserts ones
     that don't already exist (by name). Admin can edit or delete these."""
@@ -657,6 +747,7 @@ def _migrate_add_columns():
     _try_add("tournament_teams", "prize_split_json", "TEXT")
     _try_add("tournament_teams", "prize_split_snapshot_json", "TEXT")
     _try_add("tournament_teams", "prize_split_locked_at", "TIMESTAMP")
+    _try_add("tournament_teams", "prize_split_reopened_at", "TIMESTAMP")
     # Injury system (the ``tournament_injuries`` table itself comes from
     # create_all above; these are the per-tournament switches).
     _try_add("tournaments", "injuries_enabled", "BOOLEAN DEFAULT FALSE")
@@ -695,6 +786,13 @@ def _migrate_add_columns():
     _try_add("tournament_honours", "tournament_team_id", "INTEGER")
     _try_add("tournament_honours", "prize_snapshot_coins", "INTEGER")
     _try_add("tournament_honours", "prize_snapshot_gems", "INTEGER")
+    _try_add("tournament_honours", "prize_revision", "INTEGER NOT NULL DEFAULT 0")
+    _try_add("tournament_prize_payouts", "revision", "INTEGER NOT NULL DEFAULT 0")
+    _try_add("tournament_prize_payouts", "correction_id", "INTEGER")
+    _try_add("tournament_prize_payouts", "reversed_at", "TIMESTAMP")
+    _try_add("tournament_prize_payouts", "reversal_coins_after", "INTEGER")
+    _try_add("tournament_prize_payouts", "reversal_gems_after", "INTEGER")
+    _migrate_tournament_prize_corrections()
     _try_add("tournaments", "prizes_json", "TEXT")
     _try_add("tournaments", "awards_given_at", "TIMESTAMP")
     _try_add("tournaments", "awards_announced_at", "TIMESTAMP")

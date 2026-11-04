@@ -16,10 +16,13 @@ def payout_rows(session, tournament_id):
 
 
 def payout_summary(session, tournament_id):
-    result = {"paid": 0, "pending": 0, "failed": 0, "coins": 0, "gems": 0}
+    result = {"paid": 0, "pending": 0, "failed": 0, "reversed": 0, "cancelled": 0, "coins": 0, "gems": 0}
     for status in ("paid", "pending", "failed"):
         result[f"{status}_coins"] = result[f"{status}_gems"] = 0
     for row in payout_rows(session, tournament_id):
+        if row.status in ("reversed", "cancelled"):
+            result[row.status] += 1
+            continue
         status = row.status if row.status in ("paid", "pending", "failed") else "pending"
         result[status] += 1
         result["coins"] += row.coins
@@ -52,6 +55,7 @@ def _new_row(honour, tg, coins, gems, bps, **extra):
     from models import TournamentPrizePayout
     return TournamentPrizePayout(
         honour_id=honour.id, tournament_id=honour.tournament_id,
+        revision=honour.prize_revision or 0,
         tournament_name=honour.tournament_name, award=honour.award,
         team_name=honour.team_name, recipient_tg_id=tg,
         coins=coins, gems=gems, share_bps=bps, **extra)
@@ -98,8 +102,13 @@ def plan_honours(session, tour, honours):
     for honour in honours:
         if not (honour.team_name or honour.player_name):
             continue
+        if (honour.prize_revision and honour.prize_snapshot_coins == 0
+                and not honour.prize_snapshot_gems):
+            # A reviewed zero-value correction cancels the award's cash prize.
+            continue
         existing = (session.query(TournamentPrizePayout)
-                    .filter_by(honour_id=honour.id).populate_existing().all())
+                    .filter_by(honour_id=honour.id, revision=honour.prize_revision or 0)
+                    .populate_existing().all())
         if not existing and honour.prize_snapshot_coins is None and (
                 honour.prize_coins or honour.prize_gems):
             # Pre-ledger honours and balances committed in one transaction.
@@ -144,7 +153,9 @@ def plan_honours(session, tour, honours):
             reserved = (session.query(TournamentPrizePayout)
                         .join(TournamentHonour, TournamentPrizePayout.honour_id == TournamentHonour.id)
                         .filter(TournamentHonour.tournament_id == tour.id,
-                                TournamentHonour.tournament_team_id == key[1]).all())
+                                TournamentHonour.tournament_team_id == key[1],
+                                TournamentPrizePayout.revision == TournamentHonour.prize_revision,
+                                TournamentPrizePayout.status.in_(("paid", "pending", "failed"))).all())
         else:
             reserved = []
         coins_left = _pool_targets(sum(h.prize_snapshot_coins or 0 for h in awards), shares, reserved, "coins")
@@ -183,7 +194,7 @@ def _settle_rows(session, rows):
     from services.tournament_awards import AWARD_LABEL
     for original in sorted(rows, key=lambda r: (r.recipient_tg_id, r.id)):
         row = _lock_payout(session, original)
-        if row.status == "paid":
+        if row.status not in ("pending", "failed"):
             continue
         if not row.recipient_tg_id:
             row.status = "pending"
@@ -231,9 +242,11 @@ def _sync_honours(session, rows):
             continue
         coins, gems = (session.query(func.coalesce(func.sum(TournamentPrizePayout.coins), 0),
                                      func.coalesce(func.sum(TournamentPrizePayout.gems), 0))
-                       .filter_by(honour_id=hid, status="paid").one())
+                       .filter_by(honour_id=hid, revision=honour.prize_revision or 0,
+                                  status="paid").one())
         honour.prize_coins, honour.prize_gems = coins, gems
-        linked = [row for row in rows if row.honour_id == hid]
+        linked = [row for row in rows if row.honour_id == hid
+                  and row.revision == (honour.prize_revision or 0)]
         if len(linked) == 1 and linked[0].user_id:
             honour.user_id = linked[0].user_id
     session.flush()
@@ -270,7 +283,8 @@ def retry_for_recipient(session, telegram_id):
 def honour_payment_text(session, tour, honour):
     from models import TournamentPrizePayout, User
     from services.tournament_awards import prize_text, prizes
-    rows = (session.query(TournamentPrizePayout).filter_by(honour_id=honour.id)
+    rows = (session.query(TournamentPrizePayout).filter_by(honour_id=honour.id,
+                                                         revision=honour.prize_revision or 0)
             .order_by(TournamentPrizePayout.id).all()) if honour.id else []
     if rows:
         lines = []
@@ -290,6 +304,8 @@ def honour_payment_text(session, tour, honour):
         label = ("@" + user.username if user.username else user.first_name or str(user.telegram_id)) if user else ""
         return f"Credited: {paid}" + (f" → {escape(label)}" if label else "")
     pending = prize_text(prizes(tour).get(honour.award))
+    if honour.prize_revision and honour.prize_snapshot_coins == 0 and not honour.prize_snapshot_gems:
+        return "Cancelled — no cash prize"
     return f"Pending: {pending} — assign a recipient" if pending and (honour.team_name or honour.player_name) else ""
 
 
@@ -307,7 +323,8 @@ def recipient_receipt_page(session, telegram_id, before_id=None, limit=12):
     consumed, last_id = 0, None
     for row in rows[:limit]:
         receipt = []
-        state = {"paid": "Credited", "pending": "Pending", "failed": "Failed — awaiting retry"}.get(row.status, row.status)
+        state = {"paid": "Credited", "pending": "Pending", "failed": "Failed — awaiting retry",
+                 "reversed": "Reversed — previous credit deducted", "cancelled": "Cancelled — never credited"}.get(row.status, row.status)
         receipt.append(f"<b>#{row.id} · {escape(row.tournament_name)}</b>")
         receipt.append(f"{escape(AWARD_LABEL.get(row.award, row.award))} · {escape(row.team_name or '—')}")
         amount = prize_text({"coins": row.coins, "gems": row.gems}) or "0 coins"
@@ -316,6 +333,10 @@ def recipient_receipt_page(session, telegram_id, before_id=None, limit=12):
             receipt.append(f"Balance after credit: {row.balance_coins_after:,} coins + {row.balance_gems_after or 0:,} gems")
         if row.paid_at:
             receipt.append(row.paid_at.strftime("%d %b %Y %H:%M UTC"))
+        if row.reversed_at:
+            receipt.append("Reversed: " + row.reversed_at.strftime("%d %b %Y %H:%M UTC"))
+            if row.reversal_coins_after is not None:
+                receipt.append(f"Balance after reversal: {row.reversal_coins_after:,} coins + {row.reversal_gems_after or 0:,} gems")
         receipt.append("")
         if len("\n".join(lines + receipt)) > 3500:
             break

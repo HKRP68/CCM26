@@ -3025,6 +3025,7 @@ class TournamentTeam(Base):
     prize_split_json = Column(Text, nullable=True)
     prize_split_snapshot_json = Column(Text, nullable=True)
     prize_split_locked_at = Column(DateTime, nullable=True)
+    prize_split_reopened_at = Column(DateTime, nullable=True)
 
     # This team's home surface. Used by the schedule generator when the
     # tournament's ``pitch_mode`` is "home": every fixture the team hosts is
@@ -3370,8 +3371,45 @@ class TournamentHonour(Base):
     prize_gems = Column(Integer, default=0, nullable=False)
     prize_snapshot_coins = Column(Integer, nullable=True)
     prize_snapshot_gems = Column(Integer, nullable=True)
+    prize_revision = Column(Integer, default=0, server_default="0", nullable=False)
     awarded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     announced_at = Column(DateTime, nullable=True)
+
+
+class TournamentPrizeRedistribution(Base):
+    """An explicit admin change to a locked split and its prize revisions."""
+    __tablename__ = "tournament_prize_redistributions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="SET NULL"),
+                           nullable=True, index=True)
+    team_id = Column(Integer, ForeignKey("tournament_teams.id", ondelete="SET NULL"),
+                     nullable=True, index=True)
+    request_key = Column(String(64), nullable=False, unique=True)
+    reason = Column(String(500), nullable=False)
+    corrected_by = Column(String(120), nullable=True)
+    old_split_json = Column(Text, nullable=False)
+    new_split_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TournamentPrizeCorrection(Base):
+    """An audited, idempotent reversal and replacement of one prize award."""
+    __tablename__ = "tournament_prize_corrections"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="SET NULL"),
+                           nullable=True, index=True)
+    honour_id = Column(Integer, ForeignKey("tournament_honours.id", ondelete="SET NULL"),
+                       nullable=True, index=True)
+    request_key = Column(String(64), nullable=False, unique=True)
+    previous_revision = Column(Integer, nullable=False)
+    revision = Column(Integer, nullable=False)
+    reason = Column(String(500), nullable=False)
+    corrected_by = Column(String(120), nullable=True)
+    old_details_json = Column(Text, nullable=False)
+    new_details_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class TournamentPrizePayout(Base):
@@ -3386,6 +3424,9 @@ class TournamentPrizePayout(Base):
     tournament_name = Column(String(120), nullable=False)
     award = Column(String(20), nullable=False, index=True)
     team_name = Column(String(120), nullable=True)
+    revision = Column(Integer, default=0, server_default="0", nullable=False)
+    correction_id = Column(Integer, ForeignKey("tournament_prize_corrections.id", ondelete="SET NULL"),
+                           nullable=True, index=True)
     recipient_tg_id = Column(BigInteger, nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     coins = Column(Integer, default=0, nullable=False)
@@ -3396,12 +3437,16 @@ class TournamentPrizePayout(Base):
     balance_coins_after = Column(Integer, nullable=True)
     balance_gems_after = Column(Integer, nullable=True)
     paid_at = Column(DateTime, nullable=True)
+    reversed_at = Column(DateTime, nullable=True)
+    reversal_coins_after = Column(Integer, nullable=True)
+    reversal_gems_after = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
                         nullable=False)
 
     __table_args__ = (
-        UniqueConstraint("honour_id", "recipient_tg_id", name="uq_tournament_prize_recipient"),
+        UniqueConstraint("honour_id", "revision", "recipient_tg_id",
+                         name="uq_tournament_prize_revision_recipient"),
     )
 
 

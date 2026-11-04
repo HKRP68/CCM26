@@ -21,6 +21,7 @@
 .status-pill.paid { color:#86efac; border-color:rgba(134,239,172,.4); background:rgba(34,197,94,.12); }
 .status-pill.pending { color:#fde68a; border-color:rgba(253,230,138,.4); background:rgba(234,179,8,.12); }
 .status-pill.failed { color:#fca5a5; border-color:rgba(252,165,165,.4); background:rgba(239,68,68,.12); }
+.status-pill.reversed { color:#c4b5fd; border-color:rgba(196,181,253,.4); background:rgba(139,92,246,.12); }
 .prize-split-list { display:grid; gap:.8rem; grid-template-columns:repeat(auto-fit, minmax(250px, 1fr)); }
 .prize-split-team { border:1px solid var(--border); border-radius:12px; padding:.8rem; }
 .prize-split-member { display:flex; align-items:center; justify-content:space-between; gap:.6rem; margin:.45rem 0; }
@@ -278,25 +279,39 @@
 
   <section class="tour-card" id="prize-sharing">
     <h3 style="margin-top:0;">Prize sharing</h3>
-    <p style="color:var(--muted);font-size:.88rem;">Owner and co-owners share every prize earned by their team, including Orange Cap, MVP and Winning Captain. Equal shares are the default. Agree custom percentages before starting; recipients and percentages lock when the tournament starts. Whole coins and gems are divided so every share adds up to the full prize.</p>
+    <p style="color:var(--muted);font-size:.88rem;">Owner and co-owners share every prize earned by their team, including Orange Cap, MVP and Winning Captain. Equal shares are the default. Percentages lock when the tournament starts; admins can reopen them to correct the distribution. Whole coins and gems are divided so every share adds up to the full prize.</p>
     {% if teams %}
     <div class="prize-split-list">
       {% for tt in teams %}
       {% set split = prize_splits.get(tt.id, {}) %}
       <div class="prize-split-team">
         <strong>{{ tt.name }}</strong>
-        {% if split.get('error') %}<p style="color:#fca5a5;font-size:.84rem;">{{ split.error }}{% if not split.get('locked') %} Save equal shares or update the percentages before starting.{% endif %}</p>{% endif %}
+        {% if split.get('error') %}<p style="color:#fca5a5;font-size:.84rem;">{{ split.error }}{% if split.get('reopened') %} Enter the corrected percentages and apply the redistribution.{% elif not split.get('locked') %} Save equal shares or update the percentages before starting.{% endif %}</p>{% endif %}
         {% if split.get('locked') %}
         <span class="status-pill completed" style="margin-left:.4rem;">Locked</span>
         <p style="color:var(--muted);font-size:.8rem;">{{ 'Custom percentages' if split.get('custom') else 'Equal shares' }}{% if split.get('locked_at') %} · {{ split.locked_at.strftime('%d %b %Y %H:%M UTC') }}{% endif %}</p>
         {% for member in split.get('recipients', []) %}
         <div class="prize-split-member"><code>{{ member.telegram_id }}</code><strong>{{ member.percent }}%</strong></div>
         {% else %}<p style="color:var(--muted);">No payout recipients assigned.</p>{% endfor %}
+        <form method="POST" style="margin-top:.6rem;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="reopen_prize_split">
+          <input type="hidden" name="team_id" value="{{ tt.id }}">
+          <button class="btn" type="submit">Reopen percentages</button>
+        </form>
         {% elif split.get('recipients') %}
+        {% if split.get('reopened') %}
+        <span class="status-pill paused" style="margin-left:.4rem;">Editor reopened</span>
+        <p style="color:var(--muted);font-size:.82rem;">Recorded shares remain in effect until you apply. Applying reverses and re-distributes every existing prize for this team, then locks the new percentages.</p>
+        {% endif %}
         <form method="POST">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="hidden" name="action" value="set_prize_split">
+          <input type="hidden" name="action" value="{{ 'redistribute_prizes' if split.get('reopened') else 'set_prize_split' }}">
           <input type="hidden" name="team_id" value="{{ tt.id }}">
+          {% if split.get('reopened') %}
+          <input type="hidden" name="request_key" value="{{ redistribution_keys.get(tt.id) }}">
+          <input type="hidden" name="expected_snapshot" value="{{ split.get('snapshot_token', '') }}">
+          {% endif %}
           <label style="display:block;margin:.6rem 0;">Distribution
             <select name="split_mode" style="width:100%;margin-top:.25rem;">
               <option value="equal" {{ 'selected' if not split.get('custom') else '' }}>Equal shares (default)</option>
@@ -307,7 +322,12 @@
           <label class="prize-split-member"><code>{{ member.telegram_id }}</code><span><input type="number" name="share_{{ member.telegram_id }}" value="{{ member.percent }}" min="0.01" max="100" step="0.01" required aria-label="Prize percentage for {{ member.telegram_id }}"> %</span></label>
           {% endfor %}
           <small style="display:block;color:var(--muted);margin:.5rem 0;">Custom percentages must total 100%. Equal shares ignores the percentage boxes.</small>
-          <button class="btn" type="submit">Save prize split</button>
+          {% if split.get('reopened') %}
+          <label style="display:block;margin-top:.6rem;">Reason for redistribution
+            <textarea name="reason" rows="2" maxlength="500" required style="width:100%;margin-top:.3rem;" placeholder="Explain why the prize percentages need to change"></textarea>
+          </label>
+          {% endif %}
+          <button class="btn{{ ' danger' if split.get('reopened') else '' }}" type="submit" style="margin-top:.5rem;">{{ 'Apply redistribution & lock' if split.get('reopened') else 'Save prize split' }}</button>
         </form>
         {% else %}
         <p style="color:var(--muted);">Assign an owner or co-owner below to set prize sharing.</p>
@@ -316,19 +336,33 @@
       {% endfor %}
     </div>
     {% else %}<p style="color:var(--muted);">Add participating teams to configure prize sharing.</p>{% endif %}
+    {% if prize_redistributions %}
+    <div style="margin-top:1.2rem;">
+      <h4>Redistribution history</h4>
+      {% for redistribution in prize_redistributions %}
+      <div class="prize-split-team" style="margin-top:.5rem;">
+        <strong>Redistribution #{{ redistribution.id }}</strong>
+        <p style="margin:.4rem 0;">{{ redistribution.reason }}</p>
+        <small style="color:var(--muted);">{{ redistribution.corrected_by or 'Admin' }} · {{ redistribution.created_at.strftime('%d %b %Y %H:%M UTC') }}</small>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
   </section>
 
   <section class="tour-card" id="prize-payouts">
     <h3 style="margin-top:0;">Prize payouts</h3>
-    <p style="color:var(--muted);font-size:.88rem;">Each recipient has a separate receipt. Unregistered users keep their pending share; retry after they run <code>/debut</code>. Paid receipts stay unchanged and are never credited twice.</p>
+    <p style="color:var(--muted);font-size:.88rem;">Each recipient has a separate receipt. Unregistered users keep their pending share; retry after they run <code>/debut</code>. To fix a mistake, reverse and re-award the prize below. Original receipts remain in the history.</p>
     <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.8rem;">
       <span class="status-pill paid">Paid {{ payout_counts.get('paid', 0) }}</span>
       <span class="status-pill pending">Pending {{ payout_counts.get('pending', 0) }}</span>
       <span class="status-pill failed">Failed {{ payout_counts.get('failed', 0) }}</span>
+      {% if payout_counts.get('reversed', 0) %}<span class="status-pill reversed">Reversed {{ payout_counts.get('reversed', 0) }}</span>{% endif %}
+      {% if payout_counts.get('cancelled', 0) %}<span class="status-pill cancelled">Cancelled {{ payout_counts.get('cancelled', 0) }}</span>{% endif %}
       <form method="GET" action="{{ url_for('admin_tournament_detail', tournament_id=t.id, _anchor='prize-payouts') }}" style="display:flex;align-items:center;gap:.4rem;">
         <label for="payout-status">Show</label>
         <select id="payout-status" name="payout_status">
-          {% for value, label in [('all', 'All receipts'), ('paid', 'Paid'), ('pending', 'Pending'), ('failed', 'Failed')] %}
+          {% for value, label in [('all', 'All receipts'), ('paid', 'Paid'), ('pending', 'Pending'), ('failed', 'Failed'), ('reversed', 'Reversed'), ('cancelled', 'Cancelled')] %}
           <option value="{{ value }}" {{ 'selected' if payout_filter == value else '' }}>{{ label }}</option>
           {% endfor %}
         </select>
@@ -348,18 +382,62 @@
         {% for payout in payout_rows %}
           {% set user = payout_users.get(payout.recipient_tg_id) %}
           <tr>
-            <td style="padding:.65rem;vertical-align:top;">#{{ payout.id }}{% if payout.paid_at %}<br><small style="color:var(--muted);">{{ payout.paid_at.strftime('%d %b %Y %H:%M UTC') }}</small>{% endif %}</td>
+            <td style="padding:.65rem;vertical-align:top;">#{{ payout.id }}<br><small style="color:var(--muted);">Revision {{ payout.revision or 0 }}{% if payout.correction_id %} · Correction #{{ payout.correction_id }}{% endif %}</small>{% if payout.paid_at %}<br><small style="color:var(--muted);">{{ payout.paid_at.strftime('%d %b %Y %H:%M UTC') }}</small>{% endif %}</td>
             <td style="padding:.65rem;vertical-align:top;">{{ payout_award_labels.get(payout.award, payout.award) }}<br><small style="color:var(--muted);">{{ payout.team_name or '—' }}</small></td>
             <td style="padding:.65rem;vertical-align:top;">{% if payout.recipient_tg_id %}{% if user %}{{ '@' ~ user.username if user.username else user.first_name or 'Registered user' }}<br>{% endif %}<code>{{ payout.recipient_tg_id }}</code>{% else %}<span style="color:var(--muted);">Unassigned — set team owner</span>{% endif %}</td>
             <td style="padding:.65rem;vertical-align:top;white-space:nowrap;">{{ '{:,}'.format(payout.coins) }} coins<br>{{ '{:,}'.format(payout.gems) }} gems</td>
             <td style="padding:.65rem;vertical-align:top;"><span class="status-pill {{ payout.status }}">{{ payout.status }}</span>{% if payout.failure_reason %}<br><small style="color:var(--muted);">{{ payout.failure_reason }}</small>{% endif %}</td>
-            <td style="padding:.65rem;vertical-align:top;white-space:nowrap;">{% if payout.balance_coins_after is not none %}{{ '{:,}'.format(payout.balance_coins_after) }} coins{% else %}—{% endif %}<br>{% if payout.balance_gems_after is not none %}{{ '{:,}'.format(payout.balance_gems_after) }} gems{% else %}—{% endif %}</td>
+            <td style="padding:.65rem;vertical-align:top;white-space:nowrap;">{% if payout.balance_coins_after is not none %}{{ '{:,}'.format(payout.balance_coins_after) }} coins{% else %}—{% endif %}<br>{% if payout.balance_gems_after is not none %}{{ '{:,}'.format(payout.balance_gems_after) }} gems{% else %}—{% endif %}{% if payout.reversed_at %}<br><small style="color:var(--muted);">Reversed {{ payout.reversed_at.strftime('%d %b %Y %H:%M UTC') }}{% if payout.reversal_coins_after is not none %}<br>After reversal: {{ '{:,}'.format(payout.reversal_coins_after) }} coins / {{ '{:,}'.format(payout.reversal_gems_after or 0) }} gems{% endif %}</small>{% endif %}</td>
           </tr>
         {% endfor %}
         </tbody>
       </table>
     </div>
     {% else %}<p style="color:var(--muted);">No {{ payout_filter ~ ' ' if payout_filter != 'all' else '' }}payout receipts yet. Receipts appear when a finished tournament has configured prizes and payout recipients.</p>{% endif %}
+    {% if correction_honours %}
+    <div id="prize-corrections" style="margin-top:1.2rem;">
+      <h4>Correct a prize</h4>
+      <p style="color:var(--muted);font-size:.85rem;">This deducts the selected award's previous credits, cancels its unpaid shares, and issues the corrected prize in one transaction. If a previous recipient cannot repay the original amount, no balances change. Enter a reason so the correction can be reviewed later.</p>
+      {% for honour in correction_honours %}
+      <details class="prize-split-team" style="margin-top:.6rem;">
+        <summary>{{ payout_award_labels.get(honour.award, honour.award) }} · {{ honour.player_name or honour.team_name or 'Not awarded' }} <small style="color:var(--muted);">(revision {{ honour.prize_revision or 0 }})</small></summary>
+        <form method="POST" style="margin-top:.8rem;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="correct_prize">
+          <input type="hidden" name="honour_id" value="{{ honour.id }}">
+          <input type="hidden" name="expected_revision" value="{{ honour.prize_revision or 0 }}">
+          <input type="hidden" name="request_key" value="{{ correction_keys.get(honour.id) }}">
+          <div class="tour-form-grid">
+            <div><label>Corrected prize (coins)</label><input type="number" name="coins" min="0" max="10000000" required value="{{ honour.prize_snapshot_coins if honour.prize_snapshot_coins is not none else honour.prize_coins or prize_table.get(honour.award, {}).get('coins', 0) }}"></div>
+            <div><label>Corrected prize (gems)</label><input type="number" name="gems" min="0" max="100000" required value="{{ honour.prize_snapshot_gems if honour.prize_snapshot_gems is not none else honour.prize_gems or prize_table.get(honour.award, {}).get('gems', 0) }}"></div>
+            <div><label>Corrected winning team</label><select name="team_id"><option value="">Keep recorded team and recipients</option>{% for team in teams %}<option value="{{ team.id }}">{{ team.name }}</option>{% endfor %}</select></div>
+            <div><label>Winning player / captain (optional)</label><input type="text" name="player_name" maxlength="150" value="{{ honour.player_name or '' }}" placeholder="Keep recorded winner"></div>
+          </div>
+          <label style="display:block;margin-top:.7rem;">Recipient overrides (optional)
+            <textarea name="recipient_shares" rows="3" style="width:100%;margin-top:.3rem;" placeholder="123456:50&#10;789012:50"></textarea>
+          </label>
+          <small style="color:var(--muted);">One Telegram ID and percentage per line, separated by a colon. Percentages must total 100%. Leave blank to keep the recorded recipients, or use the selected team's locked split.</small>
+          <label style="display:block;margin-top:.7rem;">Reason for correction
+            <textarea name="reason" rows="2" maxlength="500" required style="width:100%;margin-top:.3rem;" placeholder="Explain the incorrect award and the correction"></textarea>
+          </label>
+          <button class="btn danger" type="submit" style="margin-top:.7rem;">Reverse &amp; re-award</button>
+        </form>
+      </details>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if prize_corrections %}
+    <div style="margin-top:1.2rem;">
+      <h4>Correction history</h4>
+      {% for correction in prize_corrections %}
+      <div class="prize-split-team" style="margin-top:.5rem;">
+        <strong>Correction #{{ correction.id }}</strong> · revision {{ correction.previous_revision }} → {{ correction.revision }}
+        <p style="margin:.4rem 0;">{{ correction.reason }}</p>
+        <small style="color:var(--muted);">{{ correction.corrected_by or 'Admin' }} · {{ correction.created_at.strftime('%d %b %Y %H:%M UTC') }}</small>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
   </section>
 
   <!-- Participating teams -->

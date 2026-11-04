@@ -17503,6 +17503,32 @@ def admin_tournament_detail(tournament_id):
                               f"{tt.name}: {mode}")
                     flash(f"Prize sharing saved for {tt.name}. It locks when the tournament starts.",
                           "success")
+                elif action == "reopen_prize_split":
+                    from services.tournament_prize_corrections import reopen_split
+                    tt = reopen_split(db, t, _int_form("team_id"),
+                                      actor=f"web:{session.get('admin_user') or 'admin'}")
+                    log_admin(db, "tournament_prize_split_reopen", "tournament", t.id, t.name)
+                    flash("Prize percentage editor reopened. Existing shares stay in effect until "
+                          "you apply the redistribution.", "info")
+                elif action == "redistribute_prizes":
+                    from services.tournament_prize_corrections import redistribute_team
+                    mode = request.form.get("split_mode", "equal")
+                    if mode not in ("equal", "custom"):
+                        raise ValueError("Choose equal shares or custom percentages.")
+                    shares = ({key[len("share_"):]: value
+                               for key, value in request.form.items()
+                               if key.startswith("share_")}
+                              if mode == "custom" else None)
+                    corrections = redistribute_team(
+                        db, t, team_id=_int_form("team_id"), shares=shares,
+                        reason=request.form.get("reason") or "",
+                        request_key=request.form.get("request_key") or "",
+                        expected_snapshot=request.form.get("expected_snapshot") or "",
+                        actor=f"web:{session.get('admin_user') or 'admin'}")
+                    log_admin(db, "tournament_prize_redistribution", "tournament", t.id, t.name,
+                              f"{len(corrections)} prize award(s) corrected: {request.form.get('reason') or ''}")
+                    flash("Prize percentages updated and locked. Existing team prizes were reversed "
+                          "and re-distributed.", "success")
                 elif action == "retry_prize_payouts":
                     from services import tournament_awards as _ta
                     from services import tournament_payouts as _payouts
@@ -17511,6 +17537,24 @@ def admin_tournament_detail(tournament_id):
                     _payouts.retry_payouts(db, t)
                     log_admin(db, "tournament_prize_retry", "tournament", t.id, t.name)
                     flash("Payout retry complete. Review each recipient's status below.", "success")
+                elif action == "correct_prize":
+                    from services.tournament_prize_corrections import correct_award, parse_shares
+                    raw_shares = (request.form.get("recipient_shares") or "").strip()
+                    correction = correct_award(
+                        db, t, honour_id=int(request.form.get("honour_id") or 0),
+                        coins=int((request.form.get("coins") or "0").replace(",", "")),
+                        gems=int((request.form.get("gems") or "0").replace(",", "")),
+                        reason=request.form.get("reason") or "",
+                        request_key=request.form.get("request_key") or "",
+                        expected_revision=int(request.form.get("expected_revision") or 0),
+                        actor=f"web:{session.get('admin_user') or 'admin'}",
+                        team_id=int(request.form["team_id"]) if request.form.get("team_id") else None,
+                        player_name=(request.form.get("player_name") or "").strip() or None,
+                        shares=parse_shares(raw_shares) if raw_shares else None)
+                    log_admin(db, "tournament_prize_correction", "tournament", t.id, t.name,
+                              f"Correction #{correction.id}: {correction.reason}")
+                    flash("Previous prize credits reversed. The corrected prize has been re-awarded; "
+                          "unregistered recipients keep their new share pending.", "success")
                 elif action == "set_team_award_photo":
                     tt = db.get(TournamentTeam, _int_form("team_id"))
                     if not tt or tt.tournament_id != t.id:
@@ -18057,8 +18101,9 @@ def admin_tournament_detail(tournament_id):
             back = {"schedule": "admin_tournament_schedule",
                     "dashboard": "admin_tournament_dashboard"}.get(
                         request.form.get("return_to") or "", "admin_tournament_detail")
-            if action in ("set_prize_split", "retry_prize_payouts"):
-                anchor = "prize-sharing" if action == "set_prize_split" else "prize-payouts"
+            if action in ("set_prize_split", "reopen_prize_split", "redistribute_prizes", "retry_prize_payouts", "correct_prize"):
+                anchor = ("prize-sharing" if action in ("set_prize_split", "reopen_prize_split", "redistribute_prizes")
+                          else "prize-payouts")
                 return redirect(url_for("admin_tournament_detail", tournament_id=t.id,
                                         _anchor=anchor))
             return redirect(url_for(back, tournament_id=t.id))
@@ -18118,20 +18163,28 @@ def admin_tournament_detail(tournament_id):
         from services import tournament_match_settings as _match_settings
         from services.knockout_service import qualifier_count
         from services import tournament_channels as _channels
-        from models import TournamentChannelPost
+        from models import TournamentChannelPost, TournamentPrizeCorrection, TournamentPrizeRedistribution
         from sqlalchemy.orm import defer
         prize_splits = {tt.id: _splits.split_settings(db, t, tt) for tt in teams}
         all_payouts = _payouts.payout_rows(db, t.id)
         payout_counts = {status: sum(row.status == status for row in all_payouts)
-                         for status in ("paid", "pending", "failed")}
+                         for status in ("paid", "pending", "failed", "reversed", "cancelled")}
         payout_filter = request.args.get("payout_status", "all")
-        if payout_filter not in ("all", "paid", "pending", "failed"):
+        if payout_filter not in ("all", "paid", "pending", "failed", "reversed", "cancelled"):
             payout_filter = "all"
         payout_rows = [row for row in all_payouts
                        if payout_filter == "all" or row.status == payout_filter]
         payout_tg_ids = {row.recipient_tg_id for row in all_payouts}
         payout_users = {user.telegram_id: user for user in db.query(User).filter(
             User.telegram_id.in_(payout_tg_ids)).all()} if payout_tg_ids else {}
+        import uuid as _uuid
+        correction_honours = _tawards.honours_for(db, t.id)
+        correction_keys = {honour.id: _uuid.uuid4().hex for honour in correction_honours}
+        redistribution_keys = {tt.id: _uuid.uuid4().hex for tt in teams}
+        prize_corrections = (db.query(TournamentPrizeCorrection).filter_by(tournament_id=t.id)
+                             .order_by(TournamentPrizeCorrection.id.desc()).all())
+        prize_redistributions = (db.query(TournamentPrizeRedistribution).filter_by(tournament_id=t.id)
+                                 .order_by(TournamentPrizeRedistribution.id.desc()).all())
         return render_template("admin_tournament_detail.html", t=t, teams=teams,
                                playoff_qualifiers=qualifier_count(t) if t.knockout_type == "top_n" else 4,
                                stadium_choices=[(r.get("name"), r.get("city") or "")
@@ -18142,9 +18195,13 @@ def admin_tournament_detail(tournament_id):
                                              for a in _tawards.AWARDS],
                                prize_table=_tawards.prizes(t),
                                prize_splits=prize_splits,
+                               redistribution_keys=redistribution_keys,
                                payout_rows=payout_rows, payout_counts=payout_counts,
                                payout_filter=payout_filter, payout_users=payout_users,
                                payout_award_labels=_tawards.AWARD_LABEL,
+                               correction_honours=correction_honours, correction_keys=correction_keys,
+                               prize_corrections=prize_corrections,
+                               prize_redistributions=prize_redistributions,
                                tour_channels=_channels.channels(t),
                                channel_posts=db.query(TournamentChannelPost).options(defer(TournamentChannelPost.photo), defer(TournamentChannelPost.extra_photo)).filter_by(tournament_id=t.id).order_by(TournamentChannelPost.id.desc()).limit(30).all(),
                                rating_rules=_ts_rr.rating_rules(t),

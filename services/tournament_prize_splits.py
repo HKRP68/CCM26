@@ -105,7 +105,7 @@ def set_split(session, team_id, shares):
     tour = _lock_tournament(session, session.get(Tournament, team.tournament_id))
     team = (session.query(TournamentTeam).filter_by(id=team.id)
             .populate_existing().one())
-    if team.prize_split_locked_at or _started(session, tour):
+    if (team.prize_split_locked_at or _started(session, tour)) and not team.prize_split_reopened_at:
         raise ValueError("Prize splits are locked after the tournament starts.")
     if not shares:
         team.prize_split_json = None
@@ -141,6 +141,10 @@ def _snapshot(team):
     frozen = _load(team.prize_split_snapshot_json)
     if frozen is not None:
         return frozen
+    # An ownerless team can still have an unfinished redistribution draft.
+    # Only the explicit apply action may freeze or pay that new allocation.
+    if team.prize_split_reopened_at:
+        return []
     current = _current(team)
     # Ownerless teams can acquire their first recipient later. Once any known
     # owners exist, even unregistered ones, the entire allocation is immutable.
@@ -173,20 +177,23 @@ def recipients(session, tour, team):
 def split_settings(session, tour, team):
     """Read-only values for the split editor, including the immutable snapshot."""
     error = None
+    reopened = bool(team.prize_split_reopened_at)
     try:
         frozen = _load(team.prize_split_snapshot_json)
-        rows = frozen if frozen is not None else _current(team)
+        rows = _current(team) if reopened else frozen if frozen is not None else _current(team)
     except ValueError as exc:
         # Keep the editor accessible when owners change before activation.
         # Starting/settling still validates the saved allocation strictly.
         error = str(exc)
-        rows = ([] if team.prize_split_snapshot_json is not None else
+        rows = ([] if team.prize_split_snapshot_json is not None and not reopened else
                 [{"telegram_id": tg, "weight": 1} for tg in _manager_ids(team)])
     bps = split_amount(10000, rows)
     members = [dict(row, percent=f"{percentage / 100:.2f}")
                for row, percentage in zip(rows, bps)]
     return {
-        "locked": bool(team.prize_split_locked_at or _started(session, tour)),
+        "locked": bool(team.prize_split_locked_at or _started(session, tour)) and not reopened,
+        "reopened": reopened,
+        "snapshot_token": team.prize_split_snapshot_json or "",
         "custom": bool(team.prize_split_json),
         "recipients": members,
         "percentages": {str(row["telegram_id"]): row["percent"] for row in members},
