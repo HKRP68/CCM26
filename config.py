@@ -553,9 +553,10 @@ TRAIT_STACK_WEIGHTS = [1.0, 0.7, 0.5]
 # inactive opponent keeps its share neutral; it is not given to the other side.
 TRAIT_ROLE_WEIGHTS = {"batter": 0.5, "bowler": 0.5}
 
-# Hard cap on the combined absolute relative changes per side, including
-# reductions as well as boosts (prevents high-level stacks bypassing the cap).
-# The role's 50% share is applied after this cap.
+# Smooth ceiling on combined absolute relative changes per side, including
+# reductions and boosts. For raw strength S and ceiling C the effective
+# strength is C*S/(C+S): every upgrade helps, even for a high-level stack,
+# while the result stays below C. Apply the role's 50% share afterwards.
 TRAIT_BOOST_CAP = 0.25   # 25%
 
 # Max traits per player

@@ -706,15 +706,27 @@ def effective_batting(striker_bat, non_striker_bat):
     return BAT_BLEND_STRIKER * s + (1.0 - BAT_BLEND_STRIKER) * ns
 
 
-def _trait_count(traits, keys):
+def _trait_strength(traits, keys):
+    """Level-aware clutch strength, with the ball engine's stack ordering.
+
+    The old per-trait count made a Lv.1 finisher worth the same as Lv.5 in
+    the calibrated chase controller, even after upgrading the ball weights.
+    """
+    from config import TRAIT_STACK_WEIGHTS
+    from services.trait_engine import _level_pct
     if not traits:
-        return 0
-    n = 0
+        return 0.0
+    levels = []
     for t in traits:
         key = (t or {}).get("effect_key") if isinstance(t, dict) else t
         if key in keys:
-            n += 1
-    return n
+            levels.append((_level_pct(t.get("level", 1)) if isinstance(t, dict)
+                           else _level_pct(1), str(key)))
+    ordered = sorted(levels, key=lambda entry: (-entry[0], entry[1]))
+    return sum(strength / _level_pct(5)
+               * (TRAIT_STACK_WEIGHTS[min(i, len(TRAIT_STACK_WEIGHTS) - 1)]
+                  if TRAIT_STACK_WEIGHTS else 1.0)
+               for i, (strength, _key) in enumerate(ordered))
 
 
 def _lookup(table, edge, balls_left, runs_needed):
@@ -766,9 +778,9 @@ def situational_shift(wickets_in_hand=5, striker_balls=0, striker_traits=None,
         shift += NEW_BATTER_SHIFT
 
     shift += min(TRAIT_SHIFT_CAP,
-                 TRAIT_SHIFT_PER * _trait_count(striker_traits, BAT_CLUTCH_TRAITS))
+                 TRAIT_SHIFT_PER * _trait_strength(striker_traits, BAT_CLUTCH_TRAITS))
     shift -= min(TRAIT_SHIFT_CAP,
-                 TRAIT_SHIFT_PER * _trait_count(bowler_traits, BOWL_DEATH_TRAITS))
+                 TRAIT_SHIFT_PER * _trait_strength(bowler_traits, BOWL_DEATH_TRAITS))
 
     if part_time_bowler:
         shift += PART_TIME_SHIFT

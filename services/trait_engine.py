@@ -7,7 +7,7 @@ pairs, where ``x`` is the trait's level strength as a relative percentage and
 an empty list means the trait did not fire on this ball.
 
 Batting and bowling each receive 50% of the trait influence. Their stacked
-relative changes are capped separately, combined, then applied once to each
+relative changes are limited separately, combined, then applied once to each
 outcome's original weight. This keeps rare wickets from receiving outsized
 additive boosts and prevents applying one side first from deciding the duel.
 
@@ -51,6 +51,10 @@ logger = logging.getLogger(__name__)
 
 
 def _level_pct(level: int) -> float:
+    try:
+        level = max(1, min(5, int(level)))
+    except (TypeError, ValueError):
+        level = 1
     base = TRAIT_LEVEL_PCT.get(level, 0)
     if level == 5:
         base += TRAIT_LEVEL_5_HIDDEN_BONUS_PCT
@@ -483,6 +487,30 @@ TRAIT_HANDLERS = {
 }
 
 
+# Roles describe the action on this delivery, not the player's card category:
+# an all-rounder's batting trait fires at the crease and their bowling trait
+# fires with the ball. Fielding traits belong to the defending role.
+TRAIT_ROLES = {
+    **{key: ("batter",) for key in TRAIT_HANDLERS if key.startswith("bat_")},
+    **{key: ("bowler",) for key in TRAIT_HANDLERS
+       if key.startswith(("bowl_", "field_"))},
+    **dict.fromkeys(("mental_consistency", "mental_momentum", "mental_confidence",
+                     "mental_ice", "aware_rotation", "aware_gap",
+                     "elite_master_blaster", "elite_run_machine", "elite_ice_finisher"),
+                    ("batter",)),
+    **dict.fromkeys(("elite_bowling_wizard", "elite_magic_spell", "elite_unplayable",
+                     "elite_golden_arm", "elite_big_fish", "elite_matchup"),
+                    ("bowler",)),
+    **dict.fromkeys(("mental_comeback", "aware_pitch", "special_giantkiller", "elite_goat"),
+                    ("batter", "bowler")),
+}
+
+
+def trait_allowed(effect_key, role):
+    """Whether this trait can affect the specified action on this delivery."""
+    return role in TRAIT_ROLES.get(effect_key, ())
+
+
 def _stack_weight(index: int) -> float:
     if index < len(TRAIT_STACK_WEIGHTS):
         return TRAIT_STACK_WEIGHTS[index]
@@ -515,14 +543,15 @@ def apply_traits(probs, striker_traits, bowler_traits, ctx):
         # different stack weights from it, which puts the row order back in
         # charge for the case where it is most likely (a player levelling their
         # traits together).
-        ordered = sorted(traits, key=lambda t: (-int(t.get("level", 1) or 1),
-                                                str(t.get("effect_key", ""))))
-        for i, t in enumerate(ordered):
+        ordered = sorted((t for t in traits if trait_allowed(t.get("effect_key"), role)),
+                         key=lambda t: (-_level_pct(t.get("level", 1)),
+                                        str(t.get("effect_key", ""))))
+        active_slot = 0
+        for t in ordered:
             handler = TRAIT_HANDLERS.get(t.get("effect_key"))
             if not handler:
                 continue
             x = _level_pct(t.get("level", 1))
-            weight = _stack_weight(i)
             try:
                 deltas = handler(ctx or {}, x, role)
             except Exception:
@@ -530,20 +559,24 @@ def apply_traits(probs, striker_traits, bowler_traits, ctx):
                 # other traits, so it is dropped rather than raised.
                 logger.exception("trait handler %s failed", t.get("effect_key"))
                 continue
-            if not deltas:
+            if not deltas or not any(d for _, d in deltas):
                 continue
+            # Inactive, unknown and wrong-role traits must not weaken the
+            # active trait by taking an earlier diminishing-return slot.
+            weight = _stack_weight(active_slot)
+            active_slot += 1
             name = t.get("display_name", t.get("effect_key"))
             level = t.get("level", 1)
             activated.append(f"{name} Lv.{level}")
             for key, d in deltas:
                 all_deltas.append((key, d * weight, role, name, level))
 
-    # Both boosts and reductions use the same budget. Previously only positive
-    # deltas were capped, so boundary suppression could bypass the limit.
+    # Smoothly approach the same ceiling for boosts and reductions. A hard
+    # cutoff made Finisher and other strong traits identical at levels 4/5.
     for role in ("batter", "bowler"):
         total = sum(abs(d[1]) for d in all_deltas if d[2] == role)
-        if total > TRAIT_MAX_EFFECTIVE_PCT:
-            scale = TRAIT_MAX_EFFECTIVE_PCT / total
+        if total:
+            scale = TRAIT_MAX_EFFECTIVE_PCT / (TRAIT_MAX_EFFECTIVE_PCT + total)
             for i, (k, d, r, n, lv) in enumerate(all_deltas):
                 if r == role:
                     all_deltas[i] = (k, d * scale, r, n, lv)

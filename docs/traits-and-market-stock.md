@@ -220,8 +220,9 @@ equipped and do nothing in /letsplay. The map now carries Single and Double too.
 returns by slot (×1.0, ×0.7, ×0.5), and the engine used to index it by whatever
 order the traits arrived in — i.e. by database row order. A player's effective
 squad therefore depended on the order their rows came back. Traits are now
-sorted by level descending first, so the Lv.5 trait always takes the
-full-strength slot.
+sorted by level descending first. Only traits that activate in the correct
+role consume a slot: an inactive Lv.5 Finisher cannot weaken an active Anchor
+in the middle overs.
 
 ### 5.3 Equal batting and bowling influence
 
@@ -230,18 +231,68 @@ Batting and bowling each have a **50% share** of trait influence on a delivery
 Levels and conditions still determine which traits fire and how strong they are.
 
 Handler deltas are relative changes to the existing outcome weights. For example,
-a Lv.1 Wicket Hunter changes a wicket weight of 4 to 4.1 before normalization:
-5% strength × 50% bowling share = a 2.5% relative boost. It previously added five
-percentage points outright, which more than doubled that wicket weight.
+a Lv.1 Wicket Hunter changes a wicket weight of 4 to about 4.0833 before
+normalization. Its 5% raw strength becomes 4.1667% after the smooth limit below;
+the 50% bowling share makes that a 2.0833% relative boost. Before the 50/50
+rebalance it added five percentage points outright, more than doubling the
+wicket weight.
 
 Stacking still uses the strongest-first diminishing returns. Each side's total
-absolute deltas, including both increases and decreases, are capped at 25%
-before its half share is applied. The two sides' changes are combined before
+absolute deltas, including both increases and decreases, approach a 25% ceiling
+before its half share is applied. For raw strength `S` and ceiling `C`, effective
+strength is `C × S / (C + S)`. This smooth limit stays below the same ceiling
+without flattening upgrades: previously Finisher's Lv.4 and Lv.5 effects both
+hit the hard cutoff and were identical. Every active catalogue trait now gains
+strength between these levels, including the Lv.5 hidden bonus.
+
+The two sides' changes are combined before
 any probability is updated, so equal opposing effects cancel without a bias
 from applying batting first. This balances trait influence; match results still
 depend on ratings, conditions, tactics and which traits are active.
 
-### 5.4 Randomness
+### 5.4 Roles and close finishes
+
+`services.trait_engine.TRAIT_ROLES` assigns every catalogue effect an explicit
+role. Batting traits and the batting Elite traits work at the crease; bowling,
+fielding and bowling Elite traits work while defending. Consistency King,
+Momentum Player, Confidence Player, Ice Veins, Strike Rotator and Gap Finder
+are batting effects. Comeback King, Pitch Reader, Giant Killer and GOAT
+Instinct support both roles, using the matching handler branch.
+
+The rule follows the action rather than the card category. All-rounders can
+keep both batting and bowling traits, each working in its own role. No trait
+is removed or repriced. Activation summaries follow the same role filter.
+
+The final-over chase controller also weights Finisher, Clutch Player, Power
+Hitter, Power Surge, Death Specialist and Yorker Specialist by level, with the
+same strongest-first stack ordering. It previously counted traits regardless
+of level, making Lv.1 and Lv.5 equivalent in the target win probability.
+Matching batting and bowling investment still contributes equal opposite
+shifts to that target.
+
+### 5.5 Reproducing the balance audit
+
+Run `python -m tools.trait_balance --n 100 --levels 1 4 5 --output /tmp/traits.json`.
+The harness plays the real LetsPlay over loop, innings transition and chase
+controller on Flat, Even and Green surfaces. Every seed is played in both
+batting orders with equal card ratings, balanced approaches and a rotation of
+the five regular bowlers that reserves their quotas through the death. Team A carries
+the tested traits; team B is the neutral control. The four main profiles are
+no traits, five batting traits, five bowling traits and both loadouts. Focused
+rows review Anchor, Finisher, Wicket Hunter and Death Specialist separately.
+
+JSON output includes runs, wickets, ties, per-trait activation opportunities,
+wrong-role activations, and approximate 95% intervals across seed pairs for
+win shares and differences from the neutral controls. Noisy win percentages
+are evidence to collect more samples, not a reason to buff one entire role.
+Neutral controls are reused across levels; imports and audits restore logging,
+RNG state and patched services. The tool uses default configuration and disables
+commentary without writing the database or changing live match settings.
+
+See [the recorded audit](trait-balance-audit.md) for the tuning decisions and
+sample-size limits.
+
+### 5.6 Randomness
 
 Two traits are deliberately probabilistic:
 

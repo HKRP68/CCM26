@@ -27,7 +27,7 @@ from config import (
     trait_list_price, trait_rarity_key, trait_rarity_mult, trait_sell_value,
     trait_trade_fee,
 )
-from services.trait_engine import TRAIT_HANDLERS, apply_traits
+from services.trait_engine import TRAIT_HANDLERS, TRAIT_ROLES, apply_traits
 from services.trait_service import (
     TRAIT_CATEGORY_ORDER, TRAIT_DEFINITIONS, trait_meta, trait_price_of,
     trait_rarity_of,
@@ -126,17 +126,19 @@ class HandlerRobustnessTests(unittest.TestCase):
             raise ValueError("bad trait")
 
         TRAIT_HANDLERS["_test_boom"] = boom
+        TRAIT_ROLES["_test_boom"] = ("batter",)
         try:
             probs = {"6": 10.0, "4": 10.0, "W": 5.0, "dot": 30.0}
             activated = apply_traits(
                 probs,
                 [{"effect_key": "_test_boom", "level": 3, "display_name": "Boom"},
-                 {"effect_key": "bowl_wicket_hunter", "level": 3,
-                  "display_name": "Wicket Hunter"}],
+                 {"effect_key": "bat_power_hitter", "level": 3,
+                  "display_name": "Power Hitter"}],
                 [], {"over": 5, "total_overs": 20})
-            self.assertEqual(activated, ["Wicket Hunter Lv.3"])
+            self.assertEqual(activated, ["Power Hitter Lv.3"])
         finally:
             TRAIT_HANDLERS.pop("_test_boom")
+            TRAIT_ROLES.pop("_test_boom")
 
     def test_the_strongest_trait_takes_the_full_strength_stack_slot(self):
         """Stacking is level-ordered, not list-ordered.

@@ -959,8 +959,11 @@ def _trait_label(t):
 
 def _record_activated_traits(collector, activated, striker_traits, bowler_traits):
     """Classify the apply_traits 'Name Lv.X' strings into bat/bowl, with emoji."""
-    st = {_trait_label(t): t for t in (striker_traits or [])}
-    bw = {_trait_label(t): t for t in (bowler_traits or [])}
+    from services.trait_engine import trait_allowed
+    st = {_trait_label(t): t for t in (striker_traits or [])
+          if trait_allowed(t.get("effect_key"), "batter")}
+    bw = {_trait_label(t): t for t in (bowler_traits or [])
+          if trait_allowed(t.get("effect_key"), "bowler")}
     for label in activated:
         if label in st:
             t = st[label]
