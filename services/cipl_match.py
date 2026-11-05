@@ -919,12 +919,11 @@ def _apply_trait_weights(raw_weights, striker_traits, bowler_traits, ctx,
                          collector=None):
     """Nudge the engine's raw outcome weights by the active player traits.
 
-    services.trait_engine.apply_traits works on a ~0-100 percentage-point scale
-    (the scale of the legacy probability engine), so we rescale the engine's
-    normalised weights to sum to 100, let apply_traits add its deltas to the
-    Six / Four / Wicket / Dot buckets, then rescale back. The engine renormalises
-    afterwards. Capping / stacking / level logic is reused verbatim, so /letsplay
-    traits behave exactly like /cm and /wpm traits.
+    Rescale the engine's weights to the legacy probability engine's ~0-100
+    scale, apply the traits' relative changes, then rescale back. The engine
+    renormalises afterwards. Relative changes are scale-independent, and the
+    50/50 role shares, capping, stacking and level logic are reused verbatim,
+    so /letsplay traits behave exactly like /cm and /wpm traits.
 
     When ``collector`` (a ``{"bat": set, "bowl": set}`` dict) is supplied, the
     traits that actually fired this ball are recorded — tagged by role and

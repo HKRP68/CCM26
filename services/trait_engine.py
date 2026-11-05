@@ -2,9 +2,14 @@
 Called by probability_engine.calculate_outcome() before normalization.
 
 Every handler takes ``(ctx, x, role)`` and returns a list of ``(key, delta)``
-pairs, where ``x`` is the trait's level strength in percentage points and
+pairs, where ``x`` is the trait's level strength as a relative percentage and
 ``role`` is "batter" or "bowler" (the side the trait is equipped on). Returning
 an empty list means the trait did not fire on this ball.
+
+Batting and bowling each receive 50% of the trait influence. Their stacked
+relative changes are capped separately, combined, then applied once to each
+outcome's original weight. This keeps rare wickets from receiving outsized
+additive boosts and prevents applying one side first from deciding the duel.
 
 THE CONTRACT FOR ctx
 ────────────────────
@@ -39,7 +44,7 @@ import logging
 import random
 from config import (
     TRAIT_LEVEL_PCT, TRAIT_STACK_WEIGHTS, TRAIT_MAX_EFFECTIVE_PCT,
-    TRAIT_LEVEL_5_HIDDEN_BONUS_PCT,
+    TRAIT_LEVEL_5_HIDDEN_BONUS_PCT, TRAIT_ROLE_WEIGHTS,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,7 +58,8 @@ def _level_pct(level: int) -> float:
 
 
 def _apply_delta(probs: dict, key: str, delta: float):
-    probs[key] = max(0.0, probs.get(key, 0.0) + delta)
+    """Apply the combined relative change to this outcome's original weight."""
+    probs[key] = max(0.0, probs.get(key, 0.0) * (1.0 + delta / 100.0))
 
 
 def _num(ctx, key, default=0):
@@ -532,16 +538,23 @@ def apply_traits(probs, striker_traits, bowler_traits, ctx):
             for key, d in deltas:
                 all_deltas.append((key, d * weight, role, name, level))
 
-    # Cap positive sum per role
+    # Both boosts and reductions use the same budget. Previously only positive
+    # deltas were capped, so boundary suppression could bypass the limit.
     for role in ("batter", "bowler"):
-        pos_total = sum(max(0, d[1]) for d in all_deltas if d[2] == role)
-        if pos_total > TRAIT_MAX_EFFECTIVE_PCT:
-            scale = TRAIT_MAX_EFFECTIVE_PCT / pos_total
+        total = sum(abs(d[1]) for d in all_deltas if d[2] == role)
+        if total > TRAIT_MAX_EFFECTIVE_PCT:
+            scale = TRAIT_MAX_EFFECTIVE_PCT / total
             for i, (k, d, r, n, lv) in enumerate(all_deltas):
-                if r == role and d > 0:
+                if r == role:
                     all_deltas[i] = (k, d * scale, r, n, lv)
 
-    for key, delta, _, _, _ in all_deltas:
+    # Combine the two equal shares before touching probabilities. Clamping a
+    # batter's wicket reduction to zero before adding the bowler's increase
+    # used to favour bowling even when the opposing changes were equal.
+    combined = {}
+    for key, delta, role, _, _ in all_deltas:
+        combined[key] = combined.get(key, 0.0) + delta * TRAIT_ROLE_WEIGHTS[role]
+    for key, delta in combined.items():
         _apply_delta(probs, key, delta)
 
     return activated

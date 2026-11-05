@@ -190,7 +190,7 @@ ever shows five slots, and nobody can plan for a trait they have never seen.
 
 `services/trait_engine.py` maps each `effect_key` to a handler taking
 `(ctx, x, role)` and returning `(probability_key, delta)` pairs. `x` is the
-level's strength in percentage points; `role` is which side the trait sits on.
+level's strength as a relative percentage; `role` is which side the trait sits on.
 
 ### 5.1 The context contract
 
@@ -223,7 +223,25 @@ squad therefore depended on the order their rows came back. Traits are now
 sorted by level descending first, so the Lv.5 trait always takes the
 full-strength slot.
 
-### 5.3 Randomness
+### 5.3 Equal batting and bowling influence
+
+Batting and bowling each have a **50% share** of trait influence on a delivery
+(`TRAIT_ROLE_WEIGHTS`). If one side has no active traits, its share stays neutral.
+Levels and conditions still determine which traits fire and how strong they are.
+
+Handler deltas are relative changes to the existing outcome weights. For example,
+a Lv.1 Wicket Hunter changes a wicket weight of 4 to 4.1 before normalization:
+5% strength × 50% bowling share = a 2.5% relative boost. It previously added five
+percentage points outright, which more than doubled that wicket weight.
+
+Stacking still uses the strongest-first diminishing returns. Each side's total
+absolute deltas, including both increases and decreases, are capped at 25%
+before its half share is applied. The two sides' changes are combined before
+any probability is updated, so equal opposing effects cancel without a bias
+from applying batting first. This balances trait influence; match results still
+depend on ratings, conditions, tactics and which traits are active.
+
+### 5.4 Randomness
 
 Two traits are deliberately probabilistic:
 

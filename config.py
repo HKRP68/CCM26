@@ -530,7 +530,10 @@ TRAIT_DEFINITIONS = [
      "description": "Gets stronger as the innings progresses"},
 ]
 
-# Level → base effect percentage (additive building block for engine)
+# Level → relative change to an outcome's existing weight, before stacking
+# and the equal batting/bowling shares below. These are not percentage points
+# added to probabilities: +5 points on a 4% wicket chance would more than
+# double it, while the same boost to a common batting outcome is much smaller.
 TRAIT_LEVEL_EFFECT = {
     1: 0.05,   # 5%
     2: 0.10,   # 10%
@@ -546,8 +549,13 @@ TRAIT_MAX_BONUS = 0.02   # extra 2% at L5
 # (sorted by level desc, then applied: slot 0 × 1.0, slot 1 × 0.7, slot 2 × 0.5)
 TRAIT_STACK_WEIGHTS = [1.0, 0.7, 0.5]
 
-# Hard cap on combined effective boost per side of the ball
-# (prevents 3 high-level traits from snowballing)
+# Each side owns half of the trait influence on a delivery. An absent or
+# inactive opponent keeps its share neutral; it is not given to the other side.
+TRAIT_ROLE_WEIGHTS = {"batter": 0.5, "bowler": 0.5}
+
+# Hard cap on the combined absolute relative changes per side, including
+# reductions as well as boosts (prevents high-level stacks bypassing the cap).
+# The role's 50% share is applied after this cap.
 TRAIT_BOOST_CAP = 0.25   # 25%
 
 # Max traits per player
