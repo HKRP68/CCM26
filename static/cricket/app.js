@@ -2700,6 +2700,44 @@ async function continuePastInningsBreak() {
 }
 
 // 5. Render Final Result Overlay modal
+function renderPostMatchCoaching(coaching) {
+  const section = document.getElementById('result-coaching');
+  if (!section) return;
+  section.replaceChildren();
+  const turns = Array.isArray(coaching?.turning_points) ? coaching.turning_points.slice(0, 2) : [];
+  const tips = Array.isArray(coaching?.tips) ? coaching.tips.slice(0, 2) : [];
+  section.classList.toggle('hidden', !turns.length && !tips.length);
+  if (!turns.length && !tips.length) return;
+  const title = document.createElement('h3');
+  title.textContent = '🧠 Post-match coaching';
+  section.appendChild(title);
+  if (turns.length) {
+    const label = document.createElement('h4');
+    label.textContent = 'Turning points';
+    section.appendChild(label);
+    const list = document.createElement('ol');
+    turns.forEach(point => {
+      const item = document.createElement('li');
+      item.textContent = point.text || '';
+      list.appendChild(item);
+    });
+    section.appendChild(list);
+  }
+  if (tips.length) {
+    const label = document.createElement('h4');
+    label.textContent = 'Next match';
+    section.appendChild(label);
+    tips.forEach(tip => {
+      const paragraph = document.createElement('p');
+      const team = document.createElement('strong');
+      team.textContent = `${tip.team || 'Your team'}: `;
+      paragraph.appendChild(team);
+      paragraph.appendChild(document.createTextNode(tip.text || ''));
+      section.appendChild(paragraph);
+    });
+  }
+}
+
 function renderResultScreen() {
   const overlay = document.getElementById('result-overlay');
   overlay.classList.remove('hidden');
@@ -2709,6 +2747,7 @@ function renderResultScreen() {
   document.getElementById('tab-result')?.classList.add('active');
 
   const result = matchState.result;
+  renderPostMatchCoaching(result?.coaching);
 
   if (result && result.winner) {
     const winnerDisplayName = result.winner.teamName || result.winner.username || 'WINNER';

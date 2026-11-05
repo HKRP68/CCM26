@@ -5630,6 +5630,9 @@ async def _send_match_analysis(context, mid, state, result, keyboard_rows=None):
     already been paid out must never be held up by its own paperwork.
     """
     from services.match_analysis import analysis_filename, build_match_analysis_html
+    from services.match_coaching import send_post_match_coaching
+
+    await send_post_match_coaching(context.bot, state["chat_id"], state)
 
     filename = analysis_filename(mid)
     result = result or {}

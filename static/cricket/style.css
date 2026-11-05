@@ -1759,6 +1759,20 @@ body {
 }
 
 /* Spotlight cards (MOTM / Impact Players) */
+.result-coaching {
+  margin: 18px 0;
+  padding: 16px;
+  background: var(--card-bg-alt);
+  border: 1px solid var(--card-border-bright);
+  border-radius: 12px;
+  text-align: left;
+  line-height: 1.5;
+}
+.result-coaching h3 { font-size: 1rem; margin: 0 0 12px; }
+.result-coaching h4 { font-size: 0.85rem; margin: 12px 0 6px; }
+.result-coaching p, .result-coaching li { font-size: 0.85rem; margin: 6px 0; }
+.result-coaching ol { padding-left: 20px; margin: 0; }
+
 .motm-spotlight {
   text-align: left;
   background: var(--card-bg-alt);

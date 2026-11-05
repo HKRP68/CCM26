@@ -49,9 +49,6 @@ _DEATH_FRACTION = 0.20
 # above does not reproduce the engine, which reads it from the format spec.
 _HUNDRED_POWERPLAY = 5
 
-# Momentum points → win-probability points, for ranking turning points together.
-_MOMENTUM_WEIGHT = 10.0
-
 
 def analysis_filename(match_id):
     """The report's filename, shared by the chat send and the channel archive."""
@@ -646,49 +643,6 @@ def _approach_section(views):
     return "".join(out) or "<p class='note'>No approach data recorded.</p>"
 
 
-def _turning_points(views, chase_history):
-    """The three overs that moved the match most.
-
-    Two different measures have to be ranked against each other: win probability,
-    which spans 0-100, and momentum, which spans -2 to +2. Momentum is scaled by
-    ``_MOMENTUM_WEIGHT`` to put them on one axis — a total momentum collapse, the
-    largest swing the accumulator can produce, is worth about as much as a 40-point
-    move in the chase. Deliberately less than a full swing in win probability,
-    because momentum describes how an over *felt* and win probability describes
-    what it *cost*.
-
-    Momentum is read from the **first innings only**. In the second there is a
-    target, so win probability measures the same swings in the unit that matters,
-    and counting both would let one over enter the ranking twice. The cost of
-    that choice: a match with no ``chase_history`` — one abandoned before the
-    chase, or replayed from a state written before the chase was tracked — gets
-    turning points from the first innings alone.
-    """
-    events = []
-    prev = None
-    for entry in chase_history or []:
-        chance = _num(entry.get("chasing"))
-        if prev is not None:
-            events.append((abs(chance - prev), entry.get("over"), 2,
-                           f"win probability {prev}% → {chance}%"))
-        prev = chance
-    for v in views:
-        if v["number"] != 1:
-            continue
-        series = v["momentum"]
-        for idx in range(1, len(series)):
-            swing = series[idx] - series[idx - 1]
-            events.append((abs(swing) * _MOMENTUM_WEIGHT, idx + 1, 1,
-                           f"momentum {series[idx - 1]:+.1f} → {series[idx]:+.1f}"))
-    if not events:
-        return ""
-    events.sort(key=lambda e: -e[0])
-    items = "".join(
-        f"<li><b>Innings {inn}, over {_e(over)}</b> — {_e(text)}</li>"
-        for _weight, over, inn, text in events[:3])
-    return f"<ol class='turns'>{items}</ol>"
-
-
 def _pitch_section(state, pitch):
     """How the surface changed for the chase — the pitch's own note, plus the
     trace of which innings-2 rules were live and from which over."""
@@ -780,7 +734,10 @@ def build_match_analysis_html(state, result=None, scorecard=None, potm=None):
     chase_history = state.get("chase_history") or []
 
     legend = _legend([(v["team"], f"s{v['number']}") for v in views])
-    sections = [
+    from services.match_coaching import build_post_match_coaching, render_coaching_html
+    coaching = render_coaching_html(build_post_match_coaching(state))
+    sections = [("Post-match coaching", coaching)] if coaching else []
+    sections += [
         ("Phase by phase", _phase_table(views, overs_total, pitch)),
         ("Runs per over", _manhattan_svg(series_bars) + legend),
         ("The worm", _worm_svg(series_bars, overs_total) + legend),
@@ -810,10 +767,6 @@ def build_match_analysis_html(state, result=None, scorecard=None, potm=None):
                       0, 100, overs_total, zero_line=False,
                       label="The chasing side's win probability, over by over")
             + "<p class='note'>The chasing side's live chance, over by over.</p>"))
-
-    turns = _turning_points(views, chase_history)
-    if turns:
-        sections.append(("Turning points", turns))
 
     sections.append(("Partnerships &amp; wickets", _partnership_section(views)))
     sections.append(("The approach duel", _approach_section(views)))

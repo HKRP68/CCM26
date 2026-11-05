@@ -7010,6 +7010,9 @@ async def _end_innings(ctx, mid):
         summary_msg = f"<blockquote expandable>{msg}</blockquote>"
         sent = await ctx.bot.send_message(cid, summary_msg, parse_mode="HTML")
 
+        from services.match_coaching import send_post_match_coaching
+        await send_post_match_coaching(ctx.bot, cid, s)
+
         # Ranked / rivalry card (no-op when there is nothing).
         if not s.get("is_spectator"):
             from services.post_match import announce as _announce_post_match

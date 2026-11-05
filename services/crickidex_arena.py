@@ -1197,7 +1197,11 @@ def _build_result(session, state, match, tg_of, host, guest):
             "impactPoints": persisted_motm.get("impact_points", best_score),
         }
 
+    from services.match_coaching import build_post_match_coaching
+    coaching = build_post_match_coaching(state)
+
     return {
+        "coaching": coaching,
         "winner": ({"telegramId": win_block.get("telegramId"),
                     "username": win_block.get("username"),
                     "teamName": win_block.get("teamName")} if win_block else None),
