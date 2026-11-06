@@ -3427,9 +3427,12 @@ def user_ban(user_id):
             flash("User not found", "error")
             return redirect(url_for("users_list"))
         action = request.form.get("action", "ban")
+        from services.warning_service import lock_user
+        lock_user(db, user)
         if action == "ban":
             reason = (request.form.get("reason", "") or "").strip()[:500]
             user.is_banned = True
+            user.warning_ban = False
             user.ban_reason = reason or None
             user.banned_at = datetime.utcnow()
             log_admin(db, "user_ban", target_type="user", target_id=user.id,
@@ -3439,6 +3442,7 @@ def user_ban(user_id):
             flash(f"🚫 Banned {user.username or user.first_name}", "info")
         elif action == "unban":
             user.is_banned = False
+            user.warning_ban = False
             user.ban_reason = None
             user.banned_at = None
             log_admin(db, "user_unban", target_type="user", target_id=user.id,

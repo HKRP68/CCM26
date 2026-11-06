@@ -134,6 +134,8 @@ class User(Base):
     is_banned = Column(Boolean, default=False, nullable=False)
     ban_reason = Column(String(500), nullable=True)
     banned_at = Column(DateTime, nullable=True)
+    # Only warning-owned bans may be lifted by /cmuunwarn.
+    warning_ban = Column(Boolean, default=False, nullable=False)
     # Admin-selected tournament participation restriction. Keep squad and
     # economy access; only official tournament gameplay remains available.
     tournament_only = Column(Boolean, default=False, nullable=False)
@@ -151,6 +153,30 @@ class User(Base):
 
     roster = relationship("UserRoster", back_populates="user", cascade="all, delete-orphan")
     stats = relationship("UserStats", back_populates="user", uselist=False, cascade="all, delete-orphan")
+
+
+class UserWarning(Base):
+    """Persistent warnings; revocation preserves the original moderation record."""
+    __tablename__ = "user_warnings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    reason = Column(String(500), nullable=False)
+    issued_by = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    issued_chat_id = Column(BigInteger, nullable=True)
+    issued_message_id = Column(BigInteger, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    revoked_by = Column(BigInteger, nullable=True)
+    revoke_reason = Column(String(500), nullable=True)
+    revoked_chat_id = Column(BigInteger, nullable=True)
+    revoked_message_id = Column(BigInteger, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("issued_chat_id", "issued_message_id", name="uq_warning_issue_message"),
+        UniqueConstraint("revoked_chat_id", "revoked_message_id", name="uq_warning_revoke_message"),
+        Index("ix_user_warnings_active", "user_id", "revoked_at"),
+    )
 
 
 class Player(Base):

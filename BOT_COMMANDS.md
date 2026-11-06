@@ -783,6 +783,9 @@ Available in the dedicated Franchise Auction bot; website features are retained.
 
 | Usage | What it does |
 |-------|--------------|
+| `/cmuwarn @user [reason]` | Bot admins/owners: issue a persistent account warning. Five active warnings automatically ban the player from CricMaster Ultra |
+| `/cmuunwarn @user [reason]` | Remove the latest active warning. Drops below five lift warning-triggered bans; manual bans remain |
+| `/cmuwarns @user [page]` | Inspect active warning count, ban status, and paginated warning/removal history. All three commands accept a Telegram user ID or a reply instead of @user. [Details](docs/warnings.md) |
 | `/logoqueue` | Review team logos waiting for approval |
 | `/newsqueue` | Review player-submitted CMU News stories waiting for approval |
 | `/logounhold <telegram id>` | Let a held user send a team logo again |

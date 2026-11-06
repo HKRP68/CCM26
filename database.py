@@ -186,7 +186,7 @@ class Base(DeclarativeBase):
 
 def init_db():
     from models import (  # noqa: F401
-        User, Player, UserRoster, UserStats, Trade, ActivityLog,
+        User, UserWarning, Player, UserRoster, UserStats, Trade, ActivityLog,
         PlayerGameStats, Match, AdminLog,
         Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily,
         PlayerMarket, BotTeam, BotTeamPlayer,
@@ -625,6 +625,7 @@ def _migrate_add_columns():
         "is_banned": "BOOLEAN DEFAULT FALSE",
         "ban_reason": "VARCHAR(500)",
         "banned_at": "TIMESTAMP",
+        "warning_ban": "BOOLEAN DEFAULT FALSE NOT NULL",
         "tournament_only": "BOOLEAN DEFAULT FALSE NOT NULL",
         "tournament_only_reason": "VARCHAR(500)",
         "tournament_only_at": "TIMESTAMP",

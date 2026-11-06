@@ -115,6 +115,7 @@ from handlers.giveaway import giveaway_join_callback, giveaway_command
 from handlers.cmushop import cmushop_handler, cmushop_callback
 from handlers.cmucareer import cmucareer_handler, cmucareer_callback
 from handlers.undo import cmuundo_handler
+from handlers.warnings import cmuwarn_handler, cmuunwarn_handler, cmuwarns_handler
 from handlers.app import app_handler
 from handlers.ipl16 import ipl160_handler
 
@@ -412,6 +413,9 @@ DM_ONLY_MENU_COMMANDS = frozenset(DM_ONLY_COMMANDS)
 # config.ADMIN_IDS, so they are usable from the slash menu by the people who
 # own them without ever appearing in a player's list.
 ADMIN_MENU_COMMANDS = (
+    ("cmuwarn", "Admin: warn a player; 5 warnings trigger a ban"),
+    ("cmuunwarn", "Admin: remove a player's latest active warning"),
+    ("cmuwarns", "Admin: view warning counts and moderation history"),
     ("logoqueue", "Admin: review team logos waiting for approval"),
     ("newsqueue", "Admin: review CMU News stories waiting for approval"),
     ("logounhold", "Admin: let a held user send a team logo again"),
@@ -1336,7 +1340,7 @@ def main():
         # Cache ban lookups briefly so every button tap/command does not pay a
         # synchronous database round trip before the real handler can run.
         ban_cache_ttl = float(os.getenv("BAN_CACHE_TTL_SECONDS", "60"))
-        ban_cache = {}
+        ban_cache = app.bot_data.setdefault("_ban_cache", {})
 
         async def _ban_check(update, context):
             if _is_storage_only_command(update):
@@ -1377,8 +1381,9 @@ def main():
 
             if is_banned:
                 try:
+                    from html import escape
                     txt = ("🚫 <b>You are banned from CricMaster Ultra.</b>\n"
-                           + (f"\n<i>Reason: {reason}</i>" if reason else ""))
+                           + (f"\n<i>Reason: {escape(reason)}</i>" if reason else ""))
                     if update.callback_query:
                         await update.callback_query.answer(
                             "You are banned.", show_alert=True)
@@ -1810,6 +1815,11 @@ def main():
         # ── Owner-only subscription grant (hidden from menu) ─────────
         app.add_handler(CommandHandler("grant", grant_handler))
         app.add_handler(CommandHandler("givepack", givepack_handler))
+
+        # Account moderation: five active warnings trigger the existing ban guard.
+        app.add_handler(CommandHandler("cmuwarn", cmuwarn_handler))
+        app.add_handler(CommandHandler("cmuunwarn", cmuunwarn_handler))
+        app.add_handler(CommandHandler("cmuwarns", cmuwarns_handler))
 
         # ── CMU Shop image gallery ───────────────────────────────────
         # PTB requires lowercase command names and lowercases incoming ones
