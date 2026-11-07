@@ -694,11 +694,21 @@ function startSetupTransitionWatcher() {
 }
 
 // API Call - GET state
+function matchFetch(url, options = {}) {
+  const initData = window.Telegram?.WebApp?.initData || '';
+  const devId = new URLSearchParams(window.location.search).get('dev');
+  const authorization = initData ? `tma ${initData}` : (devId ? `tma DEV_${devId}` : '');
+  return fetch(url, {
+    ...options,
+    headers: { ...options.headers, Authorization: authorization },
+  });
+}
+
 async function fetchWithTimeout(url, options = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), POLL_REQUEST_TIMEOUT_MS);
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    return await matchFetch(url, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(timeoutId);
   }
@@ -1064,7 +1074,7 @@ async function submitSetup() {
   document.getElementById('submit-setup-btn').disabled = true;
 
   try {
-    const res = await fetch('/api/match/select-players', {
+    const res = await matchFetch('/api/match/select-players', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -1647,7 +1657,7 @@ async function submitImpactPlayer() {
   const btn = document.getElementById('confirm-impact-player-btn');
   try {
     if (btn) btn.disabled = true;
-    const res = await fetch('/api/match/impact-player', {
+    const res = await matchFetch('/api/match/impact-player', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1818,7 +1828,7 @@ async function submitShot(shot) {
   minimizeControlsSheet();
   showFlowStage('🏏 Shot played', `${shot} selected`, 'evt-runs');
   try {
-    const res = await fetch('/api/match/action', {
+    const res = await matchFetch('/api/match/action', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, matchId, type: 'shot', action: {
@@ -1918,7 +1928,7 @@ async function submitDelivery() {
   showFlowStage('🎳 Bowler delivers', `${selectedDelivery} at ${selectedSpeed} pace`, 'evt-runs');
 
   try {
-    const res = await fetch('/api/match/action', {
+    const res = await matchFetch('/api/match/action', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -2022,7 +2032,7 @@ function renderWicketBatsmanSelectionSheet() {
 
 async function selectNextBatsman(index) {
   try {
-    const res = await fetch('/api/match/action', {
+    const res = await matchFetch('/api/match/action', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -2131,7 +2141,7 @@ function renderOverBowlerSelectionSheet() {
 
 async function selectNextBowler(index) {
   try {
-    const res = await fetch('/api/match/action', {
+    const res = await matchFetch('/api/match/action', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -2682,7 +2692,7 @@ async function continuePastInningsBreak() {
   const btn = document.getElementById('ib-continue-btn');
   if (btn) btn.disabled = true;
   try {
-    const res = await fetch('/api/match/innings-break/continue', {
+    const res = await matchFetch('/api/match/innings-break/continue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, matchId })
@@ -2949,7 +2959,7 @@ function stopTournamentOnlyAutoplay(data) {
 async function postAutoplayStatus(active) {
   if (!matchId || !userId || userId === 'spectator') return;
   try {
-    const resp = await fetch('/api/match/autoplay-status', {
+    const resp = await matchFetch('/api/match/autoplay-status', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, matchId, active: !!active }),
@@ -3038,7 +3048,7 @@ async function runAutoplayAction() {
 
   autoplayInFlight = true;
   try {
-    const resp = await fetch('/api/match/autoplay', {
+    const resp = await matchFetch('/api/match/autoplay', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, matchId }),

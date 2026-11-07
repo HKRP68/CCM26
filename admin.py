@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger("admin")
 from functools import wraps
-from flask import (Flask, abort, render_template, request, redirect, url_for, flash,
+from flask import (Flask, abort, g, render_template, request, redirect, url_for, flash,
                    session, Response, send_file, jsonify, has_request_context)
 from sqlalchemy import func, and_, or_, desc, asc, case, cast, String
 from dotenv import load_dotenv
@@ -4331,6 +4331,29 @@ def _init_data_telegram_id():
 
 
 @app.before_request
+def _block_banned_miniapp_user():
+    """Check every signed Mini App request, including live-match aliases."""
+    from services.maintenance_service import is_miniapp_path
+    match_api = request.path == "/api/match" or request.path.startswith("/api/match/")
+    if not (is_miniapp_path(request.path)
+            or match_api
+            or request.path.startswith("/webapp")):
+        return None
+    telegram_id = _init_data_telegram_id()
+    if telegram_id is None:
+        if match_api:
+            return {"ok": False, "error": "bad_init_data",
+                    "message": "Open the match from Telegram to continue."}, 401
+        return None  # Endpoints still enforce their normal authentication.
+    if match_api:
+        g.match_telegram_id = telegram_id
+    from services.ban_guard import banned_error
+    with get_session() as db:
+        user = db.query(User.is_banned).filter(User.telegram_id == telegram_id).first()
+        return banned_error(user)
+
+
+@app.before_request
 def _block_miniapp_during_maintenance():
     """Lock the Mini App while maintenance mode is on.
 
@@ -4474,6 +4497,11 @@ def _webapp_auth(allow_not_debuted=False):
 
     db = get_session()
     user = db.query(User).filter(User.telegram_id == tg_id).first()
+    from services.ban_guard import banned_error
+    blocked = banned_error(user)
+    if blocked:
+        db.close()
+        return None, tg_id, blocked
     if user is not None and getattr(user, "needs_debut", False):
         user = None  # reset by an admin: must /debut again before playing
     if not user and not allow_not_debuted:
@@ -9064,17 +9092,26 @@ def webapp_match_state():
 # `matchId`/`match_id`, otherwise the latest playing match for that user is used.
 def _match_rest_user_and_match(db, user_id, match_id=None):
     from models import User, Match
-    try:
-        uid = int(user_id or 0)
-    except (TypeError, ValueError):
-        return None, None, ({"ok": False, "error": "bad_user_id"}, 400)
-    user = db.get(User, uid)
-    if not user:
-        # The Crickidex Arena frontend sends the raw Telegram id as userId;
-        # fall back to a telegram_id lookup so those links resolve too.
-        user = db.query(User).filter(User.telegram_id == uid).first()
+    verified_id = g.get("match_telegram_id") if has_request_context() else None
+    if verified_id is not None:
+        # HTTP callers act as the signed sender, regardless of userId in JSON.
+        user = db.query(User).filter(User.telegram_id == verified_id).first()
+    else:
+        # Internal callers may resolve an account directly; HTTP requests must
+        # first pass the signed-identity before-request guard above.
+        try:
+            uid = int(user_id or 0)
+        except (TypeError, ValueError):
+            return None, None, ({"ok": False, "error": "bad_user_id"}, 400)
+        user = db.get(User, uid)
+        if not user:
+            user = db.query(User).filter(User.telegram_id == uid).first()
     if not user:
         return None, None, ({"ok": False, "error": "no_user"}, 404)
+    from services.ban_guard import banned_error
+    blocked = banned_error(user)
+    if blocked:
+        return None, None, blocked
     if match_id:
         try:
             mid = int(match_id)
@@ -10055,7 +10092,11 @@ def match_rest_poll():
         mid = request.args.get("matchId") or request.args.get("match_id")
         if not uid and not mid:
             return {"error": "userId or matchId is required"}, 400
-        viewer = resolve_viewer(db, uid)
+        viewer = resolve_viewer(db, g.match_telegram_id)
+        from services.ban_guard import banned_error
+        blocked = banned_error(viewer)
+        if blocked:
+            return blocked
         match = find_active_match(db, viewer, mid)
         if not match:
             return {"error": "No active match found."}, 404

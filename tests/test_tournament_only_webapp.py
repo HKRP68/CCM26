@@ -159,12 +159,14 @@ class TournamentOnlyWebappTests(unittest.TestCase):
 
     def test_restricted_autoplay_cannot_be_enabled_but_can_be_disabled(self):
         payload = {"userId": self.me.id, "matchId": self.casual.id, "active": True}
-        self.assertBlocked(self.client.post("/api/match/autoplay-status", json=payload))
+        self.assertBlocked(self.client.post("/api/match/autoplay-status", json=payload,
+                                           headers=self.headers))
         payload["active"] = "false"
         with patch("services.match_webapp_access.save_autoplay_users",
                    return_value={"match_id": self.casual.id}) as save:
             with patch("services.crickidex_arena.serialize_match_state", return_value={}):
-                response = self.client.post("/api/match/autoplay-status", json=payload)
+                response = self.client.post("/api/match/autoplay-status", json=payload,
+                                            headers=self.headers)
         self.assertEqual(response.status_code, 200, response.get_json())
         self.assertFalse(save.call_args.args[2])
 

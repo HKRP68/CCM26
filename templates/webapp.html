@@ -3411,6 +3411,10 @@ async function api(path, body, timeoutMs = 25000) {
     if (resp.status === 503 && data && data.error === 'maintenance') {
       showMaintenanceScreen(data);
     }
+    // A ban locks every screen, including an app session already open.
+    if (resp.status === 403 && data && data.error === 'banned') {
+      showLockScreen('🚫', maintenanceHtml(data.message) || 'This account is suspended.', '');
+    }
     // Rookie mode: the Mini App is members-only. Same treatment as
     // maintenance — one lock screen instead of every caller toasting its own
     // error — but it is a paywall, so it says so and offers no retry loop.

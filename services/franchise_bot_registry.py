@@ -148,6 +148,9 @@ def register_auction_handlers(app, *, include_solo_league=False):
     from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, TypeHandler, filters
     from services.button_access import button_access_guard, install_button_access_defaults
 
+    from services.ban_guard import check_ban
+
+    app.add_handler(TypeHandler(Update, check_ban), group=-90)
     install_button_access_defaults()
     app.add_handler(TypeHandler(Update, button_access_guard), group=-60)
     app.add_handler(TypeHandler(Update, bind_update_owner), group=-50)

@@ -1225,8 +1225,8 @@ def main():
         # FIRST matching handler per group, so each one needs a group of its
         # own; the numbers are spaced by ten purely to leave room to insert a
         # new gate between two existing ones later without renumbering.
-        # Order: button owner → reply context → chat tracker → maintenance →
-        # ban → Rookie membership gate → handlers.
+        # Order: ban → auction handoff → button owner → reply context →
+        # chat tracker → maintenance → Rookie membership gate → handlers.
 
         # ── Reply-context middleware (group=-50, runs before outbound replies) ──
         # Refreshing the sender's stored username/name is a *blocking* DB round
@@ -1336,62 +1336,10 @@ def main():
                 logger.exception("Maintenance check failed (non-fatal)")
         app.add_handler(TypeHandler(_TGUpdate, _maintenance_check), group=-30)
 
-        # ── Ban-guard middleware (group=-20) ──
-        # Cache ban lookups briefly so every button tap/command does not pay a
-        # synchronous database round trip before the real handler can run.
-        ban_cache_ttl = float(os.getenv("BAN_CACHE_TTL_SECONDS", "60"))
-        ban_cache = app.bot_data.setdefault("_ban_cache", {})
-
+        # ── Ban guard (group=-90, before every replying/mutating handler) ──
         async def _ban_check(update, context):
-            if _is_storage_only_command(update):
-                return
-            user = update.effective_user
-            if not user:
-                return
-            now = time.monotonic()
-            cached = ban_cache.get(user.id)
-            if cached and now - cached[0] < ban_cache_ttl:
-                is_banned, reason, needs_debut = cached[1], cached[2], cached[3]
-            else:
-                # Cold cache: the ban lookup is a blocking DB query. Offload it
-                # to a worker thread so it doesn't stall the loop before the real
-                # handler (or button acknowledgement) can run.
-                def _query_ban():
-                    from database import get_session as _gs
-                    from models import User as _User
-                    s = _gs()
-                    try:
-                        u = (s.query(_User)
-                             .filter(_User.telegram_id == user.id)
-                             .first())
-                        if u and u.is_banned:
-                            return True, (u.ban_reason or "").strip(), False
-                        return False, "", bool(u and getattr(u, "needs_debut", False))
-                    finally:
-                        s.close()
-                try:
-                    is_banned, reason, needs_debut = await asyncio.to_thread(_query_ban)
-                    # A reset account is re-read every time, so the /debut that
-                    # clears the flag unlocks the bot on the very next command.
-                    if not needs_debut:
-                        ban_cache[user.id] = (now, is_banned, reason, False)
-                except Exception:
-                    logger.exception("Ban-check middleware failed (non-fatal)")
-                    return
-
-            if is_banned:
-                try:
-                    from html import escape
-                    txt = ("🚫 <b>You are banned from CricMaster Ultra.</b>\n"
-                           + (f"\n<i>Reason: {escape(reason)}</i>" if reason else ""))
-                    if update.callback_query:
-                        await update.callback_query.answer(
-                            "You are banned.", show_alert=True)
-                    elif update.message:
-                        await update.message.reply_text(txt, parse_mode="HTML")
-                except Exception:
-                    pass
-                raise ApplicationHandlerStop
+            from services.ban_guard import check_ban
+            needs_debut = await check_ban(update, context)
 
             # Admin "Reset user": everything but the doorway commands points
             # the player back to /debut (services/user_reset_service.py).
@@ -1410,7 +1358,7 @@ def main():
                 except Exception:
                     pass
                 raise ApplicationHandlerStop
-        app.add_handler(TypeHandler(_TGUpdate, _ban_check), group=-20)
+        app.add_handler(TypeHandler(_TGUpdate, _ban_check), group=-90)
 
         # Gameplay-only gate, after bans and before membership/command routing.
         # Shared tournament/casual buttons are classified from server state.

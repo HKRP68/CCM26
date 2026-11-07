@@ -363,7 +363,8 @@ def test_real_ban_middleware_blocks_after_fifth_and_allows_after_removal(db, mon
     context = NS(args=[str(PLAYER), "Bad <behavior>&"], bot=None, bot_data={"_ban_cache": cache})
     asyncio.run(commands.cmuwarn_handler(update, context))
     assert PLAYER not in cache
-    blocked = NS(effective_user=NS(id=PLAYER), message=NS(reply_text=AsyncMock()), callback_query=None)
+    blocked = NS(effective_user=NS(id=PLAYER),
+                 message=NS(text="/claim", reply_text=AsyncMock()), callback_query=None)
     with pytest.raises(ApplicationHandlerStop):
         asyncio.run(namespace["_ban_check"](blocked, context))
     assert "Bad &lt;behavior&gt;&amp;" in blocked.message.reply_text.await_args.args[0]
@@ -371,7 +372,7 @@ def test_real_ban_middleware_blocks_after_fifth_and_allows_after_removal(db, mon
                   callback_query=NS(answer=AsyncMock()))
     with pytest.raises(ApplicationHandlerStop):
         asyncio.run(namespace["_ban_check"](callback, context))
-    callback.callback_query.answer.assert_awaited_once_with("You are banned.", show_alert=True)
+    callback.callback_query.answer.assert_not_awaited()
     message.message_id = 6
     asyncio.run(commands.cmuunwarn_handler(update, context))
     assert PLAYER not in cache
