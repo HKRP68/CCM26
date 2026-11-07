@@ -2584,6 +2584,8 @@ def users_list():
         query = query.order_by(sort_map.get(sort, User.created_at.desc()))
 
         total = query.count()
+        bulk_recipient_count = query.filter(
+            (User.is_banned == False) | (User.is_banned.is_(None))).count()
         total_pages = max(1, (total + per_page - 1) // per_page)
         page = min(page, total_pages)
 
@@ -2624,7 +2626,11 @@ def users_list():
         if joined_before: active_filters.append(("Joined before", joined_before, "joined_before"))
         if activity: active_filters.append(("Activity", activity, "activity"))
 
+        from models import Pack
+        bulk_packs = db.query(Pack).order_by(Pack.slot_number.asc(), Pack.id.asc()).all()
         return render_template("users.html", users=users, total=total, page=page,
+                               bulk_recipient_count=bulk_recipient_count,
+                               bulk_packs=bulk_packs,
                                total_pages=total_pages, per_page=per_page,
                                q=q, sort=sort, active_filters=active_filters,
                                filters={
@@ -3566,6 +3572,7 @@ def users_bulk_action():
       - grant_coins (amount=int)
       - grant_gems (amount=int)
       - grant_quest_points (amount=int)
+      - grant_pack (pack_id=int; one unopened pack per user)
 
     Caps absurd amounts and excludes banned users. Up to 5,000 users per call.
     """
@@ -3577,7 +3584,7 @@ def users_bulk_action():
         if request.form.get(k, "").strip()
     }
     action = (request.form.get("action") or "").strip()
-    if action not in ("grant_coins", "grant_gems", "grant_quest_points"):
+    if action not in ("grant_coins", "grant_gems", "grant_quest_points", "grant_pack"):
         flash("Unknown bulk action.", "error")
         return redirect(url_for("users_list", **filter_args))
 
@@ -3588,24 +3595,35 @@ def users_bulk_action():
               "error")
         return redirect(url_for("users_list", **filter_args))
 
-    try:
-        amount = int(request.form.get("amount", "0"))
-    except (ValueError, TypeError):
-        flash("Amount must be a number.", "error")
-        return redirect(url_for("users_list"))
-    if amount == 0:
-        flash("Amount cannot be zero.", "error")
-        return redirect(url_for("users_list"))
+    amount = 1  # Bulk packs always give exactly one per recipient.
+    if action != "grant_pack":
+        try:
+            amount = int(request.form.get("amount", "0"))
+        except (ValueError, TypeError):
+            flash("Amount must be a whole number.", "error")
+            return redirect(url_for("users_list", **filter_args))
+        if amount == 0:
+            flash("Amount cannot be zero.", "error")
+            return redirect(url_for("users_list", **filter_args))
 
-    cap = {"grant_coins": 5_000_000, "grant_gems": 5_000,
-           "grant_quest_points": 50_000}[action]
-    if abs(amount) > cap:
-        flash(f"Amount too large (max ±{cap:,}).", "error")
-        return redirect(url_for("users_list"))
+        cap = {"grant_coins": 5_000_000, "grant_gems": 5_000,
+               "grant_quest_points": 50_000}[action]
+        if abs(amount) > cap:
+            flash(f"Amount too large (max ±{cap:,}).", "error")
+            return redirect(url_for("users_list", **filter_args))
 
     db = get_session()
     try:
         from services.activity_service import log_activity as _log_act
+        pack = None
+        if action == "grant_pack":
+            from models import Pack
+            from services.pack_service import grant_pack
+            pack_id = _parse_int(request.form.get("pack_id", ""))
+            pack = db.get(Pack, pack_id) if pack_id else None
+            if pack is None:
+                flash("Pick a valid pack to give. Nothing was changed.", "error")
+                return redirect(url_for("users_list", **filter_args))
 
         # Rebuild the same filter the users_list page used
         q = request.form.get("q", "").strip()
@@ -3651,34 +3669,49 @@ def users_bulk_action():
         # Exclude banned users from bulk grants
         query = query.filter((User.is_banned == False) | (User.is_banned.is_(None)))
 
+        query = query.order_by(User.id).limit(5001)
         affected = query.all()
         if len(affected) > 5000:
-            flash(f"Filter matches {len(affected)} users — too many. Narrow first.", "error")
-            return redirect(url_for("users_list"))
+            flash("Filter matches more than 5,000 eligible users. Narrow first.", "error")
+            return redirect(url_for("users_list", **filter_args))
+        if not affected:
+            flash("No eligible users match these filters. Nothing was changed.", "info")
+            return redirect(url_for("users_list", **filter_args))
 
         n = 0
         for u in affected:
-            if action == "grant_coins":
+            if action == "grant_pack":
+                grant_pack(db, u.id, pack.id, source="admin")
+                _log_act(db, u.id, "admin_grant_pack",
+                         f"Admin bulk-granted 1× {pack.name} (pack #{pack.id})")
+            elif action == "grant_coins":
+                old_balance = u.total_coins or 0
                 u.total_coins = max(0, (u.total_coins or 0) + amount)
                 _log_act(db, u.id, "admin_grant",
                          f"Admin bulk-granted {amount:+,} coins",
-                         coins_change=amount)
+                         coins_change=u.total_coins - old_balance)
             elif action == "grant_gems":
+                old_balance = u.total_gems or 0
                 u.total_gems = max(0, (u.total_gems or 0) + amount)
                 _log_act(db, u.id, "admin_grant",
                          f"Admin bulk-granted {amount:+,} gems",
-                         gems_change=amount)
+                         gems_change=u.total_gems - old_balance)
             elif action == "grant_quest_points":
                 u.quest_points = max(0, (u.quest_points or 0) + amount)
                 _log_act(db, u.id, "admin_grant",
                          f"Admin bulk-granted {amount:+,} quest points")
             n += 1
 
+        detail = (f"grant_pack=1x {pack.name} (pack #{pack.id}) per user"
+                  if pack else f"{action}={amount:+,}")
         log_admin(db, "bulk_grant", target_type="user_filter", target_id=None,
                   target_name=f"{n} users",
-                  detail=f"{action}={amount:+,}")
+                  detail=detail)
         db.commit()
-        flash(f"✅ Applied {amount:+,} {action.replace('grant_', '').replace('_', ' ')} to {n} users.", "success")
+        if pack:
+            flash(f"📦 Gave 1× {pack.name} to each of {n} users. Packs are unopened in their inventory.", "success")
+        else:
+            flash(f"✅ Applied {amount:+,} {action.replace('grant_', '').replace('_', ' ')} to {n} users.", "success")
     except Exception as e:
         db.rollback()
         logger.exception("Bulk grant failed")

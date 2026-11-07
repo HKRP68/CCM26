@@ -91,6 +91,8 @@
     color: var(--muted, #888);
     font-size: .85rem;
   }
+  #bulk-reward-form .form-group { min-width: 0; max-width: 100%; }
+  #bulk-reward-form select { max-width: 100%; }
 </style>
 
 <h2 style="margin-bottom:1rem;">Users <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ total }})</span></h2>
@@ -204,53 +206,118 @@
   {% endif %}
 </form>
 
-<!-- ── Bulk action panel (collapsible) ───────────────────────────────── -->
-<details style="background:var(--card,#181f2a);border:1px solid var(--border,#2a3142);border-radius:10px;padding:.5rem .85rem;margin-bottom:1rem;">
-  <summary style="cursor:pointer;color:var(--muted);font-size:.85rem;">
-    ⚡ Bulk Actions — apply to all {{ total }} filtered users
+<!-- ── Bulk rewards ────────────────────────────────────────────────── -->
+<details class="filter-toolbar" id="bulk-rewards">
+  <summary style="cursor:pointer;font-weight:600;">
+    🎁 Bulk Rewards · {{ bulk_recipient_count }} eligible {{ 'user' if bulk_recipient_count == 1 else 'users' }}
   </summary>
-  <form method="POST" action="{{ url_for('users_bulk_action') }}"
-        onsubmit="return confirmBulkGrant(this);"
-        style="margin-top:.75rem;">
+  <p style="color:var(--muted);font-size:.85rem;margin:.75rem 0;">
+    Reward everyone matching the filters above, across all pages. Banned users are skipped.
+    Choose one reward type per submission. Maximum 5,000 recipients.
+  </p>
+  <form method="POST" action="{{ url_for('users_bulk_action') }}" id="bulk-reward-form"
+        onsubmit="return confirmBulkGrant(this);" class="filter-row" style="align-items:flex-end;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    {# Pass filter params so the server applies to the same set #}
     <input type="hidden" name="q" value="{{ q }}">
     {% for k, v in filters.items() %}
       {% if v is not none and v != '' %}
         <input type="hidden" name="{{ k }}" value="{{ v }}">
       {% endif %}
     {% endfor %}
-
-    <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;">
-      <select name="action" style="background:var(--bg);border:1px solid var(--border);color:#fff;padding:.4rem .6rem;border-radius:6px;font-size:.85rem;">
-        <option value="grant_coins">🪙 Grant Coins</option>
-        <option value="grant_gems">💎 Grant Gems</option>
-        <option value="grant_quest_points">🎯 Grant Quest Points</option>
+    <div class="form-group" style="margin:0;">
+      <label for="bulk-action">Reward type</label>
+      <select name="action" id="bulk-action">
+        <option value="grant_coins">🪙 Coins</option>
+        <option value="grant_gems">💎 Gems</option>
+        <option value="grant_quest_points">🎯 Quest Points</option>
+        <option value="grant_pack">📦 Pack</option>
       </select>
-      <input type="number" name="amount" placeholder="amount (can be negative)" required
-             style="background:var(--bg);border:1px solid var(--border);color:#fff;padding:.4rem .6rem;border-radius:6px;font-size:.85rem;width:200px;">
-      <input type="text" name="confirm_text" placeholder="Type CONFIRM" required autocomplete="off"
-             title="Type CONFIRM in capitals to apply the grant"
-             style="background:var(--bg);border:1px solid var(--border);color:#fff;padding:.4rem .6rem;border-radius:6px;font-size:.85rem;width:150px;">
-      <button type="submit" class="btn btn-blue">Apply to {{ total }} users</button>
     </div>
-    <div style="color:var(--muted);font-size:.75rem;margin-top:.5rem;">
-      Caps: max ±5,000,000 coins / ±5,000 gems / ±50,000 quest points per user per call. Banned users are skipped.
-      Type <b>CONFIRM</b> to apply — it can't be undone.
+    <div class="form-group" id="bulk-amount-field" style="margin:0;">
+      <label for="bulk-amount">Amount per user</label>
+      <input type="number" name="amount" id="bulk-amount" placeholder="e.g. 1000" required step="1"
+             min="-5000000" max="5000000" style="width:180px;">
     </div>
+    <div class="form-group" id="bulk-pack-field" style="margin:0;" hidden>
+      <label for="bulk-pack">Pack · one per user</label>
+      <select name="pack_id" id="bulk-pack" disabled>
+        <option value="">Choose a pack…</option>
+        {% for p in bulk_packs %}
+        <option value="{{ p.id }}">{{ p.emoji or '📦' }} {{ p.name }}{% if not p.is_active %} (inactive){% endif %}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-group" style="margin:0;">
+      <label for="bulk-confirm">Type CONFIRM</label>
+      <input type="text" name="confirm_text" id="bulk-confirm" placeholder="CONFIRM" required autocomplete="off"
+             pattern="CONFIRM" title="Type CONFIRM in capitals to apply the reward" style="width:150px;">
+    </div>
+    <button type="submit" class="btn btn-blue" {% if bulk_recipient_count == 0 or bulk_recipient_count > 5000 %}disabled{% endif %}>
+      Apply to {{ bulk_recipient_count }} {{ 'user' if bulk_recipient_count == 1 else 'users' }}
+    </button>
   </form>
+  <p id="bulk-reward-help" style="color:var(--muted);font-size:.8rem;margin-top:.75rem;"></p>
+  <p id="bulk-reward-preview" role="status" aria-live="polite" style="font-size:.9rem;margin-top:.5rem;"></p>
+  {% if bulk_recipient_count > 5000 %}
+  <p style="color:var(--accent2);">Narrow your filters to 5,000 eligible users or fewer.</p>
+  {% endif %}
 </details>
 <script>
+const bulkForm = document.getElementById('bulk-reward-form');
+const bulkCount = {{ bulk_recipient_count | tojson }};
+const bulkAudience = bulkCount.toLocaleString() + (bulkCount === 1 ? ' user' : ' users');
+const bulkRewards = {
+  grant_coins: {label: 'coins', cap: 5000000},
+  grant_gems: {label: 'gems', cap: 5000},
+  grant_quest_points: {label: 'quest points', cap: 50000}
+};
+function bulkRewardSummary(form) {
+  const action = form.elements['action'].value;
+  if (action === 'grant_pack') {
+    const pack = form.elements['pack_id'];
+    return pack.value ? 'Give 1× ' + pack.options[pack.selectedIndex].text + ' to each of ' + bulkAudience + ' (' + bulkCount.toLocaleString() + (bulkCount === 1 ? ' pack total).' : ' packs total).') : 'Choose a pack to preview the reward.';
+  }
+  const amount = Number(form.elements['amount'].value);
+  if (!amount) return 'Enter a non-zero amount to preview the reward.';
+  return (amount < 0 ? 'Remove ' : 'Add ') + Math.abs(amount).toLocaleString() + ' ' + bulkRewards[action].label + (amount < 0 ? ' from' : ' for') + ' each of ' + bulkAudience + '.';
+}
+function updateBulkReward() {
+  const action = bulkForm.elements['action'].value;
+  const isPack = action === 'grant_pack';
+  const amount = bulkForm.elements['amount'];
+  const pack = bulkForm.elements['pack_id'];
+  document.getElementById('bulk-amount-field').hidden = isPack;
+  document.getElementById('bulk-pack-field').hidden = !isPack;
+  amount.disabled = isPack;
+  amount.required = !isPack;
+  pack.disabled = !isPack;
+  pack.required = isPack;
+  amount.setCustomValidity('');
+  if (!isPack) {
+    amount.min = -bulkRewards[action].cap;
+    amount.max = bulkRewards[action].cap;
+    if (amount.value !== '' && Number(amount.value) === 0) amount.setCustomValidity('Enter a non-zero amount.');
+  }
+  document.getElementById('bulk-reward-help').textContent = isPack
+    ? {{ ('One unopened pack per user per submission. Users open it with /openpack. Bulk grants do not send individual DMs.' if bulk_packs else 'No packs available. Create a pack under Packs first.') | tojson }}
+    : 'Maximum ±' + bulkRewards[action].cap.toLocaleString() + ' ' + bulkRewards[action].label + ' per user. Negative amounts deduct; balances stop at zero.';
+  document.getElementById('bulk-reward-preview').textContent = bulkRewardSummary(bulkForm);
+}
 function confirmBulkGrant(form) {
   if ((form.confirm_text.value || '').trim() !== 'CONFIRM') {
     alert('Type CONFIRM (in capitals) to apply this bulk grant.');
     form.confirm_text.focus();
     return false;
   }
-  var sel = form.elements['action'];
-  var label = sel.options[sel.selectedIndex].text;
-  return window.confirm('Apply ' + label + ' (' + form.elements['amount'].value + ') to all {{ total }} filtered (non-banned) users? Cannot be undone.');
+  if (!form.reportValidity() || bulkCount === 0 || bulkCount > 5000) return false;
+  return window.confirm(bulkRewardSummary(form) + '\nRecipients are checked again when you submit. This cannot be undone.');
 }
+bulkForm.addEventListener('input', updateBulkReward);
+bulkForm.addEventListener('change', function(event) {
+  if (['action', 'amount', 'pack_id'].includes(event.target.name)) bulkForm.elements['confirm_text'].value = '';
+  updateBulkReward();
+});
+updateBulkReward();
 </script>
 
 {% macro sortcol(label, sort_key) %}
