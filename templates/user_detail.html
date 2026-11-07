@@ -115,6 +115,7 @@
     {% endif %}
   </h2>
   <div style="margin-top:.5rem;">
+    <a class="btn btn-outline" href="{{ url_for('account_transfer', old_id=user.telegram_id) }}">🔄 Transfer Account</a>
     <a href="{{ url_for('admin_user_traits', user_id=user.id) }}"
        style="color:var(--accent); text-decoration:none; font-size:.85rem; padding:.3rem .6rem; border:1px solid var(--accent); border-radius:4px; display:inline-block;">
       💎 Manage Traits →

@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Account Transfer{% endblock %}
+{% block content %}
+<style>
+.transfer-wrap { max-width: 960px; margin: auto; }
+.transfer-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+.transfer-panel { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 1.25rem; margin-bottom: 1.25rem; }
+.transfer-fields, .transfer-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.transfer-panel label { display: block; margin: .75rem 0 .35rem; font-weight: 600; }
+.transfer-panel input[type=text], .transfer-panel textarea { width: 100%; box-sizing: border-box; }
+.transfer-panel label.transfer-check { display: flex; align-items: flex-start; gap: .6rem; font-size: .9rem; text-transform: none; letter-spacing: normal; }
+.transfer-check input[type=checkbox] { width: auto; flex: 0 0 auto; margin-top: .2rem; padding: 0; }
+.transfer-help { color: var(--muted); font-size: .88rem; line-height: 1.6; margin: .5rem 0; }
+.transfer-stats div { background: var(--bg); border-radius: 8px; padding: .85rem; overflow-wrap: anywhere; }
+.transfer-stats span { display: block; color: var(--muted); font-size: .8rem; margin-bottom: .3rem; }
+.transfer-id { overflow-wrap: anywhere; }
+@media(max-width: 580px) { .transfer-fields { grid-template-columns: 1fr; } }
+</style>
+<div class="transfer-wrap">
+  <div class="transfer-heading">
+    <div><h2>Account Transfer</h2><p class="transfer-help">Recover a player's game account after they delete or replace their Telegram account.</p></div>
+    <a class="btn btn-outline" href="{{ url_for('users_list') }}">Back to Users</a>
+  </div>
+  <div class="transfer-panel">
+    <h3>1. Old User ID → New User ID</h3>
+    <p class="transfer-help">Use numeric <strong>Telegram user IDs</strong>, not usernames or internal game IDs. The old game account must still exist. The new ID must have no game account; ask the player to wait before using /debut.</p>
+    <form method="POST" action="{{ url_for('account_transfer') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="preview">
+      <div class="transfer-fields">
+        <div><label for="old-id">Old Telegram User ID</label><input id="old-id" type="text" inputmode="numeric" pattern="[1-9][0-9]{0,15}" maxlength="16" name="old_id" value="{{ old_id }}" required placeholder="e.g. 123456789"></div>
+        <div><label for="new-id">New Telegram User ID</label><input id="new-id" type="text" inputmode="numeric" pattern="[1-9][0-9]{0,15}" maxlength="16" name="new_id" value="{{ new_id }}" required placeholder="e.g. 987654321"></div>
+      </div>
+      <label for="transfer-reason">Ownership verification / support reference</label>
+      <textarea id="transfer-reason" name="reason" minlength="10" maxlength="200" rows="3" required placeholder="How did you verify this is the same player? Record the support reference; do not enter passwords or login codes.">{{ reason }}</textarea>
+      <p class="transfer-help">Only an admin can transfer an account. Verify the claimant's ownership independently before confirming.</p>
+      <button class="btn btn-primary" type="submit">Preview Transfer</button>
+    </form>
+  </div>
+  {% if preview %}
+  <div class="transfer-panel" id="transfer-preview">
+    <h3>2. Review &amp; Confirm Transfer</h3>
+    <p class="transfer-id"><strong>{{ preview.old_id }}</strong> → <strong>{{ preview.new_id }}</strong></p>
+    <p>{{ preview.name }}{% if preview.team %} · {{ preview.team }}{% endif %} · Game account #{{ preview.user_id }}</p>
+    <div class="transfer-stats">
+      <div><span>Squad players</span><strong>{{ preview.squad }}</strong></div>
+      <div><span>Coins</span><strong>{{ "{:,}".format(preview.coins) }}</strong></div>
+      <div><span>Gems</span><strong>{{ "{:,}".format(preview.gems) }}</strong></div>
+      <div><span>Quest points</span><strong>{{ "{:,}".format(preview.quest_points) }}</strong></div>
+      <div><span>Matches played</span><strong>{{ preview.matches }}</strong></div>
+      <div><span>Subscription</span><strong>{{ preview.subscription | title }}</strong></div>
+    </div>
+    <p class="transfer-help">Keeps the same game account, squad, traits, packs, career, stats, achievements, cooldowns and subscription expiry. Tournament, draft and auction ownership, saved lineups and prize recipients move to the new ID. Bans and restrictions remain in place.{% if preview.banned %} <strong>This account is currently banned.</strong>{% endif %}</p>
+    <p class="transfer-help">The old Telegram ID loses access. Telegram name and username refresh when the player next interacts with the bot. Admin permissions require separate review. This preview expires in 10 minutes.</p>
+    <form method="POST" action="{{ url_for('account_transfer') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="confirm">
+      <input type="hidden" name="transfer_token" value="{{ transfer_token }}">
+      <label class="transfer-check"><input type="checkbox" name="ownership_verified" value="yes" required> I verified that both IDs belong to the same player.</label>
+      <label for="confirm-id">Type the new Telegram User ID again</label>
+      <input id="confirm-id" type="text" inputmode="numeric" name="confirm_new_id" required autocomplete="off" pattern="{{ preview.new_id }}">
+      <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin-top:1rem;">
+        <button class="btn btn-primary" type="submit">Confirm Transfer</button>
+        <a class="btn btn-outline" href="{{ url_for('account_transfer') }}">Cancel</a>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+  <div class="transfer-panel">
+    <h3>Recent transfers</h3>
+    <p class="transfer-help">Last 25 completed transfers. Each receipt records the IDs, balances, squad size, verification note, time and admin IP in the Audit Log.</p>
+    {% for entry in history %}
+    <details style="border-top:1px solid var(--border);padding:.75rem 0;">
+      <summary style="cursor:pointer;">Receipt #{{ entry.id }} · {{ entry.timestamp | ist('%d %b %Y %H:%M') }} · {{ entry.target_name }}</summary>
+      {% if entry.transfer_details %}
+      <p class="transfer-id"><strong>{{ entry.transfer_details.old_id }}</strong> → <strong>{{ entry.transfer_details.new_id }}</strong></p>
+      <p class="transfer-help">{{ entry.transfer_details.squad }} players · {{ "{:,}".format(entry.transfer_details.coins) }} coins · {{ entry.transfer_details.gems }} gems</p>
+      <p class="transfer-help">Verified: {{ entry.transfer_details.verification }}</p>
+      {% else %}<p class="transfer-help" style="overflow-wrap:anywhere;">{{ entry.detail }}</p>{% endif %}
+      <a href="{{ url_for('user_detail', user_id=entry.target_id) }}">Open game account #{{ entry.target_id }}</a>
+    </details>
+    {% else %}<p class="transfer-help">No transfers yet.</p>{% endfor %}
+  </div>
+  <div class="transfer-panel">
+    <h3>Recovery tips</h3>
+    <ul style="padding-left:1.25rem;line-height:1.8;">
+      <li>Keep a private record of your Telegram user ID and game account ID for future support.</li>
+      <li>If the game data itself was deleted, restore a database backup before transferring.</li>
+      <li>If the new ID already has a squad or money, resolve the account conflict with support first. Transfers never merge balances or overwrite another account.</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}
