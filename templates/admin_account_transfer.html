@@ -23,7 +23,7 @@
   </div>
   <div class="transfer-panel">
     <h3>1. Old User ID → New User ID</h3>
-    <p class="transfer-help">Use numeric <strong>Telegram user IDs</strong>, not usernames or internal game IDs. The old game account must still exist. The new ID must have no game account; ask the player to wait before using /debut.</p>
+    <p class="transfer-help">Use numeric <strong>Telegram user IDs</strong>, not usernames or internal game IDs. The old game account must still exist. If the new ID already has a game account, it will be replaced with the old account after confirmation.</p>
     <form method="POST" action="{{ url_for('account_transfer') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="preview">
@@ -42,6 +42,7 @@
     <h3>2. Review &amp; Confirm Transfer</h3>
     <p class="transfer-id"><strong>{{ preview.old_id }}</strong> → <strong>{{ preview.new_id }}</strong></p>
     <p>{{ preview.name }}{% if preview.team %} · {{ preview.team }}{% endif %} · Game account #{{ preview.user_id }}</p>
+    <p><strong>Old account data that the new ID will receive</strong></p>
     <div class="transfer-stats">
       <div><span>Squad players</span><strong>{{ preview.squad }}</strong></div>
       <div><span>Coins</span><strong>{{ "{:,}".format(preview.coins) }}</strong></div>
@@ -50,6 +51,19 @@
       <div><span>Matches played</span><strong>{{ preview.matches }}</strong></div>
       <div><span>Subscription</span><strong>{{ preview.subscription | title }}</strong></div>
     </div>
+    {% if preview.destination %}
+    <div style="border:1px solid var(--accent);border-radius:10px;padding:1rem;margin-top:1rem;" id="replacement-preview">
+      <h3>Existing new-ID account will be replaced</h3>
+      <p>{{ preview.destination.name }}{% if preview.destination.team %} · {{ preview.destination.team }}{% endif %} · Game account #{{ preview.destination.user_id }}</p>
+      <div class="transfer-stats">
+        <div><span>Current squad to archive</span><strong>{{ preview.destination.squad }}</strong></div>
+        <div><span>Current coins to archive</span><strong>{{ "{:,}".format(preview.destination.coins) }}</strong></div>
+        <div><span>Current gems to archive</span><strong>{{ "{:,}".format(preview.destination.gems) }}</strong></div>
+        <div><span>Current quest points to archive</span><strong>{{ "{:,}".format(preview.destination.quest_points) }}</strong></div>
+      </div>
+      <p class="transfer-help">The new ID will use the old account's squad, money and progress. Its current data will be kept in a disabled archive under game account #{{ preview.destination.user_id }} for support recovery. Balances and squads are not combined.</p>
+    </div>
+    {% endif %}
     <p class="transfer-help">Keeps the same game account, squad, traits, packs, career, stats, achievements, cooldowns and subscription expiry. Tournament, draft and auction ownership, saved lineups and prize recipients move to the new ID. Bans and restrictions remain in place.{% if preview.banned %} <strong>This account is currently banned.</strong>{% endif %}</p>
     <p class="transfer-help">The old Telegram ID loses access. Telegram name and username refresh when the player next interacts with the bot. Admin permissions require separate review. This preview expires in 10 minutes.</p>
     <form method="POST" action="{{ url_for('account_transfer') }}">
@@ -57,6 +71,9 @@
       <input type="hidden" name="action" value="confirm">
       <input type="hidden" name="transfer_token" value="{{ transfer_token }}">
       <label class="transfer-check"><input type="checkbox" name="ownership_verified" value="yes" required> I verified that both IDs belong to the same player.</label>
+      {% if preview.destination %}
+      <label class="transfer-check"><input type="checkbox" name="replace_destination" value="yes" required> Replace the new ID's current game account with the old account and archive its current data.</label>
+      {% endif %}
       <label for="confirm-id">Type the new Telegram User ID again</label>
       <input id="confirm-id" type="text" inputmode="numeric" name="confirm_new_id" required autocomplete="off" pattern="{{ preview.new_id }}">
       <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin-top:1rem;">
@@ -76,6 +93,7 @@
       <p class="transfer-id"><strong>{{ entry.transfer_details.old_id }}</strong> → <strong>{{ entry.transfer_details.new_id }}</strong></p>
       <p class="transfer-help">{{ entry.transfer_details.squad }} players · {{ "{:,}".format(entry.transfer_details.coins) }} coins · {{ entry.transfer_details.gems }} gems</p>
       <p class="transfer-help">Verified: {{ entry.transfer_details.verification }}</p>
+      {% if entry.transfer_details.archived_user_id %}<p><a href="{{ url_for('user_detail', user_id=entry.transfer_details.archived_user_id) }}">View replaced account archive #{{ entry.transfer_details.archived_user_id }}</a></p>{% endif %}
       {% else %}<p class="transfer-help" style="overflow-wrap:anywhere;">{{ entry.detail }}</p>{% endif %}
       <a href="{{ url_for('user_detail', user_id=entry.target_id) }}">Open game account #{{ entry.target_id }}</a>
     </details>
@@ -86,7 +104,7 @@
     <ul style="padding-left:1.25rem;line-height:1.8;">
       <li>Keep a private record of your Telegram user ID and game account ID for future support.</li>
       <li>If the game data itself was deleted, restore a database backup before transferring.</li>
-      <li>If the new ID already has a squad or money, resolve the account conflict with support first. Transfers never merge balances or overwrite another account.</li>
+      <li>If the new ID already has a squad or money, review both accounts before confirming replacement. Its current data stays in a disabled archive; the old account's balances and squad become active.</li>
     </ul>
   </div>
 </div>

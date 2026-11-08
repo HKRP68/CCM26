@@ -115,7 +115,7 @@
     {% endif %}
   </h2>
   <div style="margin-top:.5rem;">
-    <a class="btn btn-outline" href="{{ url_for('account_transfer', old_id=user.telegram_id) }}">🔄 Transfer Account</a>
+    {% if user.telegram_id > 0 %}<a class="btn btn-outline" href="{{ url_for('account_transfer', old_id=user.telegram_id) }}">🔄 Transfer Account</a>{% endif %}
     <a href="{{ url_for('admin_user_traits', user_id=user.id) }}"
        style="color:var(--accent); text-decoration:none; font-size:.85rem; padding:.3rem .6rem; border:1px solid var(--accent); border-radius:4px; display:inline-block;">
       💎 Manage Traits →
@@ -123,6 +123,9 @@
   </div>
 </div>
 
+{% if user.telegram_id <= -1000000000000000 %}
+<div class="flash flash-info">Archived account: replaced during an account transfer. Its squad, balances and history are retained for support review. This account has no Telegram login.</div>
+{% endif %}
 {% if user.is_banned %}
 <div style="background:rgba(196,30,58,.1);border:1px solid rgba(196,30,58,.5);border-radius:10px;padding:.85rem 1rem;margin-bottom:1rem;">
   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem;">

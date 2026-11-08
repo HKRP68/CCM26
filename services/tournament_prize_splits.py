@@ -6,6 +6,7 @@ delays; account lookup happens separately when a payout is credited.
 """
 
 import json
+from services.account_archive import is_archived_identity
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
@@ -17,6 +18,15 @@ def _manager_ids(team):
     for tg in team_member_ids(team):
         if tg not in ids:
             ids.append(tg)
+    # Archived co-owners retain their earned prize shares, without receiving
+    # gameplay access through the positive-only ownership helpers.
+    try:
+        archived = json.loads(getattr(team, "co_owner_ids_json", None) or "[]")
+    except (TypeError, ValueError):
+        archived = []
+    for tg in archived if isinstance(archived, list) else []:
+        if is_archived_identity(tg) and int(tg) not in ids:
+            ids.append(int(tg))
     return ids
 
 
@@ -30,7 +40,7 @@ def _load(raw):
         out, seen = [], set()
         for row in rows:
             tg, weight = int(row["telegram_id"]), int(row["weight"])
-            if tg <= 0 or weight <= 0 or tg in seen:
+            if (tg <= 0 and not is_archived_identity(tg)) or weight <= 0 or tg in seen:
                 raise ValueError
             seen.add(tg)
             out.append({"telegram_id": tg, "weight": weight})

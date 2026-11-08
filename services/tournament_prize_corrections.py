@@ -92,7 +92,11 @@ def _existing_shares(session, tour, honour, rows):
                     .filter_by(honour_id=honour.id, revision=honour.prize_revision).first())
         if previous:
             saved = json.loads(previous.new_details_json).get("recipients")
-            if saved:
+            # Recovery can rebind a paid account's Telegram identity. Keep the
+            # historical correction receipt intact, but use current payout
+            # identities when they no longer match that historical snapshot.
+            if saved and (not rows or {int(r["telegram_id"]) for r in saved}
+                          == {r.recipient_tg_id for r in rows}):
                 return saved
     if rows:
         team = session.get(TournamentTeam, honour.tournament_team_id) if honour.tournament_team_id else None

@@ -101,7 +101,7 @@ def test_same_missing_and_occupied_targets(account):
             service.prepare(account.db, str(old), str(new))
     account.db.add(User(telegram_id=NEW, total_coins=99))
     account.db.commit()
-    with pytest.raises(service.TransferError, match="already has"):
+    with pytest.raises(service.TransferError, match="Confirm replacement"):
         execute(account)
     assert account.db.query(User).count() == 2
     assert account.user.total_coins == 123456
@@ -237,3 +237,228 @@ def test_expired_preview_rejected(account, monkeypatch):
     assert response.status_code == 400
     assert 'expired' in response.text
     assert account.user.telegram_id == OLD
+
+
+def add_destination(account, *, banned=False):
+    from models import UserTeamLastXI
+    destination = User(telegram_id=NEW, first_name="New identity", username="new_identity",
+        team_name="New squad", total_coins=999999, total_gems=999, quest_points=999,
+        matches_played=100, season_key="2030-01", season_points=999999,
+        is_banned=banned, ban_reason="Destination restriction" if banned else None)
+    account.db.add(destination)
+    account.db.flush()
+    player = Player(name="Destination career", rating=80, category="Batsman", country="India",
+        bat_hand="Right", bowl_hand="Right", bowl_style="Medium", is_career=True,
+        career_owner_user_id=destination.id)
+    account.db.add(player)
+    account.db.flush()
+    slot = UserRoster(user_id=destination.id, player_id=player.id, order_position=1)
+    destination_team = TournamentTeam(tournament_id=account.team.tournament_id,
+        user_tg_id=NEW, owner_tg_id=NEW, name="Destination XI",
+        prize_split_json=json.dumps([dict(telegram_id=NEW, weight=1)]),
+        prize_split_snapshot_json=json.dumps([dict(telegram_id=NEW, weight=1)]))
+    account.db.add_all([slot, destination_team,
+        MatchControlAccount(telegram_id=NEW, blocked=False),
+        UserTeamLastXI(user_tg_id=OLD, team_id=99, player_ids="[1]"),
+        UserTeamLastXI(user_tg_id=NEW, team_id=99, player_ids="[2]")])
+    account.db.commit()
+    return SimpleNamespace(user=destination, slot=slot, player=player, team=destination_team)
+
+
+def test_replacement_uses_only_old_data_and_archives_complete_destination(account):
+    from models import UserTeamLastXI
+    target = add_destination(account)
+    _, summary, _, _ = service.prepare(account.db, str(OLD), str(NEW))
+    assert summary['destination']['coins'] == 999999
+    assert summary['destination']['squad'] == 1
+    assert target.user.telegram_id == NEW  # preview never archives data
+    recovered, receipt = execute(account, replace_destination=True)
+    account.db.commit()
+    account.db.expire_all()
+    archive_id = target.user.telegram_id
+    assert archive_id < -10**15
+    assert account.db.query(User).filter_by(telegram_id=NEW).one().id == account.user.id
+    assert (recovered.total_coins, recovered.total_gems, recovered.quest_points) == (123456, 58, 70)
+    assert recovered.matches_played == 20
+    assert recovered.first_name == 'New identity' and recovered.username == 'new_identity'
+    assert (target.user.total_coins, target.user.total_gems, target.user.quest_points) == (999999, 999, 999)
+    assert target.slot.user_id == target.user.id and target.player.career_owner_user_id == target.user.id
+    assert target.user.is_banned and target.user.dm_blocked and not target.user.notifications_enabled
+    assert target.team.user_tg_id == archive_id and account.team.user_tg_id == NEW
+    assert account.db.get(MatchControlAccount, NEW).blocked
+    assert account.db.get(MatchControlAccount, archive_id) is not None
+    assert account.db.query(UserTeamLastXI).filter_by(user_tg_id=NEW).one().player_ids == '[1]'
+    assert account.db.query(UserTeamLastXI).filter_by(user_tg_id=archive_id).one().player_ids == '[2]'
+    assert json.loads(receipt.detail)['archived_user_id'] == target.user.id
+    archived_receipt = account.db.query(AdminLog).filter_by(action='account_transfer_archive').one()
+    assert archived_receipt.target_id == target.user.id
+    assert json.loads(archived_receipt.detail)['previous_status']['notifications_enabled'] is True
+    assert len(archived_receipt.detail) <= 500
+
+
+def test_shared_prize_recipients_remain_separate_and_valid_after_replacement(account):
+    from services import tournament_prize_splits as splits
+    target = add_destination(account)
+    account.team.co_owner_ids_json = json.dumps([OLD, NEW])
+    shares = json.dumps([dict(telegram_id=OLD, weight=2), dict(telegram_id=NEW, weight=1)])
+    account.team.prize_split_json = shares
+    account.team.prize_split_snapshot_json = shares
+    account.db.commit()
+    execute(account, replace_destination=True)
+    account.db.commit()
+    archive_id = target.user.telegram_id
+    assert splits._load(account.team.prize_split_snapshot_json) == [
+        dict(telegram_id=NEW, weight=2), dict(telegram_id=archive_id, weight=1)]
+    assert splits._current(account.team) == splits._load(account.team.prize_split_json)
+    assert splits._load(target.team.prize_split_snapshot_json) == [dict(telegram_id=archive_id, weight=1)]
+
+
+def test_replacement_preserves_destination_ban(account):
+    target = add_destination(account, banned=True)
+    account.user.is_banned = False
+    account.user.ban_reason = None
+    account.db.commit()
+    recovered, _ = execute(account, replace_destination=True)
+    account.db.commit()
+    assert recovered.is_banned and recovered.ban_reason == 'Destination restriction'
+    assert target.user.ban_reason == 'Destination restriction'
+
+
+def test_replacement_preview_invalidated_by_destination_changes(account):
+    target = add_destination(account)
+    _, _, digest, _ = service.prepare(account.db, str(OLD), str(NEW))
+    target.user.total_gems += 1
+    account.db.commit()
+    with pytest.raises(service.TransferError, match='changed'):
+        service.transfer(account.db, str(OLD), str(NEW), expected_user_id=account.user.id,
+            expected_digest=digest, reason=REASON, replace_destination=True)
+    assert target.user.telegram_id == NEW and account.user.telegram_id == OLD
+
+
+def test_new_registration_after_unused_preview_requires_new_review(account):
+    _, _, digest, _ = service.prepare(account.db, str(OLD), str(NEW))
+    target = add_destination(account)
+    with pytest.raises(service.TransferError, match='changed'):
+        service.transfer(account.db, str(OLD), str(NEW), expected_user_id=account.user.id,
+            expected_digest=digest, reason=REASON)
+    assert target.user.telegram_id == NEW and account.user.telegram_id == OLD
+
+
+def test_replacement_failure_rolls_back_both_accounts_and_their_records(account):
+    target = add_destination(account)
+    def fail(_connection, _cursor, statement, _parameters, _context, _many):
+        if statement.startswith('INSERT INTO admin_logs'):
+            raise RuntimeError('simulated archive audit failure')
+    event.listen(account.db.get_bind(), 'before_cursor_execute', fail)
+    try:
+        with pytest.raises(RuntimeError, match='archive audit'):
+            execute(account, replace_destination=True)
+        account.db.rollback()
+    finally:
+        event.remove(account.db.get_bind(), 'before_cursor_execute', fail)
+    account.db.expire_all()
+    assert target.user.telegram_id == NEW and account.user.telegram_id == OLD
+    assert target.team.user_tg_id == NEW and account.team.user_tg_id == OLD
+    assert account.db.get(MatchControlAccount, NEW) is not None
+    assert account.db.get(MatchControlAccount, OLD) is not None
+    assert account.db.query(AdminLog).count() == 0
+
+
+def test_replacement_requires_explicit_checkbox_and_saves_archive_receipt(account):
+    target = add_destination(account)
+    csrf = login(account)
+    token = preview(account, csrf)
+    body = dict(action='confirm', csrf_token=csrf, transfer_token=token,
+                ownership_verified='yes', confirm_new_id=str(NEW))
+    response = account.client.post('/users/transfer', data=body)
+    assert response.status_code == 400 and 'Confirm replacement' in response.text
+    account.db.expire_all()
+    assert target.user.telegram_id == NEW and account.user.telegram_id == OLD
+    body['replace_destination'] = 'yes'
+    assert account.client.post('/users/transfer', data=body).status_code == 302
+    assert account.client.post('/users/transfer', data=body).status_code == 400
+    account.db.expire_all()
+    assert account.user.telegram_id == NEW and target.user.telegram_id < 0
+    history = account.client.get('/users/transfer')
+    assert f'View replaced account archive #{target.user.id}' in history.text
+
+
+def test_archived_account_excluded_from_season_ranking_and_prizes(account, monkeypatch):
+    from models import Season, SeasonStanding
+    from services import season_service
+    target = add_destination(account)
+    account.user.season_key = '2030-01'
+    account.user.season_points = 100
+    season = Season(season_key='2030-01', name='Test season')
+    account.db.add(season)
+    account.db.commit()
+    execute(account, replace_destination=True)
+    account.db.commit()
+    monkeypatch.setattr(season_service, 'ensure_current_season', lambda session: season)
+    _, board = season_service.get_season_leaderboard(account.db)
+    assert [row['user_id'] for row in board] == [account.user.id]
+    assert season_service.get_user_season_rank(account.db, account.user) == 1
+    assert season_service.get_user_season_rank(account.db, target.user) is None
+    season_service._finalize_season(account.db, season)
+    assert account.db.query(SeasonStanding).filter_by(user_id=target.user.id).count() == 0
+
+
+def test_existing_paid_prizes_and_correction_snapshots_follow_their_accounts(account):
+    from models import TournamentHonour, TournamentPrizeCorrection, TournamentPrizePayout
+    from services.tournament_prize_corrections import _existing_shares
+    target = add_destination(account)
+    honour = TournamentHonour(tournament_id=account.team.tournament_id,
+        tournament_team_id=account.team.id, tournament_name='Recovery cup',
+        award='champion', prize_revision=1)
+    account.db.add(honour)
+    account.db.flush()
+    history = TournamentPrizeCorrection(tournament_id=account.team.tournament_id,
+        honour_id=honour.id, request_key='before-transfer', previous_revision=0,
+        revision=1, reason='Original award correction', old_details_json='{}',
+        new_details_json=json.dumps(dict(recipients=[dict(telegram_id=OLD, weight=1),
+                                                    dict(telegram_id=NEW, weight=1)])))
+    source_receipt = TournamentPrizePayout(honour_id=honour.id,
+        tournament_name='Recovery cup', award='champion', revision=1,
+        recipient_tg_id=OLD, user_id=account.user.id, coins=10, share_bps=5000, status='paid')
+    target_receipt = TournamentPrizePayout(honour_id=honour.id,
+        tournament_name='Recovery cup', award='champion', revision=1,
+        recipient_tg_id=NEW, user_id=target.user.id, coins=10, share_bps=5000, status='paid')
+    account.db.add_all([history, source_receipt, target_receipt])
+    account.db.commit()
+    execute(account, replace_destination=True)
+    account.db.commit()
+    assert source_receipt.recipient_tg_id == NEW and source_receipt.user_id == account.user.id
+    assert target_receipt.recipient_tg_id == target.user.telegram_id and target_receipt.user_id == target.user.id
+    assert source_receipt.status == target_receipt.status == 'paid'
+    shares = _existing_shares(account.db, None, honour, [source_receipt, target_receipt])
+    assert {share['telegram_id'] for share in shares} == {NEW, target.user.telegram_id}
+    assert json.loads(history.new_details_json)['recipients'][0]['telegram_id'] == OLD
+
+
+def test_concurrent_replacement_confirms_only_once(account):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from sqlalchemy.exc import SQLAlchemyError
+    target = add_destination(account)
+    _, _, digest, _ = service.prepare(account.db, str(OLD), str(NEW))
+    uid = account.user.id
+    ready = Barrier(2)
+    def attempt():
+        with account.factory() as session:
+            ready.wait(timeout=10)
+            try:
+                service.transfer(session, str(OLD), str(NEW), expected_user_id=uid,
+                    expected_digest=digest, reason=REASON, replace_destination=True)
+                session.commit()
+                return True
+            except (service.TransferError, SQLAlchemyError):
+                session.rollback()
+                return False
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda _: attempt(), range(2)))
+    assert sum(outcomes) == 1
+    account.db.expire_all()
+    assert account.user.telegram_id == NEW and target.user.telegram_id < 0
+    assert account.user.total_coins == 123456 and target.user.total_coins == 999999
+    assert account.db.query(AdminLog).filter_by(action='account_transfer').count() == 1
+    assert account.db.query(AdminLog).filter_by(action='account_transfer_archive').count() == 1

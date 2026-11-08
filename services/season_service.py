@@ -20,6 +20,7 @@ import logging
 from datetime import datetime
 
 from models import User, Season, SeasonStanding
+from services.account_archive import ARCHIVE_ID_BASE, is_archived_identity
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,8 @@ def _finalize_season(session, season):
     # Rank users by season_points (only those whose season_key matches this
     # season — others have stale/zero points for it).
     rows = (session.query(User)
-            .filter(User.season_key == season.season_key,
+            .filter(User.telegram_id > -ARCHIVE_ID_BASE,
+                    User.season_key == season.season_key,
                     User.season_points > 0)
             .order_by(User.season_points.desc(),
                       User.season_wins.desc())
@@ -210,7 +212,8 @@ def get_season_leaderboard(session, limit=20):
     """
     live = ensure_current_season(session)
     rows = (session.query(User)
-            .filter(User.season_key == live.season_key,
+            .filter(User.telegram_id > -ARCHIVE_ID_BASE,
+                    User.season_key == live.season_key,
                     User.season_points > 0)
             .order_by(User.season_points.desc(),
                       User.season_wins.desc())
@@ -231,10 +234,12 @@ def get_season_leaderboard(session, limit=20):
 def get_user_season_rank(session, user):
     """Return the user's current rank (1-based) or None if unranked."""
     live = ensure_current_season(session)
-    if user.season_key != live.season_key or (user.season_points or 0) <= 0:
+    if (is_archived_identity(user.telegram_id) or user.season_key != live.season_key
+            or (user.season_points or 0) <= 0):
         return None
     higher = (session.query(User)
-              .filter(User.season_key == live.season_key,
+              .filter(User.telegram_id > -ARCHIVE_ID_BASE,
+                      User.season_key == live.season_key,
                       User.season_points > (user.season_points or 0))
               .count())
     return higher + 1

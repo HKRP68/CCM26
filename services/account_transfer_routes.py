@@ -41,7 +41,9 @@ def register(app, login_required, get_session):
                     nonce = secrets.token_urlsafe(24)
                     session["account_transfer_nonce"] = nonce
                     token = signer().dumps(dict(old=old, new=new, uid=user.id, digest=digest,
-                                               reason=reason, nonce=nonce))
+                                               reason=reason, nonce=nonce,
+                                               destination_id=(preview["destination"]["user_id"]
+                                                               if preview["destination"] else None)))
                 elif action == "confirm":
                     try:
                         data = signer().loads(request.form.get("transfer_token", ""), max_age=600)
@@ -54,13 +56,19 @@ def register(app, login_required, get_session):
                         raise service.TransferError("Verify that the old and new Telegram accounts belong to the same person.")
                     if request.form.get("confirm_new_id", "").strip() != str(service.telegram_id(data["new"])):
                         raise service.TransferError("Type the new Telegram ID again to confirm the destination.")
+                    replacing = data.get("destination_id") is not None
+                    if replacing and request.form.get("replace_destination") != "yes":
+                        raise service.TransferError("Confirm replacement of the new ID's existing game account. Its data will be archived.")
                     user, receipt = service.transfer(db, data["old"], data["new"],
                         expected_user_id=data["uid"], expected_digest=data["digest"],
-                        reason=data["reason"], ip_address=request.remote_addr)
+                        reason=data["reason"], ip_address=request.remote_addr,
+                        replace_destination=replacing)
                     uid, receipt_id = user.id, receipt.id
                     db.commit()
                     session.pop("account_transfer_nonce", None)
-                    flash(f'Transfer complete: {data["old"]} → {data["new"]}. Squad, balances and progress preserved. Receipt #{receipt_id}. The player can now send /start from the new Telegram account.', "success")
+                    archive_note = (f' Replaced account #{data["destination_id"]} saved as a disabled archive.'
+                                    if replacing else "")
+                    flash(f'Transfer complete: {data["old"]} → {data["new"]}. Squad, balances and progress preserved. Receipt #{receipt_id}.{archive_note} The player can now send /start from the new Telegram account.', "success")
                     db.close()
                     return redirect(url_for("user_detail", user_id=uid))
                 else:
