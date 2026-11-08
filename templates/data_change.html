@@ -18,12 +18,12 @@
 
   <p style="margin:.5rem 0;font-weight:600;">Column order:</p>
   <code style="display:block;background:#0d1117;color:#c9d1d9;padding:.75rem;border-radius:.25rem;font-size:.85rem;overflow-x:auto;">
-Name, Rating, Category, Country, Bat Hand, Bowl Hand, Bowl Style, Bat Rating, Bowl Rating, Version, Is Active
+Name, Rating, Category, Country, Bat Hand, Bowl Hand, Bowl Style, Bat Rating, Bowl Rating, Version, Is Active, Gender
   </code>
 
   <p style="margin:1rem 0 .5rem;font-weight:600;">Example:</p>
-  <code style="display:block;background:#0d1117;color:#c9d1d9;padding:.75rem;border-radius:.25rem;font-size:.85rem;overflow-x:auto;white-space:pre;">Virat Kohli, 98, Batsman, India, Right, Right, Medium Pacer, 97, 32, Base, 1
-Jasprit Bumrah, 97, Bowler, India, Right, Right, Fast, 21, 96, Base, 1</code>
+  <code style="display:block;background:#0d1117;color:#c9d1d9;padding:.75rem;border-radius:.25rem;font-size:.85rem;overflow-x:auto;white-space:pre;">Virat Kohli, 98, Batsman, India, Right, Right, Medium Pacer, 97, 32, Base, 1, Male
+Jasprit Bumrah, 97, Bowler, India, Right, Right, Fast, 21, 96, Base, 1, Male</code>
 
   <div style="margin-top:1rem;padding:.75rem;background:#2e2a1a;border-left:3px solid #d4a000;border-radius:.25rem;">
     <p style="margin:0;font-size:.9rem;line-height:1.6;">
@@ -33,6 +33,10 @@ Jasprit Bumrah, 97, Bowler, India, Right, Right, Fast, 21, 96, Base, 1</code>
       • To rename a player or change its Version, use the player's <strong>Edit</strong> page instead (those are the match key here)<br>
       • Rows with no matching player are <strong>skipped</strong> and listed back to you — they are NOT created<br>
       • Updated players' cards re-render automatically and Challenge League entries are re-synced<br>
+      • <strong>Gender</strong> is optional: Male, Female, Non-binary or Other; M/F and lowercase values are accepted<br>
+      • Blank or omitted Gender cells leave saved genders unchanged. Use <code>Not set</code> to clear a gender<br>
+      • Older files without Gender still work<br>
+      • With a header, columns can be reordered, including the downloaded CSV with its ID column<br>
       • First row can be a header (auto-detected and skipped)
     </p>
   </div>
@@ -45,8 +49,8 @@ Jasprit Bumrah, 97, Bowler, India, Right, Right, Fast, 21, 96, Base, 1</code>
     name="csv_text"
     rows="15"
     style="width:100%;font-family:monospace;font-size:.9rem;padding:.75rem;background:#0d1117;color:#c9d1d9;border:1px solid var(--border);border-radius:.5rem;"
-    placeholder="Name, Rating, Category, Country, Bat Hand, Bowl Hand, Bowl Style, Bat Rating, Bowl Rating, Version, Is Active
-Virat Kohli, 98, Batsman, India, Right, Right, Medium Pacer, 97, 32, Base, 1
+    placeholder="Name, Rating, Category, Country, Bat Hand, Bowl Hand, Bowl Style, Bat Rating, Bowl Rating, Version, Is Active, Gender
+Virat Kohli, 98, Batsman, India, Right, Right, Medium Pacer, 97, 32, Base, 1, Male
 ..."></textarea>
 
   <div style="margin-top:1rem;display:flex;gap:.5rem;">
