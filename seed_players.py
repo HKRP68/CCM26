@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from database import init_db, get_session
 from models import Player
+from services.player_gender import normalize_gender
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "players.json")
 
@@ -162,6 +163,7 @@ def seed():
         player = Player(
             name=name, version=version, rating=rating, category=category,
             country=country, bat_hand=bat_hand, bowl_hand=bowl_hand,
+            gender=normalize_gender(entry.get("Gender", entry.get("gender"))),
             bowl_style=bowl_style, bat_rating=bat_rating, bowl_rating=bowl_rating,
             bat_avg=0, strike_rate=0, runs=0, centuries=0,
             bowl_avg=0, economy=0, wickets=0, is_active=True,
