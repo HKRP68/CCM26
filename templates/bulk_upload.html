@@ -16,14 +16,14 @@
 
   <p style="margin:.5rem 0;font-weight:600;">Column order:</p>
   <code style="display:block;background:#0d1117;color:#c9d1d9;padding:.75rem;border-radius:.25rem;font-size:.85rem;overflow-x:auto;">
-Name, Rating, Category, Country, Bat Hand, Bowl Hand, Bowl Style, Bat Rating, Bowl Rating, Version, Is Active
+Name, Rating, Category, Country, Bat Hand, Bowl Hand, Bowl Style, Bat Rating, Bowl Rating, Version, Is Active, Gender
   </code>
 
   <p style="margin:1rem 0 .5rem;font-weight:600;">Example:</p>
-  <code style="display:block;background:#0d1117;color:#c9d1d9;padding:.75rem;border-radius:.25rem;font-size:.85rem;overflow-x:auto;white-space:pre;">Virat Kohli, 97, Batsman, India, Right, Right, Medium Pacer, 96, 30, Base, 1
-Virat Kohli, 99, Batsman, India, Right, Right, Medium Pacer, 99, 35, Legend, 1
-Jasprit Bumrah, 96, Bowler, India, Right, Right, Fast, 20, 95, Base, 1
-Jasprit Bumrah, 98, Bowler, India, Right, Right, Fast, 22, 98, World Cup 2023, 1</code>
+  <code style="display:block;background:#0d1117;color:#c9d1d9;padding:.75rem;border-radius:.25rem;font-size:.85rem;overflow-x:auto;white-space:pre;">Virat Kohli, 97, Batsman, India, Right, Right, Medium Pacer, 96, 30, Base, 1, Male
+Virat Kohli, 99, Batsman, India, Right, Right, Medium Pacer, 99, 35, Legend, 1, Male
+Jasprit Bumrah, 96, Bowler, India, Right, Right, Fast, 20, 95, Base, 1, Male
+Jasprit Bumrah, 98, Bowler, India, Right, Right, Fast, 22, 98, World Cup 2023, 1, Male</code>
 
   <div style="margin-top:1rem;padding:.75rem;background:#1a2e1a;border-left:3px solid #00d4aa;border-radius:.25rem;">
     <p style="margin:0;font-size:.9rem;line-height:1.6;">
@@ -37,6 +37,10 @@ Jasprit Bumrah, 98, Bowler, India, Right, Right, Fast, 22, 98, World Cup 2023, 1
       • <strong>Is Active</strong> defaults to <code>1</code>. Set <code>0</code>/<code>false</code>/<code>no</code> to disable<br>
       • Category accepts abbreviations: "bat"→Batsman, "bowl"→Bowler, "wk"→Wicket Keeper, "ar"→All-rounder<br>
       • Hand accepts: "R"/"L"/"Right"/"Left"<br>
+      • <strong>Gender</strong> is optional: Male, Female, Non-binary or Other; M/F and lowercase values are accepted<br>
+      • Blank or omitted Gender cells leave saved genders unchanged. Use <code>Not set</code> to clear a gender<br>
+      • Older files without Gender still work<br>
+      • With a header, columns can be reordered, including the downloaded CSV with its ID column<br>
       • First row can be a header (auto-detected and skipped)<br>
       • This format matches the CSV from the "Download All" button — round-trip safe
     </p>
@@ -50,9 +54,9 @@ Jasprit Bumrah, 98, Bowler, India, Right, Right, Fast, 22, 98, World Cup 2023, 1
     name="csv_text"
     rows="15"
     style="width:100%;font-family:monospace;font-size:.9rem;padding:.75rem;background:#0d1117;color:#c9d1d9;border:1px solid var(--border);border-radius:.5rem;"
-    placeholder="Name, Rating, Category, Country, Bat Hand, Bowl Hand, Bowl Style, Bat Rating, Bowl Rating, Version, Is Active
-Virat Kohli, 97, Batsman, India, Right, Right, Medium Pacer, 96, 30, Base, 1
-Virat Kohli, 99, Batsman, India, Right, Right, Medium Pacer, 99, 35, Legend, 1
+    placeholder="Name, Rating, Category, Country, Bat Hand, Bowl Hand, Bowl Style, Bat Rating, Bowl Rating, Version, Is Active, Gender
+Virat Kohli, 97, Batsman, India, Right, Right, Medium Pacer, 96, 30, Base, 1, Male
+Virat Kohli, 99, Batsman, India, Right, Right, Medium Pacer, 99, 35, Legend, 1, Male
 ..."></textarea>
 
   <div style="margin-top:1rem;display:flex;gap:.5rem;">
