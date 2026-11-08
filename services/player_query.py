@@ -213,6 +213,7 @@ def challenge_details_json(player, is_overseas=False, extra=None,
         "bowl_hand": player.bowl_hand,
         "bowl_style": player.bowl_style,
         "is_overseas": bool(is_overseas),
+        "gender": getattr(player, "gender", None),
     }
     if extra:
         blob.update(extra)
