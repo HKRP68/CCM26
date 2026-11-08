@@ -1289,13 +1289,40 @@ _CSV_HAND_MAP = {"r": "Right", "right": "Right", "l": "Left", "left": "Left",
                  "rh": "Right", "lh": "Left"}
 
 
+_PLAYER_CSV_COLUMNS = (
+    "name", "rating", "category", "country", "bat_hand", "bowl_hand",
+    "bowl_style", "bat_rating", "bowl_rating", "version", "is_active", "gender",
+)
+
+
+def _read_player_csv_rows(csv_text):
+    """Accept the positional upload format and named download columns."""
+    rows = list(csv.reader(io.StringIO(csv_text.lstrip("\ufeff"))))
+    header = None
+    for line, row in enumerate(rows, start=1):
+        if not row or not any(cell.strip() for cell in row):
+            continue
+        if header is None:
+            keys = [cell.strip().lower().replace(" ", "_") for cell in row]
+            keys = ["name" if key in ("player", "player_name") else key for key in keys]
+            if "name" in keys and ("rating" in keys or keys[0] == "name"):
+                header = {key: index for index, key in enumerate(keys)}
+                continue
+            header = {}
+        if header:
+            fields = _PLAYER_CSV_COLUMNS if "gender" in header else _PLAYER_CSV_COLUMNS[:-1]
+            row = [row[header[field]] if field in header and header[field] < len(row)
+                   else "" for field in fields]
+        yield line, row
+
+
 def _normalize_player_csv_row(cols):
     """Normalize one CSV row (a list of already-stripped cells) into a dict of
     Player field values. Column order matches the Bulk Upload / "Download All"
     format::
 
         Name, Rating, Category, Country, Bat Hand, Bowl Hand, Bowl Style,
-        Bat Rating, Bowl Rating, Version, Is Active
+        Bat Rating, Bowl Rating, Version, Is Active, Gender
 
     Returns ``None`` when the row has no name. Shared by both the bulk-upload
     (create) and data-change (override) flows so parsing stays identical.
@@ -1340,12 +1367,16 @@ def _normalize_player_csv_row(cols):
     bat_hand = _CSV_HAND_MAP.get(bat_hand.lower(), bat_hand)
     bowl_hand = _CSV_HAND_MAP.get(bowl_hand.lower(), bowl_hand)
 
-    return {
+    data = {
         "name": name, "version": version, "is_active": is_active,
         "rating": rating, "category": category, "country": country,
         "bat_hand": bat_hand, "bowl_hand": bowl_hand, "bowl_style": bowl_style,
         "bat_rating": bat_rating, "bowl_rating": bowl_rating,
     }
+    # Omitted or blank genders preserve saved data during Data Change.
+    if len(cols) > 11 and cols[11].strip():
+        data["gender"] = player_gender.normalize_gender(cols[11])
+    return data
 
 
 @app.route("/players/bulk-upload", methods=["GET", "POST"])
@@ -1367,24 +1398,14 @@ def players_bulk_upload():
                               for n, v in not_career(db.query(Player.name, Player.version)).all()}
             touched_names = set()
             # Parse CSV
-            reader = csv.reader(io.StringIO(csv_text))
-            rows = list(reader)
+            rows = _read_player_csv_rows(csv_text)
 
-            # Detect if first row is a header
-            has_header = False
-            if rows and rows[0]:
-                first = rows[0][0].strip().lower()
-                if first in ("name", "player", "player_name", "player name"):
-                    has_header = True
-
-            start_idx = 1 if has_header else 0
-
-            for i, row in enumerate(rows[start_idx:], start=start_idx + 1):
+            for i, row in rows:
                 if not row or not row[0].strip():
                     continue
                 try:
                     # Format: Name, Rating, Category, Country, Bat Hand, Bowl Hand,
-                    #         Bowl Style, Bat Rating, Bowl Rating, Version, Is Active
+                    #         Bowl Style, Bat Rating, Bowl Rating, Version, Is Active, Gender
                     # Min required: Name. Version + Is Active are optional (default Base, 1).
                     cols = [c.strip() for c in row]
                     data = _normalize_player_csv_row(cols)
@@ -1461,15 +1482,7 @@ def players_data_change():
             updated_players = []     # for cache bust + Challenge League re-sync
             cl_synced = 0
 
-            reader = csv.reader(io.StringIO(csv_text))
-            rows = list(reader)
-
-            has_header = False
-            if rows and rows[0]:
-                first = rows[0][0].strip().lower()
-                if first in ("name", "player", "player_name", "player name"):
-                    has_header = True
-            start_idx = 1 if has_header else 0
+            rows = _read_player_csv_rows(csv_text)
 
             # Fields the override controls. Name & Version are the match key, so
             # they're intentionally NOT overwritten here.
@@ -1477,7 +1490,7 @@ def players_data_change():
                                "bowl_hand", "bowl_style", "bat_rating",
                                "bowl_rating", "is_active")
 
-            for i, row in enumerate(rows[start_idx:], start=start_idx + 1):
+            for i, row in rows:
                 if not row or not row[0].strip():
                     continue
                 try:
@@ -1499,6 +1512,8 @@ def players_data_change():
 
                     for f in override_fields:
                         setattr(player, f, data[f])
+                    if "gender" in data:
+                        player.gender = data["gender"]
                     # Force the generated card to re-render with the new data.
                     player.card_file_id = None
                     updated += 1
@@ -4249,6 +4264,7 @@ def _seed_from_json(raw_data):
             player = Player(
                 name=name, version=version, rating=rating, category=category,
                 country=country, bat_hand=bat_hand, bowl_hand=bowl_hand,
+                gender=player_gender.normalize_gender(_pick(entry, "Gender", "gender", "Sex", "sex")),
                 bowl_style=bowl_style, bat_rating=bat_rating, bowl_rating=bowl_rating,
                 bat_avg=0, strike_rate=0, runs=0, centuries=0,
                 bowl_avg=0, economy=0, wickets=0, is_active=True,
