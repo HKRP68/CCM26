@@ -113,6 +113,12 @@ async def ciplbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.reply_text("❌ Use /debut first.")
             return
 
+        from services.tournament_only_service import casual_game_message
+        denied = casual_game_message(session, challenger, actor_telegram_id=tg.id)
+        if denied:
+            await message.reply_text(denied, parse_mode=None)
+            return
+
         league_key, league_name = _resolve_league(session, args, command_name)
         if not league_key:
             # League keys are admin-configured, and this goes out as HTML — an

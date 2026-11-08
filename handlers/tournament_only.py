@@ -6,7 +6,6 @@ import asyncio
 import html
 import logging
 import re
-from datetime import datetime
 
 from sqlalchemy import func
 
@@ -20,14 +19,17 @@ PAGE_SIZE = 5
 USAGE = (
     "<b>Tournament-only access</b>\n"
     "<code>/tournamentonly block @user [reason]</code>\n"
+    "<code>/tournamentonly warn @user [reason]</code>\n"
     "<code>/tournamentonly unblock @user</code>\n"
     "<code>/tournamentonly status @user</code>\n"
     "<code>/tournamentonly list [page]</code>\n\n"
     "Use a Telegram user ID instead of @user, or reply to the player's "
     "message and omit the target.\n"
     "Shortcut: <code>/touronly @user [reason]</code>. "
-    "24-hour warning, then tournament-only until your open-round fixtures finish. "
-    "Add <code>--grace=0</code> for immediate restriction (0–168 hours)."
+    "Block takes effect immediately. Players unlock after finishing their "
+    "required open-round fixtures.\n"
+    "Use <code>warn</code> for 24 hours of grace, or add "
+    "<code>--grace=12</code> to choose a deadline (0–168 hours). All times are IST."
 )
 _USERNAME = re.compile(r"^@[A-Za-z0-9_]{1,32}$")
 
@@ -48,7 +50,7 @@ def _parse(args, reply_id):
     if first in {"help", "-h", "--help"}:
         return "help", None, ""
     actions = {"block": "block", "on": "block", "unblock": "unblock",
-               "off": "unblock", "status": "status", "list": "list"}
+               "off": "unblock", "status": "status", "list": "list", "warn": "warn"}
     action = actions.get(first, "block")
     if first in actions:
         args.pop(0)
@@ -70,7 +72,7 @@ def _parse(args, reply_id):
     if not (_USERNAME.fullmatch(target)
             or target.isascii() and target.isdigit() and int(target) > 0):
         raise ValueError("Use a valid @username or a positive Telegram user ID.")
-    if action != "block" and args:
+    if action not in ("block", "warn") and args:
         raise ValueError(f"Use /tournamentonly {action} @user, or reply and omit @user.")
     reason = " ".join(args).strip()
     if len(reason) > 500:
@@ -115,9 +117,9 @@ def _execute(action, target, reason, admin_id):
             lines = [f"<b>Tournament-only players · {target}/{pages}</b>"]
             for user in users:
                 lines.append(_label(user, max_name_chars=40))
-                starts = user.tournament_only_starts_at
-                lines.append(f"  Warning until {starts:%Y-%m-%d %H:%M} UTC"
-                             if starts and starts > datetime.utcnow() else "  Restricted")
+                starts = service.warning_deadline(user)
+                lines.append(f"  ⚠️ Warning until {service.format_ist(starts)}"
+                             if starts else "  🔒 Active — other game modes blocked")
                 if user.tournament_only_reason:
                     # Five bounded labels/snippets stay below 4096 characters,
                     # even when every raw character expands to an HTML entity.
@@ -131,18 +133,16 @@ def _execute(action, target, reason, admin_id):
         if action == "status":
             if not user.tournament_only:
                 return f"{_label(user)} has normal game access."
-            lines = [f"🔒 {_label(user)} has tournament-only access."]
-            if user.tournament_only_reason:
-                lines.append(f"Reason: {html.escape(user.tournament_only_reason)}")
+            lines = [f"<b>Tournament-only access</b>\n{_label(user)}"]
             if user.tournament_only_at:
-                lines.append(f"Since: {user.tournament_only_at:%Y-%m-%d %H:%M} UTC")
+                lines.append(f"Set: {service.format_ist(user.tournament_only_at)}")
             if user.tournament_only_by:
                 lines.append(f"Set by admin: <code>{int(user.tournament_only_by)}</code>")
             lines.append(html.escape(service.restriction_message(user, session=session)))
             return "\n".join(lines)
 
-        if action == "block":
-            grace = 24
+        if action in ("block", "warn"):
+            grace = 24 if action == "warn" else 0
             flags = [word for word in reason.split() if word.startswith("--grace=")]
             if flags:
                 if len(flags) != 1 or not flags[0][8:].isdigit():
@@ -158,7 +158,7 @@ def _execute(action, target, reason, admin_id):
         session.commit()
         if action == "unblock":
             return f"✅ {label} can play all game modes again."
-        return (f"🔒 Updated tournament-only access for {label}.\n"
+        return (f"<b>Updated tournament-only access</b>\n{label}\n\n"
                 + html.escape(notice))
     except Exception:
         session.rollback()
@@ -172,8 +172,23 @@ async def tournamentonly_handler(update, context):
     if message is None:
         return
     actor = getattr(update, "effective_user", None)
+    args = getattr(context, "args", None) or []
+    admin = is_bot_admin(actor.id if actor else None)
+    # Players can inspect their own remaining fixtures, without moderation
+    # privileges or visibility into somebody else's restriction.
+    self_status = not args or (len(args) == 1 and str(args[0]).lower() == "status")
+    if actor and not admin and self_status:
+        try:
+            text = await asyncio.to_thread(_execute, "status", str(actor.id), "", actor.id)
+        except ValueError as exc:
+            text = f"❌ {html.escape(str(exc))}"
+        except Exception:
+            logger.exception("tournament-only self-status failed")
+            text = "⚠️ Could not check your tournament access. Please try again."
+        await message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
+        return
     # Maintenance bypass membership does not confer account moderation powers.
-    if not is_bot_admin(actor.id if actor else None):
+    if not admin:
         await message.reply_text("⛔ Only bot admins can change tournament-only access.")
         return
     reply = getattr(message, "reply_to_message", None)
@@ -184,7 +199,7 @@ async def tournamentonly_handler(update, context):
         action, target, reason = _parse(getattr(context, "args", None) or [], reply_id)
         text = (USAGE if action == "help" else
                 await asyncio.to_thread(_execute, action, target, reason, actor.id))
-        if action == "block" and getattr(context, "bot", None):
+        if action in ("block", "warn") and getattr(context, "bot", None):
             def warning():
                 from services import tournament_only_service as service
                 db = get_session()

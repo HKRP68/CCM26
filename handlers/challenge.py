@@ -2042,6 +2042,13 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
     if reply is None:
         logger.warning("league team picker: no message to reply to")
         return
+    if not (is_tournament and tournament_id):
+        from services.tournament_only_service import casual_game_message
+        denied = casual_game_message(session, challenger, target,
+                                     actor_telegram_id=update.effective_user.id)
+        if denied:
+            await reply.reply_text(denied, parse_mode=None)
+            return
     # One game per chat / one match per player (any game mode). Block early so a
     # Challenge League draft can't start on top of a live match in this chat or
     # while either player is already busy elsewhere.

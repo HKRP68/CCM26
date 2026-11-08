@@ -2637,6 +2637,12 @@ async def wpm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Use /debut first!")
             return
 
+        from services.tournament_only_service import casual_game_message
+        denied = casual_game_message(session, host, target, actor_telegram_id=tg.id)
+        if denied:
+            await update.message.reply_text(denied, parse_mode=None)
+            return
+
         # A tag/reply that didn't resolve to a registered player — don't silently
         # fall back to an open lobby; tell the host so they can fix it.
         if target is None and target_reason == "not_found":

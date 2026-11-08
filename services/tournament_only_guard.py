@@ -372,7 +372,9 @@ def _target_filters(update):
 def _check_action(session, action, update):
     from sqlalchemy import or_
     from models import Bowlout, CLTour, Match, Tour, User
-    from services.tournament_only_service import is_restricted, is_tournament_match, restriction_message
+    from services.tournament_only_service import (
+        is_restricted, is_tournament_match, restriction_message, restriction_alert,
+        OPPONENT_NOTICE)
 
     if action.tournament:
         return None
@@ -405,12 +407,12 @@ def _check_action(session, action, update):
     if not filters:
         return None
     for user in session.query(User).filter(or_(*filters)).all():
-        if not is_restricted(user):
+        if not is_restricted(user, session=session):
             continue
         if user.telegram_id == tg:
-            return restriction_message(user)
-        return ("🔒 A participant has tournament-only access. This game mode is "
-                "unavailable until a bot admin removes their restriction.")
+            return (restriction_alert(user, session) if getattr(update, "callback_query", None)
+                    else restriction_message(user, session=session))
+        return OPPONENT_NOTICE
     return None
 
 
@@ -431,28 +433,29 @@ async def tournament_only_guard(update, context):
     """PTB TypeHandler middleware; stop a denied gameplay update in all groups."""
     if not getattr(update, "effective_user", None):
         return
-    # Snapshot event-loop-owned state before performing blocking DB work.
-    snapshot = SimpleNamespace(bot_data=dict(getattr(context, "bot_data", {}) or {}))
-    bot_username = getattr(getattr(context, "bot", None), "username", None)
-    command = _command(update, bot_username)
     query = getattr(update, "callback_query", None)
-    if query:
-        action = _callback_action(str(query.data or ""), snapshot,
-                                  getattr(update.effective_chat, "id", None))
-        if action is None:
-            return
-    elif command:
-        if command in TOURNAMENT_COMMANDS:
-            return
-        action = Action() if command in START_COMMANDS else None
-        if command not in START_COMMANDS | CONTINUE_COMMANDS:
-            if command in _registered_commands(context):
-                return
-    else:
-        action = _text_action(update, snapshot)
-        if action is None:
-            return
     try:
+        # Classification is part of the gate too: an invalid/stale callback
+        # must not throw past it and let a later handler group play the game.
+        snapshot = SimpleNamespace(bot_data=dict(getattr(context, "bot_data", {}) or {}))
+        bot_username = getattr(getattr(context, "bot", None), "username", None)
+        command = _command(update, bot_username)
+        if query:
+            action = _callback_action(str(query.data or ""), snapshot,
+                                      getattr(update.effective_chat, "id", None))
+            if action is None:
+                return
+        elif command:
+            if command in TOURNAMENT_COMMANDS:
+                return
+            action = Action() if command in START_COMMANDS else None
+            if command not in START_COMMANDS | CONTINUE_COMMANDS:
+                if command in _registered_commands(context):
+                    return
+        else:
+            action = _text_action(update, snapshot)
+            if action is None:
+                return
         denied = await asyncio.to_thread(_decision, update, snapshot, command, action)
     except Exception:
         logger.exception("Tournament-only gameplay access check failed")
@@ -463,6 +466,6 @@ async def tournament_only_guard(update, context):
         if query:
             await query.answer(denied[:200], show_alert=True)
         elif getattr(update, "effective_message", None):
-            await update.effective_message.reply_text(denied)
+            await update.effective_message.reply_text(denied, parse_mode=None)
     finally:
         raise ApplicationHandlerStop

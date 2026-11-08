@@ -289,6 +289,17 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
             await update.message.reply_text(text, parse_mode="HTML")
 
+        from services.tournament_only_service import casual_game_message
+        opponent = _reply_target_user(session, update)
+        denied = casual_game_message(session, user, opponent,
+                                     actor_telegram_id=update.effective_user.id)
+        if denied:
+            if progress:
+                await progress.edit_text(denied, parse_mode=None)
+            else:
+                await update.message.reply_text(denied, parse_mode=None)
+            return
+
         # ── Cooldown gate (checked before the heavy roster reads) ──
         stats, ready, remaining, cooldown = sim_cooldown_state(session, user)
         if not ready:
@@ -325,7 +336,6 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_xi = _xi_from_roster(session, user.id, roster)
         team_name = _team_display_name(user, "Your XI")
 
-        opponent = _reply_target_user(session, update)
         if opponent and opponent.id == user.id:
             if progress:
                 await progress.edit_text("❌ Reply to another real user to sim your XI vs their XI.")

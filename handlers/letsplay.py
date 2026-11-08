@@ -540,6 +540,14 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
             await msg.reply_text("❌ Do /debut first to get a roster!")
             return
 
+        from services.tournament_only_service import casual_game_message
+        official = bool(tour_ctx and tour_ctx.get("tournament_id"))
+        if not official:
+            denied = casual_game_message(session, host, actor_telegram_id=tg.id)
+            if denied:
+                await msg.reply_text(denied, parse_mode=None)
+                return
+
         if _active_letsplay_in_chat(context, chat.id, session):
             await msg.reply_text(
                 "⚠️ A Lets Play match is already in progress in this chat. "
@@ -585,6 +593,12 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if guest_user.id == host.id:
             await msg.reply_text("❌ You can't play a match against yourself.")
             return
+
+        if not official:
+            denied = casual_game_message(session, host, guest_user, actor_telegram_id=tg.id)
+            if denied:
+                await msg.reply_text(denied, parse_mode=None)
+                return
 
         # One match per player (any mode): block if either side is already in a
         # live DB match or a /wpm lobby, matching the other challenge handlers.

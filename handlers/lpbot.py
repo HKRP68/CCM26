@@ -59,18 +59,23 @@ async def lpbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if play_mode:
         remember_play_mode(context.bot_data, tg.id, play_mode)
 
-    # Difficulty first: the prompt sends a keyboard and this returns, and the
-    # button re-enters here with the choice already banked.
-    from handlers.botlevel import prompt_difficulty, take_pending_choice
-    if not take_pending_choice(context):
-        await prompt_difficulty(update, context, "lp")
-        return
-
     session = get_session()
     try:
         host = sync_telegram_user(session, tg)
         if not host:
             await msg.reply_text("❌ Do /debut first to get a roster!")
+            return
+
+        from services.tournament_only_service import casual_game_message
+        denied = casual_game_message(session, host, actor_telegram_id=tg.id)
+        if denied:
+            await msg.reply_text(denied, parse_mode=None)
+            return
+
+        # Check access before a difficulty/rematch button can open a new setup.
+        from handlers.botlevel import prompt_difficulty, take_pending_choice
+        if not take_pending_choice(context):
+            await prompt_difficulty(update, context, "lp")
             return
 
         if _active_letsplay_in_chat(context, chat.id, session):
