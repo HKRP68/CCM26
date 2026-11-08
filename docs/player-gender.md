@@ -27,3 +27,22 @@ For individual changes, use the Gender dropdown on **Add Player** or
 Gender filter includes **Gender not set** to find records still to fill in.
 The regular CSV, JSON and Excel player downloads include gender and respect
 the Gender filter.
+
+Bulk Upload Players and Data Change also accept an optional final Gender column:
+
+```csv
+Name,Rating,Category,Country,Bat Hand,Bowl Hand,Bowl Style,Bat Rating,Bowl Rating,Version,Is Active,Gender
+Example Player,90,Batsman,India,Right,Right,Medium Pacer,90,30,Base,1,Female
+```
+
+Files with a header can put Gender anywhere. The downloaded player CSV (including
+its ID column) can be pasted into either flow: columns are matched by header
+name. Without a header, use the column order above. Older 11-column files still
+work. Data Change leaves a player's gender unchanged when Gender is missing or
+blank; `Not set` clears it. Invalid genders are reported as row errors and that
+row is skipped, consistent with the existing bulk-upload behaviour.
+
+JSON player imports accept `Gender` or `gender`; the admin JSON importer also
+accepts `Sex` or `sex`. The standalone seed script reads Gender as well.
+Master-player Challenge League snapshots include gender, and the existing
+Data Change/Edit re-sync carries gender edits into those snapshots.
