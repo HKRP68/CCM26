@@ -220,3 +220,72 @@ def test_existing_database_migration_is_idempotent_and_preserves_players(catalog
     assert "gender" in {column["name"] for column in inspect(engine).get_columns("players")}
     catalogue.expire_all()
     assert (player.name, player.rating, player.gender) == ("Player", 90, None)
+
+
+
+def test_bulk_upload_accepts_gender_and_legacy_rows(catalogue, client):
+    rows = ("New Female,90,Bat,India,R,R,Medium,90,30,Base,1,f\n"
+            "Legacy Player,90,Bat,India,R,R,Medium,90,30,Base,1\n"
+            "Invalid Gender,90,Bat,India,R,R,Medium,90,30,Base,1,Typo")
+    assert client.post("/players/bulk-upload", data={"csv_text": rows}).status_code == 302
+    players = {p.name: p for p in catalogue.query(Player).all()}
+    assert players["New Female"].gender == "Female"
+    assert players["Legacy Player"].gender is None
+    assert "Invalid Gender" not in players
+
+
+def test_bulk_upload_maps_reordered_headers(catalogue, client):
+    rows = ("Gender,Country,Name,Rating,Category,Version\n"
+            "F,India,Header Player,91,Bat,Legend")
+    assert client.post("/players/bulk-upload", data={"csv_text": rows}).status_code == 302
+    player = catalogue.query(Player).one()
+    assert (player.name, player.gender, player.rating, player.version) == (
+        "Header Player", "Female", 91, "Legend")
+
+
+@pytest.mark.parametrize("suffix,expected", [
+    ("", "Female"), (",", "Female"), (",M", "Male"), (",Not set", None),
+    (",Typo", "Female"),
+])
+def test_data_change_handles_optional_gender(catalogue, client, suffix, expected):
+    player = card(catalogue, gender="Female")
+    catalogue.commit()
+    row = "Player,90,Bat,India,R,R,Medium,90,30,Base,1" + suffix
+    assert client.post("/players/data-change", data={"csv_text": row}).status_code == 302
+    catalogue.expire_all()
+    assert player.gender == expected
+
+
+def test_downloaded_csv_can_update_gender_without_misreading_id(catalogue, client):
+    player = card(catalogue, gender="Female")
+    catalogue.commit()
+    response = client.get("/players/download")
+    reader = csv.DictReader(io.StringIO(response.text))
+    rows = list(reader)
+    rows[0]["gender"] = "Male"
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=reader.fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    assert client.post("/players/data-change", data={"csv_text": output.getvalue()}).status_code == 302
+    catalogue.expire_all()
+    assert (player.name, player.gender, player.rating) == ("Player", "Male", 90)
+
+
+def test_json_import_preserves_gender(catalogue):
+    added = admin._seed_from_json([
+        {"Name": "JSON Female", "Rating": 90, "Gender": "f"},
+        {"name": "JSON Male", "rating": 90, "gender": "Male"},
+        {"Name": "JSON Unknown", "Rating": 90},
+    ])
+    assert added == 3
+    assert {p.name: p.gender for p in catalogue.query(Player).all()} == {
+        "JSON Female": "Female", "JSON Male": "Male", "JSON Unknown": None}
+
+
+def test_challenge_snapshot_carries_master_gender(catalogue):
+    import json
+    from services.player_query import challenge_details_json
+    player = card(catalogue, gender="Female")
+    assert json.loads(challenge_details_json(player))["gender"] == "Female"
+    assert json.loads(challenge_details_json(player, extra={"gender": "Other"}))["gender"] == "Other"
