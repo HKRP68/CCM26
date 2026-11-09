@@ -6,6 +6,7 @@ the baked-in defaults. Cache invalidated by save_config().
 
 import logging
 from datetime import datetime
+from time import monotonic
 
 from models import GameConfig
 
@@ -99,6 +100,8 @@ DEFAULTS = {
     "match_style": "telegram",
     "challenge_max_overs": 2,
     "allow_same_team_challenge": False,
+    "chemistry_variety_target": 4,
+    "chemistry_variety_versions_json": None,
     # Challenge Draft (/cdraft) player pool: the rating BAND every slot draws
     # from, the JSON list of Player.version labels a draft may deal (NULL/empty
     # = all), and how far apart the two cards offered in one slot may be.
@@ -213,6 +216,24 @@ def get_match_style(session=None):
 
 # Module-level cache (refreshed when admin saves)
 _CACHE = {"data": None, "loaded_at": None}
+_CHEMISTRY_CACHE = {"data": None, "loaded_at": 0.0}
+
+
+def get_chemistry_config():
+    """Pick up website changes across bot workers within five seconds.
+
+    Chemistry is also read during play, so avoid a database query per delivery.
+    Keep this separate from the unbounded general config cache.
+    """
+    now = monotonic()
+    if (_CHEMISTRY_CACHE["data"] is None
+            or now - _CHEMISTRY_CACHE["loaded_at"] >= 5):
+        data = _refresh()
+        _CHEMISTRY_CACHE.update(data={
+            key: data.get(key, DEFAULTS[key]) for key in
+            ("chemistry_variety_target", "chemistry_variety_versions_json")
+        }, loaded_at=now)
+    return dict(_CHEMISTRY_CACHE["data"])
 
 
 def get_config(session=None, *, fresh=False):
@@ -284,6 +305,7 @@ def save_config(session, updates, updated_by=None, allow_null=()):
         ).update({MatchScorecardImage.file_id: None}, synchronize_session=False)
     # Invalidate cache so next get_config re-reads
     _CACHE["data"] = None
+    _CHEMISTRY_CACHE["data"] = None
     return row
 
 

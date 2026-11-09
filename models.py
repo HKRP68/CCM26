@@ -1411,6 +1411,10 @@ class GameConfig(Base):
     match_style = Column(String(20), default="telegram", nullable=False)
     challenge_max_overs = Column(Integer, default=2, nullable=False)
     allow_same_team_challenge = Column(Boolean, default=False, nullable=False)
+    # Card Variety: distinct eligible editions needed for the full 10 points.
+    chemistry_variety_target = Column(Integer, default=4, nullable=False)
+    # NULL = all special editions; [] = none; otherwise exact version labels.
+    chemistry_variety_versions_json = Column(Text, nullable=True)
     # ── Challenge Draft pool (/cdraft, editable on the Match Gameplay page
     # and with /cdraftset) ──
     # The two ends of the draft's rating ladder: slot 1 is dealt around the max

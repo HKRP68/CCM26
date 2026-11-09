@@ -341,7 +341,8 @@ async def playingxi_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if is_own and bench:
             kb = InlineKeyboardMarkup([[
                 InlineKeyboardButton(f"📋 View Bench ({len(bench)})", callback_data=f"viewbench_{view_user.id}")
-            ]])
+            ], [InlineKeyboardButton("🧪 Improve Chemistry",
+                                     callback_data=f"chem_recs_{view_user.id}")]])
         blocks = build_xi_blocks(roster, handle, view_user.captain_roster_id,
                                  show_bench=False,
                                  origin_chat_id=update.effective_chat.id)
@@ -407,70 +408,8 @@ async def bench_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def swapplayers_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tg_user = update.effective_user
-    if not context.args or len(context.args) < 2:
-        await update.message.reply_text("Usage: /swap <pos1> <pos2>\nPositions match the numbers shown in /pxi")
-        return
-    try:
-        pos1, pos2 = int(context.args[0]), int(context.args[1])
-    except ValueError:
-        await update.message.reply_text("❌ Numbers only.")
-        return
-
-    session = get_session()
-    try:
-        user = session.query(User).filter(User.telegram_id == tg_user.id).first()
-        if not user:
-            await update.message.reply_text("❌ Do /debut first!")
-            return
-
-        locked = match_lock_message(session, user.id, "swap players in your XI")
-        if locked:
-            await update.message.reply_text(locked, parse_mode="HTML")
-            return
-
-        # Get roster in raw order first (to ensure order_position is clean)
-        raw_roster = _get_ordered_roster(session, user.id)
-
-        # Build display order (matches /pxi numbering)
-        display_order = _build_display_order(raw_roster)
-        total = len(display_order)
-
-        if pos1 < 1 or pos2 < 1 or pos1 > total or pos2 > total or pos1 == pos2:
-            await update.message.reply_text(
-                f"❌ Positions must be 1-{total}, and different.")
-            return
-
-        # Get entries at the DISPLAY positions
-        e1, p1 = display_order[pos1 - 1]
-        e2, p2 = display_order[pos2 - 1]
-
-        # Swap their order_position values in the database
-        e1.order_position, e2.order_position = e2.order_position, e1.order_position
-
-        log_activity(session, user.id, "swap", f"Swapped #{pos1} {p1.name} ↔ #{pos2} {p2.name}")
-        session.commit()
-
-        xi_note = "\n🏏 Playing XI updated!" if pos1 <= 11 or pos2 <= 11 else ""
-        # /swapplayers numbers by the /pxi DISPLAY order (batsmen → keepers →
-        # all-rounders → pacers → spinners), which is not the batting order. For
-        # a player whose saved batting order is now what every match bats, that
-        # mismatch matters, so point them at the command that speaks in batting
-        # slots instead of letting them guess.
-        from services import batting_order_service as _bos
-        order_note = ""
-        if (pos1 <= 11 or pos2 <= 11) and _bos.has_custom_order(user):
-            order_note = ("\n\n⚠️ This moved squad slots, not batting slots — "
-                          "check your line-up with /sbo (it edits batting "
-                          "positions 1-11 directly).")
-        await update.message.reply_text(
-            f"✅ Swapped #{pos1} {p1.name} ↔ #{pos2} {p2.name}{xi_note}{order_note}")
-    except Exception:
-        session.rollback()
-        logger.exception("Swap err")
-        await update.message.reply_text("⚠️ Error.")
-    finally:
-        session.close()
+    from handlers.chemistry_planner import swap_preview_command
+    await swap_preview_command(update, context)
 
 
 async def setcaptain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

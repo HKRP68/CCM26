@@ -149,10 +149,10 @@ welcome messages for that chat, `/dwm` turns them off (group admins only).
 | `/playingxi` | `/pxi` `/xi` | View or manage your playing XI |
 | `/ximage` | `/xiimg` `/xipic` | Your Playing XI rendered as an image |
 | `/autobuild` | `/ab` `/best11` | Auto-pick your best legal XI and reorder the roster |
-| `/swapplayers` | `/swappl` `/swap` | Swap two players' positions |
+| `/swapplayers` | `/swappl` `/swap` | Preview chemistry and rating changes, then confirm a swap of two players' positions |
 | `/setbo` 💬 | `/sbo` `/battingorder` `/bo` | View or change your batting order |
 | `/setcaptain` | `/captain` `/cap` | Set your team captain |
-| `/cmuchem` | `/cmuchemistry` `/chem` `/chemistry` | Check your XI's Team Chemistry and see your special cards by player name, edition and special type 🧪 |
+| `/cmuchem` | `/cmuchemistry` `/chem` `/chemistry` | Check Team Chemistry, grouped special-edition counts and legal bench upgrades; tap an upgrade to preview the swap 🧪 |
 | `/chemhelp` | `/chemguide` | How Team Chemistry works 📖 |
 | `/change` | — | Change your XI / batting order during match setup (after the toss, before the match starts) |
 

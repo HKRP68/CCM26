@@ -7647,7 +7647,7 @@ def webapp_market_buy(slot_id):
 @app.route("/api/webapp/xi", methods=["POST"])
 @csrf_exempt
 def webapp_xi():
-    """Return the playing XI (positions 1-11) and bench (positions 12-25)."""
+    """Return the XI, bench, current chemistry and legal chemistry upgrades."""
     auth, tg_id, err = _webapp_auth()
     if err:
         return err
@@ -7657,13 +7657,13 @@ def webapp_xi():
         rows = (db.query(UserRoster, Player)
                 .join(Player, UserRoster.player_id == Player.id)
                 .filter(UserRoster.user_id == user.id)
-                .order_by(UserRoster.order_position.asc()).all())
+                .order_by(UserRoster.order_position.asc(), UserRoster.acquired_date.asc()).all())
         xi = []
         bench = []
-        for r, p in rows:
+        for position, (r, p) in enumerate(rows, 1):
             entry = {
                 "roster_id": r.id,
-                "position": r.order_position,
+                "position": position,
                 "player_id": p.id,
                 "card_url": _player_card_url(p.id),
                 "name": p.name,
@@ -7675,11 +7675,16 @@ def webapp_xi():
                 "version": p.version or "Base",
                 "is_captain": bool(user.captain_roster_id == r.id),
             }
-            if r.order_position <= 11:
+            if position <= 11:
                 xi.append(entry)
             else:
                 bench.append(entry)
+        from services import chemistry_planner
+        from services.config_service import get_config
+        config = get_config(db, fresh=True)
         return {"ok": True, "xi": xi, "bench": bench,
+                "chemistry": chemistry_planner.summarize_xi(rows, config),
+                "chemistry_suggestions": chemistry_planner.recommend_bench_swaps(rows, config=config),
                 "captain_roster_id": user.captain_roster_id,
                 "roster_count": len(rows)}
     except Exception as e:
@@ -7786,12 +7791,40 @@ def webapp_xi_reorder():
         db.close()
 
 
+@app.route("/api/webapp/xi/preview_swap", methods=["POST"])
+@csrf_exempt
+def webapp_xi_preview_swap():
+    """Read-only chemistry comparison; ownership is checked against the live roster."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import chemistry_planner
+        from services.config_service import get_config
+        from services.roster_service import get_roster_ordered
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            raise ValueError("Choose an XI player and a bench player.")
+        preview = chemistry_planner.preview_swap(
+            get_roster_ordered(db, user.id), int(data.get("xi_roster_id") or 0),
+            int(data.get("bench_roster_id") or 0), get_config(db, fresh=True))
+        if (not preview["membership_changed"]
+                or preview["outgoing"]["roster_id"] != int(data.get("xi_roster_id") or 0)):
+            raise ValueError("Choose an XI player and a bench player.")
+        return {"ok": True, "preview": preview}
+    except (ValueError, TypeError) as exc:
+        return {"ok": False, "error": "invalid_swap", "message": str(exc)}, 400
+    finally:
+        db.close()
+
+
 @app.route("/api/webapp/xi/swap_bench", methods=["POST"])
 @csrf_exempt
 def webapp_xi_swap_bench():
     """Swap a bench player into the XI.
 
-    Request body: {bench_roster_id, xi_roster_id}
+    Request body: {bench_roster_id, xi_roster_id, preview_token}
     The bench player takes the XI player's position; XI player goes to bench.
     """
     auth, tg_id, err = _webapp_auth()
@@ -7799,43 +7832,47 @@ def webapp_xi_swap_bench():
         return err
     db, user, tg_id = auth
     try:
+        db.refresh(user, with_for_update=True)
         locked = _team_locked_response(db, user, "swap players in your XI")
         if locked:
             return locked
-        from models import UserRoster
+        from services import chemistry_planner
+        from services.config_service import get_config
+        from services.roster_service import get_roster_ordered
         data = request.get_json(silent=True) or {}
-        bench_id = int(data.get("bench_roster_id") or 0)
-        xi_id = int(data.get("xi_roster_id") or 0)
+        if not isinstance(data, dict):
+            return {"ok": False, "error": "invalid_swap"}, 400
+        try:
+            bench_id = int(data.get("bench_roster_id") or 0)
+            xi_id = int(data.get("xi_roster_id") or 0)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "invalid_swap"}, 400
         if not bench_id or not xi_id:
             return {"ok": False, "error": "missing_ids"}, 400
 
-        bench_row = (db.query(UserRoster)
-                     .filter(UserRoster.id == bench_id,
-                             UserRoster.user_id == user.id).first())
-        xi_row = (db.query(UserRoster)
-                  .filter(UserRoster.id == xi_id,
-                          UserRoster.user_id == user.id).first())
-        if not bench_row or not xi_row:
-            return {"ok": False, "error": "not_found"}, 404
-        if bench_row.order_position <= 11:
-            return {"ok": False, "error": "not_bench"}, 400
-        if xi_row.order_position > 11:
-            return {"ok": False, "error": "not_xi"}, 400
-
-        # Swap their positions
-        bench_pos = bench_row.order_position
-        xi_pos = xi_row.order_position
-        bench_row.order_position = xi_pos
-        xi_row.order_position = bench_pos
+        roster = get_roster_ordered(db, user.id)
+        try:
+            preview = chemistry_planner.preview_swap(
+                roster, xi_id, bench_id, get_config(db, fresh=True))
+        except ValueError as exc:
+            return {"ok": False, "error": "invalid_swap", "message": str(exc)}, 400
+        if not preview["membership_changed"] or preview["outgoing"]["roster_id"] != xi_id:
+            return {"ok": False, "error": "invalid_swap"}, 400
+        if data.get("preview_token") != preview["preview_token"]:
+            return {"ok": False, "error": "stale_preview",
+                    "message": "Your roster or chemistry rules changed. Preview the swap again before confirming."}, 409
+        chemistry_planner.apply_swap(roster, xi_id, bench_id)
 
         # Putting a bench player into a specific batting slot is the user
         # arranging their line-up, exactly like `/sbo 2 13`. Mark the order as
         # theirs so every mode bats it as saved instead of re-sorting by rating.
         from datetime import datetime as _dt
         user.batting_order_set_at = _dt.utcnow()
-
+        from services.activity_service import log_activity
+        log_activity(db, user.id, "swap",
+                     f"[MiniApp] {preview['incoming']['name']} replaced {preview['outgoing']['name']}")
         db.commit()
-        return {"ok": True}
+        return {"ok": True, "chemistry": preview["after"]}
     except Exception as e:
         db.rollback()
         logger.exception("webapp_xi_swap_bench failed")
@@ -14776,6 +14813,74 @@ def _cdraft_feasibility(rows, versions):
     """Can these settings deal a draft? ``{role: (have, need)}``."""
     from services import cdraft_service
     return cdraft_service.pool_feasibility(rows, versions)
+
+
+@app.route("/settings/chemistry", methods=["GET", "POST"])
+@login_required
+def admin_chemistry_settings():
+    """Choose the exact editions that earn Card Variety and its full-bonus target."""
+    from services import chemistry
+    from services.config_service import get_config, save_config
+
+    db = get_session()
+    try:
+        cfg = get_config(db, fresh=True)
+        rules = chemistry.variety_rules(cfg)
+        catalogue = {}
+        for version, count in db.query(Player.version, func.count(Player.id)).group_by(
+                Player.version).all():
+            label = chemistry.edition_label(version)
+            if not label:
+                continue
+            item = catalogue.setdefault(label.casefold(), {"label": label, "count": 0})
+            item["count"] += count
+        # Keep selected editions editable even if their last catalogue card
+        # was removed. Never silently expand a saved allow-list on a new drop.
+        for label in rules["versions"] or ():
+            catalogue.setdefault(label.casefold(), {"label": label, "count": 0})
+        status = 200
+        if request.method == "POST":
+            try:
+                target = int(request.form.get("chemistry_variety_target", ""))
+                if not 1 <= target <= chemistry.XI_SIZE:
+                    raise ValueError("Versions for the full bonus must be from 1 to 11.")
+                mode = request.form.get("chemistry_version_mode")
+                if mode not in {"all", "selected"}:
+                    raise ValueError("Choose all special editions or selected editions.")
+                chosen = {}
+                if mode == "selected":
+                    for value in request.form.getlist("chemistry_versions"):
+                        key = (chemistry.edition_label(value) or "").casefold()
+                        if key not in catalogue:
+                            raise ValueError("Select eligible editions from the catalogue.")
+                        chosen[key] = catalogue[key]["label"]
+                versions_json = (None if mode == "all" else
+                                 json.dumps(sorted(chosen.values(), key=str.casefold)))
+            except ValueError as exc:
+                flash(f"Card Variety was not saved: {exc}", "error")
+                status = 400
+            else:
+                save_config(db, {
+                    "chemistry_variety_target": target,
+                    "chemistry_variety_versions_json": versions_json,
+                }, updated_by=session.get("admin_user", "admin"),
+                    allow_null=("chemistry_variety_versions_json",))
+                log_admin(db, "chemistry_settings_save", "config", 0, "chemistry",
+                          f"target={target} versions={versions_json if versions_json is not None else 'all'}")
+                db.commit()
+                flash("✅ Card Variety settings saved. Changes reach the bot within 5 seconds.", "success")
+                return redirect(url_for("admin_chemistry_settings"))
+        return render_template(
+            "admin_chemistry.html", rules=rules,
+            versions=sorted(catalogue.values(), key=lambda item: item["label"].casefold()),
+            allowed={label.casefold() for label in rules["versions"] or ()},
+        ), status
+    except Exception:
+        db.rollback()
+        logger.exception("chemistry settings failed")
+        raise
+    finally:
+        db.close()
 
 
 @app.route("/settings/matches", methods=["GET", "POST"])

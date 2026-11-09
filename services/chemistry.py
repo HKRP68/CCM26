@@ -6,9 +6,9 @@ Chemistry is scored out of 100 and splits into two independent halves:
   • SPECIAL CHEMISTRY  (0-20) — the spread of special card editions (Icon,
     TOTY, Prime, Legend, Event) the XI is built from.
 
-Like ``services.xi_rules`` this module imports nothing beyond the standard
-library, so the maths can be reused by the match engine, the Mini App, the
-bot's XI builder and the tests without dragging in Telegram or SQLAlchemy.
+The maths can run with an explicit config dict using only the standard library.
+Without one, Card Variety lazily reads the website's shared settings so the
+match engine, bot and guide use the same eligible editions and target.
 
 ────────────────────────────────────────────────────────────────────────
 Why country chemistry is a table and not N×(N−1)÷2
@@ -100,9 +100,8 @@ _TYPE_KEYWORDS = (
     ("prime", ("prime", "peak", "moments")),
     ("legend", ("legend", "ultimate", "goat")),
     ("star", ("star",)),
-    # League editions are separate types, not one lumped "event" — Card Variety
-    # asks for four *different* types, so an IPL and a BBL card have to count as
-    # two. Checked before the catch-all.
+    # The historical special-chemistry model keeps league types separate.
+    # Player-facing Card Variety uses exact editions instead (see below).
     ("ipl", ("ipl", "indian premier")),
     ("wpl", ("wpl", "women's premier", "womens premier")),
     ("bbl", ("bbl", "big bash")),
@@ -386,7 +385,7 @@ ROLE_HALVED = ("All-rounder",)
 ROLE_COMPONENT_MAX = 20
 CATEGORY_CHEMISTRY_MAX = ROLE_COMPONENT_MAX * len(ROLE_ORDER)      # 80
 
-# Playing XI Bonus — two tiered halves, both scored on a target of four.
+# Playing XI Bonus — two tiered halves, both defaulting to a target of four.
 # Tiers rather than a smooth ramp because players need to know what the next
 # step costs: "one more country" is a decision, "+2.5 per country" is not.
 DIVERSITY_TIERS = ((4, 10), (3, 7), (2, 3))
@@ -492,23 +491,106 @@ def country_diversity(players):
     return _tier_score(len(countries), DIVERSITY_TIERS), len(countries)
 
 
-def card_variety(players):
-    """Squad-wide special-edition spread. Returns ``(score, types)``.
+def edition_label(version):
+    """An edition's own label, without a cosmetic 'card'/'edition' suffix.
 
-    4+ special types → 10, 3 → 7, 2 → 3, otherwise 0.
+    Keep years and event names: IPL2025 and IPL2026 are different editions.
+    The broader ``special_type`` buckets remain responsible for Icon effects.
     """
-    types = {special_type(_field(p, "version")) for p in players}
-    types.discard(None)
-    return _tier_score(len(types), VARIETY_TIERS), len(types)
+    label = " ".join(str(version or "").split())
+    while True:
+        for noise in _VERSION_NOISE:
+            if label.casefold().endswith(noise):
+                label = label[:-len(noise)].strip()
+                break
+        else:
+            return label if special_type(label) is not None else None
 
 
-def playing_xi_bonus(players):
+def variety_rules(config=None):
+    """Website-configured target, eligible labels and descending score tiers.
+
+    With the default target of four, keep the existing 0/3/7/10 curve. Other
+    targets spread the ten points evenly from one type (zero) to the target.
+    A target of one awards the full ten for the first eligible edition.
+    """
+    import json
+
+    if config is None:
+        from services.config_service import get_chemistry_config
+        config = get_chemistry_config()
+    try:
+        target = max(1, min(XI_SIZE, int(config.get(
+            "chemistry_variety_target", VARIETY_TARGET_TYPES))))
+    except (TypeError, ValueError):
+        target = VARIETY_TARGET_TYPES
+    raw = config.get("chemistry_variety_versions_json")
+    try:
+        versions = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        versions = None
+    if not isinstance(versions, list):
+        versions = None
+    if versions is not None:
+        labels = {}
+        for version in versions:
+            label = edition_label(version) if isinstance(version, str) else None
+            if label:
+                labels.setdefault(label.casefold(), label)
+        versions = sorted(labels.values(), key=str.casefold)
+    tiers = (((1, VARIETY_MAX),) if target == 1 else tuple(
+        (count, _round_half_up(VARIETY_MAX * (count - 1) / (target - 1)))
+        for count in range(target, 1, -1)))
+    return {"target": target, "versions": versions, "tiers": tiers}
+
+
+def card_variety_details(players, config=None):
+    """Group eligible cards by edition, with a count that matches the score."""
+    rules = variety_rules(config)
+    allowed = (None if rules["versions"] is None else
+               {label.casefold(): label for label in rules["versions"]})
+    counts = {}
+    for player in players:
+        label = edition_label(_field(player, "version"))
+        if not label:
+            continue
+        key = label.casefold()
+        if allowed is not None and key not in allowed:
+            continue
+        if key not in counts:
+            counts[key] = {"version": allowed[key] if allowed is not None else label,
+                           "count": 0}
+        counts[key]["count"] += 1
+    versions = sorted(counts.values(), key=lambda item:
+                      (-item["count"], item["version"].casefold()))
+    missing = ([] if allowed is None else
+               [label for key, label in allowed.items() if key not in counts])
+    return {"score": _tier_score(len(counts), rules["tiers"]),
+            "types": len(counts), "versions": versions,
+            "target": rules["target"], "tiers": rules["tiers"],
+            "missing": missing,
+            "available": None if allowed is None else len(allowed)}
+
+
+def card_variety(players, config=None):
+    """Squad-wide eligible-edition spread. Returns ``(score, types)``."""
+    detail = card_variety_details(players, config)
+    return detail["score"], detail["types"]
+
+
+def playing_xi_bonus(players, config=None):
     """Country Diversity + Card Variety, 0-20, with both halves."""
+    players = list(players)
     diversity, countries = country_diversity(players)
-    variety, types = card_variety(players)
-    return diversity + variety, {
+    variety = card_variety_details(players, config)
+    return diversity + variety["score"], {
         "diversity": diversity, "countries": countries,
-        "variety": variety, "types": types,
+        "variety": variety["score"], "types": variety["types"],
+        "variety_versions": variety["versions"],
+        "variety_target": variety["target"],
+        "variety_tiers": variety["tiers"],
+        "variety_missing": variety["missing"],
+        "variety_available": variety["available"],
     }
 
 
@@ -534,7 +616,7 @@ def category_chemistry(members):
     return _round_half_up(score), majority, biggest
 
 
-def role_chemistry(players, xi_bonus=None):
+def role_chemistry(players, xi_bonus=None, config=None):
     """Per-role chemistry lines for /cmuchem.
 
     ``xi_bonus`` is the shared Playing XI Bonus (0-20); computed from the squad
@@ -543,7 +625,7 @@ def role_chemistry(players, xi_bonus=None):
     """
     players = list(players)
     if xi_bonus is None:
-        xi_bonus = playing_xi_bonus(players)[0]
+        xi_bonus = playing_xi_bonus(players, config)[0]
 
     grouped = {role: [] for role in ROLE_ORDER}
     for player in players:
@@ -580,7 +662,7 @@ def role_chemistry(players, xi_bonus=None):
     return lines
 
 
-def calculate_role_report(players):
+def calculate_role_report(players, config=None):
     """The full /cmuchem report.
 
     Overall is Category Chemistry (4 roles × 20 = 80) plus the Playing XI Bonus
@@ -588,7 +670,7 @@ def calculate_role_report(players):
     genuinely add to 100 rather than being normalised up. A test pins the sum.
     """
     players = list(players)
-    xi_bonus, xi_detail = playing_xi_bonus(players)
+    xi_bonus, xi_detail = playing_xi_bonus(players, config)
     lines = role_chemistry(players, xi_bonus=xi_bonus)
 
     category_total = sum(line["category"] for line in lines)
@@ -607,7 +689,11 @@ def calculate_role_report(players):
         "diversity_max": DIVERSITY_MAX,
         "variety": xi_detail["variety"],
         "variety_types": xi_detail["types"],
-        "variety_target": VARIETY_TARGET_TYPES,
+        "variety_target": xi_detail["variety_target"],
+        "variety_versions": xi_detail["variety_versions"],
+        "variety_tiers": xi_detail["variety_tiers"],
+        "variety_missing": xi_detail["variety_missing"],
+        "variety_available": xi_detail["variety_available"],
         "variety_max": VARIETY_MAX,
         "xi_bonus": xi_bonus,
         "xi_bonus_max": XI_BONUS_MAX,
@@ -622,7 +708,7 @@ def calculate_role_report(players):
     }
 
 
-def match_boosts(players):
+def match_boosts(players, config=None):
     """In-match stat boost per role for an XI: ``{role: boost}``.
 
     This is what chemistry actually *does*. The match engine adds a player's
@@ -633,7 +719,8 @@ def match_boosts(players):
     chemistry plays at its raw ratings rather than below them, so a new player
     fielding whatever they pulled is not taxed for it.
     """
-    return {line["role"]: line["bonus"] for line in role_chemistry(players)}
+    return {line["role"]: line["bonus"]
+            for line in role_chemistry(players, config=config)}
 
 
 # ── Layer 2: Partnership Bond ───────────────────────────────────────
@@ -699,7 +786,7 @@ def clutch_multiplier(over, total_overs, pressure=0.0):
         else 1.0
 
 
-def fielding_bonus(players):
+def fielding_bonus(players, config=None):
     """Fielding-quality bonus (0-``FIELDING_MAX_BONUS``) from the side's chemistry.
 
     The match engine adds this to the bowling side's fielding quality and then
@@ -708,17 +795,19 @@ def fielding_bonus(players):
     chemistry helps a side *reach* the best fielding in the game, it does not
     let one side field better than the game allows.
     """
-    total = calculate_role_report(players)["total"]
+    total = calculate_role_report(players, config)["total"]
     return round(FIELDING_MAX_BONUS * total / CMUCHEM_TOTAL_MAX, 2)
 
 
-def improvement_tips(players, limit=3):
+def improvement_tips(players, limit=3, config=None):
     """Concrete, ranked next steps for raising this XI's chemistry.
 
     Ordered by points available, so the first tip is always the best move.
     Returns a list of ``(points, text)`` — empty when the XI is already at 100.
     """
-    report = calculate_role_report(players)
+    from html import escape
+
+    report = calculate_role_report(players, config)
     tips = []
 
     for line in report["roles"]:
@@ -745,22 +834,29 @@ def improvement_tips(players, limit=3):
             )))
 
     types = report["variety_types"]
+    available = report["variety_available"]
     if report["variety"] < VARIETY_MAX:
-        nxt = next((t for t, _p in reversed(VARIETY_TIERS) if t > types),
-                   VARIETY_TARGET_TYPES)
-        gain = _tier_score(nxt, VARIETY_TIERS) - report["variety"]
+        tiers = report["variety_tiers"]
+        nxt = next((t for t, _p in reversed(tiers)
+                    if t > types and (available is None or t <= available)), None)
+        gain = _tier_score(nxt, tiers) - report["variety"] if nxt is not None else 0
         if gain > 0:
+            suggestion = ""
+            if report["variety_missing"]:
+                missing = ", ".join(escape(label) for label in
+                                    report["variety_missing"][:3])
+                suggestion = f" Missing eligible editions: {missing}."
             tips.append((gain, (
                 f"<b>Card Variety</b> +{gain} — you hold {types} special "
                 f"type{'s' if types != 1 else ''}. Reach {nxt} for "
-                f"{_tier_score(nxt, VARIETY_TIERS)}/{VARIETY_MAX}."
+                f"{_tier_score(nxt, tiers)}/{VARIETY_MAX}.{suggestion}"
             )))
 
     tips.sort(key=lambda t: -t[0])
     return tips[:limit]
 
 
-def xi_summary(players):
+def xi_summary(players, config=None):
     """Compact chemistry summary for the /pxi lineup card.
 
     Returns ``(total, shape)``, or ``None`` when the side isn't a full XI yet —
@@ -770,7 +866,7 @@ def xi_summary(players):
     players = list(players)
     if len(players) < XI_SIZE:
         return None
-    total = calculate_role_report(players)["total"]
+    total = calculate_role_report(players, config)["total"]
     _country_total, blocks = country_chemistry(players)
     shape = "-".join(str(b["count"]) for b in
                      sorted(blocks, key=lambda b: -b["count"]))
@@ -797,7 +893,7 @@ def live_colour(total):
     return LIVE_CHEM_BANDS[-1][1]
 
 
-def live_badge(players):
+def live_badge(players, config=None):
     """In-match chemistry badge for an XI — ``'🟩 88/100'`` — or ``None``.
 
     Uses the same 30-100 number as /cmuchem and /pxi rather than inventing a
@@ -822,7 +918,7 @@ def live_badge(players):
         return None
     if any(not str(_field(player, "country") or "").strip() for player in players):
         return None
-    total = calculate_role_report(players)["total"]
+    total = calculate_role_report(players, config)["total"]
     return f"{live_colour(total)} {total}/{CMUCHEM_TOTAL_MAX}"
 
 
@@ -839,7 +935,7 @@ def bond_label(bond):
     return None
 
 
-def render_chemistry_card(players):
+def render_chemistry_card(players, config=None):
     """The /cmuchem card as Telegram HTML.
 
     Lives here rather than in the handler so it can be rendered — and tested —
@@ -848,7 +944,8 @@ def render_chemistry_card(players):
     from html import escape
 
     players = list(players)
-    report = calculate_role_report(players)
+    report = calculate_role_report(players, config)
+    fielding = round(FIELDING_MAX_BONUS * report["total"] / CMUCHEM_TOTAL_MAX, 2)
 
     lines = ["🧪 <b>TEAM CHEMISTRY</b>", "━━━━━━━━━━━━━━━━━━━"]
     for role in report["roles"]:
@@ -888,26 +985,24 @@ def render_chemistry_card(players):
         "⚡ <b>In matches</b>",
         f"• Unit boosts above, <b>×{CLUTCH_MULTIPLIER:g} at the death</b> "
         "and in a tight chase",
-        f"• <b>+{fielding_bonus(players):g}</b> fielding — "
-        f"{chem_colour(fielding_bonus(players), FIELDING_MAX_BONUS)} "
+        f"• <b>+{fielding:g}</b> fielding — "
+        f"{chem_colour(fielding, FIELDING_MAX_BONUS)} "
         "fewer dropped catches",
         "• 🤝 Countrymen batting together run better "
         "<i>(an Icon partners with anyone)</i>",
     ]
 
-    lines += ["", "✨ <b>Your special cards — Playing XI</b>"]
-    special_cards = [p for p in players if special_type(_field(p, "version"))]
-    if special_cards:
-        for player in special_cards:
-            kind = special_type(_field(player, "version"))
-            label = (kind.upper() if kind in {"toty", "ipl", "wpl", "bbl", "psl", "sa20", "cpl"}
-                     else kind.title())
-            lines.append(f"• {escape(str(_field(player, 'name') or 'Player'))} — "
-                         f"{escape(str(_field(player, 'version')))} ({label})")
+    lines += ["", "✨ <b>Card types — Playing XI</b>"]
+    types = report["variety_types"]
+    lines.append(f"You have <b>{types} special card "
+                 f"type{'s' if types != 1 else ''}</b>.")
+    if report["variety_versions"]:
+        lines.append(", ".join(f"{item['count']}× {escape(item['version'])}"
+                               for item in report["variety_versions"]))
     else:
-        lines.append("No special cards in your Playing XI yet.")
+        lines.append("No eligible special cards in your Playing XI yet.")
 
-    tips = improvement_tips(players)
+    tips = improvement_tips(players, config=config)
     if tips:
         lines.append("")
         lines.append("💡 <b>How to improve</b>")

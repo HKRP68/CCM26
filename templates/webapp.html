@@ -2193,6 +2193,19 @@
     color: var(--red); font-weight: 700; font-size: 0.78rem;
     white-space: nowrap;
   }
+  .xi-chemistry-card {
+    background:var(--card); border:1px solid var(--border); border-radius:10px;
+    padding:.85rem; margin:0 0 .8rem; font-size:.8rem;
+  }
+  .xi-chemistry-card h3 { margin:0 0 .5rem; font-size:.95rem; }
+  .xi-chemistry-suggestion { padding:.7rem 0; border-top:1px solid var(--border); }
+  .xi-chemistry-suggestion:first-of-type { border-top:0; }
+  .xi-chemistry-suggestion button { margin-top:.4rem; }
+  .swap-comparison { width:100%; border-collapse:collapse; margin:.7rem 0; font-size:.82rem; }
+  .swap-comparison th, .swap-comparison td { padding:.5rem .25rem; text-align:left; border-bottom:1px solid var(--border); }
+  .swap-warning { color:var(--accent); font-size:.8rem; line-height:1.5; }
+  .swap-actions { display:flex; gap:.6rem; margin-top:1rem; }
+  .swap-actions button { flex:1; padding:.7rem; }
 
   /* Phase result flash overlay */
   .phase-result-overlay {
@@ -2850,8 +2863,11 @@
     </div>
   </div>
   <p style="color:var(--muted);font-size:0.78rem;margin:0 0 0.7rem;">
-    Drag the ⠿ handle OR use ▲▼ buttons to reorder. Tap a bench player to swap them in (same category only).
+    Drag the ⠿ handle or use ▲▼ to reorder. Tap a bench player to preview a swap with the same category.
+    Chemistry suggestions can also adjust roles when the resulting XI is valid.
   </p>
+  <div id="xi-chemistry" aria-live="polite"></div>
+  <div id="xi-chemistry-suggestions"></div>
   <div id="xi-list" style="margin-bottom: 1rem;">
     <div class="empty"><div class="spinner"></div></div>
   </div>
@@ -6559,6 +6575,11 @@ async function buyFromMarket(slotId, name, price) {
 let xiSortable = null;
 let cachedXi = null;
 let cachedBench = null;
+let cachedXiChemistry = null;
+let cachedChemistrySuggestions = [];
+let pendingXiSwap = null;
+let xiSwapSaving = false;
+let swapPreviewSequence = 0;
 
 // Category order — used for grouping bench and inferring batting/bowling
 const XI_CATEGORY_ORDER = ['Batsman', 'Wicket Keeper', 'All-rounder', 'Bowler'];
@@ -6593,6 +6614,8 @@ async function loadXi() {
   const benchEl = document.getElementById('xi-bench');
   list.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
   benchEl.innerHTML = '';
+  document.getElementById('xi-chemistry').textContent = '';
+  document.getElementById('xi-chemistry-suggestions').textContent = '';
   const { ok, data } = await api('/api/webapp/xi', {});
   if (!ok) {
     list.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
@@ -6600,9 +6623,42 @@ async function loadXi() {
   }
   cachedXi = data.xi;
   cachedBench = data.bench;
+  cachedXiChemistry = data.chemistry;
+  cachedChemistrySuggestions = data.chemistry_suggestions || [];
 
   renderXiList();
   renderBenchGrouped();
+  renderXiChemistry();
+}
+
+function signedChange(value) { return value > 0 ? `+${value}` : String(value); }
+
+function renderXiChemistry() {
+  const summary = document.getElementById('xi-chemistry');
+  const suggestions = document.getElementById('xi-chemistry-suggestions');
+  if (!cachedXiChemistry) {
+    summary.textContent = 'Complete your XI to see chemistry and bench suggestions.';
+    suggestions.textContent = '';
+    return;
+  }
+  summary.innerHTML = `<div class="xi-chemistry-card">
+    <h3>🧪 Chemistry ${cachedXiChemistry.total}/100</h3>
+    <span style="color:var(--muted);">Card Variety ${cachedXiChemistry.variety}/10 ·
+      ${cachedXiChemistry.variety_types}/${cachedXiChemistry.variety_target} special types ·
+      Country Diversity ${cachedXiChemistry.diversity}/10</span>
+  </div>`;
+  if (!cachedBench?.length) { suggestions.textContent = ''; return; }
+  const body = cachedChemistrySuggestions.length ? cachedChemistrySuggestions.map(item => `
+    <div class="xi-chemistry-suggestion">
+      <div><b>${escapeHtml(item.incoming.name)}</b> (${escapeHtml(item.incoming.version)})
+        for ${escapeHtml(item.outgoing.name)}</div>
+      <div style="color:var(--green);font-weight:700;margin-top:.25rem;">
+        +${item.delta} CHEM · ${item.before.total} → ${item.after.total}/100</div>
+      <div style="color:var(--muted);margin-top:.2rem;">Card OVR ${item.outgoing.rating} → ${item.incoming.rating}
+        (${signedChange(item.rating_delta)})</div>
+      <button class="link-btn" onclick="previewSwap(${item.incoming.roster_id}, ${item.outgoing.roster_id})">Preview swap</button>
+    </div>`).join('') : '<p style="color:var(--muted);margin:0;">No legal bench swap improves chemistry right now.</p>';
+  suggestions.innerHTML = `<section class="xi-chemistry-card"><h3>💡 Bench chemistry upgrades</h3>${body}</section>`;
 }
 
 function renderXiList() {
@@ -6754,25 +6810,25 @@ function showSwapPicker(benchRosterId, benchName, benchCategory, candidates) {
   const overlay = document.createElement('div');
   overlay.id = 'swap-picker-overlay';
   overlay.className = 'swap-overlay';
-  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.onclick = (e) => { if (e.target === overlay) closeSwapPreview(); };
   overlay.innerHTML = `
     <div class="swap-panel">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
         <h3 style="margin:0;font-size:1rem;">Swap ${escapeHtml(benchName)} in</h3>
-        <button onclick="document.getElementById('swap-picker-overlay').remove();" class="link-btn">✕</button>
+        <button onclick="closeSwapPreview()" class="link-btn" aria-label="Close swap picker">✕</button>
       </div>
       <p style="color:var(--muted);font-size:0.78rem;margin:0 0 0.7rem;">
         Choose a <b>${escapeHtml(benchCategory)}</b> to swap out of the XI:
       </p>
       <div>
         ${candidates.map(c => `
-          <div class="swap-candidate" onclick="confirmSwap(${benchRosterId}, ${c.roster_id}, '${escapeHtmlAttr(benchName)}', '${escapeHtmlAttr(c.name)}')">
+          <button type="button" class="swap-candidate" style="width:100%;text-align:left;color:var(--text);font-family:inherit;" onclick="previewSwap(${benchRosterId}, ${c.roster_id})">
             <div>
               <div style="font-weight:700;font-size:0.88rem;">${escapeHtml(c.name)} ${ratingBadge(c.rating)}</div>
               <div style="font-size:0.72rem;color:var(--muted);">XI position ${c.position}</div>
             </div>
-            <div class="swap-arrow">→ Out</div>
-          </div>
+            <div class="swap-arrow">Preview →</div>
+          </button>
         `).join('')}
       </div>
     </div>
@@ -6780,22 +6836,94 @@ function showSwapPicker(benchRosterId, benchName, benchCategory, candidates) {
   document.body.appendChild(overlay);
 }
 
-async function confirmSwap(benchRosterId, xiRosterId, benchName, xiName) {
-  const overlay = document.getElementById('swap-picker-overlay');
-  if (overlay) overlay.remove();
+function closeSwapPreview() {
+  if (xiSwapSaving) return;
+  swapPreviewSequence++;
+  pendingXiSwap = null;
+  document.getElementById('swap-picker-overlay')?.remove();
+}
+
+function swapModal(title, content) {
+  document.getElementById('swap-picker-overlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'swap-picker-overlay'; overlay.className = 'swap-overlay';
+  overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', title);
+  overlay.onclick = event => { if (event.target === overlay) closeSwapPreview(); };
+  overlay.onkeydown = event => { if (event.key === 'Escape') closeSwapPreview(); };
+  overlay.innerHTML = `<div class="swap-panel">
+    <div style="display:flex;justify-content:space-between;gap:1rem;align-items:center;">
+      <h3 style="margin:0;font-size:1rem;">${escapeHtml(title)}</h3>
+      <button class="link-btn" onclick="closeSwapPreview()" aria-label="Close preview">✕</button>
+    </div>${content}</div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('button')?.focus();
+  return overlay;
+}
+
+async function previewSwap(benchRosterId, xiRosterId) {
+  if (xiSwapSaving) return;
+  const sequence = ++swapPreviewSequence;
+  pendingXiSwap = null;
+  const overlay = swapModal('🧪 Swap preview', '<p>Calculating chemistry…</p>');
+  const { ok, data } = await api('/api/webapp/xi/preview_swap', {
+    bench_roster_id: benchRosterId, xi_roster_id: xiRosterId,
+  });
+  if (sequence !== swapPreviewSequence || !overlay.isConnected) return;
+  if (!ok) {
+    swapModal('Swap unavailable', `<p>${escapeHtml(data.message || 'Could not preview this swap.')}</p>`);
+    return;
+  }
+  pendingXiSwap = data.preview;
+  const p = data.preview, before = p.before, after = p.after;
+  const rows = before && after ? [
+    ['Chemistry', `${before.total}/100`, `${after.total}/100 (${signedChange(p.delta)})`],
+    ['Card Variety', `${before.variety}/10`, `${after.variety}/10`],
+    ['Special types', before.variety_types, after.variety_types],
+    ['Country Diversity', `${before.diversity}/10`, `${after.diversity}/10`],
+    ['Average OVR', before.average_rating, after.average_rating],
+    ...before.roles.map((role, i) => [`${role.label} boost`, `+${role.bonus}`, `+${after.roles[i].bonus}`]),
+  ] : [];
+  const warning = p.warnings.length
+    ? `<div class="swap-warning"><b>XI needs attention before a match:</b><ul>${p.warnings.map(text => `<li>${escapeHtml(text)}</li>`).join('')}</ul></div>`
+    : '<p style="color:var(--green);font-size:.8rem;">✓ This swap keeps a valid XI.</p>';
+  swapModal('🧪 Swap preview', `
+    <p><b>In:</b> ${escapeHtml(p.incoming.name)} (${escapeHtml(p.incoming.version)})<br>
+      <b>Out:</b> ${escapeHtml(p.outgoing.name)} (${escapeHtml(p.outgoing.version)})</p>
+    <p style="font-size:.8rem;">Card OVR ${p.outgoing.rating} → ${p.incoming.rating} (${signedChange(p.rating_delta)})</p>
+    <table class="swap-comparison"><thead><tr><th>Component</th><th>Before</th><th>After</th></tr></thead>
+      <tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${escapeHtml(String(cell))}</td>`).join('')}</tr>`).join('')}</tbody></table>
+    ${warning}<p style="color:var(--muted);font-size:.78rem;">Your XI changes only when you confirm.</p>
+    <div id="swap-preview-error" role="status"></div>
+    <div class="swap-actions"><button class="link-btn" onclick="closeSwapPreview()">Cancel</button>
+      <button class="link-btn" id="confirm-xi-swap" onclick="confirmSwap()">Confirm swap</button></div>`);
+}
+
+async function confirmSwap() {
+  if (!pendingXiSwap || xiSwapSaving) return;
+  const p = pendingXiSwap;
+  xiSwapSaving = true;
+  const button = document.getElementById('confirm-xi-swap');
+  if (button) { button.disabled = true; button.textContent = 'Saving…'; }
   haptic('medium');
   const { ok, data } = await api('/api/webapp/xi/swap_bench', {
-    bench_roster_id: benchRosterId,
-    xi_roster_id: xiRosterId,
+    bench_roster_id: p.incoming.roster_id,
+    xi_roster_id: p.outgoing.roster_id,
+    preview_token: p.preview_token,
   });
+  xiSwapSaving = false;
   if (!ok) {
-    toast(data.message || 'Swap failed', 'error');
+    const error = document.getElementById('swap-preview-error');
+    if (error) error.innerHTML = `<p class="swap-warning">${escapeHtml(data.message || 'Swap failed.')}</p>
+      <button class="link-btn" onclick="previewSwap(${p.incoming.roster_id}, ${p.outgoing.roster_id})">Refresh preview</button>`;
+    pendingXiSwap = null;
     hapticNotif('error');
     return;
   }
-  toast(`${benchName} replaces ${xiName} in the XI`, 'success');
+  closeSwapPreview();
+  toast(`${p.incoming.name} replaces ${p.outgoing.name} · Chemistry ${p.after.total}/100`, 'success');
   hapticNotif('success');
-  loadXi();
+  await loadXi();
 }
 
 // ════════════════ Invite ════════════════

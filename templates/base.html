@@ -496,6 +496,7 @@ hr.pitch-line { border: none; height: 1px; background: linear-gradient(90deg, tr
 
     <div class="section-label">Game Settings</div>
     <a href="{{ url_for('admin_match_settings') }}" class="{{ 'active' if request.endpoint == 'admin_match_settings' }}">🏏 Match Gameplay</a>
+    <a href="{{ url_for('admin_chemistry_settings') }}" class="{{ 'active' if request.endpoint == 'admin_chemistry_settings' }}">🧪 Team Chemistry</a>
     <a href="{{ url_for('admin_scorecard_settings') }}" class="{{ 'active' if request.endpoint == 'admin_scorecard_settings' }}">📊 Scorecard</a>
     <a href="{{ url_for('admin_card_template') }}" class="{{ 'active' if 'card_template' in (request.endpoint or '') or 'career_face' in (request.endpoint or '') }}">🎴 Card Template</a>
     <a href="{{ url_for('admin_career') }}" class="{{ 'active' if (request.endpoint or '').startswith('admin_career') and 'face' not in (request.endpoint or '') and 'change' not in (request.endpoint or '') }}">🎖 Career Players</a>

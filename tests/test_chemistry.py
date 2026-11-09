@@ -27,20 +27,22 @@ def _xi(shape, version="Base"):
 
 
 class SpecialCardDisplayTests(unittest.TestCase):
-    def test_owned_xi_special_cards_show_name_and_edition_with_html_escaped(self):
+    def test_owned_xi_groups_editions_without_player_names_and_escapes_html(self):
         players = _xi((4, 4, 3))
         players[0].name = "Lara <Legend>"
         players[0].version = "Icon & Prime"
         players[1].name = "Kohli"
         players[1].version = "TOTY"
-        text = chemistry.render_chemistry_card(iter(players))
-        self.assertIn("Your special cards — Playing XI", text)
-        self.assertIn("Lara &lt;Legend&gt; — Icon &amp; Prime (Icon)", text)
-        self.assertIn("Kohli — TOTY (TOTY)", text)
+        players[2].version = "TOTY"
+        text = chemistry.render_chemistry_card(iter(players), config={})
+        self.assertIn("You have <b>2 special card types</b>", text)
+        self.assertIn("2× TOTY, 1× Icon &amp; Prime", text)
+        self.assertNotIn("Lara", text)
+        self.assertNotIn("Kohli", text)
 
     def test_base_xi_has_an_explicit_empty_special_card_message(self):
-        self.assertIn("No special cards in your Playing XI yet.",
-                      chemistry.render_chemistry_card(_xi((4, 4, 3))))
+        self.assertIn("No eligible special cards in your Playing XI yet.",
+                      chemistry.render_chemistry_card(_xi((4, 4, 3)), config={}))
 
 
 class CountryCurveTests(unittest.TestCase):

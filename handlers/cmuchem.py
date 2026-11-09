@@ -14,7 +14,10 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import User
 from services import chemistry
-from handlers.lineup import _get_ordered_roster
+from services import chemistry_planner
+from services.config_service import get_config
+from services.roster_service import get_roster_ordered
+from handlers.chemistry_planner import recommendation_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +33,7 @@ async def cmuchem_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Do /debut first!")
             return
 
-        roster = _get_ordered_roster(session, user.id)
+        roster = get_roster_ordered(session, user.id)
         players = [player for _entry, player in roster[:11]]
 
         if len(players) < 11:
@@ -46,8 +49,14 @@ async def cmuchem_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        config = get_config(session, fresh=True)
+        suggestions = chemistry_planner.recommend_bench_swaps(roster, config=config)
+        text = chemistry.render_chemistry_card(players, config=config)
+        if len(roster) > 11:
+            text += "\n\n" + chemistry_planner.render_recommendations(suggestions)
         await update.message.reply_text(
-            chemistry.render_chemistry_card(players), parse_mode="HTML")
+            text, parse_mode="HTML",
+            reply_markup=recommendation_keyboard(user.id, suggestions))
 
     except Exception:
         logger.exception(f"Chemistry error for user {tg_user.id}")

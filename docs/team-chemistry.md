@@ -440,9 +440,9 @@ countries, which caps Country Diversity at 3 of 10.
 
 ### 7.2 Playing XI Bonus (0-20)
 
-Two tiered halves, both scored on a target of four. Tiers rather than a smooth
-ramp because a player needs to know what the next step costs — *"one more
-country"* is a decision, *"+2.5 per country"* is not.
+Two tiered halves, both defaulting to a target of four. Country Diversity uses
+the fixed table below. Card Variety's target and eligible editions can be
+changed under **Game Settings → Team Chemistry** (`/settings/chemistry`).
 
 | Countries | Diversity | | Special types | Variety |
 |---|---:|---|---|---:|
@@ -451,10 +451,62 @@ country"* is a decision, *"+2.5 per country"* is not.
 | 2 | 3 | | 2 | 3 |
 | 1 | 0 | | 1 | 0 |
 
-Special types are `Icon, TOTY, Prime, Legend, Star, IPL, WPL, BBL, PSL, SA20,
-CPL` plus an `event` catch-all for anything else non-base. **League editions
-are separate types** — Card Variety asks for four *different* types, so an IPL
-card and a BBL card must count as two, not collapse into one bucket.
+Card Variety counts **distinct eligible edition labels**, preserving years and
+event names: `IPL2026`, `IPL2025`, `T20WC` and `BBL2025` are four types. Case,
+extra whitespace and cosmetic `card`, `cards`, `edition` or `version` suffixes
+do not create extra types. Base cards never count. The broader special-type
+classification is still used for Icon effects and the historical country-block
+model; it does not merge editions for the player-facing variety score.
+
+Admins choose **All special editions** (the default, including future drops)
+or **Only the editions I select**. Unselected editions contribute no variety
+points; an explicitly empty selection disables this bonus. Saved editions stay
+editable even if their last catalogue card is removed. The full-bonus target
+can be 1–11 distinct editions. For targets above one:
+
+```
+variety = round_half_up(10 × max(0, min(types, target) − 1) / (target − 1))
+```
+
+At target one, the first eligible type earns all ten points. The default target
+four retains the 0/3/7/10 table above. Repeated cards increase the quantity in
+the display, never the distinct-type count. For example:
+
+```
+You have 3 special card types.
+2× IPL2026, 1× BBL2025, 1× T20WC
+```
+
+The chemistry card does not list player names. Its counts, score, next-tier
+tips, `/chemhelp`, `/pxi`, live badges and newly calculated match boosts all use
+the saved rules. Workers refresh settings within five seconds; boosts already
+cached by a running match retain their current values. The website previews the
+score tiers and warns when the selected catalogue is smaller than the target.
+Existing databases receive the new config columns through the startup migration.
+
+#### Preview swaps and find bench upgrades
+
+`/swap <pos1> <pos2>` now previews the change before showing **Confirm swap**
+and **Cancel**. Positions continue to match `/pxi` display numbers, including
+the bench. The Mini App's XI screen provides the same comparison when choosing
+a replacement. Previews show overall chemistry, Card Variety, Country Diversity,
+role boosts and the average OVR; rating losses remain visible beside chemistry gains.
+Viewing a preview or cancelling never writes roster positions.
+
+`/cmuchem`, the **Improve Chemistry** button on your own `/pxi`, and the Mini
+App's **Bench chemistry upgrades** section recommend up to three bench cards.
+Each recommendation is that card's best legal swap, ranked by positive displayed
+chemistry gain, then raw chemistry and rating change. The whole roster rulebook
+applies: keeper and role counts, the third-all-rounder restriction, duplicate
+cricketers and the seven-per-country limit. Cross-role swaps are eligible when
+the resulting XI is legal. Suggestions always lead to a fresh preview.
+
+Manual swaps can still build an XI in steps; their previews explicitly list any
+remaining validation warnings. Confirmations recheck ownership, the current
+roster and card attributes, scoring rules and match locks. Changed inputs require
+a new preview. Bot confirmations expire after five minutes, and a new preview
+replaces the previous one. Confirmed bench selections mark the XI as user-chosen
+so automatic selection does not discard a deliberately chosen chemistry upgrade.
 
 ### 7.3 Stat boosts in matches
 

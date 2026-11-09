@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}Team Chemistry{% endblock %}
+{% block head_extra %}
+<style>
+  #chemistry-settings input[type="checkbox"],
+  #chemistry-settings input[type="radio"] {
+    display:inline-block;
+    width:auto;
+    margin:0 .4rem 0 0;
+    vertical-align:middle;
+  }
+  #chemistry-settings .edition-option,
+  #chemistry-settings .edition-mode {
+    text-transform:none;
+    letter-spacing:normal;
+    font-size:.95rem;
+    font-weight:400;
+    color:var(--text);
+    overflow-wrap:anywhere;
+  }
+  #chemistry-settings fieldset { min-width:0; }
+  #chemistry-settings .edition-option[hidden] { display:none; }
+  #chemistry-settings th, #chemistry-settings td {
+    overflow-wrap:anywhere;
+    white-space:normal;
+  }
+</style>
+{% endblock %}
+{% block content %}
+<h1>🧪 Team Chemistry</h1>
+<p style="color:var(--muted); max-width:800px; margin-bottom:1.5rem;">
+  Choose which card editions count toward Card Variety in a player's Playing XI,
+  and how many different editions earn the full 10-point bonus.
+</p>
+
+<form method="POST" action="{{ url_for('admin_chemistry_settings') }}" class="form-card" style="max-width:900px;" id="chemistry-settings">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <h2 style="margin:0 0 1rem;">🃏 Card Variety</h2>
+  <label for="variety-target"><strong>Different versions for the full bonus</strong></label>
+  <input id="variety-target" type="number" name="chemistry_variety_target"
+         min="1" max="11" step="1" required value="{{ rules.target }}"
+         style="display:block; max-width:120px; margin:.5rem 0;">
+  <p style="color:var(--muted); margin-bottom:1.2rem;">
+    From 1 to 11. Repeated cards of the same edition add to its quantity but count as
+    one type. IPL2026 and IPL2025 count as two different types. Base cards never count.
+    With a target above one, the first type earns 0 points; further types build up to 10.
+  </p>
+
+  <label class="edition-mode" style="display:block; margin-bottom:.7rem;">
+    <input type="radio" name="chemistry_version_mode" value="all"
+           {% if rules.versions is none %}checked{% endif %}>
+    <strong>All special editions</strong>
+    <span style="color:var(--muted);">— includes future editions automatically</span>
+  </label>
+  <label class="edition-mode" style="display:block; margin-bottom:1rem;">
+    <input type="radio" name="chemistry_version_mode" value="selected"
+           {% if rules.versions is not none %}checked{% endif %}>
+    <strong>Only the editions I select</strong>
+  </label>
+
+  <fieldset id="edition-picker" style="border:1px solid var(--border); border-radius:8px; padding:1rem; margin-bottom:1rem;">
+    <legend>Eligible editions</legend>
+    <p style="color:var(--muted); margin:0 0 .75rem;">
+      Unselected editions earn no variety points. Selecting none disables the variety bonus.
+      Country and Icon bonuses keep their own rules.
+    </p>
+    <div style="display:flex; flex-wrap:wrap; gap:.6rem; align-items:center; margin-bottom:1rem;">
+      <input type="search" id="edition-search" placeholder="Search editions" aria-label="Search editions" style="flex:1; min-width:160px;">
+      <button type="button" class="btn btn-secondary" id="select-editions">Select all</button>
+      <button type="button" class="btn btn-secondary" id="clear-editions">Clear selection</button>
+    </div>
+    <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:.6rem 1rem;">
+      {% for item in versions %}
+      <label class="edition-option">
+        <input type="checkbox" name="chemistry_versions" value="{{ item.label }}"
+               {% if item.label|lower in allowed %}checked{% endif %}>
+        {{ item.label }} <span style="color:var(--muted);">({{ item.count }} card{{ '' if item.count == 1 else 's' }})</span>
+      </label>
+      {% else %}
+      <p style="color:var(--muted);">No special editions in the catalogue yet.</p>
+      {% endfor %}
+    </div>
+  </fieldset>
+  <p id="edition-status" role="status" aria-live="polite" style="color:var(--muted);"></p>
+
+  <div style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:1rem; margin:1rem 0;">
+    <strong>Score preview</strong>
+    <table style="width:100%; margin-top:.5rem;">
+      <thead><tr><th scope="col">Different eligible editions in XI</th><th scope="col">Variety points</th></tr></thead>
+      <tbody id="variety-preview">
+        {% for count, points in rules.tiers %}
+        <tr><td>{{ count }}{{ '+' if loop.first else '' }}</td><td>{{ points }}/10</td></tr>
+        {% endfor %}
+        <tr><td>{{ '0' if rules.target == 1 else '0–1' }}</td><td>0/10</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="color:var(--muted); margin-bottom:1.2rem;">
+    The chemistry card groups eligible editions, for example:<br>
+    <strong>You have 3 special card types</strong><br>
+    2× IPL2026, 1× T20WC, 1× BBL2025<br>
+    Saved rules reach the bot within 5 seconds and apply to chemistry displays and new match boosts.
+    Matches already in progress keep their current boosts.
+  </p>
+  <button type="submit" class="btn">💾 Save Chemistry Settings</button>
+</form>
+
+<script>
+(() => {
+  const form = document.getElementById('chemistry-settings');
+  const target = document.getElementById('variety-target');
+  const picker = document.getElementById('edition-picker');
+  const boxes = [...form.querySelectorAll('input[name="chemistry_versions"]')];
+  const status = document.getElementById('edition-status');
+  const preview = document.getElementById('variety-preview');
+  function update() {
+    const all = form.elements.chemistry_version_mode.value === 'all';
+    picker.disabled = all;
+    picker.style.opacity = all ? '.6' : '1';
+    const available = all ? boxes.length : boxes.filter(box => box.checked).length;
+    const needed = Number(target.value);
+    status.textContent = all
+      ? `All special editions count (${available} currently in the catalogue).`
+      : `${available} eligible edition${available === 1 ? '' : 's'} selected.`;
+    if (!all && available === 0) status.textContent += ' Card Variety is disabled.';
+    else if (Number.isInteger(needed) && available < needed)
+      status.textContent += ` The full bonus needs ${needed} available editions.`;
+    preview.replaceChildren();
+    if (!Number.isInteger(needed) || needed < 1 || needed > 11) return;
+    function row(label, score) {
+      const tr = document.createElement('tr');
+      for (const text of [label, `${score}/10`]) {
+        const td = document.createElement('td'); td.textContent = text; tr.append(td);
+      }
+      preview.append(tr);
+    }
+    for (let count = needed; count >= 2; count--)
+      row(`${count}${count === needed ? '+' : ''}`,
+          Math.round(10 * (count - 1) / (needed - 1)));
+    if (needed === 1) row('1+', 10);
+    row(needed === 1 ? '0' : '0–1', 0);
+  }
+  form.addEventListener('change', update);
+  target.addEventListener('input', update);
+  document.getElementById('edition-search').addEventListener('input', event => {
+    const query = event.target.value.toLocaleLowerCase();
+    for (const box of boxes)
+      box.closest('label').hidden = !box.value.toLocaleLowerCase().includes(query);
+  });
+  document.getElementById('select-editions').addEventListener('click', () => {
+    boxes.forEach(box => { box.checked = true; }); update();
+  });
+  document.getElementById('clear-editions').addEventListener('click', () => {
+    boxes.forEach(box => { box.checked = false; }); update();
+  });
+  update();
+})();
+</script>
+{% endblock %}

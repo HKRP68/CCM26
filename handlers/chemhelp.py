@@ -14,6 +14,7 @@ tab reads the player's own Playing XI and ranks their best available moves.
 """
 
 import logging
+from html import escape
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -37,8 +38,10 @@ def _tier_lines(tiers, maximum, plural, singular):
         label = f"{threshold}+" if index == 0 else f"{threshold}"
         colour = chemistry.chem_colour(points, maximum)
         out.append(f"{colour} <b>{label}</b> {plural} = <b>{points}</b> pts")
-    out.append(f"{chemistry.CHEM_COLOURS[-1][1]} <b>1</b> {singular} = "
-               f"<b>0</b> pts")
+    bottom = tiers[-1][0] - 1
+    label = "0" if bottom == 0 else f"0–{bottom}"
+    out.append(f"{chemistry.CHEM_COLOURS[-1][1]} <b>{label}</b> {plural} = "
+               "<b>0</b> pts")
     return "\n".join(out)
 
 
@@ -61,13 +64,24 @@ def _colour_key():
     return "   ".join(ranges)
 
 
-def _special_type_list():
-    pretty = {"icon": "Icon", "toty": "TOTY", "prime": "Prime",
-              "legend": "Legends", "star": "Stars", "ipl": "IPL",
-              "wpl": "WPL", "bbl": "BBL", "psl": "PSL", "sa20": "SA20",
-              "cpl": "CPL", "event": "World Cup / other drops"}
-    return ", ".join(pretty.get(t, t.title())
-                     for t in chemistry.SPECIAL_TYPES)
+def _variety_guide():
+    rules = chemistry.variety_rules()
+    if rules["versions"] == []:
+        return "Card Variety is currently disabled: no eligible editions selected."
+    versions = ("All special editions, including future drops."
+                if rules["versions"] is None else
+                ", ".join(escape(label) for label in rules["versions"][:8]))
+    if rules["versions"] is not None and len(rules["versions"]) > 8:
+        versions += f", plus {len(rules['versions']) - 8} more eligible editions."
+    return (
+        f"{_tier_lines(rules['tiers'], chemistry.VARIETY_MAX, 'special types', 'special type')}\n\n"
+        f"<b>Eligible editions</b>\n<i>{versions}</i>\n\n"
+        "Each edition counts as a different type. IPL2026 and IPL2025 are "
+        "two types; two IPL2026 cards are one type. Base cards and unselected "
+        "editions do not count.\n\n"
+        f"<i>{rules['target']} different eligible editions earn the full "
+        f"{chemistry.VARIETY_MAX} variety points.</i>"
+    )
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -150,13 +164,7 @@ SECTIONS = {
             f"<b>🌍 Country Diversity (0-{chemistry.DIVERSITY_MAX})</b>\n"
             f"{_tier_lines(chemistry.DIVERSITY_TIERS, chemistry.DIVERSITY_MAX, 'countries', 'country')}\n\n"
             f"<b>🃏 Card Variety (0-{chemistry.VARIETY_MAX})</b>\n"
-            f"{_tier_lines(chemistry.VARIETY_TIERS, chemistry.VARIETY_MAX, 'special types', 'special type')}\n\n"
-            "<b>Special types</b>\n"
-            f"<i>{_special_type_list()}</i>\n\n"
-            "Each counts as a <b>different</b> type — an IPL card and a BBL "
-            "card are two, not one. Base cards don't count here.\n\n"
-            "<i>Four of each half = the full "
-            f"{chemistry.XI_BONUS_MAX}.</i>"
+            f"{_variety_guide()}"
         ),
     },
     "boosts": {
@@ -205,6 +213,13 @@ _IMPROVE = {"emoji": "💡", "title": "Improve — Your Next Moves"}
 # ════════════════════════════════════════════════════════════════════
 
 def _generic_improve_body():
+    rules = chemistry.variety_rules()
+    variety_tip = (
+        "Card Variety is currently disabled by the game settings."
+        if rules["versions"] == [] else
+        f"{rules['target']}+ eligible special types earns the full "
+        f"{chemistry.VARIETY_MAX}. A cheap card of a type you're "
+        "<i>missing</i> is worth more than another of one you already hold.")
     return (
         "<b>💡 How To Improve</b>\n\n"
         "<b>1️⃣ Unify your units</b>\n"
@@ -216,15 +231,14 @@ def _generic_improve_body():
         f"the full {chemistry.DIVERSITY_MAX}. This works <i>with</i> step 1 — "
         "four unified roles from four different countries scores both.\n\n"
         "<b>3️⃣ Collect different card types</b>\n"
-        f"{chemistry.VARIETY_TARGET_TYPES}+ special types earns the full "
-        f"{chemistry.VARIETY_MAX}. A cheap card of a type you're "
-        "<i>missing</i> is worth more than another of one you already hold.\n\n"
+        f"{variety_tip}\n\n"
         "<b>4️⃣ Mind your keeper and all-rounders</b>\n"
         "Small roles are cheap to fix — a single-player role scores full "
         "marks automatically, and a 2-player role only needs those two to "
         "match.\n\n"
         "<i>Build your XI, then run /cmuchem — it ranks your best available "
-        "moves against your actual squad.</i>"
+        "moves against your actual squad, including legal bench swaps. "
+        "/swap shows a chemistry preview before you confirm.</i>"
     )
 
 
@@ -254,15 +268,19 @@ def _personal_improve_body(telegram_id):
             f"{colour} Your chemistry: <b>{report['total']}/"
             f"{report['total_max']}</b>\n",
         ]
-        if not tips:
+        if report["total"] == chemistry.CMUCHEM_TOTAL_MAX:
             lines.append("🏆 <b>Perfect score</b> — every role is unified, and "
                          "your diversity and variety are both maxed. Nothing "
                          "left to fix.")
+        elif not tips:
+            lines.append("No further improvements are available under the current chemistry rules.")
         else:
             lines.append("<b>Your best moves, biggest first:</b>\n")
             lines.extend(f"• {text}" for _points, text in tips)
             lines.append("\n<i>Swapping one player in a broken role is usually "
                          "the cheapest big win.</i>")
+        lines.append("\n/cmuchem recommends legal bench swaps. Tap one to preview "
+                     "its chemistry and rating changes.")
         return "\n".join(lines)
     except Exception:
         logger.exception("chemhelp: personal improve tab failed")

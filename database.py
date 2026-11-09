@@ -919,6 +919,8 @@ def _migrate_add_columns():
     _try_add("game_config", "match_style", "VARCHAR(20) DEFAULT 'telegram' NOT NULL")
     _try_add("game_config", "challenge_max_overs", "INTEGER DEFAULT 2 NOT NULL")
     _try_add("game_config", "allow_same_team_challenge", "BOOLEAN DEFAULT FALSE NOT NULL")
+    _try_add("game_config", "chemistry_variety_target", "INTEGER DEFAULT 4 NOT NULL")
+    _try_add("game_config", "chemistry_variety_versions_json", "TEXT")
     # Challenge Draft (/cdraft) pool. The defaults match the CDRAFT_* env
     # fallbacks, so an existing deployment drafts exactly as it did before the
     # settings were addable. NULL versions means every edition is allowed.

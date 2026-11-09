@@ -67,6 +67,7 @@ from handlers.lineup import playingxi_handler, swapplayers_handler, setcaptain_h
 from handlers.batting_order import setbo_handler
 from handlers.ximage import ximage_handler
 from handlers.cmuchem import cmuchem_handler
+from handlers.chemistry_planner import chemistry_swap_callback
 from handlers.search import (
     searchpl_handler, searchovr_handler,
     searchpl_page_callback, searchovr_page_callback,
@@ -2477,6 +2478,8 @@ def main():
         app.add_handler(CallbackQueryHandler(release_cancel_callback, pattern=r"^rldup_"))
         app.add_handler(CallbackQueryHandler(roster_page_callback, pattern=r"^roster_page_"))
         app.add_handler(CallbackQueryHandler(bench_callback, pattern=r"^viewbench_"))
+        app.add_handler(CallbackQueryHandler(
+            chemistry_swap_callback, pattern=r"^chem_(?:recs|pick|apply|cancel)_"))
 
         # ── Buy callbacks ────────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(buypl_confirm_callback, pattern=r"^buypl_"))
