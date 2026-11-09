@@ -362,11 +362,15 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
             await q.answer(locked, show_alert=True)
             return
 
+        from services.economy_transactions import lock_user_for_update
+        lock_user_for_update(session, user)
+        balance_before = user.total_coins or 0
         ok, msg, gem_bonus = buy_player(session, user, slot)
         if ok:
             log_activity(session, user.id, "buy_market",
                          f"Bought {msg} from market",
-                         coins_change=0, player_name=msg)
+                         coins_change=(user.total_coins or 0) - balance_before,
+                         player_name=msg)
             try:
                 from services.quest_service import safe_track
                 safe_track(session, user.id, "market_buy", 1)

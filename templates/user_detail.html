@@ -451,23 +451,33 @@
   <span style="font-size:.7rem;color:var(--muted);">Live history only — archived activity is not shown.</span>
   {% endif %}
 </form>
+<p style="font-size:.75rem;color:var(--muted);margin:.5rem 0;">
+  Recorded balances were captured with the action. Estimated balances are reconstructed from older logs and may be incomplete.
+  Buy and undo entries should cancel their coin changes; signing gems must also be returned.
+</p>
 <div class="table-wrap">
   <table>
-    <thead><tr><th>Time</th><th>Action</th><th>Detail</th><th>Coins</th><th>Net Coins</th></tr></thead>
+    <thead><tr><th>Time / ID</th><th>Action</th><th>Detail</th><th>Coins</th><th>Gems</th><th>Coin balance before → after</th></tr></thead>
     <tbody>
     {% for a in activities %}
     <tr>
-      <td style="font-size:.75rem;white-space:nowrap;">{{ a.created_at | ist('%d %b %Y, %H:%M:%S') if a.created_at else '' }}</td>
+      <td style="font-size:.75rem;white-space:nowrap;">{{ a.created_at | ist('%d %b %Y, %H:%M:%S') if a.created_at else '' }}<br><span style="color:var(--muted);">#{{ a.id }}</span></td>
       <td><span style="background:var(--bg);padding:.15rem .5rem;border-radius:4px;font-size:.75rem;font-weight:600;">{{ a.action }}</span></td>
       <td style="font-size:.8rem;">{{ a.detail or '' }}</td>
       <td style="font-size:.8rem;{% if a.coins_change > 0 %}color:var(--green);{% elif a.coins_change < 0 %}color:var(--red);{% endif %}">
         {% if a.coins_change %}{{ '{:+,}'.format(a.coins_change) }}{% endif %}
       </td>
-      <td style="font-size:.8rem;font-weight:600;white-space:nowrap;">{{ '{:,}'.format(a._net_coins) }}</td>
+      <td style="font-size:.8rem;white-space:nowrap;{% if a.gems_change > 0 %}color:var(--green);{% elif a.gems_change < 0 %}color:var(--red);{% endif %}">
+        {% if a.gems_change %}{{ '{:+,}'.format(a.gems_change) }}{% endif %}
+      </td>
+      <td style="font-size:.8rem;white-space:nowrap;{% if a._coins_recorded and a._net_coins < 0 %}color:var(--red);{% endif %}">
+        {{ '{:,}'.format(a._coins_before) }} → <strong>{{ '{:,}'.format(a._net_coins) }}</strong><br>
+        <span style="font-size:.7rem;color:var(--muted);">{{ 'Recorded' if a._coins_recorded else 'Estimated' }}</span>
+      </td>
     </tr>
     {% endfor %}
     {% if not activities %}
-    <tr><td colspan="5" style="text-align:center;padding:1.5rem;color:var(--muted);">
+    <tr><td colspan="6" style="text-align:center;padding:1.5rem;color:var(--muted);">
       {% if activity_action_filter %}No activity matches the current filter.{% else %}No activity yet{% endif %}
     </td></tr>
     {% endif %}

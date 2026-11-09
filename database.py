@@ -679,6 +679,10 @@ def _migrate_add_columns():
         _try_add("users", col, coltype)
     for col, coltype in new_match_cols.items():
         _try_add("matches", col, coltype)
+    # Preserve unknown historical balances as NULL; never backfill estimates
+    # as though they had been captured when the transaction happened.
+    _try_add("activity_log", "coins_balance_after", "INTEGER")
+    _try_add("activity_log", "gems_balance_after", "INTEGER")
     _try_add("stats_seasons", "player_duels_json", "TEXT")
     _try_add("stats_seasons", "franchise_results_json", "TEXT")
 

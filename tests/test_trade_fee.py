@@ -101,6 +101,9 @@ class FakeSession:
     def flush(self):
         self.flushed += 1
 
+    def refresh(self, obj, **kwargs):
+        pass
+
     def add(self, obj):
         pass
 
@@ -129,12 +132,23 @@ class CompleteTradeFeeTests(unittest.TestCase):
             "expire": ts.expire_stale_trades,
             "validate": ts._validate_same_ovr_swap,
             "log": ts.log_activity,
+            "lock": ts.lock_user_for_update,
+            "debit": ts.debit_coins,
         }
         ts.expire_stale_trades = lambda session: None
         ts._validate_same_ovr_swap = lambda *a, **k: (
             self.init_entry, self.init_player,
             self.recv_entry, self.recv_player, None)
         ts.log_activity = lambda *a, **k: None
+        ts.lock_user_for_update = lambda session, user: user
+
+        def debit(session, user, amount):
+            if user.total_coins < amount:
+                return False
+            user.total_coins -= amount
+            return True
+
+        ts.debit_coins = debit
 
         import services.trait_service as trait_service
         self._real_return = trait_service.return_traits_to_inventory
@@ -144,6 +158,8 @@ class CompleteTradeFeeTests(unittest.TestCase):
         ts.expire_stale_trades = self._saved["expire"]
         ts._validate_same_ovr_swap = self._saved["validate"]
         ts.log_activity = self._saved["log"]
+        ts.lock_user_for_update = self._saved["lock"]
+        ts.debit_coins = self._saved["debit"]
         import services.trait_service as trait_service
         trait_service.return_traits_to_inventory = self._real_return
 

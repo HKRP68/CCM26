@@ -2883,12 +2883,10 @@ def user_detail(user_id):
         for _, p in roster:
             p._tier_css = tier_css(p.rating)
 
-        # ── Activity log: filters + running net-coin balance ──
-        # Net coins after an activity = current balance minus every change that
-        # happened *after* it. For the default (newest-N, unfiltered) view those
-        # newer changes are all inside the window, so we only need to load N rows
-        # — no full-table scan. Filtered / full-history views walk the whole
-        # (live) history so intervening non-matching changes are still counted.
+        # Stored wallet snapshots are authoritative for new entries. Legacy
+        # rows have only deltas, so label their backwards balances estimates.
+        # Filtered views still include intervening rows in the calculation.
+        from services.activity_history import annotate_balances
         action_filter = (request.args.get("action") or "").strip()
         limit_param = (request.args.get("limit") or "50").strip().lower()
 
@@ -2918,7 +2916,6 @@ def user_detail(user_id):
             base_q = base_q.filter(ActivityLog.action == action_filter)
         activity_total = base_q.count()
 
-        running = user.total_coins or 0
         if not action_filter and activity_limit_n is not None:
             # Fast path: only the newest N rows are needed for both display and
             # their running balances.
@@ -2926,9 +2923,7 @@ def user_detail(user_id):
                 base_q.order_by(ActivityLog.created_at.desc(), ActivityLog.id.desc())
                 .limit(activity_limit_n).all()
             )
-            for a in activities:
-                a._net_coins = running
-                running -= (a.coins_change or 0)
+            annotate_balances(activities, user.total_coins, user.total_gems)
         else:
             # Filtered or full-history view: walk the entire live history so the
             # balance accounts for intervening (non-matching) activities, then
@@ -2939,9 +2934,7 @@ def user_detail(user_id):
                 .order_by(ActivityLog.created_at.desc(), ActivityLog.id.desc())
                 .all()
             )
-            for a in all_activities:
-                a._net_coins = running
-                running -= (a.coins_change or 0)
+            annotate_balances(all_activities, user.total_coins, user.total_gems)
             activities = ([a for a in all_activities if a.action == action_filter]
                           if action_filter else all_activities)
             if activity_limit_n is not None:
@@ -5473,6 +5466,8 @@ def webapp_buy(player_id):
         return err
     db, user, tg_id = auth
     try:
+        from services.economy_transactions import debit_coins, lock_user_for_update
+        lock_user_for_update(db, user)
         locked = _team_locked_response(db, user, "buy players", market=True)
         if locked:
             return locked
@@ -5482,7 +5477,7 @@ def webapp_buy(player_id):
         from config import get_buy_value
 
         p = db.get(Player, player_id)
-        if not p or not p.is_active:
+        if not p or not p.is_active or getattr(p, "is_career", False):
             return {"ok": False, "error": "not_found"}, 404
         if getattr(p, "restricted_from_buypl", False):
             return {"ok": False, "error": "blocked",
@@ -5498,7 +5493,9 @@ def webapp_buy(player_id):
             return {"ok": False, "error": "insufficient_coins",
                     "message": f"Need {price:,} 🪙, you have {user.total_coins:,}."}, 400
 
-        user.total_coins = (user.total_coins or 0) - price
+        if not debit_coins(db, user, price):
+            return {"ok": False, "error": "insufficient_coins",
+                    "message": "Your balance changed. Please try again."}, 400
         entry = UserRoster(
             user_id=user.id, player_id=p.id,
             order_position=(user.roster_count or 0) + 1,
@@ -5508,26 +5505,22 @@ def webapp_buy(player_id):
         db.flush()
         user.roster_count = (user.roster_count or 0) + 1
 
-        try:
-            from services.activity_service import log_activity
-            log_activity(db, user.id, "buy",
-                         f"[MiniApp] Bought {p.name} ({p.rating} OVR) for {price:,}",
-                         coins_change=-price,
-                         player_name=p.name, player_rating=p.rating)
-        except Exception:
-            pass
+        from services.activity_service import log_activity
+        purchase_log = log_activity(
+            db, user.id, "buy",
+            f"[MiniApp] Bought {p.name} ({p.rating} OVR) for {price:,}",
+            coins_change=-price,
+            player_name=p.name, player_rating=p.rating)
         # Elite signing rebate — gems back on anything rated above 95.
         from services.buy_bonus import award_buy_gem_bonus
         gem_bonus = award_buy_gem_bonus(db, user, p, price, source="miniapp")
 
-        try:
-            from services.undo_service import record_buy
-            record_buy(db, user.id,
-                       roster_id=entry.id, player_id=p.id,
-                       player_name=p.name, rating=p.rating, price=price,
-                       gem_bonus=gem_bonus)
-        except Exception:
-            pass
+        from services.undo_service import record_buy
+        db.flush()
+        record_buy(db, user.id,
+                   roster_id=entry.id, player_id=p.id,
+                   player_name=p.name, rating=p.rating, price=price,
+                   gem_bonus=gem_bonus, activity_id=purchase_log.id)
 
         db.commit()
         post_miniapp_activity(user, "buy_player",
@@ -5581,6 +5574,8 @@ def webapp_release(roster_id):
         return err
     db, user, tg_id = auth
     try:
+        from services.economy_transactions import lock_user_for_update
+        lock_user_for_update(db, user)
         locked = _team_locked_response(db, user, "sell players", market=True)
         if locked:
             return locked
@@ -5636,11 +5631,11 @@ def webapp_release(roster_id):
                          player_name=player_name, player_rating=player_rating)
         except Exception:
             pass
-        try:
-            from services.undo_service import record_release
-            record_release(db, user.id, player.id, sell_value)
-        except Exception:
-            pass
+        from services.undo_service import record_release
+        record_release(db, user.id, items=[{
+            "player_id": player.id, "player_name": player_name,
+            "rating": player_rating, "price": sell_value,
+        }], total_refund=sell_value)
 
         db.commit()
         post_miniapp_activity(user, "sell_player",
@@ -5677,6 +5672,8 @@ def webapp_release_multi():
         return err
     db, user, tg_id = auth
     try:
+        from services.economy_transactions import lock_user_for_update
+        lock_user_for_update(db, user)
         locked = _team_locked_response(db, user, "sell players", market=True)
         if locked:
             return locked
@@ -5743,11 +5740,13 @@ def webapp_release_multi():
                 "sell_value": sv,
             })
             db.delete(r)
-            try:
-                from services.undo_service import record_release
-                record_release(db, user.id, p.id, sv)
-            except Exception:
-                pass
+
+        from services.undo_service import record_release
+        record_release(db, user.id, items=[{
+            "player_id": r.player_id, "player_name": players[r.player_id].name,
+            "rating": players[r.player_id].rating,
+            "price": get_sell_value(players[r.player_id].rating),
+        } for r in rows if r.player_id in players], total_refund=total_coins)
 
         user.total_coins = (user.total_coins or 0) + total_coins
         user.roster_count = max(0, (user.roster_count or 0) - len(released))
@@ -7565,11 +7564,13 @@ def webapp_market_buy(slot_id):
         return err
     db, user, tg_id = auth
     try:
+        from services.economy_transactions import lock_user_for_update
+        lock_user_for_update(db, user)
         locked = _team_locked_response(db, user, "buy players", market=True)
         if locked:
             return locked
-        from models import GlobalPlayerMarket, UserRoster
-        from services.global_market import is_sold_out
+        from models import GlobalPlayerMarket
+        from services.global_market import buy_player, is_sold_out
 
         slot = db.query(GlobalPlayerMarket).filter(
             GlobalPlayerMarket.id == slot_id,
@@ -7588,43 +7589,24 @@ def webapp_market_buy(slot_id):
         # Note: restricted_from_buypl only blocks /buypl direct-name purchase,
         # NOT the Player Market — market buys are always allowed.
 
-        # Ownership: prevent double-owning the same version
-        owned = (db.query(UserRoster)
-                 .filter(UserRoster.user_id == user.id,
-                         UserRoster.player_id == player.id).first())
-        if owned:
-            return {"ok": False, "error": "already_owned",
-                    "message": "You already own this version."}, 400
-
-        # Roster cap
-        if (user.roster_count or 0) >= MAX_ROSTER:
-            return {"ok": False, "error": "roster_full",
-                    "message": f"Your roster is full ({MAX_ROSTER}/{MAX_ROSTER})."}, 400
-
-        # Free, Bronze and Silver pay the slot's sell price (== base price);
-        # Platinum gets 5% off it and Diamond 10%. Floored at resale value so
-        # the slot can't be farmed for coins.
-        from services.global_market import player_slot_prices
-        _listed, price = player_slot_prices(user, slot, player)
-
-        # Balance
-        if (user.total_coins or 0) < price:
-            return {"ok": False, "error": "insufficient_coins",
-                    "message": f"Need {price:,} 🪙 — you have {user.total_coins:,}."}, 400
-
-        # Apply
-        user.total_coins -= price
-        # Append at next free position (use roster_count+1 for predictability)
-        max_pos = (db.query(UserRoster.order_position)
-                   .filter(UserRoster.user_id == user.id)
-                   .order_by(UserRoster.order_position.desc()).first())
-        next_pos = _next_roster_position(max_pos)
-        new_row = UserRoster(user_id=user.id, player_id=player.id,
-                             order_position=next_pos,
-                             acquired_date=datetime.utcnow())
-        db.add(new_row)
-        user.roster_count = (user.roster_count or 0) + 1
-        slot.purchased_count += 1
+        # Use the same locked wallet, ownership checks, atomic stock claim and
+        # MarketPurchase receipt as the chat market.
+        balance_before = user.total_coins or 0
+        ok, message, gem_bonus = buy_player(
+            db, user, slot.slot_index, expected_slot_id=slot_id)
+        if not ok:
+            db.rollback()
+            error = "purchase_failed"
+            if "already own" in message:
+                error = "already_owned"
+            elif "Roster full" in message:
+                error = "roster_full"
+            elif "coins" in message or "balance" in message:
+                error = "insufficient_coins"
+            elif "Sold out" in message:
+                error = "sold_out"
+            return {"ok": False, "error": error, "message": message}, 400
+        price = balance_before - (user.total_coins or 0)
 
         try:
             from services.activity_service import log_activity
@@ -7634,22 +7616,9 @@ def webapp_market_buy(slot_id):
                          player_name=player.name, player_rating=player.rating)
         except Exception:
             pass
-        # Elite signing rebate — gems back on anything rated above 95, sized on
-        # the coins actually paid (post membership discount).
-        from services.buy_bonus import award_buy_gem_bonus
-        gem_bonus = award_buy_gem_bonus(db, user, player, price,
-                                        source="miniapp_market")
-
-        # No /cmuundo record: a market buy is not undoable on either surface.
-        # Reversing one would have to give the slot's stock back too
-        # (purchased_count, and the MarketPurchase audit row), which the undo
-        # handler knows nothing about — undoing without that permanently eats a
-        # copy of a limited run. This call used to be
-        # ``record_buy(db, user.id, player.id, price)``, which always raised
-        # TypeError against record_buy's keyword-only signature and was
-        # swallowed, so market buys have never been undoable in practice. It is
-        # gone rather than fixed: the gem rebate above is only safe to credit
-        # here *because* nothing can reverse the purchase and keep the gems.
+        # Market purchases are final: the generic undo cannot restore stock
+        # or reverse MarketPurchase receipts. The shared service awards the
+        # signing rebate once and deliberately creates no direct-buy undo.
 
         db.commit()
         post_miniapp_activity(user, "buy_player",

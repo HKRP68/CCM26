@@ -31,6 +31,7 @@ from models import (
 )
 
 from services.player_service import not_career
+from services.economy_transactions import debit_coins, lock_user_for_update
 
 logger = logging.getLogger(__name__)
 
@@ -593,7 +594,7 @@ def player_slot_prices(user, slot, player):
     return listed, price
 
 
-def buy_player(session, user, slot_index):
+def buy_player(session, user, slot_index, *, expected_slot_id=None):
     """Atomic buy of a player from the global market.
 
     Returns (success, message_or_player_name, gem_bonus) — ``gem_bonus`` is the
@@ -607,9 +608,16 @@ def buy_player(session, user, slot_index):
     """
     from config import MAX_ROSTER
 
-    slot = (session.query(GlobalPlayerMarket)
-            .filter(GlobalPlayerMarket.slot_index == slot_index,
-                    GlobalPlayerMarket.is_active == True).first())
+    # Stock and the buyer's wallet are separate contention points. Serialize
+    # this user's purchases before rechecking ownership, roster size and price.
+    lock_user_for_update(session, user)
+
+    query = (session.query(GlobalPlayerMarket)
+             .filter(GlobalPlayerMarket.slot_index == slot_index,
+                     GlobalPlayerMarket.is_active == True))
+    if expected_slot_id is not None:
+        query = query.filter(GlobalPlayerMarket.id == expected_slot_id)
+    slot = query.first()
     if not slot:
         return False, "Slot not found or inactive.", 0
 
@@ -617,16 +625,13 @@ def buy_player(session, user, slot_index):
         return False, "Sold out — try another slot.", 0
 
     player = session.get(Player, slot.player_id)
-    if not player:
+    if not player or not player.is_active or getattr(player, "is_career", False):
         return False, "Player no longer available.", 0
 
     # Block if user owns ANY version of this player
-    try:
-        from services.version_service import user_owns_any_version
-        if user_owns_any_version(session, user.id, player.id):
-            return False, f"You already own a version of <b>{player.name}</b>.", 0
-    except Exception:
-        pass
+    from services.version_service import user_owns_any_version
+    if user_owns_any_version(session, user.id, player.id):
+        return False, f"You already own a version of <b>{player.name}</b>.", 0
 
     if user.roster_count >= MAX_ROSTER:
         return False, f"Roster full ({MAX_ROSTER}). Release players first.", 0
@@ -652,6 +657,7 @@ def buy_player(session, user, slot_index):
 
     # Atomic decrement using UPDATE...WHERE — prevents race condition
     where = [GlobalPlayerMarket.id == slot.id]
+    where.append(GlobalPlayerMarket.is_active == True)
     if not is_unlimited(slot):
         where.append(
             GlobalPlayerMarket.purchased_count < GlobalPlayerMarket.quantity)
@@ -664,7 +670,11 @@ def buy_player(session, user, slot_index):
         return False, "Sold out — someone else just got it.", 0
 
     # Charge user, add to roster
-    user.total_coins -= price
+    if not debit_coins(session, user, price):
+        # The stock reservation and charge are one transaction. A failed
+        # charge must not consume a copy or produce an audit/roster row.
+        session.rollback()
+        return False, "Your balance changed. Please reopen the market.", 0
     user.roster_count += 1
     next_pos = user.roster_count
     entry = UserRoster(
@@ -854,6 +864,7 @@ def add_trait_to_market(session, trait_id, custom_price=None,
 
 def buy_trait(session, user, slot_index):
     """Atomic buy of a trait. Adds to user's TraitInventory at level 1."""
+    lock_user_for_update(session, user)
     slot = (session.query(GlobalTraitMarket)
             .filter(GlobalTraitMarket.slot_index == slot_index,
                     GlobalTraitMarket.is_active == True).first())
@@ -868,7 +879,8 @@ def buy_trait(session, user, slot_index):
         return False, f"Not enough gems. Need {slot.final_price}, have {user.total_gems or 0}."
 
     # Atomic decrement (no stock race to lose on an unlimited slot)
-    where = [GlobalTraitMarket.id == slot.id]
+    where = [GlobalTraitMarket.id == slot.id,
+             GlobalTraitMarket.is_active == True]
     if not is_unlimited(slot):
         where.append(
             GlobalTraitMarket.purchased_count < GlobalTraitMarket.quantity)

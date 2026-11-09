@@ -121,6 +121,10 @@ class FakeSession:
     def add(self, obj):
         self.added.append(obj)
 
+    def get(self, model, user_id):
+        # This stock-free fixture has no persisted wallet to snapshot.
+        return None
+
 
 def an_offer(**kw):
     """The default live offer, with any term overridden."""

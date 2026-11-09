@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from config import TRADE_EXPIRES_SECONDS, TRADE_FEE_PERCENT, get_buy_value
 from models import Player, Trade, User, UserRoster
 from services.activity_service import log_activity
+from services.economy_transactions import debit_coins, lock_user_for_update
 from services.rating_matcher_service import (
     get_players_at_rating,
     is_player_locked,
@@ -53,11 +54,13 @@ def _get_owned_available_entry(session: Session, user_id: int, roster_id: int):
     entry = (
         session.query(UserRoster)
         .filter(UserRoster.id == roster_id, UserRoster.user_id == user_id)
+        .populate_existing()
+        .with_for_update()
         .first()
     )
     if not entry:
         return None, None
-    player = session.get(Player, entry.player_id)
+    player = session.get(Player, entry.player_id, populate_existing=True)
     if not player or is_player_locked(entry, player) or is_player_non_tradable(player):
         return None, None
     if not any(e.id == entry.id for e, _ in get_players_at_rating(session, user_id, player.rating)):
@@ -139,20 +142,18 @@ def _user_label(user) -> str:
 
 
 def _lock_wallets(session: Session, user_ids):
-    """SELECT … FOR UPDATE both captains' rows, refreshing the in-session copies.
+    """Refresh both wallets under strict shared locks, in a stable order.
 
-    Serialises concurrent trade completions against each other on Postgres. A
-    backend without row locking (sqlite in the tests) simply ignores the clause,
-    and any failure is non-fatal — the affordability check below still runs, it
-    just isn't protected from a simultaneous completion.
+    A trade can overlap a buy, release or undo in another worker. Locks must
+    refresh cached users, and failures must abort rather than spend stale funds.
     """
-    try:
-        (session.query(User)
-         .filter(User.id.in_(list(user_ids)))
-         .with_for_update()
-         .all())
-    except Exception:
-        logger.debug("trade: wallet row lock unavailable", exc_info=True)
+    users = {}
+    for user_id in sorted(set(user_ids)):
+        user = session.get(User, user_id)
+        if user is None:
+            raise ValueError("Trade participant no longer exists")
+        users[user_id] = lock_user_for_update(session, user)
+    return users
 
 
 def _cannot_afford(initiator: User, receiver: User, fee: int):
@@ -169,10 +170,15 @@ def _cannot_afford(initiator: User, receiver: User, fee: int):
 
 def complete_trade(session: Session, trade_id: int) -> dict:
     """Final safety check and same-OVR player swap."""
-    expire_stale_trades(session)
     trade = session.get(Trade, trade_id)
     if not trade:
         return {"success": False, "message": "Trade not found"}
+
+    # Acquire wallets before writing/locking the trade, matching the lock order
+    # used by release/undo. Re-read the trade afterwards: undo may have cancelled
+    # it while this transaction waited, or another worker may have completed it.
+    users = _lock_wallets(session, (trade.initiator_id, trade.receiver_id))
+    session.refresh(trade, with_for_update=True)
     if trade.status != "pending":
         return {"success": False, "message": "Trade cancelled because it was already completed or cancelled."}
     now = datetime.utcnow()
@@ -182,8 +188,8 @@ def complete_trade(session: Session, trade_id: int) -> dict:
         session.flush()
         return {"success": False, "message": "Trade expired."}
 
-    initiator = session.get(User, trade.initiator_id)
-    receiver = session.get(User, trade.receiver_id)
+    initiator = users[trade.initiator_id]
+    receiver = users[trade.receiver_id]
     init_entry, init_player, recv_entry, recv_player, error = _validate_same_ovr_swap(
         session, initiator, receiver, trade.initiator_roster_id, trade.receiver_roster_id
     )
@@ -195,11 +201,9 @@ def complete_trade(session: Session, trade_id: int) -> dict:
 
     # Charge the fee before the cards change hands — re-priced and re-checked
     # here because a balance can be spent while the confirmation is on screen.
-    # The bot serves updates concurrently, so take a row lock on both wallets
-    # first: without it two completions can both read the pre-charge balance and
-    # each decide the fee is affordable.
+    # Both wallets and roster entries were refreshed under lock before any
+    # validation, so simultaneous purchases/reversals cannot use old balances.
     fee = trade_fee_for(init_player.rating)
-    _lock_wallets(session, (initiator.id, receiver.id))
     short = _cannot_afford(initiator, receiver, fee)
     if short:
         trade.status = "cancelled"
@@ -207,8 +211,11 @@ def complete_trade(session: Session, trade_id: int) -> dict:
         session.flush()
         return {"success": False, "message": short, "fee": fee}
     if fee > 0:
+        # Keep the two debits indivisible even if a final database affordability
+        # predicate fails. The caller rolls back on this exception.
         for side in (initiator, receiver):
-            side.total_coins = (side.total_coins or 0) - fee
+            if not debit_coins(session, side, fee):
+                raise ValueError("Trade balance changed; neither side can be charged")
     trade.trade_fee = fee
 
     # Traits do NOT travel with a traded player. Each side's equipped traits go

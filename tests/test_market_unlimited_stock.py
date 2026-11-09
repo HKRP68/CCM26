@@ -15,6 +15,7 @@ rules.
 """
 
 import unittest
+from unittest.mock import patch
 
 from services import global_market as gm
 
@@ -154,6 +155,13 @@ class _User:
 
 
 class BuyTraitStockTests(unittest.TestCase):
+    def setUp(self):
+        # This fake exercises stock reservation only. Wallet serialization is
+        # covered against real sessions by test_market_transaction_integrity.
+        lock = patch.object(gm, "lock_user_for_update")
+        lock.start()
+        self.addCleanup(lock.stop)
+
     def test_an_unlimited_trait_slot_can_be_bought_without_end(self):
         slot = _Slot(quantity=0, final_price=10)
         session = _FakeSession(slot, trait=_Trait())

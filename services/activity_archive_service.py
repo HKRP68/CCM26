@@ -82,6 +82,8 @@ def archive_old_logs(session, older_than_days=30, archived_by=None):
         "detail": r.detail,
         "coins_change": r.coins_change,
         "gems_change": r.gems_change,
+        "coins_balance_after": r.coins_balance_after,
+        "gems_balance_after": r.gems_balance_after,
         "player_name": r.player_name,
         "player_rating": r.player_rating,
         "created_at": r.created_at.isoformat() if r.created_at else None,

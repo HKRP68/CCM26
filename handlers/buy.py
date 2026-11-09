@@ -11,7 +11,8 @@ from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from database import get_session
-from models import User, Player, UserRoster
+from models import User, Player, UserRoster, BuyConfirmation
+from services.economy_transactions import lock_user_for_update, debit_coins
 from services.card_generator import generate_card
 from config import get_buy_value, get_sell_value, MAX_ROSTER
 from services.activity_service import log_activity
@@ -547,9 +548,26 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer("Already processing…")
         return
 
-    parts = query.data.split("_")  # buypl_{player_id}_{user_id}
-    player_id = int(parts[1])
-    owner_user_id = int(parts[2])
+    try:
+        parts = query.data.split("_")  # buypl_{player_id}_{user_id}_{owner_tg}
+        player_id = int(parts[1])
+        owner_user_id = int(parts[2])
+        if len(parts) > 3 and int(parts[3]) != tg_user.id:
+            release(key)
+            await query.answer("Not your card!", show_alert=True)
+            return
+    except (AttributeError, IndexError, TypeError, ValueError):
+        release(key)
+        await query.answer("Invalid purchase", show_alert=True)
+        return
+
+    sent_at = getattr(query.message, "date", None)
+    if isinstance(sent_at, datetime):
+        age = (datetime.now(sent_at.tzinfo) - sent_at).total_seconds()
+        if age >= buy_session.BUY_CARD_TTL:
+            release(key)
+            await query.answer("This card has expired — send /buypl again.", show_alert=True)
+            return
 
     session = get_session()
     try:
@@ -607,8 +625,19 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             await query.message.reply_text("🔴 Buying is restricted to the Official Group.")
             return
 
+        # Nothing below yields to Telegram until the purchase commits or rolls
+        # back. Refresh and lock the purse after the UI awaits above, so another
+        # command cannot spend the balance between validation and the debit.
+        user = lock_user_for_update(session, user)
+        request_key = f"bot:{query.message.chat_id}:{query.message.message_id}"
+        if session.get(BuyConfirmation, request_key) is not None:
+            session.rollback()
+            await query.message.reply_text(
+                "This purchase was already processed. Send /buypl for a new card.")
+            return
         player = session.get(Player, player_id)
         if not player:
+            session.rollback()
             release(key)
             await query.message.reply_text("❌ Player no longer available")
             return
@@ -617,9 +646,11 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
         # honor the restricted_from_buypl flag even if a stale button slipped
         # through (e.g. admin enabled the flag after the buttons were sent).
         if getattr(player, "restricted_from_buypl", False):
+            player_name = html.escape(player.name)
+            session.rollback()
             release(key)
             await query.message.reply_text(
-                f"🚫 <b>{player.name}</b> is <b>Not available to Buy</b> via /buypl.\n\n"
+                f"🚫 <b>{player_name}</b> is <b>Not available to Buy</b> via /buypl.\n\n"
                 f"<i>Try the player market (/playermarket), packs, or trades.</i>",
                 parse_mode="HTML",
             )
@@ -629,15 +660,17 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
         username = tg_user.username or tg_user.first_name
 
         if user.total_coins < buy_val:
-            release(key)
             shortage = buy_val - user.total_coins
-            await query.message.reply_text(
+            failure = (
                 f"❌ @{username} needs {shortage:,} more coins to buy {player.name}\n"
-                f"💰 Balance: {user.total_coins:,} | Price: {buy_val:,}"
-            )
+                f"💰 Balance: {user.total_coins:,} | Price: {buy_val:,}")
+            session.rollback()
+            release(key)
+            await query.message.reply_text(failure)
             return
 
         if user.roster_count >= MAX_ROSTER:
+            session.rollback()
             release(key)
             await query.message.reply_text("❌ Roster full! Release players first.")
             return
@@ -645,15 +678,27 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
         # Re-check version ownership (user might have bought another version since)
         from services.version_service import user_owns_any_version
         if user_owns_any_version(session, user.id, player.id):
+            player_name = html.escape(player.name)
+            session.rollback()
             release(key)
             await query.message.reply_text(
-                f"❌ You already own a version of <b>{player.name}</b>.",
+                f"❌ You already own a version of <b>{player_name}</b>.",
                 parse_mode="HTML",
             )
             return
 
-        # Buy the player
-        user.total_coins -= buy_val
+        session.add(BuyConfirmation(
+            request_key=request_key, user_id=user.id, player_id=player_id))
+        session.flush()
+
+        # The affordability predicate is enforced by the database as well as
+        # the refreshed balance check above. A rejected debit grants nothing.
+        if not debit_coins(session, user, buy_val):
+            session.rollback()
+            release(key)
+            await query.message.reply_text(
+                "❌ Your balance changed. Send /buypl again to check the latest price and balance.")
+            return
         entry = UserRoster(
             user_id=user.id, player_id=player.id,
             order_position=user.roster_count + 1,
@@ -663,10 +708,12 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
         session.flush()  # populate entry.id for undo record
         user.roster_count += 1
 
-        log_activity(session, user.id, "buy",
+        purchase_log = log_activity(session, user.id, "buy",
                      f"Bought {player.name} ({player.rating} OVR) for {buy_val:,}",
                      coins_change=-buy_val,
                      player_name=player.name, player_rating=player.rating)
+
+        session.flush()  # audit ID links the reversal to this exact purchase
 
         # Elite signing rebate, while that offer is running. Read once so the
         # receipt's countdown is the same offer the gems were paid from.
@@ -676,15 +723,14 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
         gem_bonus = award_buy_gem_bonus(session, user, player, buy_val,
                                         source="buypl", offer=offer)
 
-        # Record for /cmuundo (60-second window)
-        try:
-            from services.undo_service import record_buy
-            record_buy(session, user.id,
-                       roster_id=entry.id, player_id=player.id,
-                       player_name=player.name, rating=player.rating,
-                       price=buy_val, gem_bonus=gem_bonus)
-        except Exception:
-            logger.exception("record_buy failed (non-fatal)")
+        # The reversal record and receipt are part of the same transaction as
+        # the charge, roster entry and signing bonus.
+        from services.undo_service import record_buy
+        record_buy(session, user.id,
+                   roster_id=entry.id, player_id=player.id,
+                   player_name=player.name, rating=player.rating,
+                   price=buy_val, gem_bonus=gem_bonus,
+                   activity_id=purchase_log.id)
 
         session.commit()
 

@@ -153,9 +153,37 @@ def _do_release(session, user, entries, *, value_fn=get_sell_value,
 
     Returns dict with success, released list, total_coins, new_balance, new_count.
     """
-    from sqlalchemy import text
     from models import Trade
+    from services.economy_transactions import lock_user_for_update
     from services.trait_service import return_traits_to_inventory
+
+    # Confirmation cards can outlive the roster snapshot they describe. Lock
+    # the same wallet as buy/undo, then reload ownership before crediting: a
+    # concurrent undo or release must not sell this entry a second time.
+    user = lock_user_for_update(session, user)
+    entries = list(entries)
+    roster_ids = [entry.id for entry, _player in entries]
+    expected = {entry.id: (player.id, entry.acquired_date)
+                for entry, player in entries}
+    live_entries = (session.query(UserRoster, Player)
+                    .join(Player, UserRoster.player_id == Player.id)
+                    .filter(UserRoster.user_id == user.id,
+                            UserRoster.id.in_(roster_ids))
+                    .populate_existing()
+                    .with_for_update(of=UserRoster)
+                    .all()) if roster_ids else []
+    if (len(set(roster_ids)) != len(roster_ids)
+            or len(live_entries) != len(entries)
+            or any(expected[entry.id] != (player.id, entry.acquired_date)
+                   for entry, player in live_entries)):
+        return {
+            "success": False, "error": "roster_changed",
+            "message": "⚠️ Your roster changed. Reopen the release confirmation.",
+            "released": [], "total_coins": 0,
+            "new_balance": user.total_coins, "new_count": user.roster_count,
+        }
+    by_id = {entry.id: (entry, player) for entry, player in live_entries}
+    entries = [by_id[roster_id] for roster_id in roster_ids]
 
     # Career Players are personal and permanent. This is the one choke point
     # every release path funnels through (chat, callbacks, multi-release and the
@@ -174,7 +202,6 @@ def _do_release(session, user, entries, *, value_fn=get_sell_value,
     captain_released = False
     traits_returned = 0
 
-    roster_ids = [e.id for e, _ in entries]
     if not roster_ids:
         return {
             "success": True, "released": [],
@@ -221,19 +248,12 @@ def _do_release(session, user, entries, *, value_fn=get_sell_value,
         captain_released = True
         session.flush()
 
-    # 4. Catch-all: production DB may have FK constraints not in the model
-    # (e.g. legacy users.captain_roster_id FK from an old migration). Use raw
-    # SQL UPDATE that's safe-on-no-match — these are idempotent best-effort
-    # cleanups. Wrapped in try/except so missing tables don't crash the release.
-    safety_updates = [
-        ("UPDATE users SET captain_roster_id = NULL WHERE captain_roster_id IN :ids",
-         {"ids": tuple(roster_ids) if len(roster_ids) > 1 else (roster_ids[0],)}),
-    ]
-    for sql, params in safety_updates:
-        try:
-            session.execute(text(sql), params)
-        except Exception:
-            pass  # best-effort
+    # 4. Clear lingering captain pointers too. SQLAlchemy expands the IN list
+    # correctly on both PostgreSQL and SQLite; swallowing a SQL syntax error
+    # here would leave a PostgreSQL transaction aborted before the credit.
+    (session.query(User)
+     .filter(User.captain_roster_id.in_(roster_ids))
+     .update({User.captain_roster_id: None}, synchronize_session=False))
 
     # 5. Delete the roster entries
     undo_items = []  # for /cmuundo
@@ -259,13 +279,9 @@ def _do_release(session, user, entries, *, value_fn=get_sell_value,
 
     # Record for /cmuundo
     if undo_items and record_undo:
-        try:
-            from services.undo_service import record_release
-            record_release(session, user.id,
-                           items=undo_items, total_refund=total_coins)
-        except Exception:
-            import logging as _lg
-            _lg.getLogger(__name__).exception("record_release failed (non-fatal)")
+        from services.undo_service import record_release
+        record_release(session, user.id,
+                       items=undo_items, total_refund=total_coins)
 
     return {
         "success": True,

@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime, timedelta
 
-from models import ActivityLog
+from models import ActivityLog, User
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +16,7 @@ def log_activity(session, user_id: int, action: str, detail: str = "",
                  coins_change: int = 0, gems_change: int = 0,
                  player_name: str = None, player_rating: int = None):
     """Write one activity row. Call before session.commit()."""
+    user = session.get(User, user_id)
     entry = ActivityLog(
         user_id=user_id,
         action=action,
@@ -24,6 +25,8 @@ def log_activity(session, user_id: int, action: str, detail: str = "",
         gems_change=gems_change,
         player_name=player_name,
         player_rating=player_rating,
+        coins_balance_after=(user.total_coins or 0) if user is not None else None,
+        gems_balance_after=(user.total_gems or 0) if user is not None else None,
     )
     session.add(entry)
     # Successful game actions share one capped activity budget across the bot
@@ -42,6 +45,7 @@ def log_activity(session, user_id: int, action: str, detail: str = "",
                     entry.detail = (detail or "")[:500 - len(suffix)] + suffix
         except Exception:
             logger.exception("season activity bonus failed for %s/%s", user_id, action)
+    return entry
 
 
 # ── Daily "start" activity (for User Retention stats) ──────────────────────

@@ -15,10 +15,12 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from database import get_session
-from models import User, UserRoster, Player, PendingUndo
+from models import User, UserRoster, Player
 from services.undo_service import (
-    get_pending, clear_pending, seconds_remaining, UNDO_WINDOW_SECONDS,
+    get_pending, consume_pending, UNDO_WINDOW_SECONDS,
 )
+from services.economy_transactions import lock_user_for_update
+from services.roster_lock import MARKET_REASON, match_lock_message
 
 logger = logging.getLogger(__name__)
 
@@ -36,27 +38,37 @@ async def cmuundo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(get_msg("not_debuted"))
             return
 
+        locked = match_lock_message(session, user.id, "undo squad changes",
+                                    reason=MARKET_REASON)
+        if locked:
+            session.rollback()
+            await update.message.reply_text(locked, parse_mode="HTML")
+            return
+
+        # Buy, release and undo share one wallet/roster lock. Always refresh
+        # after acquiring it: this session may have loaded the pre-buy balance.
+        user = lock_user_for_update(session, user)
         row, payload = get_pending(session, user.id)
         if not row:
+            session.commit()  # commit cleanup before replying/releasing the lock
             await update.message.reply_text(
                 f"⚠️ Nothing to undo.\n"
                 f"<i>/cmuundo works for {UNDO_WINDOW_SECONDS}s after your last "
                 f"/buy or /release.</i>",
                 parse_mode="HTML")
-            session.commit()  # commit the cleanup of any expired row
             return
 
         action = row.action_type
 
         if action == "buy":
-            await _undo_buy(update, session, user, payload)
+            await _undo_buy(update, session, user, payload, pending=row)
         elif action == "release":
-            await _undo_release(update, session, user, payload)
+            await _undo_release(update, session, user, payload, pending=row)
         else:
+            consume_pending(session, row, require_unexpired=False)
+            session.commit()
             await update.message.reply_text(
                 f"⚠️ Unknown action: {action}. Nothing undone.")
-            clear_pending(session, user.id)
-            session.commit()
     except Exception:
         session.rollback()
         logger.exception("cmuundo failed")
@@ -70,7 +82,17 @@ async def cmuundo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         session.close()
 
 
-async def _undo_buy(update, session, user, payload):
+async def _claim_undo(update, session, pending):
+    """Consume once before crediting; a failed reversal rolls this back."""
+    if consume_pending(session, pending):
+        return True
+    session.rollback()
+    await update.message.reply_text(
+        "⚠️ This undo expired, was already used, or was replaced by a newer action.")
+    return False
+
+
+async def _undo_buy(update, session, user, payload, *, pending):
     """Undo a buy: remove player from roster, refund price."""
     roster_id = payload.get("roster_id")
     player_id = payload.get("player_id")
@@ -78,29 +100,33 @@ async def _undo_buy(update, session, user, payload):
     player_name = payload.get("player_name", "—")
     rating = payload.get("rating", 0)
     gem_bonus = int(payload.get("gem_bonus") or 0)
+    activity_id = payload.get("activity_id")
 
     # Verify the roster entry still exists AND still belongs to this user
     entry = (session.query(UserRoster)
              .filter(UserRoster.id == roster_id,
                      UserRoster.user_id == user.id,
                      UserRoster.player_id == player_id)
+             .populate_existing()
+             .with_for_update()
              .first())
     if not entry:
         # Player was traded, released, or otherwise removed already
+        consume_pending(session, pending, require_unexpired=False)
+        session.commit()
         await update.message.reply_text(
             f"⚠️ <b>Can't undo buy</b>\n\n"
             f"<b>{player_name}</b> is no longer in your roster "
             f"(traded or released?).\n\n"
             f"<i>The undo window has been cleared.</i>",
             parse_mode="HTML")
-        clear_pending(session, user.id)
-        session.commit()
         return
 
     # An elite signing paid a gem rebate — undoing the buy has to hand those
     # gems back, so refuse while they're already spent rather than letting a
     # buy-and-undo loop mint them. Same rule the release undo uses for coins.
     if gem_bonus and (user.total_gems or 0) < gem_bonus:
+        session.commit()  # keep the undo, but release the wallet lock first
         await update.message.reply_text(
             f"⚠️ <b>Can't undo buy</b>\n\n"
             f"<b>{player_name}</b> paid a <b>{gem_bonus:,}</b> 💎 signing bonus "
@@ -109,49 +135,43 @@ async def _undo_buy(update, session, user, payload):
             f"<i>Top up the gems before the undo window closes.</i>",
             parse_mode="HTML")
         # Don't clear — they can retry once the gems are back.
-        session.commit()
+        return
+
+    if not await _claim_undo(update, session, pending):
         return
 
     # Clean up any references to this roster row before deleting it
-    from sqlalchemy import text as _sa_text
     from models import Trade
-    try:
-        stale_trades = (session.query(Trade)
+    stale_trades = (session.query(Trade)
                         .filter(Trade.status == "pending")
                         .filter((Trade.initiator_roster_id == roster_id) |
                                 (Trade.receiver_roster_id == roster_id))
                         .all())
-        for t in stale_trades:
-            t.status = "cancelled"
-            if t.initiator_roster_id == roster_id:
-                t.initiator_roster_id = None
-            if t.receiver_roster_id == roster_id:
-                t.receiver_roster_id = None
+    for t in stale_trades:
+        t.status = "cancelled"
+        if t.initiator_roster_id == roster_id:
+            t.initiator_roster_id = None
+        if t.receiver_roster_id == roster_id:
+            t.receiver_roster_id = None
 
-        # Null FKs on historical trades too
-        hist_trades = (session.query(Trade)
+    # Null FKs on historical trades too
+    hist_trades = (session.query(Trade)
                        .filter(Trade.status != "pending")
                        .filter((Trade.initiator_roster_id == roster_id) |
                                (Trade.receiver_roster_id == roster_id))
                        .all())
-        for t in hist_trades:
-            if t.initiator_roster_id == roster_id:
-                t.initiator_roster_id = None
-            if t.receiver_roster_id == roster_id:
-                t.receiver_roster_id = None
-    except Exception:
-        logger.exception("Trade cleanup failed (non-fatal)")
+    for t in hist_trades:
+        if t.initiator_roster_id == roster_id:
+            t.initiator_roster_id = None
+        if t.receiver_roster_id == roster_id:
+            t.receiver_roster_id = None
 
     # Unequip any traits on this roster row — they go BACK to the user's
     # inventory (at the level they were on) rather than being destroyed, exactly
     # like a release does. The player leaves; the traits the user paid gems for
     # stay theirs.
-    traits_returned = 0
-    try:
-        from services.trait_service import return_traits_to_inventory
-        traits_returned = return_traits_to_inventory(session, roster_id)
-    except Exception:
-        logger.exception("Trait return failed (non-fatal)")
+    from services.trait_service import return_traits_to_inventory
+    traits_returned = return_traits_to_inventory(session, roster_id)
 
     # Null captain pointer if it was this entry
     if getattr(user, "captain_roster_id", None) == roster_id:
@@ -165,6 +185,7 @@ async def _undo_buy(update, session, user, payload):
     if gem_bonus:
         user.total_gems = (user.total_gems or 0) - gem_bonus
     user.roster_count = max(0, user.roster_count - 1)
+    session.flush()
 
     # Re-number remaining roster positions
     from handlers.release import _renumber_roster
@@ -174,11 +195,11 @@ async def _undo_buy(update, session, user, payload):
     from services.activity_service import log_activity
     log_activity(session, user.id, "undo_buy",
                  f"Undo buy of {player_name} ({rating} OVR) — refunded {price:,}"
-                 + (f", reclaimed {gem_bonus:,} gems" if gem_bonus else ""),
+                 + (f", reclaimed {gem_bonus:,} gems" if gem_bonus else "")
+                 + (f" [purchase #{activity_id}]" if activity_id else ""),
                  coins_change=price, gems_change=-gem_bonus,
                  player_name=player_name, player_rating=rating)
 
-    clear_pending(session, user.id)
     session.commit()
 
     traits_line = (f"\n💎 {traits_returned} trait(s) returned to inventory."
@@ -194,16 +215,16 @@ async def _undo_buy(update, session, user, payload):
         parse_mode="HTML")
 
 
-async def _undo_release(update, session, user, payload):
+async def _undo_release(update, session, user, payload, *, pending):
     """Undo a release: restore player(s) to roster, deduct refund."""
     items = payload.get("items", [])
     total_refund = payload.get("total_refund", 0)
 
     if not items:
+        consume_pending(session, pending, require_unexpired=False)
+        session.commit()
         await update.message.reply_text(
             "⚠️ Nothing to restore in this undo.")
-        clear_pending(session, user.id)
-        session.commit()
         return
 
     # Check roster space — abort if not enough room
@@ -213,6 +234,7 @@ async def _undo_release(update, session, user, payload):
         names = ", ".join(it["player_name"] for it in items[:5])
         if len(items) > 5:
             names += f", +{len(items) - 5} more"
+        session.commit()
         await update.message.reply_text(
             f"⚠️ <b>Can't undo release</b>\n\n"
             f"Roster has {current}/{MAX_ROSTER} slots — "
@@ -221,18 +243,17 @@ async def _undo_release(update, session, user, payload):
             f"expire.</i>",
             parse_mode="HTML")
         # Don't clear — let user try again after making room
-        session.commit()
         return
 
     # Check the user has enough coins for the refund
     if (user.total_coins or 0) < total_refund:
+        session.commit()
         await update.message.reply_text(
             f"⚠️ <b>Can't undo release</b>\n\n"
             f"Need <b>{total_refund:,}</b> 🪙 to undo, but you only have "
             f"<b>{user.total_coins:,}</b> 🪙.\n\n"
             f"<i>Spent the release money already? Top up before undo expires.</i>",
             parse_mode="HTML")
-        session.commit()
         return
 
     # Verify all players still exist (haven't been deleted)
@@ -242,14 +263,14 @@ async def _undo_release(update, session, user, payload):
         if not pl:
             missing.append(it["player_name"])
     if missing:
+        consume_pending(session, pending, require_unexpired=False)
+        session.commit()
         await update.message.reply_text(
             f"⚠️ <b>Can't undo release</b>\n\n"
             f"Some players no longer exist in the database: "
             f"{', '.join(missing)}.\n\n"
             f"<i>This shouldn't normally happen.</i>",
             parse_mode="HTML")
-        clear_pending(session, user.id)
-        session.commit()
         return
 
     # Check user doesn't already own a different version of any of these
@@ -269,12 +290,15 @@ async def _undo_release(update, session, user, payload):
             if exists:
                 blocked.append(it["player_name"])
     if blocked:
+        session.commit()
         await update.message.reply_text(
             f"⚠️ <b>Can't undo release</b>\n\n"
             f"You already own a version of: {', '.join(blocked)}\n\n"
             f"<i>The undo would create duplicate ownership.</i>",
             parse_mode="HTML")
-        session.commit()
+        return
+
+    if not await _claim_undo(update, session, pending):
         return
 
     # All checks passed — restore players
@@ -299,7 +323,6 @@ async def _undo_release(update, session, user, payload):
                  f"Undo release of {len(items)} player(s) — deducted {total_refund:,}",
                  coins_change=-total_refund)
 
-    clear_pending(session, user.id)
     session.commit()
 
     names_str = ", ".join(restored[:8])

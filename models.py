@@ -389,6 +389,10 @@ class ActivityLog(Base):
     gems_change = Column(Integer, default=0)
     player_name = Column(String(150), nullable=True)
     player_rating = Column(Integer, nullable=True)
+    # Captured when logged; NULL on historical rows, which can only be
+    # estimated from deltas and must not be presented as recorded balances.
+    coins_balance_after = Column(Integer, nullable=True)
+    gems_balance_after = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User")
@@ -2152,6 +2156,17 @@ class Broadcast(Base):
     status = Column(String(20), default="pending")
     attachment_type = Column(String(20), nullable=True)
     attachment_name = Column(String(255), nullable=True)
+
+
+class BuyConfirmation(Base):
+    """Durable receipt preventing a Telegram Buy button from being replayed."""
+    __tablename__ = "buy_confirmations"
+
+    request_key = Column(String(160), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    # Historical identity: keep the receipt if a catalog card is later purged.
+    player_id = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class PendingUndo(Base):
