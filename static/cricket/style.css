@@ -3107,3 +3107,37 @@ body {
 .precision-fields label { flex: 1 1 120px; min-width: 0; font-size: 12px; }
 .precision-fields select { width: 100%; margin-top: 4px; }
 .p-rhythm { display: block; font-size: 11px; color: var(--text-secondary); }
+/* Live batting: a compact entry and an accessible, scrollable captain sheet. */
+.live-batting-entry { margin: 12px 0; }
+.live-batting-quick { margin-bottom: 12px; }
+.live-batting-entry p { margin: 7px 2px; color: var(--text-secondary); font-size: 12px; }
+#live-batting-dialog {
+  width: min(92vw, 460px); max-height: 86dvh; overflow-y: auto;
+  margin: auto; padding: 20px; border-radius: 18px;
+  border: 1px solid rgba(var(--accent-rgb), .3);
+  background: var(--bg-color); color: var(--text-primary);
+  font: inherit; box-shadow: 0 18px 70px #0008;
+}
+#live-batting-dialog::backdrop { background: #000a; }
+.live-batting-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.live-batting-heading h2 { font-size: 20px; margin: 0; }
+#live-batting-dialog p { color: var(--text-secondary); font-size: 13px; line-height: 1.6; margin: 10px 0 16px; }
+#live-batting-dialog h3 { margin: 22px 0 8px; font-size: 16px; }
+#live-batting-dialog #live-batting-message { color: var(--text-primary); }
+#live-batting-dialog fieldset { border: 0; padding: 0; margin: 12px 0 0; min-width: 0; }
+#live-batting-dialog legend { font-size: 16px; font-weight: 600; margin-bottom: 10px; }
+#live-batting-dialog label { display: block; font-size: 13px; margin: 10px 0 6px; }
+#live-batting-dialog select {
+  width: 100%; padding: 12px; margin-bottom: 12px; border-radius: 8px;
+  background: var(--bg-color); color: var(--text-primary);
+  border: 1px solid var(--text-muted); font: inherit;
+}
+#live-batting-order { list-style: decimal inside; padding: 0; }
+#live-batting-order li { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #8883; }
+#live-batting-order li span { flex: 1; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+#live-batting-dialog button:not(.btn) {
+  flex-shrink: 0; min-width: 42px; min-height: 42px; border: 1px solid #8885;
+  border-radius: 8px; color: var(--text-primary); background: transparent; font: inherit;
+}
+#live-batting-dialog button:disabled, .live-batting-entry button:disabled { opacity: .45; cursor: default; }
+#live-batting-dialog :focus-visible { outline: 2px solid var(--text-primary); outline-offset: 2px; }

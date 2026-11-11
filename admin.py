@@ -9223,6 +9223,26 @@ def _match_rest_view_only_block(match_id):
 from services.match_webapp_service import APPROACH_ACTION_TYPES as _APPROACH_ACTION_TYPES
 
 
+def _match_rest_batting_action(db, match, user, data):
+    from handlers.live_batting import submit_change
+    from services import bot_bridge
+    from services.crickidex_arena import serialize_match_state
+    kind = {"retire_batsman": "retire", "live_batting_order": "order"}[data["type"]]
+    action = data.get("action")
+    if not isinstance(action, dict):
+        return {"ok": False, "message": "Invalid batting selection."}, 400
+
+    async def _go(ctx, accept):
+        return await submit_change(ctx, match.id, user.telegram_id, kind, action,
+                                   source="app", on_accept=accept)
+
+    ok, message = bot_bridge.submit_and_wait_for_accept(_go)
+    if not ok:
+        return {"ok": False, "error": message, "message": message}, 400
+    return {"ok": True, "message": message,
+            "matchState": serialize_match_state(db, match, user)}
+
+
 def _match_rest_approach_impact(db, match, user, data):
     """Impact Player swap for an over-by-over bot match played in the Mini App.
 
@@ -9598,6 +9618,8 @@ def match_rest_action():
         if state.get("played_via") == "wsp":
             return {"ok": False, "error": "auto_simulated",
                     "message": "This match is auto-simulated — no manual actions allowed."}, 400
+        if data.get("type") in ("retire_batsman", "live_batting_order"):
+            return _match_rest_batting_action(db, match, user, data)
         if data.get("type") in _APPROACH_ACTION_TYPES:
             return _match_rest_approach_action(db, match, user, state, data)
         vo = _match_rest_view_only_block(match.id)

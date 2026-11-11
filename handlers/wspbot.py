@@ -391,7 +391,8 @@ async def _wspbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=Non
             await send_match_ready_message(
                 context, chat_id, m, bat_team_name, bowl_team_name,
                 bat_mention, bowl_mention,
-                rules_note="Auto-simulated — watch live in the Mini App")
+                rules_note="Auto-simulated — watch live in the Mini App",
+                live_batting_enabled=False)
         except Exception:
             logger.exception("wspbot match-ready message failed")
 

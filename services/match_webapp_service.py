@@ -12,6 +12,7 @@ Roles:
 """
 
 import logging
+from functools import wraps
 
 from models import Match, User
 from services import match_webapp_access as mwa
@@ -27,6 +28,23 @@ from services.match_state_store import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _guard_live_action(busy_result, match_arg=0):
+    """Share the action slot with batting changes before reading live state."""
+    def decorate(fn):
+        @wraps(fn)
+        def guarded(*args, **kwargs):
+            mid = kwargs["match_id"] if "match_id" in kwargs else args[match_arg]
+            if not _claim_action(mid):
+                return busy_result()
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                _release_action(mid)
+        return guarded
+    return decorate
+
 
 # Setup-phase actions (before the ball loop): tracked in state["setup"]
 SETUP_PICKING = "PICKING"
@@ -228,10 +246,14 @@ def _emit_new_batsman(state, idx):
     if not (0 <= idx < len(order)):
         return
     p = order[idx] or {}
+    saved = _stat_row(state.get("bat_stats"), p.get("roster_id"))
+    text = (f"{p.get('name')} resumes on {saved.get('runs', 0)} ({saved.get('balls', 0)})."
+            if saved.get("balls") or saved.get("runs") else
+            f"{p.get('name')} comes in. {_bat_career_line(p)}")
     _push_commentary(state, {
         "type": "new_batsman",
         "name": p.get("name"),
-        "text": f"{p.get('name')} comes in. {_bat_career_line(p)}",
+        "text": text,
     })
 
 
@@ -249,6 +271,12 @@ def _slot_is_out(state, slot_key):
     return bool(st and st.get("out"))
 
 
+def _next_available_batsman(state):
+    from services.batting_order_service import next_batsman_index
+    return next_batsman_index(state.get("batting_order"), state.get("bat_stats"),
+                              state.get("striker_idx"), state.get("non_striker_idx"))
+
+
 def _install_new_batsman(state, idx):
     """Install the incoming batsman (batting-order index ``idx``) into whichever
     crease slot holds the dismissed batsman.
@@ -264,6 +292,8 @@ def _install_new_batsman(state, idx):
         state["non_striker_idx"] = idx
     else:
         state["striker_idx"] = idx
+    from services.live_batting import arrive
+    arrive(state, state["batting_order"][idx])
     _emit_new_batsman(state, idx)
 
 
@@ -1625,6 +1655,7 @@ def _normalise_delivery_choice(state, delivery, length=None):
     return False, "Pick a valid delivery: " + ", ".join(combos[:12]), None
 
 
+@_guard_live_action(lambda: (False, "The match is processing another action. Try again."))
 def set_delivery(match_id, user_id, variation, length=None):
     """Bowler locks in the delivery (variation + optional length). The batsman
     then sees 'delivery coming' and picks a shot. Returns (ok, msg)."""
@@ -1790,6 +1821,11 @@ def set_delivery_action(match_id, user_id, delivery, speed=None, *, line=None,
     if not _claim_action(match_id):
         return False, "Previous action still processing — hold on.", None
     try:
+        # Batting management can commit while the delivery request validates.
+        # Read again once the shared action slot is ours.
+        state = mwa.get_state(match_id)
+        if not state or mwa.get_next_action(match_id) not in (A_PICK_DELIVERY, A_PICK_LENGTH):
+            return False, "The match moved on. Choose the delivery again.", None
         _set_processing(state, True)
         bowler = state.get("current_bowler") or {}
         kmh = _speed_to_kmh(speed, bowler)
@@ -1927,8 +1963,9 @@ def select_wicket_batsman(match_id, user_id, index):
     bat_stats = state.get("bat_stats", {})
     # State is JSON-round-tripped, so dict keys may be strings. Check both.
     st = bat_stats.get(rid) or bat_stats.get(str(rid))
-    if st and st.get("out"):
-        return False, "That batsman is already out.", None
+    from services.live_batting import eligible
+    if not eligible(player, st or {}):
+        return False, "That batsman is not available.", None
     if idx in (state.get("striker_idx"), state.get("non_striker_idx")):
         return False, "That batsman is already at the crease.", None
 
@@ -2368,8 +2405,8 @@ def play_shot(match_id, user_id, shot_index, state=None):
             # Stay in A_PICK_NEW_BATSMAN (do NOT auto-advance).
             pass
         else:
-            nb = state.get("next_batsman_idx", 2)
-            if nb < len(state.get("batting_order", [])):
+            nb = _next_available_batsman(state)
+            if nb is not None:
                 _install_new_batsman(state, nb)
                 state["next_batsman_idx"] = nb + 1
                 next_act = A_PICK_NEW_BOWLER if res["eoo"] else A_PICK_DELIVERY
@@ -2389,6 +2426,7 @@ def play_shot(match_id, user_id, shot_index, state=None):
     return True, res
 
 
+@_guard_live_action(lambda: (False, "The match is processing another action. Try again."))
 def select_new_bowler(match_id, user_id, bowler_rid):
     """At end of over, bowling side picks the next bowler (can't be same as
     the over just bowled). Returns (ok, msg)."""
@@ -2487,7 +2525,7 @@ def build_scorecard(match_id, user_id):
         rows = []
         for p in xi:
             st = _stat_row(stats, p["roster_id"])
-            if not st.get("balls") and not st.get("out") and not st.get("runs"):
+            if not st.get("balls") and not st.get("out") and not st.get("runs") and not st.get("batted"):
                 continue  # didn't bat
             rows.append({
                 "name": impact_player.display_name(p),
@@ -2496,7 +2534,8 @@ def build_scorecard(match_id, user_id):
                 "balls": st.get("balls", 0), "fours": st.get("fours", 0),
                 **{f"balls_to_{n}": st[f"balls_to_{n}"] for n in (50,100,150) if f"balls_to_{n}" in st},
                 "sixes": st.get("sixes", 0), "out": st.get("out", False),
-                "how_out": st.get("how_out", "") or ("not out" if not st.get("out") else "out"),
+                "how_out": ("Retired — can return" if st.get("retired") else
+                            st.get("how_out", "") or ("not out" if not st.get("out") else "out")),
                 "sr": round(st.get("runs", 0) * 100 / st.get("balls", 1), 1) if st.get("balls") else 0,
             })
         return rows
@@ -3722,6 +3761,7 @@ def _bot_controls_current_action(state, next_action):
     return False
 
 
+@_guard_live_action(list, match_arg=1)
 def auto_play_bot_turns(session, match_id, max_steps=200):
     """Advance all consecutive AI turns. Returns list of step descriptions
     (for optional commentary). Stops when it's the human's turn or match ends.
@@ -3824,8 +3864,8 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
                     mwa.bump_ball_seq(match_id)
                     break
             elif res["need_new_bat"] and state["total_wickets"] < state.get("wicket_limit", 10):
-                nb = state.get("next_batsman_idx", 2)
-                if nb < len(state.get("batting_order", [])):
+                nb = _next_available_batsman(state)
+                if nb is not None:
                     _install_new_batsman(state, nb)
                     state["next_batsman_idx"] = nb + 1
                 # A wicket on the last ball still owes a new-bowler pick.
@@ -3851,8 +3891,8 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
             continue
 
         if na == A_PICK_NEW_BATSMAN:
-            nb = state.get("next_batsman_idx", 2)
-            if nb < len(state.get("batting_order", [])):
+            nb = _next_available_batsman(state)
+            if nb is not None:
                 _install_new_batsman(state, nb)
                 state["next_batsman_idx"] = nb + 1
             nxt = (A_PICK_NEW_BOWLER if state.pop("pending_new_bowler", False)

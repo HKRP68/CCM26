@@ -28,7 +28,7 @@
   <!-- Telegram Web App SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Custom Styling -->
-  <link rel="stylesheet" href="style.css?v=20261105-post-match-coaching">
+  <link rel="stylesheet" href="style.css?v=20261111-live-batting">
 </head>
 <body>
   <div id="app-container">
@@ -284,6 +284,11 @@
           </button>
         </div>
 
+        <div id="live-batting-entry" class="live-batting-entry hidden">
+          <button type="button" class="btn btn-secondary btn-block" id="manage-batting-btn">🏏 Manage batting</button>
+          <p id="live-batting-hint"></p>
+        </div>
+
         <!-- COMMENTARY FEED -->
         <div class="commentary-feed-container">
           <div class="timeline" id="commentary-list">
@@ -402,6 +407,7 @@
         </div>
 
         <div class="sheet-body">
+          <button type="button" class="btn btn-secondary btn-block live-batting-quick hidden" id="manage-batting-quick-btn">🏏 Manage batting · retire / reorder</button>
           <div id="autoplay-status-message" class="autoplay-status-message hidden"></div>
 
           <!-- INCOMING BALL TYPE DISPLAY -->
@@ -674,7 +680,29 @@
 
   </div>
   
-  <script src="app.js?v=20261105-post-match-coaching"></script>
-  <script src="approach.js?v=20261001-1"></script>
+  <dialog id="live-batting-dialog" aria-labelledby="live-batting-title">
+    <div class="live-batting-heading">
+      <h2 id="live-batting-title">Manage batting</h2>
+      <button type="button" id="close-batting-btn" aria-label="Close batting controls">✕</button>
+    </div>
+    <p>Retire a batter, choose who comes in, or change the available batting order. Retired players can return from their saved score. No wicket is added.</p>
+    <p id="live-batting-message" role="status" aria-live="polite"></p>
+    <button type="button" id="refresh-batting-btn" class="btn btn-secondary btn-block hidden">Refresh batting choices</button>
+    <fieldset id="live-batting-fields">
+      <legend>Change the pair</legend>
+      <label for="retire-batter">Retire from the crease</label>
+      <select id="retire-batter"></select>
+      <label for="incoming-batter">Send in</label>
+      <select id="incoming-batter"></select>
+      <button type="button" id="confirm-retire-btn" class="btn btn-primary btn-block btn-green">Retire &amp; send in</button>
+    </fieldset>
+    <h3>Available batting order</h3>
+    <p class="live-batting-caption">First in this list bats next. Players at the crease stay in place. Changes apply to this innings only.</p>
+    <ol id="live-batting-order"></ol>
+    <button type="button" id="save-live-order-btn" class="btn btn-primary btn-block btn-green" disabled>Save batting order</button>
+  </dialog>
+  <script src="app.js?v=20261111-live-batting"></script>
+  <script src="live-batting.js?v=20261111-1"></script>
+  <script src="approach.js?v=20261111-live-batting"></script>
 </body>
 </html>

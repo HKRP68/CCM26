@@ -354,7 +354,8 @@ async def wsp_decision_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await send_match_ready_message(
             context, cid, match, bat_team, bowl_team,
             _mention(bat_user), _mention(bowl_user),
-            rules_note="Auto-simulated — watch live in the Mini App")
+            rules_note="Auto-simulated — watch live in the Mini App",
+            live_batting_enabled=False)
 
         # Launch simulation as background task
         from services.wsp_autoplay import run_wsp_simulation

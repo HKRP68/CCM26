@@ -190,9 +190,11 @@ async def _auto_decide(context, mid, state, next_act):
             for i, p in enumerate(state["batting_order"]):
                 if i == state["striker_idx"] or i == state["non_striker_idx"]:
                     continue
-                bs = state["bat_stats"].get(p["roster_id"], {})
-                if not bs.get("out", False):
-                    state["striker_idx"] = i
+                from services.live_batting import eligible, stat
+                from services.match_webapp_service import _install_new_batsman
+                bs = stat(state, p["roster_id"])
+                if eligible(p, bs):
+                    _install_new_batsman(state, i)
                     save_state(context, mid, state, next_action=A_PICK_DELIVERY)
                     await context.bot.send_message(
                         chat_id, f"🤖 Auto next batsman: <b>{p['name']}</b>",

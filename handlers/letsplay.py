@@ -2505,6 +2505,7 @@ def _team_code(name):
 
 async def _announce(context, state, pitch_type):
     """Pin a 'Lets Play' match-start card carrying the View Match button."""
+    from services.live_batting_help import start_guide_html
     bat = html.escape(str(state.get("bat_team_name", "Host")))
     bowl = html.escape(str(state.get("bowl_team_name", "Guest")))
     stadium = html.escape(str(state.get("stadium") or "Neutral Venue"))
@@ -2578,7 +2579,8 @@ async def _announce(context, state, pitch_type):
            if state.get("is_bot_match") or state.get("unranked") else "")
         + f"{rule}\n"
         f"📺 Live scorecard, commentary &amp; XI inside\n"
-        f"👇 Tap <b>View Match</b> to follow live")
+        f"👇 Tap <b>View Match</b> to follow live"
+        + "\n\n" + start_guide_html(app_only=state.get("play_mode") == "app"))
     try:
         from handlers.cipl_play import _miniapp_row
         kb = _miniapp_row(state)

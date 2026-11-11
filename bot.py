@@ -352,7 +352,7 @@ MENU_LIMIT = 100   # Telegram's setMyCommands ceiling, per scope
 # Commands whose handler refuses to run outside a group, so listing them in a
 # private chat would only advertise an error message.
 GROUP_ONLY_COMMANDS = frozenset({
-    'superover',
+    "superover",
     "bluff", "cartel", "mole", "wordchase", "endchase", "cltour",
     "unscramble", "ju", "eu", "su", "cu", "ewm", "dwm",
     # Lets Play Tournament. A fixture is two people in a chat, and the table /
@@ -379,7 +379,7 @@ GROUP_ONLY_COMMANDS = frozenset({
 PRIVATE_ONLY_COMMANDS = frozenset({
     # Personal membership details stay available in DM's slash menu, leaving
     # room for the group-only standalone Super Over in the group menu.
-    'membership',
+    "membership",
     "start", "debut", "redeem", "feedback", "notifications", "invite",
     # Rules pages. Their parent commands (/cmuchem, /fantasy) stay in the group
     # menu and both print a "…for the full guide" pointer to these.
@@ -1981,6 +1981,10 @@ def main():
         app.add_handler(CallbackQueryHandler(cipl_impact_cancel_callback, pattern=r"^cipl_impx_"))
         app.add_handler(CallbackQueryHandler(cipl_impact_callback, pattern=r"^cipl_imp_"))
         app.add_handler(CommandHandler(["impact", "ip"], impact_handler))
+        from handlers.live_batting import manage_handler, batting_callback
+        app.add_handler(CommandHandler(
+            ["managebatting", "retire", "retireout", "liveorder", "lbo"], manage_handler))
+        app.add_handler(CallbackQueryHandler(batting_callback, pattern=r"^lb_"))
         app.add_handler(CallbackQueryHandler(cipl_concussion_callback, pattern=r"^cipl_cs_"))
         app.add_handler(CommandHandler(["concussion", "medicalsub"], concussion_handler))
         # /rcl — resume a stuck Challenge League match from where it left off

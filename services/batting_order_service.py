@@ -172,12 +172,13 @@ def next_batsman_index(batting_order, bat_stats, striker_idx, non_striker_idx,
     """
     order = batting_order or []
     stats = bat_stats or {}
+    from services.live_batting import eligible
     for i in range(max(0, int(start or 0)), len(order)):
         if i in (striker_idx, non_striker_idx):
             continue
         rid = (order[i] or {}).get("roster_id")
         st = stats.get(rid) or stats.get(str(rid)) or {}
-        if st.get("out"):
+        if not eligible(order[i], st):
             continue
         return i
     return None

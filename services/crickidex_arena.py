@@ -135,6 +135,9 @@ def _full_dismissal(bs):
     reads ``c Kohli b Bumrah`` / ``lbw b Shami`` / ``run out (Jadeja)`` instead
     of a bare ``caught`` / ``bowled`` / ``lbw``.
     """
+    if bs.get('retired'):
+        from services.live_batting import RETIRED_LABEL
+        return RETIRED_LABEL
     if bs.get('retired_hurt'):
         return bs.get('dismissal') or 'Retired hurt (concussion)'
     if not bs.get("out"):
@@ -230,6 +233,8 @@ def _merge_stats(state, innings_filter=None):
             "fours": bs.get("fours", 0),
             "sixes": bs.get("sixes", 0),
             "isOut": bool(bs.get("out", False)),
+            "retired": bool(bs.get("retired")),
+            "hasBatted": bool(bs.get("batted") or bs.get("balls") or bs.get("out")),
             "how_out": _full_dismissal(bs),
             "wickets": ws.get("wickets", 0),
             "runsConceded": ws.get("runs", 0),
@@ -823,6 +828,11 @@ def _serialize_match_state_impl(session, match, viewer_user):
         inn1_partnerships = inn2_partnerships
         inn2_partnerships = []
 
+    from services.live_batting import options as batting_options
+    live_batting = batting_options(state, next_action, can_control=(
+        my_role == "batting" and status != "completed"
+        and (not is_approach_match(state) or state.get("play_mode") == "app")))
+
     return {
         "id": str(match_id),
         "type": "pve" if state.get("is_vsbot") else "pvp",
@@ -850,6 +860,7 @@ def _serialize_match_state_impl(session, match, viewer_user):
         "isMyTurn": bool(is_my_turn),
         "result": result,
         "impactPlayer": impact_player,
+        "liveBatting": live_batting,
         "deliveryOptions": delivery_options,
         "host": host,
         "guest": guest,
@@ -1065,7 +1076,10 @@ def _approach_payload(state, next_action, my_role):
         if next_action == A_PICK_CIPL_NEW_BATSMAN and cm.needs_new_batsman(state):
             for p in cm.available_batsmen(state):
                 payload["incomingBatsmen"].append({
-                    **_p(p), "displayRating": cm.display_rating(p, "bat_rating")})
+                    **_p(p), "displayRating": cm.display_rating(p, "bat_rating"),
+                    "retired": bool(_stat(state.get("bat_stats"), p.get("roster_id")).get("retired")),
+                    "runs": _stat(state.get("bat_stats"), p.get("roster_id")).get("runs", 0),
+                    "balls": _stat(state.get("bat_stats"), p.get("roster_id")).get("balls", 0)})
             order = state.get("batting_order") or []
             out = order[state.get("striker_idx", 0)] if order else {}
             bs = (state.get("bat_stats") or {}).get(str(out.get("roster_id")), {})

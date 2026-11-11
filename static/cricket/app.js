@@ -757,6 +757,10 @@ function applyMatchState(nextState, { force = false } = {}) {
   const currentRevision = Number(matchState?.ballSeq ?? -1);
   const nextRevision = Number(nextState.ballSeq ?? currentRevision);
   if (Number.isFinite(currentRevision) && Number.isFinite(nextRevision) && nextRevision < currentRevision) return;
+  // A batting change advances no delivery, so ballSeq alone cannot reject a
+  // polling response captured before the change committed.
+  if (matchState?.id === nextState.id &&
+      Number(nextState.liveBatting?.revision ?? 0) < Number(matchState.liveBatting?.revision ?? 0)) return;
 
   matchState = nextState;
   preloadEventGifs(matchState.eventGifs || {});
@@ -1247,6 +1251,7 @@ function renderGameplayScreen() {
 
   // Render controls block
   renderControlsSection();
+  if (typeof renderLiveBatting === 'function') renderLiveBatting();
 
   // Render commentary list
   renderCommentaryFeed();
@@ -2313,6 +2318,15 @@ function renderCommentaryFeed() {
       const impactText = comm.text
         || `Impact Player used! ${comm.inPlayer || ''} replaces ${comm.outPlayer || ''}`;
       item.innerHTML = `<span class="comm-dot">🟢</span><span class="comm-text">${impactText}</span>`;
+    } else if (comm.type === 'retirement' || comm.type === 'batting_order') {
+      item.className = 'comm-event comm-new-batsman';
+      const icon = document.createElement('span');
+      icon.className = 'comm-dot';
+      icon.textContent = '🏏';
+      const text = document.createElement('span');
+      text.className = 'comm-text';
+      text.textContent = comm.text || '';
+      item.append(icon, text);
     } else if (comm.type === 'wicket') {
       item.className = "comm-event comm-wicket";
       item.innerHTML = `<span class="comm-dot">🔴</span><span class="comm-text">${comm.text || ''}</span>`;
@@ -2467,7 +2481,7 @@ function renderScorecardPanel() {
     const isNonStriker = matchState.nonStriker && matchState.nonStriker.id && matchState.nonStriker.id.toString() === pid;
     const isActive = isStriker || isNonStriker;
 
-    if (!isActive && (!pStat || pStat.balls === 0)) return;
+    if (!isActive && !pStat.hasBatted && !pStat.isOut && !pStat.retired && !pStat.balls) return;
 
     anyBatRow = true;
     const runs = pStat.runs || 0;
@@ -2480,6 +2494,9 @@ function renderScorecardPanel() {
     let statusClass = 'out';
     if (isActive) {
       statusText = isStriker ? 'batting*' : 'not out';
+      statusClass = 'active';
+    } else if (pStat.retired) {
+      statusText = 'Retired — can return';
       statusClass = 'active';
     } else if (pStat.isOut) {
       statusText = pStat.how_out || pStat.outDetail || 'out';
@@ -2528,7 +2545,7 @@ function renderScorecardPanel() {
     const pid = p.id.toString();
     const st = statsPool[pid] || {};
     const isOut = st.isOut;
-    const hasBatted = (st.balls || 0) > 0;
+    const hasBatted = st.hasBatted || st.retired || (st.balls || 0) > 0;
     const isAtCrease = activeIds.includes(pid);
     return !isAtCrease && !isOut && !hasBatted;
   });
@@ -3185,9 +3202,9 @@ function renderPartnershipHistory() {
 
   let rows = '';
   history.forEach((p, i) => {
-    const wkt = p.wicket || (i + 1);
+    const wkt = p.ended_by === 'retirement' ? 'RET' : `${p.wicket || (i + 1)}W`;
     rows += `<div class="part-row">
-      <span class="part-wkt">${wkt}W</span>
+      <span class="part-wkt">${wkt}</span>
       <span class="part-names">${p.batsman1 || ''} & ${p.batsman2 || ''}</span>
       <span class="part-score">${p.runs}(${p.balls})</span>
     </div>`;

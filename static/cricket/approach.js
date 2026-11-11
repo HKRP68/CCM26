@@ -372,7 +372,7 @@ function renderApproachBatsmen(section, a) {
     div.className = 'selection-item';
     div.innerHTML = `
       <span class="selection-item-name">${escHtml(p.name)}${i === 0 ? ' <span class="ap-last">next</span>' : ''}</span>
-      <span class="selection-item-meta">${escHtml(p.displayRating ?? p.batting_ovr ?? '')} BAT • ${escHtml(p.role || 'Batsman')}</span>`;
+      <span class="selection-item-meta">${p.retired ? `Resume ${escHtml(p.runs)} (${escHtml(p.balls)}) • ` : ''}${escHtml(p.displayRating ?? p.batting_ovr ?? '')} BAT • ${escHtml(p.role || 'Batsman')}</span>`;
     div.onclick = () => {
       if (approachSubmitInFlight) return;
       haptic('medium');

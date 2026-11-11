@@ -3984,9 +3984,11 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
             _ss(context, mid, s, next_action=A_PICK_DELIVERY)
 
             await q.edit_message_text(f"✅ Bowler: {bowler['name']}\n\n⏳ Starting...", parse_mode="HTML")
+            from services.live_batting_help import start_guide_html
             await context.bot.send_message(cid,
                 f"🏏 <b>MATCH STARTING!</b>\n\n🏟️ {m.stadium}\n{bt} vs {bwt} | {m.overs} Overs\n"
-                f"🏏 {op1['name']} & {op2['name']}\n🎳 {bowler['name']}\n━━━━━━━━━━━━━━━━━━━",
+                f"🏏 {op1['name']} & {op2['name']}\n🎳 {bowler['name']}\n━━━━━━━━━━━━━━━━━━━"
+                + "\n\n" + start_guide_html(),
                 parse_mode="HTML")
             # Send opener cards (in parallel — faster start)
             await _send_innings_cards(context, cid, (op1, op2), bowler,
@@ -4453,6 +4455,10 @@ async def variation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     async with lock:
         try:
+            s = _gs(context, mid)
+            if not s or q.from_user.id != s.get("bowl_user_tg"):
+                await q.answer("Not your bowl!")
+                return
             from services.match_state_store import get_next_action
             if get_next_action(context, mid) != A_PICK_DELIVERY:
                 try: await q.answer("⏳ Already processed")
@@ -4537,6 +4543,10 @@ async def spinner_delivery_callback(update: Update, context: ContextTypes.DEFAUL
 
     async with lock:
         try:
+            s = _gs(context, mid)
+            if not s or q.from_user.id != s.get("bowl_user_tg"):
+                await q.answer("Not your bowl!")
+                return
             from services.match_state_store import get_next_action
             if get_next_action(context, mid) != A_PICK_DELIVERY:
                 try: await q.answer("⏳ Already processed")
@@ -5707,7 +5717,8 @@ async def _walk_in_next_batsman(ctx, mid, s):
     if idx is None:
         return False
     nb = order[idx]
-    s["striker_idx"] = idx
+    from services.match_webapp_service import _install_new_batsman
+    _install_new_batsman(s, idx)
     s["next_batsman_idx"] = max(s.get("next_batsman_idx", 2), idx + 1)
     # Same branch as the manual pick: a wicket on the last ball of an over still
     # owes the bowling side a new bowler.
@@ -5741,7 +5752,8 @@ async def _show_new_batsman(ctx, mid):
         for i, p in enumerate(s["batting_order"]):
             if i == s["striker_idx"] or i == s["non_striker_idx"]: continue
             bs = _stats_get(s["bat_stats"], p["roster_id"])
-            if not bs.get("out", False): available.append((i, p))
+            from services.live_batting import eligible
+            if eligible(p, bs): available.append((i, p))
         if not available:
             logger.warning(f"Match {mid}: No available batsmen but wickets={s['total_wickets']}, forcing innings end")
             await _end_innings(ctx, mid)
@@ -5779,16 +5791,28 @@ async def _show_new_batsman(ctx, mid):
 
 async def new_batsman_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; parts = q.data.split("_"); mid, bi = int(parts[1]), int(parts[2])
-    s = _gs(context, mid)
-    if not s or q.from_user.id != s["bat_user_tg"]: await q.answer("Not yours!"); return
-    await q.answer(); _cancel_action_timer(context, mid)
-    nb = s["batting_order"][bi]; s["striker_idx"] = bi
-    # Determine what's next: end of over → bowler picker; else next delivery
-    if s["current_ball"] == 0 and s["current_over"] > 1:
-        next_act = A_PICK_NEW_BOWLER
-    else:
-        next_act = A_PICK_DELIVERY
-    _ss(context, mid, s, next_action=next_act)
+    from services.live_batting import eligible, stat
+    from services.match_webapp_service import _install_new_batsman
+    async with get_match_lock(mid):
+        s = _gs(context, mid)
+        if not s or q.from_user.id != s["bat_user_tg"]:
+            await q.answer("Not yours!")
+            return
+        order = s.get("batting_order") or []
+        if (get_next_action(context, mid) != A_PICK_NEW_BATSMAN
+                or not 0 <= bi < len(order)
+                or bi in (s.get("striker_idx"), s.get("non_striker_idx"))
+                or not eligible(order[bi], stat(s, order[bi]["roster_id"]))):
+            await q.answer("That batsman is no longer available.")
+            return
+        await q.answer()
+        _cancel_action_timer(context, mid)
+        nb = order[bi]
+        _install_new_batsman(s, bi)
+        # A last-ball wicket still owes the bowling captain a bowler pick.
+        next_act = (A_PICK_NEW_BOWLER if s["current_ball"] == 0 and s["current_over"] > 1
+                    else A_PICK_DELIVERY)
+        _ss(context, mid, s, next_action=next_act)
     try:
         await q.edit_message_text(f"🏏 New batsman: {nb['name']} ({nb['bat_rating']} BAT)", parse_mode="HTML")
     except Exception:
@@ -5859,17 +5883,23 @@ async def _show_new_over_bowler(ctx, mid):
 
 async def new_over_bowler_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; parts = q.data.split("_"); mid, rid = int(parts[1]), int(parts[2])
-    s = _gs(context, mid)
-    if not s or q.from_user.id != s["bowl_user_tg"]: await q.answer("Not yours!"); return
-    await q.answer(); _cancel_action_timer(context, mid)
-    bw = next((p for p in s["bowl_xi"] if p["roster_id"] == rid), None)
-    if not bw: return
-    s["current_bowler"] = bw
-    bws = _stats_row(s["bowl_stats"], bw["roster_id"],
-                     {"balls": 0, "runs": 0, "wickets": 0,
-                      "overs_done": 0, "this_over_balls": 0})
-    bws["this_over_balls"] = 0
-    _ss(context, mid, s, next_action=A_PICK_DELIVERY)
+    async with get_match_lock(mid):
+        s = _gs(context, mid)
+        if not s or q.from_user.id != s["bowl_user_tg"]:
+            await q.answer("Not yours!")
+            return
+        if get_next_action(context, mid) != A_PICK_NEW_BOWLER:
+            await q.answer("Bowler already chosen.")
+            return
+        await q.answer(); _cancel_action_timer(context, mid)
+        bw = next((p for p in s["bowl_xi"] if p["roster_id"] == rid), None)
+        if not bw: return
+        s["current_bowler"] = bw
+        bws = _stats_row(s["bowl_stats"], bw["roster_id"],
+                         {"balls": 0, "runs": 0, "wickets": 0,
+                          "overs_done": 0, "this_over_balls": 0})
+        bws["this_over_balls"] = 0
+        _ss(context, mid, s, next_action=A_PICK_DELIVERY)
     await q.edit_message_text(f"🎳 Over {s['current_over']}: {bw['name']} | {bw.get('bowl_hand','R')[:1]}-{bw['bowl_style']}", parse_mode="HTML")
 
     # Send the bowler card and the next delivery prompt concurrently so the
@@ -6286,7 +6316,10 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
             #   out      → batted and dismissed
             #   not_out  → batted and survived (or marked retired)
             #   dnb      → in XI but never faced a ball and not given out
-            if balls == 0 and not is_out:
+            if bs.get("retired"):
+                status = "not_out"
+                dismissal = "Retired — can return"
+            elif balls == 0 and not is_out and not bs.get("batted"):
                 status = "dnb"
                 dismissal = "did not bat"
             elif is_out:

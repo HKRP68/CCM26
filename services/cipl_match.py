@@ -2536,16 +2536,9 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             if pause_on_wicket and _can_pause_for_batsman(state):
                 pause_now = True
             # Auto-promote next batsman (order fixed in Playing XI)
-            elif state["next_batsman_idx"] < len(state["batting_order"]):
-                state["striker_idx"] = state["next_batsman_idx"]
-                state["next_batsman_idx"] += 1
-                # Commentary: announce the incoming batsman (unless the innings
-                # is ending on this wicket — no one walks out then).
-                if not is_innings_over(state):
-                    _emit_new_batsman_card(
-                        state, state["batting_order"][state["striker_idx"]])
-            else:
-                state["total_wickets"] = state.get("wicket_limit", WICKET_LIMIT)
+            elif not is_innings_over(state):
+                if bring_in_batsman(state) is None:
+                    state["total_wickets"] = state.get("wicket_limit", WICKET_LIMIT)
 
         else:  # runs
             state["total_runs"] += runs
@@ -2872,7 +2865,8 @@ def available_batsmen(state):
     """The batsmen still to come in, in batting-order order."""
     order = state.get("batting_order") or []
     nxt = int(state.get("next_batsman_idx", len(order)) or 0)
-    return [p for p in order[nxt:] if p]
+    from services.live_batting import eligible, stat
+    return [p for p in order[nxt:] if p and eligible(p, stat(state, p.get("roster_id")))]
 
 
 def awaiting_new_batsman(state):
@@ -2941,18 +2935,21 @@ def bring_in_batsman(state, roster_id=None):
     """
     order = state.get("batting_order") or []
     nxt = int(state.get("next_batsman_idx", len(order)) or 0)
-    if nxt >= len(order):
+    available = available_batsmen(state)
+    if not available:
         return None
-    if roster_id is not None:
-        pos = next((i for i in range(nxt, len(order))
-                    if str(order[i].get("roster_id")) == str(roster_id)), None)
-        if pos is None:
-            return None
-        if pos != nxt:
-            order.insert(nxt, order.pop(pos))
+    roster_id = available[0]["roster_id"] if roster_id is None else roster_id
+    if str(roster_id) not in {str(p["roster_id"]) for p in available}:
+        return None
+    pos = next(i for i in range(nxt, len(order))
+               if str(order[i].get("roster_id")) == str(roster_id))
+    if pos != nxt:
+        order.insert(nxt, order.pop(pos))
     state["striker_idx"] = nxt
     state["next_batsman_idx"] = nxt + 1
     player = order[nxt]
+    from services.live_batting import arrive
+    arrive(state, player)
     _emit_new_batsman_card(state, player)
     return player
 
@@ -3109,9 +3106,13 @@ def _emit_bowler_card(state, bowler):
 
 def _emit_new_batsman_card(state, player):
     """Green 'comes to the crease' card when a new batsman is promoted."""
+    from services.live_batting import stat
+    bs = stat(state, player["roster_id"])
+    saved_score = (f" Resumes on {bs.get('runs', 0)} ({bs.get('balls', 0)})."
+                   if bs.get("balls") or bs.get("runs") else "")
     _push_card(state, {
         "type": "new_batsman", "name": player["name"],
-        "text": f"{player['name']} comes to the crease."})
+        "text": f"{player['name']} comes to the crease.{saved_score}"})
 
 
 def _emit_end_of_over_card(state, bowler, over_no, over_runs):

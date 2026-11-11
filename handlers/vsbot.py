@@ -1288,6 +1288,11 @@ async def _vsbot_start_match(context, chat_id, mid, opening_bowler):
         from services.match_state_store import save_state, A_PICK_DELIVERY
         save_state(context, mid, state, next_action=A_PICK_DELIVERY)
 
+        from services.live_batting_help import start_guide_html
+        await context.bot.send_message(
+            chat_id, f"🏏 <b>Match #{mid} started</b>\n\n" + start_guide_html(),
+            parse_mode="HTML")
+
         # Show opening cards (bot players are skipped; the rest go out together
         # rather than one upload after another)
         await _send_innings_cards(
@@ -1429,7 +1434,8 @@ async def vsbot_auto_continue(context, mid):
                 s["batting_order"], s["striker_idx"], s["non_striker_idx"], s["bat_stats"],
             )
             if p:
-                s["striker_idx"] = idx
+                from services.match_webapp_service import _install_new_batsman
+                _install_new_batsman(s, idx)
                 # A wicket on the last ball of an over still needs a bowler
                 # selection after the replacement batsman is chosen.
                 next_action = (A_PICK_NEW_BOWLER

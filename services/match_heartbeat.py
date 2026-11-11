@@ -337,8 +337,10 @@ async def _auto_decide(context, mid, state, next_act):
                 # a raw int lookup would miss and report every batter not-out —
                 # promoting someone already dismissed.
                 bs = _stat_row(state.get("bat_stats"), p["roster_id"])
-                if not bs.get("out", False):
-                    state["striker_idx"] = i
+                from services.live_batting import eligible
+                from services.match_webapp_service import _install_new_batsman
+                if eligible(p, bs):
+                    _install_new_batsman(state, i)
                     save_state(context, mid, state, next_action=A_PICK_DELIVERY)
                     await context.bot.send_message(
                         chat_id, f"🤖 Auto next batsman: <b>{p['name']}</b>",

@@ -403,7 +403,7 @@ def _partnership_section(views):
             f"<td>{_e(p.get('batsman1'))} &amp; {_e(p.get('batsman2'))}</td>"
             f"<td class='n'>{_num(p.get('runs'))}</td>"
             f"<td class='n'>{_num(p.get('balls'))}</td>"
-            f"<td class='dim'>{'unbroken' if p.get('notout') else ''}</td></tr>"
+            f"<td class='dim'>{'retirement' if p.get('ended_by') == 'retirement' else 'unbroken' if p.get('notout') else ''}</td></tr>"
             for p in v["partnerships"])
         fow = " &nbsp;·&nbsp; ".join(
             f"{_num(f[1])}-{_num(f[0])} ({_e(f[2])}, {_e(f[3])})"

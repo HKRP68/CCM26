@@ -2368,6 +2368,7 @@ def _competition_line(state):
 
 def _match_start_announcement(state):
     """Polished 'Watch CSK 🆚 MI — High-Voltage IPL Battle' card for the pin."""
+    from services.live_batting_help import start_guide_html
     bat = html.escape(str(state.get("bat_team_name", "Team A")))
     bowl = html.escape(str(state.get("bowl_team_name", "Team B")))
     bat_code = html.escape(str(state.get("bat_team_code") or "")) or bat
@@ -2426,7 +2427,8 @@ def _match_start_announcement(state):
         + ("" if _is_bot_match(state) else
            " · 📱 /playapp plays it in the Mini App with private plans")
         + "\n\n"
-        f"👇 Tap <b>Watch Match</b> to follow the action live")
+        f"👇 Tap <b>Watch Match</b> to follow the action live"
+        + "\n\n" + start_guide_html(app_only=_app_mode(state)))
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -2684,6 +2686,7 @@ async def _prompt_bat_approach(context, mid, state, auto=False):
     rows = [[InlineKeyboardButton(f"{emoji} {label}",
                                   callback_data=f"cipl_batapp_{mid}_{idx}")]
             for idx, (_, emoji, label) in enumerate(BATTING_APPROACHES)]
+    rows.append([InlineKeyboardButton("🏏 Manage batting", callback_data=f"lb_n_{mid}")])
     # The bowling captain's chosen Bowling Approach is hidden here so the batting
     # captain (the opponent) can't read the bowling plan before picking their own.
     text = (f"{_approach_card(state)}\n\n"
@@ -2739,9 +2742,14 @@ async def _prompt_new_batsman(context, mid, state, summary=None):
     left = max(0, bpu - legal)
 
     rows, row = [], []
+    from services.live_batting import stat
     for p in cipl_match.available_batsmen(state):
+        saved = stat(state, p["roster_id"])
+        label = (f"{p['name']} · Resume {saved.get('runs', 0)} ({saved.get('balls', 0)})"
+                 if saved.get("retired") else
+                 f"{p['name']} ({cipl_match.display_rating(p, 'bat_rating')})")
         row.append(InlineKeyboardButton(
-            f"{p['name']} ({cipl_match.display_rating(p, 'bat_rating')})",
+            label,
             callback_data=f"cipl_newbat_{mid}_{p['roster_id']}"))
         if len(row) == 2:
             rows.append(row); row = []
@@ -4581,7 +4589,8 @@ def _bat_line(player, bat_stats):
     star = "" if st.get("out") else "*"
     # Escaped: this goes into an HTML message, and a player name is user-set.
     name = html.escape(impact_player.display_name(player))
-    retired = ' · retired hurt (concussion)' if st.get('retired_hurt') else ''
+    retired = (' · Retired — can return' if st.get('retired') else
+               ' · retired hurt (concussion)' if st.get('retired_hurt') else '')
     return (f"{name} {st.get('runs', 0)}{star} "
             f"({st.get('balls', 0)}b, {st.get('fours', 0)}×4, {st.get('sixes', 0)}×6){retired}")
 
@@ -5699,7 +5708,7 @@ def _summary_rows(bat_stats, bat_xi, bowl_stats, bowl_xi, bpu=6):
     bats = []
     for p in bat_xi or []:
         st = bat_stats.get(str(p["roster_id"]), {})
-        if st.get("balls", 0) > 0 or st.get("out"):
+        if st.get("balls", 0) > 0 or st.get("out") or st.get("batted"):
             bats.append({"name": p["name"], "runs": st.get("runs", 0),
                          "balls": st.get("balls", 0), "out": st.get("out", False),
                          "impact": impact_player.is_impact(p)})
@@ -6080,7 +6089,8 @@ def _innings_scorecard(state, innings_label=""):
     bs = state["bat_stats"]
     batted = [p for p in state["bat_xi"]
               if bs.get(str(p["roster_id"]), {}).get("balls", 0) > 0
-              or bs.get(str(p["roster_id"]), {}).get("out")]
+              or bs.get(str(p["roster_id"]), {}).get("out")
+              or bs.get(str(p["roster_id"]), {}).get("batted")]
     for p in batted[:7]:
         lines.append(f"  {_bat_line(p, bs)}")
     # Top bowlers

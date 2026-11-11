@@ -245,7 +245,8 @@ async def reveal_toss_result(edit_fn, attempts=4):
 
 async def send_match_ready_message(context, chat_id, match, bat_team, bowl_team,
                                    bat_mention, bowl_mention, rules_note=None,
-                                   toss_note=None, traits_note=None):
+                                   toss_note=None, traits_note=None,
+                                   live_batting_enabled=True):
     """Post the 'Match Ready' card with all details + the Play Match button.
 
     ``traits_note`` carries the result of the pre-toss Trait Vote
@@ -279,9 +280,13 @@ async def send_match_ready_message(context, chat_id, match, bat_team, bowl_team,
     if kb is None:
         text += ("\n\n⚠️ <i>Mini App link unavailable — set BOT_USERNAME"
                  " (and MINIAPP_NAME) to enable.</i>")
+    if live_batting_enabled:
+        from services.live_batting_help import start_guide_html
+        text += "\n\n" + start_guide_html()
     blocks = _match_ready_blocks(match, bat_team, bowl_team, bat_mention,
                                  bowl_mention, rules_note, toss_note,
-                                 traits_note, has_button=kb is not None)
+                                 traits_note, has_button=kb is not None,
+                                 live_batting_enabled=live_batting_enabled)
     try:
         await R.send_rich_message(context.bot, chat_id, blocks, text,
                                   reply_markup=kb)
@@ -290,7 +295,8 @@ async def send_match_ready_message(context, chat_id, match, bat_team, bowl_team,
 
 
 def _match_ready_blocks(match, bat_team, bowl_team, bat_mention, bowl_mention,
-                        rules_note, toss_note, traits_note, *, has_button):
+                        rules_note, toss_note, traits_note, *, has_button,
+                        live_batting_enabled=True):
     """The Match Ready card as blocks — the twin of the HTML above.
 
     The mentions arrive already rendered as HTML anchors (every caller builds
@@ -335,6 +341,9 @@ def _match_ready_blocks(match, bat_team, bowl_team, bat_mention, bowl_mention,
             blocks.append(R.footer(R.italic(
                 "⚠️ Mini App link unavailable — set BOT_USERNAME (and "
                 "MINIAPP_NAME) to enable.")))
+        if live_batting_enabled:
+            from services.live_batting_help import start_guide_blocks
+            blocks.extend(start_guide_blocks())
         return blocks
     except Exception:
         logger.exception("match ready blocks failed to build")

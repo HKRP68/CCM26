@@ -155,6 +155,22 @@ welcome messages for that chat, `/dwm` turns them off (group admins only).
 | `/cmuchem` | `/cmuchemistry` `/chem` `/chemistry` | Check Team Chemistry, grouped special-edition counts and legal bench upgrades; tap an upgrade to preview the swap 🧪 |
 | `/chemhelp` | `/chemguide` | How Team Chemistry works 📖 |
 | `/change` | — | Change your XI / batting order during match setup (after the toss, before the match starts) |
+| `/managebatting` | `/retire` `/retireout` `/liveorder` `/lbo` | During a live innings, retire either batter and choose the incoming player, or reorder the available batsmen. Retired players can resume from their saved score; no wicket is added. Changes apply only to this innings. |
+
+In a live match, the current batting captain can use **Manage batting** in the
+Mini App or `/managebatting` in chat (optionally followed by the match ID).
+Choose a batter at the crease, then the replacement from the active Playing XI.
+Retired batters appear with their saved runs and balls and can return through
+this control or the normal next-batsman picker. Dismissed, injured, and replaced
+players cannot be selected. Use ↑ / ↓ to change who bats next; the pair at the
+crease stays in place. Changes are allowed between overs or before a new
+delivery is chosen, and do not change the saved `/sbo` order for future matches.
+An over already in progress must finish first. This is a custom temporary
+retirement rule, displayed as **Retired — can return** on the scorecard.
+Match-start cards include a short command guide at the bottom. Commands are
+shown as code text for captains to type themselves; the guide has no command
+buttons or command links. A match played in the Mini App also explains how to
+switch to chat controls. Auto-simulated spectator matches omit this guide.
 
 ## 5. Market, shop & economy
 
