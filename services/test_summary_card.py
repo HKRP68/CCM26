@@ -1,4 +1,4 @@
-"""Test-match summary card — the light poster, stretched to five days.
+"""Test-match summary card — the broadcast poster, stretched to five days.
 
 The two-innings poster (services.match_summary_card) has no room for a Test:
 up to four innings, a follow-on, a declaration, a draw. This card reuses every

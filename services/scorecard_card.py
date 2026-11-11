@@ -26,7 +26,10 @@ import json
 from functools import lru_cache
 from PIL import Image, ImageDraw, ImageFont
 
-from services.scorecard_themes import NORMAL, frame_innings_card, normalize_theme
+from services.scorecard_themes import (
+    NORMAL, draw_base_innings_background, finish_base_innings_card,
+    frame_innings_card, normalize_theme,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -255,6 +258,7 @@ SCORECARD_TEXT_FIELDS = {
         ("tag", "BOWLING green tag", "BOWLING"),
         ("table_header", "All table headers", ""),
         ("bowler_name", "Bowler NAME", "Bowler NAME"),
+        ("header_bowler", "BOWLER column head", "BOWLER"),
         ("header_overs", "OVERS", "OVERS"),
         ("header_dots", "DOTS", "DOTS"),
         ("header_runs", "RUNS", "RUNS"),
@@ -272,7 +276,7 @@ SCORECARD_TEXT_FIELDS = {
         ("opp_score_value", "Opp score value", ""),
         ("opp_score_label", "Opp score label", "OPP SCORE"),
     ],
-    # The summary card is the light "poster" design; a few of these are
+    # The summary card uses the broadcast poster layout; a few of these are
     # pipe-separated because the text object is stacked over several lines.
     "summary": [
         ("header_title", "Headline first word", "MATCH"),
@@ -413,6 +417,38 @@ def _text_from_setting(text_settings, card_type, key, default):
     setting = _settings_for(text_settings, card_type, key)
     text = str(setting.get("text", "") or "")
     return text if text else default
+
+
+def _draw_stat_text(draw, text_settings, card_type, key, text, box, font, color,
+                    *, centered=False):
+    """Fit one statistic to its own band; return its actual painted bounds.
+
+    The value, label and note used to share vertical space. Separate bands
+    also keep wide figures and admin font-size changes inside their tiles.
+    Explicit X/Y controls still move the complete band as requested.
+    """
+    x, y, width, height = box
+    x, y = _offset_xy(text_settings, card_type, key, x, y)
+    text = str(text)
+    for _ in range(4):
+        bounds = draw.textbbox((0, 0), text, font=font)
+        tw, th = bounds[2] - bounds[0], bounds[3] - bounds[1]
+        ratio = min(width / max(1, tw), height / max(1, th), 1)
+        if ratio >= 1 or not hasattr(font, "font_variant"):
+            break
+        size = max(6, int(font.size * ratio))
+        if size >= font.size:
+            break
+        font = font.font_variant(size=size)
+    while len(text) > 3 and _tw(draw, text, font) > width:
+        text = text[:-2].rstrip("…") + "…"
+    bounds = draw.textbbox((0, 0), text, font=font)
+    tw, th = bounds[2] - bounds[0], bounds[3] - bounds[1]
+    tx = x + ((width - tw) / 2 if centered else 0) - bounds[0]
+    ty = y + (height - th) / 2 - bounds[1]
+    draw.text((round(tx), round(ty)), text, font=font, fill=color)
+    return (round(tx) + bounds[0], round(ty) + bounds[1],
+            round(tx) + bounds[2], round(ty) + bounds[3])
 
 
 def _draw_horizontal_gradient(draw, x, y, w, h, c1, c2):
@@ -768,6 +804,7 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
     admin-configurable and is used for headers, totals, and highlights.
     """
     try:
+        is_base = normalize_theme(theme) == NORMAL
         default_accent = PRIMARY_DEFAULT if is_first_innings else SECONDARY_DEFAULT
         accent = _hex_to_rgb(accent_hex, default_accent)
         batting_green = (54, 219, 120)
@@ -780,10 +817,14 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         img = Image.new("RGB", (W, H), BG)
         draw = ImageDraw.Draw(img, "RGBA")
 
-        draw.ellipse([-220, -190, 520, 440], fill=(accent[0], accent[1], accent[2], 48))
-        draw.ellipse([1080, -180, 1840, 460], fill=(0, 145, 255, 42))
+        if is_base:
+            draw_base_innings_background(img)
+        else:
+            draw.ellipse([-220, -190, 520, 440], fill=(accent[0], accent[1], accent[2], 48))
+            draw.ellipse([1080, -180, 1840, 460], fill=(0, 145, 255, 42))
         draw.rounded_rectangle([22, 22, W - 22, H - 22], radius=30,
-                               fill=(7, 13, 20, 218), outline=(255, 255, 255, 45), width=1)
+                               fill=(8, 22, 37, 200) if is_base else (7, 13, 20, 218),
+                               outline=(255, 255, 255, 45), width=1)
         draw.rounded_rectangle([34, 34, W - 34, H - 34], radius=24,
                                outline=(255, 255, 255, 26), width=1)
 
@@ -793,7 +834,8 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         top_y = card_y
 
         draw.rounded_rectangle([card_x, top_y, card_x + card_w, top_y + top_h], radius=24,
-                               fill=(255, 255, 255, 13), outline=(255, 255, 255, 44), width=1)
+                               fill=(18, 37, 55, 190) if is_base else (255, 255, 255, 13),
+                               outline=(220, 174, 91, 80) if is_base else (255, 255, 255, 44), width=1)
         draw.rectangle([card_x, top_y, card_x + card_w // 2, top_y + top_h],
                        fill=(accent[0], accent[1], accent[2], 22))
         draw.rectangle([card_x + card_w // 2, top_y, card_x + card_w, top_y + top_h],
@@ -892,7 +934,8 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         table_w = card_w - 24
         table_h = 564
         draw.rounded_rectangle([table_x, table_y, table_x + table_w, table_y + table_h], radius=24,
-                               fill=(8, 16, 25, 204), outline=(255, 255, 255, 50), width=1)
+                               fill=(8, 23, 39, 246) if is_base else (8, 16, 25, 204),
+                               outline=(255, 255, 255, 50), width=1)
 
         cols = [
             (_text_from_setting(text_settings, "batting", "header_batter", "BATTER"), 0.28, "l", "header_batter"),
@@ -931,7 +974,8 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
         rows = list(batsmen_rows or [])[:11]
         while len(rows) < 11:
             rows.append({"name": "—", "dismissal": "—", "runs": 0, "balls": 0,
-                         "fours": 0, "sixes": 0, "strike_rate": 0.0, "status": "dnb"})
+                         "fours": 0, "sixes": 0, "strike_rate": 0.0, "status": "dnb",
+                         "_padding": True})
 
         row_y = header_y + header_h
         for b in rows:
@@ -987,6 +1031,8 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
                 str(b.get("sixes", 0)),
                 f"{float(b.get('strike_rate', 0) or 0):.2f}",
             ]
+            if b.get("_padding"):
+                values = ["—"] * len(values)
             cx = inner_x
             for idx, ((label, ratio, align, setting_key), value) in enumerate(zip(cols, values)):
                 cw = int(inner_w * ratio / total_ratio)
@@ -1064,19 +1110,19 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
             # Do not draw the decorative stat icon/emoji elements in the PNG
             # scorecard.  They render as missing-glyph boxes in some runtime
             # fonts, so the tiles use only the accent rule plus text content.
-            subtitle_font = _font_from_setting(text_settings, "batting", subtitle_key, 14, bold=True)
-            draw.text(_offset_xy(text_settings, "batting", subtitle_key, sx + 24, sy + 31), subtitle, fill=(158, 168, 184), font=subtitle_font)
-
+            subtitle_font = _font_from_setting(text_settings, "batting", subtitle_key, 12, bold=True)
+            _draw_stat_text(draw, text_settings, "batting", subtitle_key, subtitle,
+                            (sx + 24, sy + 17, sw - 48, 18), subtitle_font, (165, 183, 204))
             value_font = _font_from_setting(text_settings, "batting", value_key, 88 if is_total else 68, family="display")
             value_color = gold if is_total else TEXT
-            # In the HTML, the large stat value sits below the icon/title row
-            # and starts from the card padding, not beside the icon.
-            value_y = sy + (61 if is_total else 60)
-            label_font = _font_from_setting(text_settings, "batting", label_key, 24 if is_total else 22, bold=True)
-            note_font = _font_from_setting(text_settings, "batting", note_key, 14)
-            draw.text(_offset_xy(text_settings, "batting", value_key, sx + 24, value_y), str(value), fill=value_color, font=value_font)
-            draw.text(_offset_xy(text_settings, "batting", label_key, sx + 24, sy + 97), label_txt, fill=(221, 227, 238), font=label_font)
-            draw.text(_offset_xy(text_settings, "batting", note_key, sx + 24, sy + 122), note, fill=(144, 160, 182), font=note_font)
+            label_font = _font_from_setting(text_settings, "batting", label_key, 18, bold=True)
+            note_font = _font_from_setting(text_settings, "batting", note_key, 12)
+            _draw_stat_text(draw, text_settings, "batting", value_key, value,
+                            (sx + 24, sy + 39, sw - 48, 49), value_font, value_color)
+            _draw_stat_text(draw, text_settings, "batting", label_key, label_txt,
+                            (sx + 24, sy + 97, sw - 48, 20), label_font, (221, 231, 242))
+            _draw_stat_text(draw, text_settings, "batting", note_key, note,
+                            (sx + 24, sy + 122, sw - 48, 12), note_font, (165, 183, 204))
             sx += sw + gap
 
         if target is not None and not is_first_innings:
@@ -1094,7 +1140,9 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
             # about the match, not about either side.
             draw.text(_offset_xy(text_settings, "batting", "target", (W - _tw(draw, full, f_tgt)) // 2, H - 42), full, fill=GOLD, font=f_tgt)
 
-        if normalize_theme(theme) != NORMAL:
+        if is_base:
+            img = finish_base_innings_card(img)
+        else:
             img = frame_innings_card(img, theme=theme)
         buf = io.BytesIO()
         img.save(buf, format="PNG", optimize=True)
@@ -1122,6 +1170,7 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
     Fall of Wickets labels, and bottom-bar highlights.
     """
     try:
+        is_base = normalize_theme(theme) == NORMAL
         default_accent = PRIMARY_DEFAULT if is_first_innings else SECONDARY_DEFAULT
         accent = _hex_to_rgb(accent_hex, default_accent)
         bowling_green = (54, 219, 120)
@@ -1133,10 +1182,14 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
         draw = ImageDraw.Draw(img, "RGBA")
 
         # Page glow and glass card, matching the uploaded HTML proportions.
-        draw.ellipse([-220, -170, 520, 380], fill=(accent[0], accent[1], accent[2], 54))
-        draw.ellipse([1080, -170, 1840, 390], fill=(0, 150, 255, 50))
+        if is_base:
+            draw_base_innings_background(img)
+        else:
+            draw.ellipse([-220, -170, 520, 380], fill=(accent[0], accent[1], accent[2], 54))
+            draw.ellipse([1080, -170, 1840, 390], fill=(0, 150, 255, 50))
         draw.rounded_rectangle([14, 14, W - 14, H - 14], radius=24,
-                               fill=(5, 12, 20, 236), outline=(255, 255, 255, 56), width=1)
+                               fill=(8, 22, 37, 200) if is_base else (5, 12, 20, 236),
+                               outline=(255, 255, 255, 56), width=1)
         draw.rounded_rectangle([22, 22, W - 22, H - 22], radius=20,
                                outline=(255, 255, 255, 32), width=1)
 
@@ -1222,7 +1275,7 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
                        fill=(255, 255, 255, 26))
 
         cols = [
-            ("", 0.37, "l", "bowler_name"),
+            (_text_from_setting(text_settings, "bowling", "header_bowler", "BOWLER"), 0.37, "l", "header_bowler"),
             (_text_from_setting(text_settings, "bowling", "header_overs", "OVERS"), 0.13, "c", "header_overs"),
             (_text_from_setting(text_settings, "bowling", "header_dots", "DOTS"), 0.12, "c", "header_dots"),
             (_text_from_setting(text_settings, "bowling", "header_runs", "RUNS"), 0.12, "c", "header_runs"),
@@ -1247,7 +1300,7 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
 
         rows = list(bowlers_rows or [])[:8]
         while len(rows) < 8:
-            rows.append({"name": "-", "overs": "-", "dots": "-", "runs_conceded": "-", "wickets": "-", "economy": "-", "empty": True})
+            rows.append({"name": "—", "overs": "—", "dots": "—", "runs_conceded": "—", "wickets": "—", "economy": "—", "empty": True})
         row_y = table_y + header_h
         for i, b in enumerate(rows):
             empty = b.get("empty")
@@ -1263,13 +1316,13 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
                 str(b.get("dots", b.get("dot_balls", 0))),
                 str(b.get("runs_conceded", 0)),
                 str(b.get("wickets", 0)),
-                "-" if empty else f"{float(b.get('economy', 0) or 0):.2f}",
+                "—" if empty else f"{float(b.get('economy', 0) or 0):.2f}",
             ]
             cx = table_x
             for idx, ((label, ratio, align, setting_key), value) in enumerate(zip(cols, values)):
                 cw = int(table_w * ratio / total_ratio)
                 font_use = f_name if idx == 0 else f_cell
-                color = (0, 0, 0, 0) if empty else (242, 244, 248)
+                color = DIM if empty else (242, 244, 248)
                 ty = text_vcenter_y(row_y, row_y + row_h, font_use)
                 if idx == 0:
                     xy = _offset_xy(text_settings, "bowling", "bowler_name", cx + 36, ty)
@@ -1334,18 +1387,20 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
         sx = table_x
         for i, ((value_key, label_key, value, label), sw) in enumerate(zip(stats, widths)):
             if i:
-                draw.line([(sx, bottom_y), (sx, bottom_y + bottom_h)], fill=(255, 255, 255, 42), width=1)
+                draw.line([(sx, bottom_y + 16), (sx, bottom_y + bottom_h - 16)], fill=(255, 255, 255, 42), width=1)
             vf = _font_from_setting(text_settings, "bowling", value_key, 78 if i == 3 else 68, family="display")
-            vx = sx + sw // 2 - _tw(draw, value, vf) // 2 - 54
-            vy = text_vcenter_y(bottom_y, bottom_y + bottom_h, vf)
-            lx = sx + sw // 2 + 16
-            ly = text_vcenter_y(bottom_y, bottom_y + bottom_h, f_stat_label)
-            lf = _font_from_setting(text_settings, "bowling", label_key, 26, bold=True, italic=True)
-            draw.text(_offset_xy(text_settings, "bowling", value_key, vx, vy), value, fill=(244, 245, 247), font=vf)
-            draw.text(_offset_xy(text_settings, "bowling", label_key, lx, ly), label, fill=(231, 234, 240), font=lf)
+            lf = _font_from_setting(text_settings, "bowling", label_key, 16, bold=True)
+            _draw_stat_text(draw, text_settings, "bowling", value_key, value,
+                            (sx + 20, bottom_y + 10, sw - 40, 52), vf,
+                            gold if i == 3 else (244, 247, 251), centered=True)
+            _draw_stat_text(draw, text_settings, "bowling", label_key, label,
+                            (sx + 20, bottom_y + 72, sw - 40, 18), lf,
+                            (184, 201, 220), centered=True)
             sx += sw
 
-        if normalize_theme(theme) != NORMAL:
+        if is_base:
+            img = finish_base_innings_card(img, bowling=True)
+        else:
             img = frame_innings_card(img, theme=theme)
         buf = io.BytesIO()
         img.save(buf, format="PNG", optimize=True)

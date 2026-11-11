@@ -2,11 +2,11 @@
 
 Open **Scorecard Designer** (`/settings/scorecard`) and choose a look from the
 theme collection. **Exactly one theme is selected at a time**. Choose **Normal**
-to turn seasonal artwork off and restore the original scorecards.
+to turn seasonal artwork off and use the standard broadcast design.
 
 | Theme | Presentation |
 | --- | --- |
-| Normal | Original paper summary and innings cards, with team colours. |
+| Normal | Floodlit stadium, midnight navy, brushed gold, bright team tables and a framed Player of the Match showcase. |
 | Diwali | Ornate lanterns, glowing oil lamps, marigolds, rangoli and gold trim. |
 | Winter | Alpine peaks, frosted pines, a snowy cricket ball, ice rims and icicles. |
 | Christmas | Garlands, warm fairy lights, ruby ribbons, presents and a snowy village. |
@@ -14,8 +14,8 @@ to turn seasonal artwork off and restore the original scorecards.
 | Makar Sankranti | Silk kites, sunset rooftops, brass bowls, festival sweets and a kite reel. |
 | Republic Day | Tricolour ribbons, civic landmarks, a flypast and a 24-spoke Chakra. |
 
-All six seasonal designs use locally bundled illustrated artwork, shaded
-metallic frames and their own palette. The batting/bowling frames, match summary,
+The base and six seasonal designs use locally bundled illustrated artwork,
+shaded metallic frames and their own palette. The batting/bowling cards, match summary,
 result bar and Player of the Match strip follow the same selection. Text,
 scores, crests, collectible cards and player statistics are always rendered
 from live match values; none are baked into the background artwork.
@@ -32,6 +32,13 @@ Changing the saved theme invalidates cached Telegram scorecard photo IDs in
 the same transaction, so `/lastscorecard` regenerates the selected design.
 Stored match payloads, delivery history and messages already posted in chats
 are retained. Saving without changing the theme keeps the photo cache.
+
+The broadcast base upgrade refreshes cached scorecard photo IDs once on startup,
+including innings cards with the corrected statistics layout. This keeps archived
+match values and delivery history; subsequent starts retain newly rendered IDs.
+Statistics now fit into separate title, value, label and note bands. Oversized
+text is fitted within its band, while explicit X/Y controls still reposition it.
+Unused batting and bowling rows show muted dashes instead of padding zeroes.
 
 `game_config.scorecard_theme` is the authoritative single selection. Its values
 are `normal`, `diwali`, `winter`, `christmas`, `new_year`, `makar_sankranti` and

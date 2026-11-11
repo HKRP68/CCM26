@@ -597,6 +597,22 @@ def _run_isolated(statements):
     return failures
 
 
+def _migrate_scorecard_broadcast_cache():
+    """Redraw old photos once for the new base artwork and statistic layout."""
+    key = "scorecard_broadcast_v2_photo_cache"
+    statements = ["UPDATE match_scorecard_images SET file_id = NULL WHERE file_id IS NOT NULL"]
+    done, signature = _migration_signature_matches(key, statements)
+    if done:
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(statements[0]))
+        _record_migration_signature(key, signature)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("Scorecard photo-cache upgrade deferred", exc_info=True)
+
+
 def _migrate_add_columns():
     """Add any missing columns in-place. Safe to run every start.
 
@@ -1359,6 +1375,8 @@ def _migrate_add_columns():
         "UPDATE auction_seasons SET direct_bids = 1 WHERE direct_bids IS NULL",
     ]
     # ─────────────────────────────────────────────────────────────
+    _migrate_scorecard_broadcast_cache()
+
     # The summary card was redrawn as the light poster, and the saved
     # Scorecard Designer nudges for it are pixel offsets tuned to the old dark
     # layout. Replayed against the new geometry they shove text into the wrong

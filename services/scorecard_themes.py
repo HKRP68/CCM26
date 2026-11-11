@@ -25,7 +25,7 @@ _ART = _ROOT / "static" / "scorecard_themes"
 _FONTS = _ROOT / "assets" / "fonts"
 
 
-@lru_cache(maxsize=6)
+@lru_cache(maxsize=7)
 def _artwork(theme):
     with Image.open(_ART / f"{theme}.webp") as source:
         return source.convert("RGBA")
@@ -49,8 +49,6 @@ def draw_theme_background(image, theme, *, scale=1, footer_height=SUMMARY_FOOTER
                           header_height=182):
     """Keep artwork in proportion even on four-innings posters."""
     key = normalize_theme(theme)
-    if key == NORMAL:
-        return
     palette = theme_definition(key)
     try:
         artwork = _artwork(key)
@@ -121,8 +119,6 @@ def draw_theme_panel(image, box, theme, *, scale=1, radius=16, snow=True):
     """Shaded metal, bright rims and an outer glow clear of the table's text."""
     from PIL import ImageChops, ImageFilter
     key = normalize_theme(theme)
-    if key == NORMAL:
-        return
     palette = theme_definition(key)
     x0, y0, x1, y1 = box
     pad = 8
@@ -256,6 +252,22 @@ def frame_innings_card(image, theme=DIWALI):
                          "display" if has_footer_title else "script"), palette.ink, scale)
     draw_theme_footer(framed, key, scale=scale, height=footer)
     return framed.convert("RGB").resize((width, height), Image.Resampling.LANCZOS)
+
+
+def draw_base_innings_background(image):
+    """An opaque stadium plate behind the standard innings card's glass panels."""
+    backdrop = Image.new("RGBA", image.size)
+    draw_theme_background(backdrop, NORMAL, header_height=190, footer_height=28)
+    image.paste(backdrop.convert("RGB"))
+
+
+def finish_base_innings_card(image, *, bowling=False):
+    """Use the same brushed-metal rim as the broadcast match summary."""
+    result = image.convert("RGBA")
+    inset, radius = (14, 24) if bowling else (22, 30)
+    draw_theme_panel(result, (inset, inset, image.width - inset, image.height - inset),
+                     NORMAL, radius=radius, snow=False)
+    return result.convert("RGB")
 
 
 # Compatibility for older imports; new callers pass an explicit theme.

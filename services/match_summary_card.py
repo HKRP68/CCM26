@@ -1,10 +1,9 @@
-"""Match summary card renderer — the light "poster" design.
+"""Match summary renderer — the stadium broadcast design and seasonal editions.
 
-The layout reproduces the supplied reference poster (1675×939) rather than the
-dark metal card this module used to draw: a near-white paper ground with gold
-corner wedges, a branded header, two innings blocks each led by a team crest
-panel, a navy result bar, and a Player of the Match strip carrying a five-metric
-performance showcase.
+The base design uses a floodlit stadium, midnight navy and brushed gold. Live
+team colours lead the bright innings tables; a framed result bar and inset
+Player of the Match showcase finish the card. Seasonal editions share its
+geometry and cricket data, with their own artwork and palettes.
 
 Every geometry constant below is expressed in *reference pixels* — the same
 1675×939 space the reference image is measured in — and multiplied by ``SCALE``
@@ -441,29 +440,8 @@ def _readable_on(color):
 # ══════════════════════════════════════════════════════════════════════
 
 def _draw_paper(img):
-    """linear-gradient(135deg, #fff 0 72%, #edf2f7) plus the corner furniture."""
-    w, h = img.size
-    grad = Image.new("RGB", (w, h), PAPER)
-    gd = ImageDraw.Draw(grad)
-    span = w + h
-    for i in range(0, span, 4):
-        t = i / span
-        t = 0.0 if t <= 0.72 else (t - 0.72) / 0.28
-        gd.line([(i, 0), (0, i)], fill=_mix(PAPER, PAPER_EDGE, t), width=6)
-    img.paste(grad.convert("RGBA"), (0, 0))
-    draw = ImageDraw.Draw(img, "RGBA")
-
-    # Navy corner wedges with a gold diagonal band riding on each — the poster's
-    # top-left and bottom-right accents.
-    draw.polygon([s(0), s(0), s(123), s(0), s(0), s(123)], fill=(*INK, 255))
-    draw.polygon([s(0), s(124), s(124), s(0), s(146), s(0), s(0), s(146)],
-                 fill=(*GOLD, 245))
-    # Faint dot grid inside the navy corner, as on the reference.
-    for cx in range(13, 120, 19):
-        for cy in range(13, 120, 19):
-            if cx + cy < 118:
-                draw.ellipse([s(cx - 1.5), s(cy - 1.5), s(cx + 1.5), s(cy + 1.5)],
-                             fill=(255, 255, 255, 52))
+    """Compatibility name for the standard broadcast background."""
+    draw_theme_background(img, NORMAL, scale=SCALE, footer_height=20)
 
 
 def _load_logo(box):
@@ -584,9 +562,9 @@ def _draw_header(img, draw, ts, *, match_no, stadium, header_left, header_right,
                  tagline, theme=NORMAL):
     festive = theme != NORMAL
     palette = theme_definition(theme)
-    header_ink = palette.ink if festive else INK
-    soft_ink = (225, 231, 241) if festive and theme != REPUBLIC_DAY else INK_SOFT
-    header_accent = palette.accent if festive else GOLD
+    header_ink = palette.ink
+    soft_ink = (225, 231, 241) if theme != REPUBLIC_DAY else INK_SOFT
+    header_accent = palette.accent
     logo = _load_logo(LOGO_BOX)
     if logo:
         lx = LOGO_BOX[0] + ((LOGO_BOX[2] - LOGO_BOX[0]) - logo.width / SCALE) / 2
@@ -641,10 +619,9 @@ def _draw_header(img, draw, ts, *, match_no, stadium, header_left, header_right,
     px0 = HEADLINE_CX - width / 2
     draw.rounded_rectangle(sbox(px0, y0, px0 + width, y1),
                            radius=s((y1 - y0) / 2), fill=(*INK, 255))
-    if festive:
-        draw.rounded_rectangle(sbox(px0, y0, px0 + width, y1),
-                               radius=s((y1 - y0) / 2), outline=(*palette.pale, 255),
-                               width=s(1.4))
+    draw.rounded_rectangle(sbox(px0, y0, px0 + width, y1),
+                           radius=s((y1 - y0) / 2), outline=(*palette.pale, 255),
+                           width=s(1.4))
     sx, sy = _xy(ts, "stadium", HEADLINE_CX, (y0 + y1) / 2 + 1)
     _draw_text(draw, (sx, sy), label, pill_font, WHITE, tracking=2.4, anchor="mm")
 
@@ -913,8 +890,7 @@ def _draw_innings(img, draw, ts, y, *, team, runs, wickets, overs, overs_total,
     _draw_rows(draw, ts, _normalise_bowlers(bowlers), x_name=NAME_R_X,
                cx1=COL_R1_CX, cx2=COL_R2_CX, top=head_y1,
                potm_name=potm_name, max_name_w=COL_R1_CX - NAME_R_X - 96)
-    if theme != NORMAL:
-        draw_theme_panel(img, (PAD_L, y, CONTENT_R, block_y1), theme, scale=SCALE)
+    draw_theme_panel(img, (PAD_L, y, CONTENT_R, block_y1), theme, scale=SCALE)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1012,11 +988,10 @@ def _draw_result(img, draw, ts, winner_name, win_margin_text, accent, y=RESULT_Y
     a drawn Test has no winner to name."""
     y0, y1 = y, y + RESULT_H
     palette = theme_definition(theme)
-    gold = palette.accent if theme != NORMAL else GOLD
+    gold = palette.accent
     background = ((91, 15, 30) if theme == CHRISTMAS else palette.band[0]
                   if theme != NORMAL else INK)
-    if theme != NORMAL:
-        accent = palette.pale
+    accent = palette.pale
     # The poster runs a gold diagonal off each edge, level with the result bar.
     for x_edge, sign in ((0, 1), (CANVAS_W, -1)):
         draw.polygon([(s(x_edge), s(y0 + 25)), (s(x_edge + sign * 92), s(y1 + 48)),
@@ -1050,9 +1025,8 @@ def _draw_result(img, draw, ts, winner_name, win_margin_text, accent, y=RESULT_Y
     _draw_text(draw, (rx, ry), head, f, WHITE, tracking=1.6, anchor="lm")
     _draw_text(draw, (rx + wh + gap, ry), tail, f, accent, tracking=1.6,
                anchor="lm")
-    if theme != NORMAL:
-        draw_theme_panel(img, (RESULT_X0, y0, RESULT_X1, y1), theme,
-                         scale=SCALE, radius=4)
+    draw_theme_panel(img, (RESULT_X0, y0, RESULT_X1, y1), theme,
+                     scale=SCALE, radius=4)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1109,21 +1083,17 @@ def _draw_potm(img, draw, ts, *, name, team, photo_png, metrics, flourish,
     band = Image.new("RGBA", (s(CANVAS_W), s(y1 - y0)), (0, 0, 0, 0))
     bd = ImageDraw.Draw(band, "RGBA")
     palette = theme_definition(theme)
-    pale = palette.pale if theme != NORMAL else GOLD_PALE
-    bg_a, bg_b = palette.band if theme != NORMAL else (POTM_BG_A, POTM_BG_B)
+    pale = palette.pale
+    bg_a, bg_b = palette.band
     for i in range(s(CANVAS_W)):
         bd.line([(i, 0), (i, s(y1 - y0))],
                 fill=(*_mix(bg_a, bg_b, i / s(CANVAS_W)), 255))
-    if theme != NORMAL:
-        mask = Image.new("L", band.size)
-        ImageDraw.Draw(mask).rounded_rectangle(sbox(38, 0, CANVAS_W - 38, POTM_H),
-                                              radius=s(12), fill=255)
-        band.putalpha(mask)
+    mask = Image.new("L", band.size)
+    ImageDraw.Draw(mask).rounded_rectangle(sbox(38, 0, CANVAS_W - 38, POTM_H),
+                                          radius=s(12), fill=255)
+    band.putalpha(mask)
     img.alpha_composite(band, (0, s(y0)))
-    if theme != NORMAL:
-        draw_theme_panel(img, (38, y0, CANVAS_W - 38, y1), theme, scale=SCALE, radius=12)
-    else:
-        draw.line([(0, s(y0)), (s(CANVAS_W), s(y0))], fill=(*GOLD, 220), width=s(2))
+    draw_theme_panel(img, (38, y0, CANVAS_W - 38, y1), theme, scale=SCALE, radius=12)
 
     _draw_trophy(draw, POTM_TROPHY_CX, (y0 + y1) / 2)
 
@@ -1227,7 +1197,7 @@ def _draw_potm(img, draw, ts, *, name, team, photo_png, metrics, flourish,
     f_script = _font_for(ts, "game_changer", 34, family="script")
     gx, gy = _xy(ts, "game_changer", POTM_SCRIPT_CX, (y0 + y1) / 2)
     _draw_script(img, draw, (gx, gy), script, f_script,
-                 color=palette.accent if theme != NORMAL else GOLD_BRIGHT)
+                 color=palette.accent)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1405,7 +1375,7 @@ def generate_match_summary(*,
 
     ``conditions`` — ``[(kind, label, value), ...]`` chips (venue, pitch,
     weather, ball, toss) drawn in a strip under the header. The card grows by
-    the strip's height; without chips it is the classic 1675×986 poster.
+    the strip's height; without chips it is the standard 1675×986 broadcast card.
     A seasonal ``theme`` adds its illustrated artwork, frame and footer.
     The default keeps the normal poster. Match values and branding stay live.
     """

@@ -28,13 +28,13 @@ class ScorecardTheme:
 
     @property
     def artwork(self):
-        return f"/static/scorecard_themes/{self.key}.webp" if self.key != NORMAL else None
+        return f"/static/scorecard_themes/{self.key}.webp"
 
 
 THEMES = (
-    ScorecardTheme(NORMAL, "Normal", "THE ORIGINAL", "Clean paper, team colours, classic match presentation.",
-                   "Game Changer!", (199, 146, 44), (233, 201, 132), (7, 26, 52),
-                   ((7, 27, 53), (14, 48, 89)), "#f0f3f7"),
+    ScorecardTheme(NORMAL, "Normal", "THE BROADCAST EDITION", "Floodlit stadium, brushed gold and crisp, uncluttered score tables.",
+                   "Game Changer!", (220, 174, 91), (252, 230, 183), (255, 255, 255),
+                   ((8, 22, 39), (18, 40, 58)), "#0b2035"),
     ScorecardTheme(DIWALI, "Diwali", "FESTIVAL OF LIGHTS", "Glowing diyas, ornate lanterns, rangoli and a velvet night sky.",
                    "Happy Diwali", (255, 194, 66), (255, 230, 171), (255, 255, 255),
                    ((19, 12, 39), (55, 20, 50)), "#281332"),

@@ -107,10 +107,9 @@ def test_artwork_is_bundled_and_preview_images_are_available():
     for theme in THEMES:
         with Image.open(root / f"{theme.key}-thumb.webp") as image:
             image.verify()
-        if theme.key != NORMAL:
-            with Image.open(root / f"{theme.key}.webp") as image:
-                assert image.width >= 1536 and image.height >= 1024
-                image.verify()
+        with Image.open(root / f"{theme.key}.webp") as image:
+            assert image.width >= 1536 and image.height >= 1024
+            image.verify()
 
 
 def test_missing_artwork_still_produces_a_readable_scorecard():
@@ -165,6 +164,7 @@ def panel(monkeypatch):
     factory = sessionmaker(bind=engine)
     monkeypatch.setattr(admin, "get_session", factory)
     monkeypatch.setattr(database, "get_session", factory)
+    monkeypatch.setattr(database, "SessionLocal", factory)
     monkeypatch.setattr(config_service, "_CACHE", {"data": None, "loaded_at": None})
     monkeypatch.setitem(admin.app.config, "TESTING", True)
     monkeypatch.setitem(admin.app.config, "WTF_CSRF_ENABLED", False)
