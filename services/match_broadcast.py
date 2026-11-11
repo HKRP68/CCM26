@@ -457,6 +457,10 @@ def build_live_scorecard_blocks(state, waiting_for_mention=None):
         if len(rows) > 1:
             blocks.append(R.table(rows, bordered=True, compact=True,
                                   caption=R.bold("🪓 Batsmen")))
+        from services.live_batting_help import inline_manage_batting
+        manage = inline_manage_batting(state)
+        if manage:
+            blocks.append(R.paragraph(["🏏 Batting controls  ·  ", manage]))
 
         bowler = state.get("current_bowler") or {}
         if bowler:
@@ -498,7 +502,9 @@ async def broadcast_scorecard(context, match_id, state, waiting_for_mention=None
         return
     text = build_live_scorecard_text(state, waiting_for_mention)
     blocks = build_live_scorecard_blocks(state, waiting_for_mention)
-    kb = play_match_keyboard(match_id)
+    from services.live_batting_help import with_manage_batting
+    rows = with_manage_batting(state, play_match_keyboard(match_id))
+    kb = InlineKeyboardMarkup(rows) if rows else None
     try:
         await R.send_rich_message(context.bot, chat_id, blocks, text,
                                   reply_markup=kb)

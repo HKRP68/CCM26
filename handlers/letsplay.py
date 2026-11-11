@@ -2583,7 +2583,8 @@ async def _announce(context, state, pitch_type):
         + "\n\n" + start_guide_html(app_only=state.get("play_mode") == "app"))
     try:
         from handlers.cipl_play import _miniapp_row
-        kb = _miniapp_row(state)
+        from services.live_batting_help import with_manage_batting
+        kb = with_manage_batting(state, _miniapp_row(state))
     except Exception:
         kb = None
     try:

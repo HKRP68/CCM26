@@ -171,6 +171,11 @@ Match-start cards include a short command guide at the bottom. Commands are
 shown as code text for captains to type themselves; the guide has no command
 buttons or command links. A match played in the Mini App also explains how to
 switch to chat controls. Auto-simulated spectator matches omit this guide.
+In chat matches, a separate **Manage batting** button appears on the pinned
+start card and below the live over controls. Rich live scorecards also embed
+the button beside the partnership line. The button opens a separate batting
+menu and keeps the current match picker and turn timer intact. Only the
+current batting captain can use it. The Mini App keeps its own batting control.
 
 ## 5. Market, shop & economy
 

@@ -93,6 +93,16 @@ def code(text):
     return {"type": "code", "text": text}
 
 
+def callback_button(text, callback_data, *, style="primary"):
+    """Bot API 10.3 button embedded in a paragraph's RichText."""
+    if not isinstance(callback_data, str) or not 1 <= len(callback_data.encode("utf-8")) <= 64:
+        raise ValueError("Callback data must be 1–64 UTF-8 bytes.")
+    if style not in ("primary", "success", "danger", "link"):
+        raise ValueError("Unsupported rich button style.")
+    return {"type": "button", "button": {
+        "text": text, "callback_data": callback_data, "style": style}}
+
+
 def spoiler(text):
     return {"type": "spoiler", "text": text}
 

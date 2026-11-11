@@ -809,9 +809,9 @@ async def _delete_prev_over(context, state):
 
 
 def _with_view_match(state, keyboard, extras=True):
-    """Append the View Match + Impact Player row to EVERY over message.
+    """Append View Match, Impact Player and batting controls to over messages.
 
-    Both live here rather than only on the over summary because this runs for
+    These controls live here as well as on the over summary because this runs for
     the bowler prompt and both approach prompts too — which is exactly when a
     captain wants the swap. It also means the button is never more than one
     message away, even though the over summary carrying it is deleted when the
@@ -824,7 +824,7 @@ def _with_view_match(state, keyboard, extras=True):
 
 
 def _view_and_impact_rows(state, mid=None):
-    """``[[📊 View Match, 🔄 Impact Player]]`` — one row where both fit.
+    """View/Impact in one row, followed by a full-width Manage batting entry.
 
     The Impact button sits beside View Match rather than on its own row. When
     no Mini App host is configured _miniapp_row returns None, so it falls back
@@ -833,13 +833,13 @@ def _view_and_impact_rows(state, mid=None):
     rows = [list(r) for r in (_miniapp_row(state) or [])]
     # In a Mini App match the swap is made in the app, next to the picks.
     impact = None if _app_mode(state) else _impact_button(state, mid)
-    if impact is None:
-        return rows
-    if rows:
-        rows[0].append(impact)
-    else:
-        rows = [[impact]]
-    return rows
+    if impact is not None:
+        if rows:
+            rows[0].append(impact)
+        else:
+            rows = [[impact]]
+    from services.live_batting_help import with_manage_batting
+    return with_manage_batting(state, rows) or []
 
 
 async def _clear_action_reminder(context, state):
@@ -977,7 +977,7 @@ def _impact_button(state, mid=None):
 
 
 def _between_overs_row(state, mid=None):
-    """View Match + Impact Player, for messages posted between overs."""
+    """View Match, Impact Player and batting controls between overs."""
     return _view_and_impact_rows(state, mid) or None
 
 
@@ -2322,7 +2322,8 @@ async def _cleanup_setup_and_announce(context, state, draft):
             pass  # message too old / not deletable — leave it
 
     text = _match_start_announcement(state)
-    kb = _miniapp_row(state)
+    from services.live_batting_help import with_manage_batting
+    kb = with_manage_batting(state, _miniapp_row(state))
     try:
         sent = await context.bot.send_message(
             chat_id, text, parse_mode="HTML",
@@ -2686,7 +2687,6 @@ async def _prompt_bat_approach(context, mid, state, auto=False):
     rows = [[InlineKeyboardButton(f"{emoji} {label}",
                                   callback_data=f"cipl_batapp_{mid}_{idx}")]
             for idx, (_, emoji, label) in enumerate(BATTING_APPROACHES)]
-    rows.append([InlineKeyboardButton("🏏 Manage batting", callback_data=f"lb_n_{mid}")])
     # The bowling captain's chosen Bowling Approach is hidden here so the batting
     # captain (the opponent) can't read the bowling plan before picking their own.
     text = (f"{_approach_card(state)}\n\n"
@@ -4922,8 +4922,13 @@ def _build_approach_card_blocks(state, prompt):
     blocks.append(R.table(bat_rows, bordered=True, compact=True,
                           caption=R.bold(f"{bat_emoji} {bat_code} · Bat")))
     p_runs, p_balls = _partnership(state)
-    blocks.append(R.paragraph(["🤝 ", R.bold("Partnership"), "  ",
-                               R.bold(str(p_runs)), f" ({p_balls})"]))
+    partnership = ["🤝 ", R.bold("Partnership"), "  ",
+                   R.bold(str(p_runs)), f" ({p_balls})"]
+    from services.live_batting_help import inline_manage_batting
+    manage = inline_manage_batting(state)
+    if manage:
+        partnership.extend(["  ·  ", manage])
+    blocks.append(R.paragraph(partnership))
 
     # ── The attack ──
     bowl_caption = [R.bold(f"{bowl_emoji} {bowl_code} · Bowl"),
