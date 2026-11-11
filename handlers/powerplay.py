@@ -75,17 +75,17 @@ async def powerplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"❌ Not enough coins. Balance: <b>{user.total_coins:,}</b>.", parse_mode="HTML")
             return
 
+        payout = int(bet * target) if won else 0
+        net = payout - bet
+        user.total_coins += net
+
         if won:
-            payout = int(bet * target)
-            net = payout - bet
-            user.total_coins += net
             body = (
                 f"✅ <b>SURVIVED!</b>\n\n"
                 f"✈️ Plane crashed at <b>{crash}×</b> — past your target <b>{target}×</b>\n"
                 f"💰 Payout: <b>{payout:,}</b> coins  (net +{net:,})"
             )
         else:
-            user.total_coins -= bet
             body = (
                 f"💥 <b>CRASHED!</b>\n\n"
                 f"✈️ Crashed at <b>{crash}×</b> — before your target <b>{target}×</b>\n"
@@ -93,7 +93,11 @@ async def powerplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         log_activity(session, user.id, "powerplay",
-                     f"bet:{bet} target:{target} crash:{crash} {'win' if won else 'loss'}")
+                     f"{'Win' if won else 'Loss'} · Bet: {bet:,} coins · "
+                     f"Target: {target}× · Crash: {crash}× · "
+                     f"Payout: {payout:,} coins · "
+                     f"{'Profit' if won else 'Loss'}: {net:+,} coins",
+                     coins_change=net)
         session.commit()
         await update.message.reply_text(
             f"✈️ <b>Power Play</b>\n\n{body}\n\n💵 Balance: <b>{user.total_coins:,}</b>",

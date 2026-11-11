@@ -7082,7 +7082,7 @@ def webapp_quickmatch_quota():
 @app.route("/api/webapp/freepack/status", methods=["POST"])
 @csrf_exempt
 def webapp_freepack_status():
-    """Return free pack cooldown + probability table for display."""
+    """Return free pack availability, cooldown and ad status."""
     auth, tg_id, err = _webapp_auth()
     if err:
         return err
@@ -7090,7 +7090,7 @@ def webapp_freepack_status():
     try:
         from services import ad_service
         from services.free_pack_service import (
-            check_free_pack_cooldown, get_band_percentages, get_cooldown_minutes,
+            check_free_pack_cooldown, get_cooldown_minutes,
         )
         stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
         if not stats:
@@ -7102,7 +7102,6 @@ def webapp_freepack_status():
             "ready": ready,
             "remaining_seconds": remaining,
             "cooldown_minutes": get_cooldown_minutes(db),
-            "bands": get_band_percentages(db),
             "ads": ad_service.client_config(),
             "ads_configured": ad_service.is_configured(),
             "adsgram_block_id": ad_service.get_block_id(),

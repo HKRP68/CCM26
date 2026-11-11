@@ -4,13 +4,10 @@ A Free Pack gives ONE base-card player drawn by an OVR-band probability table.
 Cooldown is 1 hour by default (admin-tunable via GameConfig).
 
 Default probability table (admin-editable):
-    OVR 74 or below : fills remainder (~13%)
-    OVR 75-80       : 79%
-    OVR 81-83       : 7%
-    OVR 84-90       : ~1%
-
-The "floor" band (<=74) catches the remaining probability so the table always
-sums to 100%.
+    OVR 70-80       : 95%
+    OVR 81-83       : 4%
+    OVR 84-86       : 0.9%
+    OVR 87-90       : 0.1%
 """
 
 import json
@@ -28,13 +25,13 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_COOLDOWN_MINUTES = 60
 
-# Default probability bands. weight is relative; we normalize at draw time.
-# The floor band (min very low) absorbs the remaining probability.
+# Weights are relative and normalized at draw time. Keep 87+ in its own band
+# so its rarity does not depend on how many 84-86 players are available.
 DEFAULT_BANDS = [
-    {"min": 1, "max": 74, "weight": 13, "label": "Common"},
-    {"min": 75, "max": 80, "weight": 79, "label": "Standard"},
-    {"min": 81, "max": 83, "weight": 7, "label": "Rare"},
-    {"min": 84, "max": 90, "weight": 1, "label": "Elite"},
+    {"min": 70, "max": 80, "weight": 95, "label": "Standard"},
+    {"min": 81, "max": 83, "weight": 4, "label": "Rare"},
+    {"min": 84, "max": 86, "weight": 0.9, "label": "Elite"},
+    {"min": 87, "max": 90, "weight": 0.1, "label": "Elite"},
 ]
 
 
@@ -176,9 +173,13 @@ def open_free_pack(session, user, hold_overflow=False):
         if rating in tried_ratings:
             continue
         tried_ratings.add(rating)
-        player = _pick_base_at_rating(session, rating,
-                                       user_owned_base_ids=owned_base_ids)
-        if player:
+        candidate = _pick_base_at_rating(session, rating,
+                                         user_owned_base_ids=owned_base_ids)
+        # The shared pack picker may widen by one rating when a rating is
+        # empty. Keep that fallback inside this band so an 84-86 roll can
+        # never award an 87+ card and bypass the rarer band's weight.
+        if candidate and band["min"] <= candidate.rating <= band["max"]:
+            player = candidate
             break
 
     if not player:

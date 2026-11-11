@@ -890,23 +890,20 @@
     100% { opacity: 1; transform: translateY(0) rotateY(0) scale(1); }
   }
 
-  /* Free pack odds table */
-  .odds-row {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 0.5rem 0; border-bottom: 1px solid var(--border);
-    font-size: 0.88rem;
+  /* Free pack opening steps */
+  .freepack-steps { list-style: none; margin: 0; padding: 0; }
+  .freepack-steps li {
+    display: flex; align-items: center; gap: 0.75rem;
+    padding: 0.7rem 0; border-bottom: 1px solid var(--border);
   }
-  .odds-row:last-child { border-bottom: none; }
-  .odds-range { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; }
-  .odds-pct { font-weight: 800; color: var(--accent); }
-  .odds-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
-  .odds-common { background: #8b9bb4; }
-  .odds-std { background: var(--green); }
-  .odds-rare { background: var(--accent); }
-  .odds-elite {
-    background: #a78bfa;
-    box-shadow: 0 0 8px rgba(167,139,250,0.7);
+  .freepack-steps li:last-child { border-bottom: none; padding-bottom: 0; }
+  .freepack-step-number {
+    display: grid; place-items: center; flex: 0 0 2rem; height: 2rem;
+    border-radius: 10px; background: rgba(167,139,250,0.12);
+    color: var(--purple); font-weight: 800; font-size: 0.8rem;
   }
+  .freepack-steps strong { display: block; font-size: 0.85rem; }
+  .freepack-steps p { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.76rem; line-height: 1.5; }
 
   /* Free pack reveal card */
   .freepack-reveal-card {
@@ -2993,7 +2990,7 @@
     <div style="font-size:4rem;margin-bottom:0.4rem;">📦</div>
     <h2 style="margin:0 0 0.25rem;font-size:1.4rem;">Free Pack</h2>
     <p style="color:var(--muted);margin:0;font-size:0.88rem;">
-      Watch a short ad and get a free player. One pack every hour.
+      Watch a short ad. Reveal a player. Build your squad.
     </p>
   </div>
 
@@ -3002,17 +2999,28 @@
     <div class="empty"><div class="spinner"></div></div>
   </div>
 
-  <!-- Probability table -->
+  <!-- Opening guide -->
   <div class="card" style="margin-top:0.8rem;">
-    <p class="card-title">📊 Drop rates</p>
-    <div id="freepack-odds">
-      <div class="empty" style="padding:0.5rem;"><div style="font-size:0.8rem;">Loading…</div></div>
-    </div>
+    <p class="card-title">🎁 A new player, no coins needed</p>
+    <ol class="freepack-steps">
+      <li>
+        <span class="freepack-step-number" aria-hidden="true">1</span>
+        <div><strong>Watch the full ad</strong><p>A saved ad lets you open straight away.</p></div>
+      </li>
+      <li>
+        <span class="freepack-step-number" aria-hidden="true">2</span>
+        <div><strong>Reveal your player</strong><p>Each pack contains one base player card.</p></div>
+      </li>
+      <li>
+        <span class="freepack-step-number" aria-hidden="true">3</span>
+        <div><strong>Come back for your next pack</strong><p>Your next pack unlocks when the countdown ends.</p></div>
+      </li>
+    </ol>
   </div>
 
   <div class="card" style="margin-top:0.8rem;background:rgba(0,212,170,0.05);">
     <p style="margin:0;font-size:0.78rem;color:var(--muted);line-height:1.6;">
-      ℹ️ Players go straight to your roster. If your roster is full (25), release some first.
+      ℹ️ Your player goes straight to your squad. Squad full? Choose someone to replace, or release the new player for coins after opening.
     </p>
   </div>
 </div>
@@ -7726,29 +7734,7 @@ async function loadFreePack() {
     return;
   }
   freePackState = data;
-  renderFreePackOdds(data.bands);
   renderFreePackAction();
-}
-
-function renderFreePackOdds(bands) {
-  const el = document.getElementById('freepack-odds');
-  if (!bands || !bands.length) { el.innerHTML = '<div class="empty">—</div>'; return; }
-  // Sort by min rating descending so best is on top
-  const sorted = [...bands].sort((a, b) => b.min - a.min);
-  el.innerHTML = sorted.map(b => {
-    const range = b.min === b.max ? `OVR ${b.min}` : `OVR ${b.min}-${b.max}`;
-    const pctLabel = b.percent < 1 ? '<1%' : `${b.percent}%`;
-    const tier = b.min >= 84 ? 'elite' : (b.min >= 81 ? 'rare' : (b.min >= 75 ? 'std' : 'common'));
-    return `
-      <div class="odds-row">
-        <div class="odds-range">
-          <span class="odds-dot odds-${tier}"></span>
-          ${range}${b.label ? ` <span style="color:var(--muted);font-size:0.72rem;">${escapeHtml(b.label)}</span>` : ''}
-        </div>
-        <div class="odds-pct">${pctLabel}</div>
-      </div>
-    `;
-  }).join('');
 }
 
 function renderFreePackAction() {
@@ -7783,7 +7769,7 @@ function renderFreePackAction() {
         ${formatCountdown(d.remaining_seconds)}
       </div>
       <p style="color:var(--muted);font-size:0.75rem;margin:0.6rem 0 0;">
-        Come back in an hour for another free player.
+        Another free player is on the way. Check back when the timer ends.
       </p>
     `;
     // Live countdown

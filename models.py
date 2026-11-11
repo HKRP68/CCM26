@@ -1281,7 +1281,7 @@ class GameConfig(Base):
     # ── Free Pack (Mini App, ad-gated) ──
     free_pack_cooldown_minutes = Column(Integer, default=60, nullable=False)
     # JSON list of probability bands, e.g.
-    # [{"min":75,"max":80,"weight":79},{"min":81,"max":83,"weight":7},...]
+    # [{"min":70,"max":80,"weight":95},{"min":81,"max":83,"weight":4},...]
     # If null, a sensible default table is used.
     free_pack_bands_json = Column(Text, nullable=True)
     # ── Branding (admin-editable from /branding page) ──
