@@ -10,20 +10,42 @@
 <form method="POST" action="{{ url_for('admin_scorecard_settings') }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-  <div class="form-card" style="max-width:100%; margin-bottom:1.5rem; border-color:#b88735;">
-    <h2 style="margin-top:0; color:#edc16d;">🪔 Diwali theme</h2>
-    <p id="scorecard_theme_hint" style="color:var(--muted); font-size:.85rem;">
-      Turn on for a festive navy-and-gold design with lights, fireworks, diyas, and a Happy Diwali greeting. Turn off to use the normal scorecards.
-    </p>
-    <label class="scorecard-theme-toggle">
-      <input type="checkbox" id="scorecard_diwali_theme" name="scorecard_diwali_theme"
-             role="switch" aria-label="Diwali theme" aria-describedby="scorecard_theme_hint"
-             {% if cfg.scorecard_diwali_theme %}checked{% endif %}>
-      <span class="scorecard-theme-track" aria-hidden="true"></span>
-      <span id="scorecard_theme_state" aria-live="polite">{{ 'Diwali · On' if cfg.scorecard_diwali_theme else 'Normal · Off' }}</span>
-    </label>
-    <p style="color:var(--muted); font-size:.78rem; margin-bottom:0;">Save Scorecard Settings to apply the theme to generated and redrawn cards.</p>
-  </div>
+  <fieldset class="scorecard-theme-gallery" aria-describedby="scorecard_theme_hint">
+    <legend>Choose your match-day look</legend>
+    <div class="scorecard-theme-heading">
+      <div>
+        <span class="scorecard-theme-eyebrow">THE SCORECARD COLLECTION</span>
+        <h2>A different atmosphere. The same game.</h2>
+        <p id="scorecard_theme_hint">Select one theme for all scorecards. Choose <strong>Normal</strong> to turn seasonal artwork off.</p>
+      </div>
+      <a href="#scorecard-summary-preview" class="btn btn-ghost">View full preview ↓</a>
+    </div>
+    <div class="scorecard-theme-grid">
+      {% for theme in themes %}
+      <label class="scorecard-theme-tile">
+        <input type="radio" name="scorecard_theme" value="{{ theme.key }}"
+               id="scorecard_theme_{{ theme.key }}" data-theme-label="{{ theme.name }}"
+               {% if selected_theme == theme.key %}checked{% endif %}>
+        <span class="scorecard-theme-option" style="--theme-colour:{{ theme.css }};">
+          <span class="scorecard-theme-image">
+            <img src="{{ url_for('static', filename='scorecard_themes/' + theme.key + '-thumb.webp') }}"
+                 alt="" loading="lazy" width="512" height="342">
+            <span class="scorecard-theme-selected" aria-hidden="true">✓ Selected</span>
+          </span>
+          <span class="scorecard-theme-copy">
+            <span class="scorecard-theme-eyebrow">{{ theme.edition }}</span>
+            <strong>{{ theme.name }}</strong>
+            <span>{{ theme.description }}</span>
+          </span>
+        </span>
+      </label>
+      {% endfor %}
+    </div>
+    <div class="scorecard-theme-footer">
+      <span id="scorecard_theme_state" aria-live="polite">Selected: {{ themes | selectattr('key', 'equalto', selected_theme) | map(attribute='name') | first }}</span>
+      <span>One theme at a time · Live previews · Save below to apply</span>
+    </div>
+  </fieldset>
 
   <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.5rem;">
     {% for innings, label, input_id, color_value, emoji in [
@@ -76,7 +98,7 @@
     {% endfor %}
   </div>
 
-  <div class="form-card" style="max-width:100%; margin-top:1.5rem;">
+  <div class="form-card" id="scorecard-summary-preview" style="max-width:100%; margin-top:1.5rem; scroll-margin-top:1rem;">
     <h2 style="margin-top:0; color:var(--accent); font-family:'Bebas Neue', sans-serif; letter-spacing:.04em;">
       🏆 Match Summary Preview
     </h2>
@@ -197,13 +219,30 @@
 </div>
 
 <style>
-.scorecard-theme-toggle { display:inline-flex; align-items:center; gap:.75rem; cursor:pointer; position:relative; }
-.scorecard-theme-toggle input { position:absolute; width:1px; height:1px; opacity:0; }
-.scorecard-theme-track { display:inline-block; width:54px; height:30px; border-radius:18px; background:var(--border); border:1px solid #8b816e; position:relative; }
-.scorecard-theme-track::after { content:""; position:absolute; top:3px; left:3px; width:22px; height:22px; border-radius:50%; background:#fff; }
-.scorecard-theme-toggle input:checked + .scorecard-theme-track { background:#a36c18; border-color:#edc16d; }
-.scorecard-theme-toggle input:checked + .scorecard-theme-track::after { left:27px; background:#ffedc2; }
-.scorecard-theme-toggle input:focus-visible + .scorecard-theme-track { outline:2px solid #edc16d; outline-offset:4px; }
+.scorecard-theme-gallery { min-width:0; margin:0 0 1.5rem; padding:1.5rem; border:1px solid #74603b; border-radius:16px; background:linear-gradient(135deg,#101a2b,#10141f 60%,#241d29); }
+.scorecard-theme-gallery legend { padding:.25rem .75rem; color:#ebc87f; font-size:.85rem; background:#101a2b; border:1px solid #74603b; border-radius:20px; }
+.scorecard-theme-heading { display:flex; justify-content:space-between; align-items:center; gap:1.5rem; margin-bottom:1.3rem; }
+.scorecard-theme-heading h2 { margin:.35rem 0 .55rem; color:#f6f2e9; font-size:1.5rem; }
+.scorecard-theme-heading p { margin:0; color:#aebbd0; font-size:.85rem; }
+.scorecard-theme-heading a { flex-shrink:0; color:#f5d489; border:1px solid #76623a; border-radius:20px; background:#1a2331; text-decoration:none; }
+.scorecard-theme-eyebrow { font-size:.61rem; letter-spacing:.15em; font-weight:700; color:#d4b575; }
+.scorecard-theme-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:1rem; }
+.scorecard-theme-tile { position:relative; cursor:pointer; margin:0; font-weight:400; letter-spacing:normal; text-transform:none; }
+.scorecard-theme-tile input { position:absolute; width:1px; height:1px; opacity:0; }
+.scorecard-theme-option { display:block; height:100%; border:2px solid #354154; border-radius:12px; overflow:hidden; background:#0c1421; }
+.scorecard-theme-image { display:block; position:relative; background:var(--theme-colour); overflow:hidden; }
+.scorecard-theme-image img { display:block; width:100%; height:auto; aspect-ratio:1.55; object-fit:cover; }
+.scorecard-theme-selected { display:none; position:absolute; top:.6rem; right:.6rem; padding:.3rem .6rem; border-radius:20px; font-size:.67rem; font-weight:700; color:#241b09; background:#f5d489; box-shadow:0 2px 12px #0006; }
+.scorecard-theme-copy { display:flex; flex-direction:column; gap:.4rem; padding:1rem; }
+.scorecard-theme-copy strong { font-size:1.07rem; color:#f5f6fa; }
+.scorecard-theme-copy > span:last-child { font-size:.77rem; color:#aebbd0; line-height:1.5; }
+.scorecard-theme-tile input:checked + .scorecard-theme-option { border-color:#f5d489; box-shadow:0 0 0 1px #f5d48955,0 8px 24px #0004; }
+.scorecard-theme-tile input:checked + .scorecard-theme-option .scorecard-theme-selected { display:block; }
+.scorecard-theme-tile input:focus-visible + .scorecard-theme-option { outline:3px solid #90d8ff; outline-offset:4px; }
+.scorecard-theme-tile:hover .scorecard-theme-option { border-color:#b6a179; }
+.scorecard-theme-footer { display:flex; flex-wrap:wrap; justify-content:space-between; gap:.6rem; margin-top:1.2rem; color:#b0bdd0; font-size:.76rem; }
+#scorecard_theme_state { color:#f5d489; font-weight:600; }
+@media(max-width:600px) { .scorecard-theme-gallery { padding:1rem; } .scorecard-theme-heading { display:block; } .scorecard-theme-heading a { margin-top:1rem; } .scorecard-theme-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:.65rem; } .scorecard-theme-copy { padding:.7rem; } .scorecard-theme-copy strong { font-size:.91rem; } .scorecard-theme-eyebrow { font-size:.53rem; } }
 </style>
 
 <script>
@@ -212,10 +251,10 @@ function collectScorecardSettings() {
   document.querySelectorAll('[data-preview-control]').forEach(input => {
     params.set(input.name, input.value);
   });
-  const diwaliOn = document.getElementById('scorecard_diwali_theme').checked;
-  params.set('theme', diwaliOn ? 'diwali' : 'normal');
+  const selected = document.querySelector('input[name="scorecard_theme"]:checked');
+  params.set('theme', selected ? selected.value : 'normal');
   ['1', '2'].forEach(innings => params.set(`scorecard_color_inn${innings}`, document.getElementById(`color_inn${innings}`).value));
-  document.getElementById('scorecard_theme_state').textContent = diwaliOn ? 'Diwali · On' : 'Normal · Off';
+  document.getElementById('scorecard_theme_state').textContent = 'Selected: ' + (selected ? selected.dataset.themeLabel : 'Normal');
   return params;
 }
 
@@ -254,7 +293,7 @@ function schedulePreviewRefresh() {
   previewTimer = setTimeout(refreshAllScorecardPreviews, 250);
 }
 
-document.querySelectorAll('input[type="color"][id^="color_inn"], [data-preview-control], #scorecard_diwali_theme').forEach(input => {
+document.querySelectorAll('input[type="color"][id^="color_inn"], [data-preview-control], input[name="scorecard_theme"]').forEach(input => {
   input.addEventListener('input', schedulePreviewRefresh);
   input.addEventListener('change', schedulePreviewRefresh);
 });

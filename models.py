@@ -1341,8 +1341,11 @@ class GameConfig(Base):
     # scorecard. Defaults match the original PRIMARY (red) / SECONDARY (teal).
     scorecard_color_inn1 = Column(String(9), default="#c41e3a")
     scorecard_color_inn2 = Column(String(9), default="#00c9a7")
-    # Festival artwork is opt-in; switching it off restores the normal cards.
+    # Legacy switch, synchronized with the single selection below on save.
     scorecard_diwali_theme = Column(Boolean, default=False)
+    # A single choice prevents multiple seasonal themes from being active.
+    # NULL preserves the old Diwali switch until the first designer save.
+    scorecard_theme = Column(String(24), nullable=True)
     # Off renders the reference poster's literal "Game Changer!"; on names what
     # the Player of the Match actually did.
     scorecard_dynamic_flourish = Column(Boolean, default=False)

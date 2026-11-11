@@ -1,230 +1,267 @@
-"""Deterministic festival artwork shared by the scorecard renderers.
+"""Illustrated backdrops, metallic frames and seasonal scorecard details.
 
-Artwork is drawn locally, without downloads or font-dependent emoji. The
-renderers take an explicit theme so previews and concurrent renders cannot
-change each other's palette.
+Bundled artwork contains no cricket data. Text, crests and collectible cards
+are rendered live. Cached plates and palettes are never mutated by a render.
 """
 
+import logging
 import math
+import random
+from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-NORMAL = "normal"
-DIWALI = "diwali"
-GOLD = (246, 193, 86)
-PALE_GOLD = (255, 225, 151)
-SUMMARY_FOOTER_H = 92
+from services.scorecard_theme_catalog import (
+    CHRISTMAS, DIWALI, NEW_YEAR, NORMAL, REPUBLIC_DAY, SANKRANTI, WINTER,
+    normalize_theme, theme_definition,
+)
+
+logger = logging.getLogger(__name__)
+SUMMARY_FOOTER_H = 128
+_ROOT = Path(__file__).resolve().parents[1]
+_ART = _ROOT / "static" / "scorecard_themes"
+_FONTS = _ROOT / "assets" / "fonts"
 
 
-def normalize_theme(value):
-    return DIWALI if str(value or "").strip().lower() == DIWALI else NORMAL
+@lru_cache(maxsize=6)
+def _artwork(theme):
+    with Image.open(_ART / f"{theme}.webp") as source:
+        return source.convert("RGBA")
 
 
-class _Art:
-    """Draw in reference pixels on a transparent, supersampled layer."""
+def _mix(a, b, fraction):
+    return tuple(round(x + (y - x) * fraction) for x, y in zip(a, b))
 
-    def __init__(self, image, scale):
-        self.image = image
-        self.scale = scale
-        self.layer = Image.new("RGBA", image.size)
-        self.draw = ImageDraw.Draw(self.layer)
 
-    def box(self, x0, y0, x1, y1):
-        return tuple(round(v * self.scale) for v in (x0, y0, x1, y1))
+@lru_cache(maxsize=64)
+def _font(size, family="script"):
+    filename = {"script": "Caveat-Bold.ttf", "display": "BebasNeue-Regular.ttf",
+                "headline": "ArchivoBlack-Regular.ttf"}[family]
+    try:
+        return ImageFont.truetype(str(_FONTS / filename), max(8, round(size)))
+    except OSError:
+        return ImageFont.load_default()
 
-    def line(self, points, color, width=1):
-        self.draw.line([(round(x * self.scale), round(y * self.scale))
-                        for x, y in points], fill=color,
-                       width=max(1, round(width * self.scale)))
 
-    def polygon(self, points, color):
-        self.draw.polygon([(round(x * self.scale), round(y * self.scale))
-                           for x, y in points], fill=color)
-
-    def ellipse(self, cx, cy, rx, ry, color, outline=None, width=1):
-        self.draw.ellipse(self.box(cx - rx, cy - ry, cx + rx, cy + ry),
-                          fill=color, outline=outline,
-                          width=max(1, round(width * self.scale)))
-
-    def glow(self, cx, cy, rx, ry, color):
+def draw_theme_background(image, theme, *, scale=1, footer_height=SUMMARY_FOOTER_H,
+                          header_height=182):
+    """Keep artwork in proportion even on four-innings posters."""
+    key = normalize_theme(theme)
+    if key == NORMAL:
+        return
+    palette = theme_definition(key)
+    try:
+        artwork = _artwork(key)
+    except (OSError, ValueError):
+        logger.warning("Scorecard artwork unavailable for %s; using its palette", key)
+        image.paste((*palette.band[0], 255), (0, 0, image.width, image.height))
+        return
+    top = min(round(header_height * scale), image.height // 3)
+    bottom = min(round((footer_height + 28) * scale), image.height // 3)
+    source_top, source_bottom = round(artwork.height * .19), round(artwork.height * .80)
+    # Stretch the quiet middle, not the foreground objects or snowy mountains.
+    slices = ((0, source_top, 0, top),
+              (source_top, source_bottom, top, image.height - bottom))
+    for sy0, sy1, y0, y1 in slices:
+        section = artwork.crop((0, sy0, artwork.width, sy1)).resize(
+            (image.width, y1 - y0), Image.Resampling.LANCZOS)
+        image.paste(section, (0, y0))
+    # Keep foreground figures and objects whole and in proportion. Stretch
+    # only the quiet clearing between the two corner illustrations.
+    foreground_y = round(artwork.height * palette.foreground_top)
+    corner = round(artwork.width * .28)
+    corner_w = min(image.width // 3, round(corner * bottom / (artwork.height - foreground_y)))
+    sections = ((0, corner, 0, corner_w),
+                (corner, artwork.width - corner, corner_w, image.width - corner_w),
+                (artwork.width - corner, artwork.width, image.width - corner_w, image.width))
+    for sx0, sx1, x0, x1 in sections:
+        section = artwork.crop((sx0, foreground_y, sx1, artwork.height)).resize(
+            (x1 - x0, bottom), Image.Resampling.LANCZOS)
+        image.paste(section, (x0, image.height - bottom))
+    if key != REPUBLIC_DAY:
         from PIL import ImageFilter
-        w, h = max(4, round(rx * self.scale * 4)), max(4, round(ry * self.scale * 4))
-        glow = Image.new("RGBA", (w, h))
-        ImageDraw.Draw(glow).ellipse((w // 4, h // 4, w * 3 // 4, h * 3 // 4), fill=color)
-        glow = glow.filter(ImageFilter.GaussianBlur(max(1, min(w, h) * 0.16)))
-        self.layer.alpha_composite(glow, (round(cx * self.scale - w / 2),
-                                          round(cy * self.scale - h / 2)))
-
-    def finish(self):
-        self.image.alpha_composite(self.layer)
+        wash = Image.new("RGBA", (image.width, top))
+        wd = ImageDraw.Draw(wash)
+        wd.rounded_rectangle((round(image.width * .27), round(top * .03),
+                              round(image.width * .75), round(top * .60)),
+                             radius=round(20 * scale), fill=(5, 13, 31, 125))
+        image.alpha_composite(wash.filter(ImageFilter.GaussianBlur(18 * scale)))
 
 
-def _firework(art, cx, cy, radius, color):
-    for i in range(28):
-        angle = i * math.tau / 28
-        r = radius * (0.72 + (i % 4) * 0.09)
-        dx, dy = math.cos(angle), math.sin(angle)
-        art.line([(cx + dx * r * 0.2, cy + dy * r * 0.2),
-                  (cx + dx * r * 0.82, cy + dy * r * 0.82)], (*color, 160), 1)
-        art.ellipse(cx + dx * r, cy + dy * r, 1.1, 1.1, (*PALE_GOLD, 220))
-    art.ellipse(cx, cy, 2, 2, (*PALE_GOLD, 255))
+def _snow_cap(image, box, scale, seed):
+    """Textured snow on the border, with long icicles in the crest area only."""
+    x0, y0, x1, _y1 = box
+    width = x1 - x0
+    rng = random.Random(seed)
+    layer = Image.new("RGBA", (round((width + 14) * scale), round(28 * scale)))
+    draw = ImageDraw.Draw(layer)
+    def point(x, y):
+        return round(x * scale), round(y * scale)
+    top, bottom = [], []
+    for x in range(0, math.ceil(width + 14), 3):
+        top.append(point(x, 5 + math.sin(x * .09) * 1.1 + rng.uniform(-1.1, 1.1)))
+        bottom.append(point(x, 11 + math.sin(x * .06) * 1.5 + rng.uniform(-.7, .7)))
+    draw.polygon(top + list(reversed(bottom)), fill=(226, 244, 255, 255))
+    draw.line(top, fill=(255, 255, 255, 255), width=max(1, round(2 * scale)))
+    for x in range(9, math.ceil(width), 37):
+        length = rng.uniform(7, 15) if x < 190 else rng.uniform(2, 5)
+        draw.polygon([point(x, 10), point(x + 5, 10), point(x + 2, 11 + length)],
+                     fill=(211, 238, 255, 240))
+        draw.line([point(x + 2, 11), point(x + 2, 9 + length)],
+                  fill=(255, 255, 255, 220), width=max(1, round(scale * .7)))
+    for _ in range(max(50, round(width * 1.7))):
+        x, y = rng.uniform(0, width + 10), rng.uniform(6, 10)
+        draw.point(point(x, y), fill=(255, 255, 255, rng.randrange(100, 240)))
+    image.alpha_composite(layer, (round((x0 - 7) * scale), round((y0 - 9) * scale)))
 
 
-def _lights(art, x0, x1, drop=22):
-    points = [(x0 + (x1 - x0) * i / 80,
-               3 + drop * math.sin(math.pi * i / 80)) for i in range(81)]
-    art.line(points, (197, 135, 55, 255), 1.2)
-    for i in range(23):
-        t = i / 22
-        cx, cy = x0 + (x1 - x0) * t, 3 + drop * math.sin(math.pi * t)
-        art.glow(cx, cy + 3, 7, 7, (255, 144, 32, 160))
-        art.ellipse(cx, cy + 3, 3, 3, (255, 184, 64, 255))
-        art.ellipse(cx, cy + 2.5, 1.4, 1.6, (255, 251, 220, 255))
+def draw_theme_panel(image, box, theme, *, scale=1, radius=16, snow=True):
+    """Shaded metal, bright rims and an outer glow clear of the table's text."""
+    from PIL import ImageChops, ImageFilter
+    key = normalize_theme(theme)
+    if key == NORMAL:
+        return
+    palette = theme_definition(key)
+    x0, y0, x1, y1 = box
+    pad = 8
+    width, height = round((x1 - x0 + pad * 2) * scale), round((y1 - y0 + pad * 2) * scale)
+    rim = Image.new("RGBA", (width, height))
+    mask = Image.new("L", rim.size)
+    md = ImageDraw.Draw(mask)
+    bounds = (round(pad * scale), round(pad * scale),
+              width - round(pad * scale) - 1, height - round(pad * scale) - 1)
+    md.rounded_rectangle(bounds, radius=round(radius * scale), outline=255,
+                         width=max(2, round(2.5 * scale)))
+    rd = ImageDraw.Draw(rim)
+    dark = tuple(round(c * .49) for c in palette.accent)
+    for y in range(height):
+        t = y / max(1, height - 1)
+        if key == REPUBLIC_DAY:
+            color = (palette.accent if t < .34 else (246, 247, 241) if t < .66
+                     else (33, 142, 82))
+        else:
+            color = (_mix(palette.pale, palette.accent, min(1, t * 2)) if t < .5
+                     else _mix(dark, palette.pale, (t - .5) * 2))
+        rd.line([(0, y), (width, y)], fill=(*color, 255))
+    rim.putalpha(mask)
+    glow = Image.new("RGBA", rim.size, (*palette.accent, 0))
+    interior = Image.new("L", rim.size)
+    ImageDraw.Draw(interior).rounded_rectangle(bounds, radius=round(radius * scale), fill=255)
+    glow_alpha = mask.filter(ImageFilter.GaussianBlur(3 * scale)).point(lambda a: a // 2)
+    glow.putalpha(ImageChops.multiply(glow_alpha, ImageChops.invert(interior)))
+    location = (round((x0 - pad) * scale), round((y0 - pad) * scale))
+    image.alpha_composite(glow, location)
+    image.alpha_composite(rim, location)
+    if snow and palette.snowy:
+        _snow_cap(image, box, scale, seed=round(y0) + (117 if key == CHRISTMAS else 29))
 
 
-def _lantern(art, cx, top, size):
-    w, h = size * 0.31, size
-    art.line([(cx, 0), (cx, top)], (*GOLD, 200))
-    art.glow(cx, top + h * 0.55, w * 2, h * 0.8, (255, 113, 13, 75))
-    art.polygon([(cx - w, top + h * 0.16), (cx, top),
-                 (cx + w, top + h * 0.16)], (176, 67, 26, 255))
-    art.polygon([(cx - w, top + h * 0.16), (cx + w, top + h * 0.16),
-                 (cx + w * 0.82, top + h * 0.79),
-                 (cx, top + h * 0.92), (cx - w * 0.82, top + h * 0.79)],
-                (234, 110, 23, 255))
-    art.ellipse(cx, top + h * 0.46, w * 0.58, h * 0.29, (255, 184, 51, 255))
-    art.ellipse(cx, top + h * 0.46, w * 0.22, h * 0.22, (255, 226, 134, 255))
-    art.line([(cx - w, top + h * 0.16), (cx + w, top + h * 0.16)], (*GOLD, 255), 2)
-    art.line([(cx - w * 0.82, top + h * 0.79),
-              (cx, top + h * 0.92), (cx + w * 0.82, top + h * 0.79)], (*GOLD, 255), 2)
-    for dx in (-0.22, 0, 0.22):
-        art.line([(cx + w * dx, top + h * 0.92),
-                  (cx + w * dx, top + h * 1.2)], (224, 142, 43, 255), 1)
+def draw_header_ornament(image, theme, *, scale=1, cx=840, cy=112):
+    key = normalize_theme(theme)
+    if key == NORMAL:
+        return
+    palette = theme_definition(key)
+    layer = Image.new("RGBA", (round(42 * scale), round(30 * scale)))
+    draw = ImageDraw.Draw(layer)
+    cx0, cy0 = round(21 * scale), round(15 * scale)
+    color = (*palette.pale, 255)
+    if key == REPUBLIC_DAY:
+        color = (17, 62, 111, 255)
+        r = round(10 * scale)
+        draw.ellipse((cx0 - r, cy0 - r, cx0 + r, cy0 + r), outline=color,
+                     width=max(1, round(scale)))
+        for i in range(24):
+            a = i * math.tau / 24
+            draw.line([(cx0, cy0), (cx0 + math.cos(a) * r, cy0 + math.sin(a) * r)],
+                      fill=color, width=max(1, round(scale * .65)))
+    elif palette.snowy:
+        for i in range(6):
+            a = i * math.tau / 6
+            dx, dy = math.cos(a), math.sin(a)
+            draw.line([(cx0, cy0), (cx0 + dx * 11 * scale, cy0 + dy * 11 * scale)],
+                      fill=color, width=max(1, round(scale)))
+            for sign in (-1, 1):
+                draw.line([(cx0 + dx * 6 * scale, cy0 + dy * 6 * scale),
+                           (cx0 + (dx * 8 + sign * dy * 3) * scale,
+                            cy0 + (dy * 8 - sign * dx * 3) * scale)],
+                          fill=color, width=max(1, round(scale)))
+    else:
+        draw.polygon([(cx0, cy0 - 9 * scale), (cx0 + 6 * scale, cy0),
+                      (cx0, cy0 + 9 * scale), (cx0 - 6 * scale, cy0)], fill=color)
+        draw.ellipse((cx0 - scale, cy0 - scale, cx0 + scale, cy0 + scale),
+                     fill=(*palette.band[0], 255))
+    image.alpha_composite(layer, (round(cx * scale) - cx0, round(cy * scale) - cy0))
 
 
-def _diya(art, cx, cy, size):
-    """An oil lamp; cy is the rim, with the flame above it."""
-    art.glow(cx, cy - size * 0.17, size * 1.4, size * 0.85,
-             (255, 135, 20, 140))
-    art.glow(cx, cy + size * 0.48, size * 0.86, size * 0.15,
-             (255, 177, 50, 130))
-    art.polygon([(cx - size, cy), (cx + size, cy),
-                 (cx + size * 0.66, cy + size * 0.4),
-                 (cx, cy + size * 0.55), (cx - size * 0.66, cy + size * 0.4)],
-                (155, 42, 27, 255))
-    art.ellipse(cx, cy, size, size * 0.24, (253, 170, 41, 255),
-                (255, 221, 122, 255), 1.5)
-    art.ellipse(cx, cy + size * 0.02, size * 0.84, size * 0.13,
-                (109, 31, 29, 255))
-    for i in range(7):
-        dx = (i - 3) * size * 0.21
-        art.ellipse(cx + dx, cy + size * (0.26 + 0.09 * (1 - abs(i - 3) / 3)),
-                    size * 0.025, size * 0.025, (*GOLD, 255))
-    art.polygon([(cx, cy - size * 1.05), (cx + size * 0.14, cy - size * 0.5),
-                 (cx + size * 0.12, cy - size * 0.12), (cx, cy),
-                 (cx - size * 0.14, cy - size * 0.18),
-                 (cx - size * 0.11, cy - size * 0.52)], (255, 185, 58, 255))
-    art.ellipse(cx, cy - size * 0.29, size * 0.06, size * 0.24,
-                (255, 250, 208, 255))
+def _centred_text(draw, text, cx, cy, font, color, scale):
+    shadow = max(1, round(scale))
+    draw.text((cx + shadow, cy + shadow), text, font=font, anchor="mm", fill=(0, 0, 0, 125))
+    draw.text((cx, cy), text, font=font, anchor="mm", fill=(*color, 255))
 
 
-def _rangoli(art, cx, cy, radius):
-    colors = ((223, 70, 117, 230), (244, 142, 42, 240),
-              (113, 80, 187, 240), (247, 197, 79, 255))
-    # Flattened circles and petals read as a rangoli lying on the ground.
-    for ring in range(4):
-        outer = radius * (1 - ring * 0.19)
-        inner = outer * 0.78
-        color = colors[ring]
-        for i in range(20):
-            a = i * math.tau / 20 + (ring % 2) * math.pi / 20
-            points = []
-            for step in range(21):
-                t = step / 20
-                r = inner + (outer - inner) * math.sin(math.pi * t)
-                angle = a + (t - 0.5) * 0.27
-                points.append((cx + math.cos(angle) * r,
-                               cy + math.sin(angle) * r * 0.29))
-            art.polygon(points, color)
-        art.ellipse(cx, cy, inner, inner * 0.29, None, (*GOLD, 220), 1)
+def draw_theme_footer(image, theme, *, scale=1, height=SUMMARY_FOOTER_H):
+    """Foreground art is in the plate; greetings stay crisp at full resolution."""
+    key = normalize_theme(theme)
+    if key not in (NEW_YEAR, SANKRANTI, REPUBLIC_DAY):
+        return
+    palette = theme_definition(key)
+    layer = Image.new("RGBA", image.size)
+    draw = ImageDraw.Draw(layer)
+    cx = image.width // 2
+    cy = image.height - round(height * .51 * scale)
+    if key == NEW_YEAR:
+        now = datetime.now(timezone.utc)
+        year = now.year + (1 if now.month >= 10 else 0)
+        title, caption, family, size = "Happy New Year", str(year), "script", 60
+    elif key == SANKRANTI:
+        title, caption, family, size = "Happy Makar Sankranti", "LET YOUR GAME SOAR", "script", 54
+    else:
+        title, caption, family, size = "REPUBLIC DAY", "CELEBRATING THE SPIRIT OF INDIA", "headline", 40
+        draw_header_ornament(layer, key, scale=scale, cx=cx / scale,
+                             cy=(image.height / scale) - height + 22)
+    title_font = _font(size * scale, family)
+    while draw.textlength(title, font=title_font) > image.width * .51 and size > 24:
+        size -= 1
+        title_font = _font(size * scale, family)
+    color = palette.ink if key == REPUBLIC_DAY else palette.pale
+    _centred_text(draw, title, cx, cy, title_font, color, scale)
+    _centred_text(draw, caption, cx, cy + round(37 * scale),
+                   _font(16 * scale, "display"), color, scale)
+    image.alpha_composite(layer)
 
 
-def draw_diwali_background(image, *, scale=1, footer_height=SUMMARY_FOOTER_H):
-    """A navy festival backdrop; all decorations stay behind scorecard data."""
-    width, height = image.width / scale, image.height / scale
-    gradient = Image.new("RGB", (192, 128))
-    pixels = gradient.load()
-    for y in range(128):
-        for x in range(192):
-            nx, ny = x / 191, y / 127
-            warm = (math.exp(-((nx - 0.02) ** 2 / 0.045 + (ny - 0.86) ** 2 / 0.1))
-                    + math.exp(-((nx - 0.98) ** 2 / 0.045 + (ny - 0.86) ** 2 / 0.1)))
-            top = math.exp(-((nx - 0.93) ** 2 / 0.07 + ny ** 2 / 0.04))
-            pixels[x, y] = (int(14 + 61 * warm + 33 * top),
-                            int(15 + 12 * warm + 9 * top),
-                            int(39 + 7 * ny + 3 * top))
-    image.paste(gradient.resize(image.size, Image.Resampling.BICUBIC).convert("RGBA"))
-
-    art = _Art(image, scale)
-    _lights(art, 0, width * 0.27)
-    _lights(art, width * 0.73, width)
-    _firework(art, width * 0.262, 59, 39, (235, 88, 148))
-    _firework(art, width * 0.738, 43, 31, (245, 174, 69))
-    _firework(art, 23, height * 0.48, 42, (199, 127, 68))
-    _firework(art, width - 19, height * 0.62, 48, (199, 127, 68))
-    for dx, top, size in ((190, 28, 68), (111, 12, 49), (48, 30, 42)):
-        _lantern(art, width - dx, top, size)
-
-    # Symmetric sparks along the margins never cross into the white tables.
-    for side in (-1, 1):
-        x = 20 if side < 0 else width - 20
-        for y in range(210, int(height - footer_height), 84):
-            art.polygon([(x, y - 5), (x + 3, y), (x, y + 5), (x - 3, y)],
-                        (218, 164, 68, 140))
-    art.finish()
-
-
-def draw_diwali_footer(image, *, scale=1, height=SUMMARY_FOOTER_H):
-    width, bottom = image.width / scale, image.height / scale
-    art = _Art(image, scale)
-    art.line([(36, bottom - height + 6), (width - 36, bottom - height + 6)],
-             (192, 137, 53, 100))
-    _rangoli(art, width / 2, bottom - 12, min(220, width * 0.16))
-    _diya(art, width / 2, bottom - 37, 33)
-    for x, size in ((width * 0.1, 24), (width * 0.18, 18),
-                    (width * 0.82, 18), (width * 0.9, 24)):
-        _diya(art, x, bottom - 27, size)
-    for i in range(57):
-        x = 45 + (width - 90) * i / 56
-        y = bottom - 14 - (i % 5) * 4
-        art.ellipse(x, y, 1.2, 1.2, (*PALE_GOLD, 110 + (i % 3) * 55))
-    art.finish()
-
-
-def frame_innings_card(image):
-    """Add festive space around an innings card without covering its content."""
+def frame_innings_card(image, theme=DIWALI):
+    """Surround an intact innings card with the same art as its match summary."""
+    key = normalize_theme(theme)
+    if key == NORMAL:
+        return image.copy()
+    palette = theme_definition(key)
     scale = 2
-    pad, top, footer = 36, 80, 100
-    width, height = image.width + 2 * pad, image.height + top + footer
+    pad, top, footer = 36, 96, SUMMARY_FOOTER_H
+    width, height = image.width + pad * 2, image.height + top + footer
     framed = Image.new("RGBA", (width * scale, height * scale))
-    draw_diwali_background(framed, scale=scale, footer_height=footer)
+    draw_theme_background(framed, key, scale=scale, footer_height=footer, header_height=top)
     framed.alpha_composite(image.convert("RGBA").resize(
         (image.width * scale, image.height * scale), Image.Resampling.LANCZOS),
         (pad * scale, top * scale))
-    art = _Art(framed, scale)
-    art.draw.rounded_rectangle(art.box(pad - 4, top - 4, width - pad + 4,
-                                     top + image.height + 4),
-                               radius=24 * scale, outline=(*GOLD, 255), width=2 * scale)
-    art.finish()
-    # Reuse the bundled script font rather than a festival emoji glyph.
-    path = Path(__file__).resolve().parents[1] / "assets" / "fonts" / "Caveat-Bold.ttf"
-    try:
-        font = ImageFont.truetype(str(path), 42 * scale)
-    except OSError:
-        font = ImageFont.load_default()
+    draw_theme_panel(framed, (pad - 2, top - 2, width - pad + 2,
+                             top + image.height + 2), key, scale=scale, radius=24)
     draw = ImageDraw.Draw(framed)
-    draw.text((width * scale // 2, 42 * scale), "Happy Diwali", anchor="mm",
-              font=font, fill=(*PALE_GOLD, 255))
-    draw_diwali_footer(framed, scale=scale, height=footer)
+    has_footer_title = key in (NEW_YEAR, SANKRANTI, REPUBLIC_DAY)
+    header = palette.edition if has_footer_title else palette.greeting
+    _centred_text(draw, header, width * scale // 2, 50 * scale,
+                   _font((30 if has_footer_title else 42) * scale,
+                         "display" if has_footer_title else "script"), palette.ink, scale)
+    draw_theme_footer(framed, key, scale=scale, height=footer)
     return framed.convert("RGB").resize((width, height), Image.Resampling.LANCZOS)
+
+
+# Compatibility for older imports; new callers pass an explicit theme.
+def draw_diwali_background(image, *, scale=1, footer_height=SUMMARY_FOOTER_H):
+    draw_theme_background(image, DIWALI, scale=scale, footer_height=footer_height)
+
+
+def draw_diwali_footer(image, *, scale=1, height=SUMMARY_FOOTER_H):
+    draw_theme_footer(image, DIWALI, scale=scale, height=height)

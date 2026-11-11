@@ -22,8 +22,8 @@ from PIL import Image, ImageDraw
 
 from services import match_summary_card as msc
 from services.scorecard_themes import (
-    DIWALI, NORMAL, SUMMARY_FOOTER_H, draw_diwali_background,
-    draw_diwali_footer, normalize_theme,
+    NORMAL, SUMMARY_FOOTER_H, draw_theme_background,
+    draw_theme_footer, normalize_theme,
 )
 from services.match_summary_card import (
     CANVAS_W, CONTENT_R, GOLD, GOLD_BRIGHT, GOLD_PALE, HEADER_H, INK, INN_H, LINE,
@@ -137,11 +137,11 @@ def generate_test_summary(*, innings, winner_name, win_margin_text, result_headl
         theme = normalize_theme(theme)
         innings = list(innings or [])[:4]
         blocks, timeline_y, result_y, potm_y, height = _layout(len(innings), bool(conditions))
-        if theme == DIWALI:
+        if theme != NORMAL:
             height += SUMMARY_FOOTER_H
         img = Image.new("RGBA", (s(CANVAS_W), s(height)), (255, 255, 255, 255))
-        if theme == DIWALI:
-            draw_diwali_background(img, scale=msc.SCALE)
+        if theme != NORMAL:
+            draw_theme_background(img, theme, scale=msc.SCALE)
         else:
             msc._draw_paper(img)
         draw = ImageDraw.Draw(img, "RGBA")
@@ -173,7 +173,7 @@ def generate_test_summary(*, innings, winner_name, win_margin_text, result_headl
         _draw_timeline(img, draw, timeline_y, days)
 
         msc._draw_result(img, draw, ts, winner_name, win_margin_text, RESULT_ACCENT,
-                         y=result_y, headline=result_headline)
+                         y=result_y, headline=result_headline, theme=theme)
 
         metrics = msc._potm_metrics(potm_stats, potm_runs, potm_balls, potm_fours,
                                     potm_sixes, None, wickets=potm_wickets,
@@ -182,8 +182,8 @@ def generate_test_summary(*, innings, winner_name, win_margin_text, result_headl
                        photo_png=potm_photo_png, card_png=potm_card_png, metrics=metrics,
                        flourish=msc._flourish(potm_stats, potm_runs, potm_wickets),
                        y=potm_y, theme=theme)
-        if theme == DIWALI:
-            draw_diwali_footer(img, scale=msc.SCALE)
+        if theme != NORMAL:
+            draw_theme_footer(img, theme, scale=msc.SCALE)
 
         out = Image.new("RGB", img.size, (255, 255, 255))
         out.paste(img, mask=img.split()[-1])

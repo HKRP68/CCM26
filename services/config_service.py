@@ -57,6 +57,7 @@ DEFAULTS = {
     "scorecard_color_inn1": "#c41e3a",
     "scorecard_color_inn2": "#00c9a7",
     "scorecard_diwali_theme": False,
+    "scorecard_theme": None,
     "scorecard_text_settings": None,
     # The summary card's script flourish. Off means the reference's literal
     # "Game Changer!"; on names what the player actually did (Five For!,
@@ -154,7 +155,8 @@ CARD_STYLES = {"tier", "template"}
 
 def get_scorecard_theme(session=None):
     """Read the theme fresh so website saves reach separate bot processes."""
-    return "diwali" if _refresh(session).get("scorecard_diwali_theme") else "normal"
+    from services.scorecard_theme_catalog import theme_from_config
+    return theme_from_config(_refresh(session))
 
 
 # Valid completion-card tokens for /wpm and /cm, in the order they should be
@@ -284,10 +286,19 @@ def save_config(session, updates, updated_by=None, allow_null=()):
         row = GameConfig()
         session.add(row)
         session.flush()
-    theme_changed = (
-        updates.get("scorecard_diwali_theme") is not None
-        and bool(row.scorecard_diwali_theme) != bool(updates["scorecard_diwali_theme"])
-    )
+    from services.scorecard_theme_catalog import DIWALI, NORMAL, THEME_BY_KEY, theme_from_config
+    previous_theme = theme_from_config({"scorecard_theme": row.scorecard_theme,
+                                       "scorecard_diwali_theme": row.scorecard_diwali_theme})
+    updates = dict(updates)
+    if updates.get("scorecard_theme") is not None:
+        selected = str(updates["scorecard_theme"]).strip().lower()
+        if selected not in THEME_BY_KEY:
+            raise ValueError("Choose one valid scorecard theme.")
+        updates["scorecard_theme"] = selected
+        updates["scorecard_diwali_theme"] = selected == DIWALI
+    elif updates.get("scorecard_diwali_theme") is not None:
+        # Compatibility for older callers; both fields represent one choice.
+        updates["scorecard_theme"] = DIWALI if updates["scorecard_diwali_theme"] else NORMAL
     for k, v in updates.items():
         if k in DEFAULTS and (v is not None or k in allow_null):
             setattr(row, k, v)
@@ -295,7 +306,9 @@ def save_config(session, updates, updated_by=None, allow_null=()):
     if updated_by:
         row.updated_by = updated_by
     session.flush()
-    if theme_changed:
+    current_theme = theme_from_config({"scorecard_theme": row.scorecard_theme,
+                                      "scorecard_diwali_theme": row.scorecard_diwali_theme})
+    if current_theme != previous_theme:
         # Telegram file_ids refer to rendered pixels. Forget the old variant
         # so /lastscorecard redraws using the newly selected theme. Payloads
         # and delivery history stay intact; this commits with the setting.

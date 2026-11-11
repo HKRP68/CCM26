@@ -9,6 +9,7 @@ import pytest
 from PIL import Image, ImageChops
 
 from services import match_summary_card as summary
+from services.scorecard_theme_catalog import THEMES, THEME_BY_KEY, NORMAL, theme_from_config
 
 
 def _summary_payload():
@@ -51,6 +52,14 @@ def _image(data):
     return Image.open(io.BytesIO(data)).convert("RGB")
 
 
+def _selected_theme(html):
+    inputs = re.findall(r'<input[^>]*name="scorecard_theme"[^>]*>', html)
+    selected = [tag for tag in inputs if "checked" in tag]
+    assert len(inputs) == len(THEMES)
+    assert len(selected) == 1
+    return re.search(r'value="([^"]+)"', selected[0]).group(1)
+
+
 @pytest.fixture(scope="module")
 def summary_images():
     payload = _summary_payload()
@@ -79,6 +88,43 @@ def test_turning_off_restores_the_normal_pixels_without_leaking_palette(summary_
     assert summary.generate_match_summary(**payload, theme="unknown") == normal_png
 
 
+@pytest.mark.parametrize("theme", [t.key for t in THEMES if t.key != NORMAL])
+def test_each_theme_preserves_live_table_values_and_has_its_own_art(theme, summary_images):
+    payload, normal_png, _ = summary_images
+    image = _image(summary.generate_match_summary(**payload, theme=theme))
+    normal = _image(normal_png)
+    assert image.height > normal.height
+    for y in (summary.INN1_Y, summary.INN2_Y):
+        region = (summary.NAME_L_X - 12, y + summary.BAR_H + summary.HEAD_ROW_H + 3,
+                  summary.CONTENT_R - 12, y + summary.INN_H - 12)
+        assert ImageChops.difference(normal.crop(region), image.crop(region)).getbbox() is None
+    assert image.crop((300, 0, 1250, 180)).tobytes() != normal.crop((300, 0, 1250, 180)).tobytes()
+
+
+def test_artwork_is_bundled_and_preview_images_are_available():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "static" / "scorecard_themes"
+    for theme in THEMES:
+        with Image.open(root / f"{theme.key}-thumb.webp") as image:
+            image.verify()
+        if theme.key != NORMAL:
+            with Image.open(root / f"{theme.key}.webp") as image:
+                assert image.width >= 1536 and image.height >= 1024
+                image.verify()
+
+
+def test_missing_artwork_still_produces_a_readable_scorecard():
+    with patch("services.scorecard_themes._artwork", side_effect=OSError("missing artwork")):
+        assert _image(summary.generate_match_summary(**_summary_payload(), theme="winter"))
+
+
+def test_legacy_setting_is_only_a_fallback_to_the_single_selection():
+    assert theme_from_config({"scorecard_diwali_theme": True}) == "diwali"
+    for theme in THEME_BY_KEY:
+        assert theme_from_config({"scorecard_theme": theme, "scorecard_diwali_theme": True}) == theme
+    assert theme_from_config({"scorecard_theme": "winter,christmas", "scorecard_diwali_theme": True}) == NORMAL
+
+
 def test_festival_card_supports_conditions_and_missing_artwork():
     data = summary.generate_match_summary(
         **_summary_payload(), theme="diwali", inn1_logo_png=b"invalid crest",
@@ -87,7 +133,8 @@ def test_festival_card_supports_conditions_and_missing_artwork():
     assert image.height > summary.CANVAS_H + summary.STRIP_H
 
 
-def test_test_match_theme_renders_all_four_innings():
+@pytest.mark.parametrize("theme", [t.key for t in THEMES if t.key != NORMAL])
+def test_test_match_theme_renders_all_four_innings(theme):
     from services.test_summary_card import generate_test_summary
     kwargs = dict(
         innings=[dict(team="Alpha" if i % 2 == 0 else "Beta", runs=200 + i,
@@ -97,7 +144,7 @@ def test_test_match_theme_renders_all_four_innings():
         days=[dict(label="DAY 5", line="Beta won", final=True)],
         conditions=[("pitch", "Pitch", "Dry")])
     normal = _image(generate_test_summary(**kwargs))
-    festive = _image(generate_test_summary(**kwargs, theme="diwali"))
+    festive = _image(generate_test_summary(**kwargs, theme=theme))
     assert festive.width == normal.width
     assert festive.height > normal.height
 
@@ -146,13 +193,12 @@ def _cached_card(panel):
 def test_switch_is_saved_and_replay_uses_the_selected_theme(panel):
     assert panel.config.get_scorecard_theme() == "normal"
     _cached_card(panel)
-    response = panel.client.post("/settings/scorecard", data=_form(scorecard_diwali_theme="on"))
+    response = panel.client.post("/settings/scorecard", data=_form(scorecard_theme="diwali"))
     assert response.status_code == 302
     assert panel.config.get_scorecard_theme() == "diwali"
     page = panel.client.get("/settings/scorecard")
     assert page.status_code == 200
-    switch = re.search(r'<input[^>]*id="scorecard_diwali_theme"[^>]*>', page.text).group()
-    assert "checked" in switch
+    assert _selected_theme(page.text) == "diwali"
     with panel.sessions() as session:
         card = session.query(panel.models.MatchScorecardImage).one()
         assert card.file_id is None
@@ -161,7 +207,7 @@ def test_switch_is_saved_and_replay_uses_the_selected_theme(panel):
         card.file_id = "diwali-photo"
         session.commit()
 
-    assert panel.client.post("/settings/scorecard", data=_form()).status_code == 302
+    assert panel.client.post("/settings/scorecard", data=_form(scorecard_theme="normal")).status_code == 302
     assert panel.config.get_scorecard_theme() == "normal"
     with panel.sessions() as session:
         assert session.query(panel.models.MatchScorecardImage).one().file_id is None
@@ -184,24 +230,65 @@ def test_resaving_the_same_theme_keeps_cached_images_and_rollback_is_atomic(pane
         assert session.query(panel.models.MatchScorecardImage).one().file_id == "normal-photo"
 
 
+def test_switching_between_festivals_keeps_exactly_one_active_and_redraws_replays(panel):
+    _cached_card(panel)
+    for theme in [t.key for t in THEMES if t.key != NORMAL] + [NORMAL]:
+        with panel.sessions() as session:
+            archived = session.query(panel.models.MatchScorecardImage).one()
+            archived.file_id = "previous-theme-photo"
+            session.commit()
+        response = panel.client.post("/settings/scorecard", data=_form(scorecard_theme=theme))
+        assert response.status_code == 302
+        assert panel.config.get_scorecard_theme() == theme
+        with panel.sessions() as session:
+            row = session.query(panel.models.GameConfig).one()
+            assert row.scorecard_theme == theme
+            assert row.scorecard_diwali_theme is (theme == "diwali")
+            assert session.query(panel.models.MatchScorecardImage).one().file_id is None
+        assert _selected_theme(panel.client.get("/settings/scorecard").text) == theme
+
+
+@pytest.mark.parametrize("selection", ["not-a-theme", "winter,christmas", '["winter","christmas"]'])
+def test_invalid_theme_does_not_replace_the_active_theme(panel, selection):
+    with panel.sessions() as session:
+        panel.config.save_config(session, {"scorecard_theme": "winter"})
+        session.commit()
+    response = panel.client.post("/settings/scorecard", data=_form(scorecard_theme=selection))
+    assert response.status_code == 200
+    assert "Choose one valid scorecard theme" in response.text
+    assert panel.config.get_scorecard_theme() == "winter"
+
+
+def test_multiple_selections_are_rejected_without_changing_settings(panel):
+    from werkzeug.datastructures import MultiDict
+    with panel.sessions() as session:
+        panel.config.save_config(session, {"scorecard_theme": "diwali"})
+        session.commit()
+    form = MultiDict(list(_form().items()) + [("scorecard_theme", "winter"),
+                                              ("scorecard_theme", "christmas")])
+    response = panel.client.post("/settings/scorecard", data=form)
+    assert response.status_code == 200
+    assert "Only one scorecard theme" in response.text
+    assert panel.config.get_scorecard_theme() == "diwali"
+
+
 def test_other_processes_pick_up_saves_without_restarting(panel):
-    assert panel.config.get_config()["scorecard_diwali_theme"] is False
+    assert panel.config.get_config()["scorecard_theme"] is None
     with panel.sessions() as session:
         # Bypass the cache invalidation, as a different website process would.
-        session.add(panel.models.GameConfig(scorecard_diwali_theme=True))
+        session.add(panel.models.GameConfig(scorecard_theme="winter"))
         session.commit()
-    assert panel.config.get_config()["scorecard_diwali_theme"] is False
+    assert panel.config.get_config()["scorecard_theme"] is None
     page = panel.client.get("/settings/scorecard")
     assert page.status_code == 200
-    switch = re.search(r'<input[^>]*id="scorecard_diwali_theme"[^>]*>', page.text).group()
-    assert "checked" in switch
-    assert panel.config.get_scorecard_theme() == "diwali"
+    assert _selected_theme(page.text) == "winter"
+    assert panel.config.get_scorecard_theme() == "winter"
 
 
 @pytest.mark.parametrize("card_type", ["batting", "bowling", "summary"])
 def test_live_preview_can_turn_off_a_saved_theme_without_saving(panel, card_type):
     with panel.sessions() as session:
-        panel.config.save_config(session, {"scorecard_diwali_theme": True})
+        panel.config.save_config(session, {"scorecard_theme": "winter"})
         session.commit()
     url = f"/settings/scorecard/preview?card_type={card_type}"
     normal = panel.client.get(url + "&theme=normal")
@@ -209,12 +296,12 @@ def test_live_preview_can_turn_off_a_saved_theme_without_saving(panel, card_type
     assert normal.status_code == festive.status_code == 200
     assert festive.mimetype == "image/png"
     assert _image(festive.data).height > _image(normal.data).height
-    assert panel.config.get_scorecard_theme() == "diwali"
+    assert panel.config.get_scorecard_theme() == "winter"
 
 
 def test_summary_preview_uses_the_colour_controls_in_both_themes(panel):
     with patch("services.match_summary_card.generate_match_summary", return_value=b"preview") as render:
-        for theme in ("normal", "diwali"):
+        for theme in THEME_BY_KEY:
             response = panel.client.get("/settings/scorecard/preview", query_string={
                 "card_type": "summary", "theme": theme,
                 "scorecard_color_inn1": "#0088aa", "scorecard_color_inn2": "#dd9900"})
@@ -227,31 +314,33 @@ def test_summary_preview_uses_the_colour_controls_in_both_themes(panel):
 
 
 @pytest.mark.parametrize("card_type", ["batting", "bowling", "summary"])
-def test_stored_payload_theme_is_overridden_by_current_settings(panel, card_type):
+@pytest.mark.parametrize("theme", [t.key for t in THEMES if t.key != NORMAL])
+def test_stored_payload_theme_is_overridden_by_current_settings(panel, card_type, theme):
     from services import scorecard_delivery
     with panel.sessions() as session:
-        panel.config.save_config(session, {"scorecard_diwali_theme": True})
+        panel.config.save_config(session, {"scorecard_theme": theme})
         session.commit()
     path = ("services.match_summary_card.generate_match_summary" if card_type == "summary"
             else f"services.scorecard_card.generate_{card_type}_scorecard")
     payload = {"theme": "normal"}
     with patch(path, return_value=b"rendered") as render:
         assert scorecard_delivery.render_card(card_type, payload) == b"rendered"
-    assert render.call_args.kwargs["theme"] == "diwali"
+    assert render.call_args.kwargs["theme"] == theme
     assert payload == {"theme": "normal"}
 
 
-def test_existing_databases_migrate_with_the_theme_off(panel, monkeypatch):
+@pytest.mark.parametrize("legacy_on", [False, True])
+def test_existing_databases_keep_their_theme_during_migration(panel, monkeypatch, legacy_on):
     with panel.sessions() as session:
-        panel.config.save_config(session, {"scorecard_diwali_theme": False})
+        panel.config.save_config(session, {"scorecard_diwali_theme": legacy_on})
         session.commit()
     with panel.engine.begin() as connection:
-        connection.exec_driver_sql("ALTER TABLE game_config DROP COLUMN scorecard_diwali_theme")
+        connection.exec_driver_sql("ALTER TABLE game_config DROP COLUMN scorecard_theme")
     monkeypatch.setattr(panel.database, "engine", panel.engine)
     monkeypatch.setattr(panel.database, "_is_postgres", False)
     panel.database._migrate_add_columns()
     panel.database._migrate_add_columns()  # warm starts must be safe too
-    assert panel.config.get_scorecard_theme() == "normal"
+    assert panel.config.get_scorecard_theme() == ("diwali" if legacy_on else "normal")
 
 
 def test_toggle_refreshes_every_preview_and_full_size_link():
@@ -266,9 +355,12 @@ def test_toggle_refreshes_every_preview_and_full_size_link():
 const assert = require('node:assert/strict'), fs = require('node:fs'), vm = require('node:vm');
 const source = fs.readFileSync(process.argv[1], 'utf8').split('<script>')[1].split('</script>')[0];
 const handlers = {}, elements = {
-  scorecard_diwali_theme: {checked:false, addEventListener:(event, callback)=>handlers[event]=callback},
   scorecard_theme_state: {textContent:''}, color_inn1:{value:'#0065b3'}, color_inn2:{value:'#ed6500'}
 };
+const choices = [['normal','Normal'],['diwali','Diwali'],['winter','Winter'],['christmas','Christmas'],
+ ['new_year','New Year'],['makar_sankranti','Makar Sankranti'],['republic_day','Republic Day']];
+const radios = choices.map(([value,label])=>({value,checked:value==='normal',dataset:{themeLabel:label},
+ addEventListener:(event, callback)=>handlers[event]=callback}));
 const ids = ['batting_inn1','bowling_inn1','batting_inn2','bowling_inn2','summary_inn1'];
 ids.forEach(id => {
   elements['preview_'+id] = {dataset:{baseSrc:'/settings/scorecard/preview?card_type='+id.split('_')[0]}};
@@ -276,20 +368,22 @@ ids.forEach(id => {
 });
 const context = vm.createContext({ URL, URLSearchParams, Date, setTimeout:callback=>callback(), clearTimeout(){},
   window:{location:{origin:'http://scorecards.test'}}, document:{getElementById:id=>elements[id],
-    querySelectorAll:selector=>selector.includes('#scorecard_diwali_theme') ? [elements.scorecard_diwali_theme] : []}
+    querySelector:()=>radios.find(r=>r.checked),
+    querySelectorAll:selector=>selector.includes('input[name="scorecard_theme"]') ? radios : []}
 });
 vm.runInContext(source, context);
-for (const enabled of [false, true, false]) {
-  elements.scorecard_diwali_theme.checked = enabled;
+for (const [theme,label] of [...choices,choices[0]]) {
+  radios.forEach(r=>r.checked=r.value===theme);
   handlers.change();
   ids.forEach(id => {
     const preview = elements['preview_'+id], url = new URL(preview.src, 'http://scorecards.test');
-    assert.equal(url.searchParams.get('theme'), enabled ? 'diwali' : 'normal');
+    assert.equal(url.searchParams.get('theme'), theme);
+    assert.equal(url.searchParams.getAll('theme').length, 1);
     assert.equal(url.searchParams.get('scorecard_color_inn1'), '#0065b3');
     assert.equal(url.searchParams.get('scorecard_color_inn2'), '#ed6500');
     assert.equal(elements['preview_link_'+id].href, preview.src);
   });
-  assert.equal(elements.scorecard_theme_state.textContent, enabled ? 'Diwali · On' : 'Normal · Off');
+  assert.equal(elements.scorecard_theme_state.textContent, 'Selected: '+label);
 }
 '''
     result = subprocess.run(["node", "-e", script, str(template)],

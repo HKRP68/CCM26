@@ -866,6 +866,7 @@ def _migrate_add_columns():
         "scorecard_color_inn1": "VARCHAR(9) DEFAULT '#c41e3a'",
         "scorecard_color_inn2": "VARCHAR(9) DEFAULT '#00c9a7'",
         "scorecard_diwali_theme": "BOOLEAN DEFAULT FALSE",
+        "scorecard_theme": "VARCHAR(24)",
         "scorecard_text_settings": "TEXT",
         "scorecard_dynamic_flourish": "BOOLEAN DEFAULT FALSE",
         "scorecard_potm_card": "BOOLEAN DEFAULT TRUE",

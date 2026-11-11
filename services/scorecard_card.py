@@ -26,7 +26,7 @@ import json
 from functools import lru_cache
 from PIL import Image, ImageDraw, ImageFont
 
-from services.scorecard_themes import DIWALI, NORMAL, frame_innings_card, normalize_theme
+from services.scorecard_themes import NORMAL, frame_innings_card, normalize_theme
 
 logger = logging.getLogger(__name__)
 
@@ -1094,8 +1094,8 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
             # about the match, not about either side.
             draw.text(_offset_xy(text_settings, "batting", "target", (W - _tw(draw, full, f_tgt)) // 2, H - 42), full, fill=GOLD, font=f_tgt)
 
-        if normalize_theme(theme) == DIWALI:
-            img = frame_innings_card(img)
+        if normalize_theme(theme) != NORMAL:
+            img = frame_innings_card(img, theme=theme)
         buf = io.BytesIO()
         img.save(buf, format="PNG", optimize=True)
         return buf.getvalue()
@@ -1345,8 +1345,8 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
             draw.text(_offset_xy(text_settings, "bowling", label_key, lx, ly), label, fill=(231, 234, 240), font=lf)
             sx += sw
 
-        if normalize_theme(theme) == DIWALI:
-            img = frame_innings_card(img)
+        if normalize_theme(theme) != NORMAL:
+            img = frame_innings_card(img, theme=theme)
         buf = io.BytesIO()
         img.save(buf, format="PNG", optimize=True)
         return buf.getvalue()

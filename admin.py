@@ -14978,6 +14978,7 @@ def admin_scorecard_settings():
     db = get_session()
     try:
         from services.config_service import get_config, save_config
+        from services.scorecard_theme_catalog import THEMES, theme_from_config
         from services.scorecard_card import SCORECARD_TEXT_FIELDS, normalize_scorecard_text_settings
         import re as _re
         import json as _json
@@ -14993,6 +14994,11 @@ def admin_scorecard_settings():
 
         if request.method == "POST":
             try:
+                selections = request.form.getlist("scorecard_theme")
+                if len(selections) > 1:
+                    raise ValueError("Only one scorecard theme can be selected.")
+                selected_theme = (selections[0] if selections else
+                                  "diwali" if _checked("scorecard_diwali_theme") else "normal")
                 c1 = _validate_hex(
                     request.form.get("scorecard_color_inn1"), "#c41e3a")
                 c2 = _validate_hex(
@@ -15017,7 +15023,7 @@ def admin_scorecard_settings():
                 save_config(db, {
                     "scorecard_color_inn1": c1,
                     "scorecard_color_inn2": c2,
-                    "scorecard_diwali_theme": _checked("scorecard_diwali_theme"),
+                    "scorecard_theme": selected_theme,
                     "scorecard_text_settings": _json.dumps(text_settings, separators=(",", ":")),
                     "wpm_result_cards": wpm_result_cards,
                     # The two places the Player of the Match's collectible card
@@ -15030,7 +15036,7 @@ def admin_scorecard_settings():
                 db.commit()
                 log_admin(db, "scorecard_settings_save", "config", 0,
                           "scorecard", f"inn1={c1} inn2={c2} cards={wpm_result_cards} "
-                          f"diwali={_checked('scorecard_diwali_theme')}")
+                          f"theme={selected_theme}")
                 db.commit()
                 flash("✅ Scorecard settings saved.", "info")
                 return redirect(url_for("admin_scorecard_settings"))
@@ -15048,6 +15054,7 @@ def admin_scorecard_settings():
 
         return render_template("admin_scorecard_settings.html",
                                cfg=cfg, presets=SCORECARD_COLOR_PRESETS,
+                               themes=THEMES, selected_theme=theme_from_config(cfg),
                                text_settings=normalize_scorecard_text_settings(cfg.get("scorecard_text_settings")),
                                text_fields=SCORECARD_TEXT_FIELDS,
                                potm_card_inline=_on("scorecard_potm_card_inline"),
@@ -15076,7 +15083,8 @@ def admin_scorecard_preview():
         import re as _re
         cfg = get_config(db, fresh=True)
         from services.scorecard_themes import normalize_theme
-        saved_theme = "diwali" if cfg.get("scorecard_diwali_theme") else "normal"
+        from services.scorecard_theme_catalog import theme_from_config
+        saved_theme = theme_from_config(cfg)
         theme = normalize_theme(request.args.get("theme", saved_theme))
         innings = request.args.get("innings", "1")
         is_first = (innings == "1")
