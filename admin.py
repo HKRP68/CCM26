@@ -27128,6 +27128,39 @@ def public_stats_series(series_id):
         db.close()
 
 
+@app.get('/stats/<int:series_id>/players/download')
+def public_stats_players_download(series_id):
+    from services import live_records, cricket_portal_export as export
+    export_format = request.args.get('format', 'xlsx')
+    layout = request.args.get('layout', 'totals')
+    if export_format not in ('xlsx', 'csv') or layout not in ('totals', 'seasons'):
+        abort(400)
+    db = get_session()
+    try:
+        series = live_records.public_series(db, series_id)
+        if series is None:
+            abort(404)
+        try:
+            _, selected = live_records.selected_season(db, series, request.args.get('season'))
+        except ValueError:
+            abort(404)
+        data = export.snapshot(db, series, selected)
+        slug = re.sub(r'[^a-z0-9]+', '-', (series.short_name or series.name).lower()).strip('-')[:60] or 'competition'
+        scope = f'season-{selected.season_no}' if selected else 'all-seasons'
+        stamp = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
+        csv_layout = f'-{layout}' if export_format == 'csv' else ''
+        body = export.xlsx_bytes(data) if export_format == 'xlsx' else export.csv_bytes(data, layout)
+        response = send_file(io.BytesIO(body), as_attachment=True,
+            download_name=f'{slug}-{scope}-player-stats{csv_layout}-{stamp}.{export_format}',
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' if export_format == 'xlsx' else 'text/csv',
+            max_age=0, etag=False)
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
+    finally:
+        db.close()
+
+
 @app.route('/api/stats/news/<int:article_id>')
 def public_stats_article(article_id):
     from models import NewsArticle
