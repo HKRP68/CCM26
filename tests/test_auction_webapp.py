@@ -23,7 +23,15 @@ _MODULE_NAMES = ('database', 'models', 'config', 'services.player_service',
                  'services.auction_preseason', 'services.auction_trade_service',
                  'services.retention_negotiation', 'services.auction_webapp',
                  'services.auction_webapp_routes', 'services.auction_sets_io',
-                 'services.auction_auto_sets', 'services.auction_simulator')
+                 'services.auction_auto_sets', 'services.auction_simulator',
+                 # Auction and season-draft interfaces now share these services.
+                 # Restore their mapped classes and AuctionError together when
+                 # leaving this suite's temporary database, in either test order.
+                 'services.franchise_draft', 'services.franchise_draft_admin',
+                 'services.franchise_draft_rich', 'services.franchise_draft_web',
+                 'services.franchise_team_import', 'services.franchise_player_import',
+                 'services.league_season_service', 'services.tournament_service', 'handlers.franchise_draft',
+                 'handlers.franchise_bot')
 _SAVED = {}
 _ENV = {}
 _FILE = None

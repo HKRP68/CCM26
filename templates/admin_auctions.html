@@ -62,6 +62,7 @@
         {% if row.follows %}<br>follows <a href="{{ url_for('admin_auction_detail', season_id=row.follows.id) }}">{{ row.follows.name }}</a>{% endif %}
       </div>
       <div class="au-actions">
+        {% if draft_mode %}<a class="btn btn-primary" href="{{ url_for('admin_franchise_draft_workspace',season_id=row.season.id) }}">🏏 Manage Draft</a>{% endif %}
         <a class="btn btn-ghost" href="{{ url_for('admin_auction_detail', season_id=row.season.id) }}">⚙️ Set up</a>
         {% if not draft_mode %}<a class="btn btn-primary" href="{{ url_for('admin_auction_console', season_id=row.season.id) }}">🔨 Console</a>{% endif %}
       </div>

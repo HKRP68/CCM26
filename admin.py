@@ -24816,6 +24816,58 @@ def admin_auctions_list():
         db.close()
 
 
+@app.route('/franchise-drafts/<int:season_id>/workspace')
+@login_required
+def admin_franchise_draft_workspace(season_id):
+    db=get_session()
+    try:
+        season=_auction_or_404(db,season_id)
+        draft=auction_svc.franchise_draft_config(db,season)
+        if draft is None:abort(404)
+        return render_template('admin_franchise_draft_workspace.html',season=season,franchise_draft=draft)
+    finally:db.close()
+
+
+@app.route('/api/admin/franchise-draft',methods=['POST'])
+@login_required
+def admin_franchise_draft_api():
+    """Password-authenticated admin controls; owner picks require Telegram identity."""
+    from services import franchise_draft_web as DW,auction_webapp as W
+    from models import FranchiseDraft
+    from sqlalchemy.exc import IntegrityError,OperationalError
+    import secrets
+    if request.content_length and request.content_length>2_000_000:return {'ok':False,'message':'Requests must be under 2 MB.'},413
+    data=request.get_json(silent=True)
+    if not isinstance(data,dict):return {'ok':False,'message':'Send a JSON object.'},400
+    actor=session.setdefault('draft_admin_actor',-secrets.randbits(60)-1)
+    db=get_session()
+    try:
+        rows=db.query(AuctionSeason).join(FranchiseDraft,FranchiseDraft.season_id==AuctionSeason.id).order_by(AuctionSeason.id.desc()).all()
+        sid=W.integer(data['season_id'],'Draft ID',1) if data.get('season_id') else None
+        season=next((s for s in rows if s.id==sid),None) if sid else next(iter(rows),None)
+        if sid and season is None:raise auction_svc.AuctionError('That Franchise Draft does not exist.')
+        if data.get('request_type')=='action':
+            result=DW.perform(db,season,actor,data,trusted_admin=True)
+            log_admin(db,'franchise_draft_web','auction',season.id if season else result.get('season_id'),
+                      season.name if season else data.get('name'),detail=json.dumps({'action':data.get('action'),'operation':data.get('operation'),'admin_session':actor}))
+            db.commit()
+            return dict(ok=True,**result)
+        if season is not None:
+            from services import franchise_draft as D
+            D.resolve_timeout(db,season)
+            db.commit()
+        result=W.base_payload(db,season,actor,rows)
+        result.update(admin=True,role_labels=['Website Administrator'])
+        return DW.payload(db,season,result,data,actor=actor,trusted_admin=True)
+    except (auction_svc.AuctionError,ValueError,TypeError,KeyError) as exc:
+        db.rollback();return {'ok':False,'message':W.plain(str(exc))},400
+    except IntegrityError:
+        db.rollback();return {'ok':False,'message':'Another action changed this draft. Refresh and preview again.'},409
+    except OperationalError:
+        db.rollback();return {'ok':False,'message':'The database is busy. Try again shortly.'},503
+    finally:db.close()
+
+
 @app.route("/auctions/<int:season_id>/teams/<int:franchise_id>", methods=["GET", "POST"])
 @login_required
 def admin_auction_team_manage(season_id, franchise_id):

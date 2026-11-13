@@ -33,7 +33,8 @@
   {% if franchise_draft %}
   <div class="au-card">
     <b>📋 Franchise draft · {{ franchise_draft.rounds }} rounds</b>
-    <p class="au-note">Manage players, franchise roles and purses here. Open <code>/draft</code> in the dedicated franchise bot for draft settings, fixed rating prices, custom player prices, the pick order and live drafting. Squad size follows the number of rounds, with no overseas limit.</p>
+    <p class="au-note">Manage draft settings, players, franchises, prices, order, purses and live activity from the website. Squad size follows the number of rounds, with no overseas limit. Telegram <code>/draft</code> in the dedicated franchise bot uses the same saved state.</p>
+    <a class="btn btn-primary" href="{{ url_for('admin_franchise_draft_workspace',season_id=season.id) }}">🏏 Open full Draft management</a>
   </div>
   {% endif %}
 

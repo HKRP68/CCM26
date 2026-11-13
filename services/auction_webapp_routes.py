@@ -167,6 +167,10 @@ def register(app, authenticate, csrf_exempt, member_rpc):
             mode = data.get('mode') if kind == 'read' else None
             requested = data.get('season_id') or (launch['season_id'] if launch and mode is None else None)
             # Creation never needs access to a selected auction.
+            if kind == 'action' and data.get('action') == 'draft_create':
+                result=W.perform(db,None,tg_id,data)
+                db.commit()
+                return dict(ok=True,**result)
             if kind == 'action' and data.get('action') == 'admin_create':
                 if not W.admin_for(db, tg_id):
                     raise W.AccessError('Only Auction Managers can create an auction.')
@@ -175,6 +179,12 @@ def register(app, authenticate, csrf_exempt, member_rpc):
                 return dict(ok=True, **result)
             season, rows = W.resolve(db, tg_id, requested, check_member=member, origin_chat_id=origin, acquisition_mode=mode)
             if kind == 'read':
+                if season is not None and A.franchise_draft_config(db,season) is not None:
+                    from services import franchise_draft as D
+                    D.resolve_timeout(db,season)
+                    # A website visit can recover an expired, approved timer
+                    # even while the Telegram delivery worker is reconnecting.
+                    db.commit()
                 result = W.payload(db, season, tg_id, rows, data)
                 # trade_squad materializes last season's unsigned retention
                 # rights as queued lots. Persist these before returning their

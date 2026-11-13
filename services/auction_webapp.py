@@ -438,7 +438,7 @@ def payload(db, season, tg_id, rows, data):
     result = base_payload(db, season, tg_id, rows)
     if data.get('view') == 'franchisedraft':
         from services.franchise_draft_web import payload as draft_payload
-        return draft_payload(db, season, result, data)
+        return draft_payload(db, season, result, data, actor=tg_id)
     if season is None:
         return result
     view = data.get('view', 'live')
@@ -525,6 +525,10 @@ def perform(db, season, tg_id, data):
     action = data.get('action')
     if not isinstance(action, str):
         raise A.AuctionError("Choose an auction action.")
+    if action.startswith('draft_') and (action=='draft_create' or
+            (season is not None and A.franchise_draft_config(db,season) is not None)):
+        from services.franchise_draft_web import perform as draft_perform
+        return draft_perform(db,season,tg_id,data)
     if action.startswith('admin_'):
         if not admin_for(db, tg_id, season):
             raise AccessError("Only Auction Managers can manage the auction.")

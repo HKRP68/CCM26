@@ -12,9 +12,38 @@ Panel, the Mini App home tiles, the franchise website navigation and the bot's
 home menu. The administrator's `/franchise-drafts` section creates and lists
 draft seasons; setup reuses `/auctions/<season_id>` with draft-specific controls.
 Auction lists and draft lists show their own acquisition mode. The browser draft
-workspace shows the live board, available players, order, squads, purses, history
-and rules, with links to the existing Telegram draft controls for signings and
-administration. Selecting a section never converts an existing season's mode.
+workspace supports full draft administration and owner/co-owner signings, using
+the same saved state and confirmation engine as Telegram. Selecting a section
+never converts an existing season's mode.
+
+## Full website management
+
+In the admin panel choose **Franchise Drafts → Manage Draft**. The franchise
+website and Mini App also expose the same workspace through **Franchise Draft**.
+Draft Admins sign in with Telegram; password-authenticated website administrators
+use the admin-panel workspace. Owner picks always require the actual owner's or
+co-owner's verified Telegram account, including picks made on the website.
+
+The workspace includes creation/season continuation, previous-team import,
+franchise identities and ownership, catalogue search and bulk selection, CSV
+and individual player import, rating/custom prices, purses, category/rating
+rules, rounds, order/randomization, timers, readiness, start/pause/resume,
+audited corrections/undo, inactive-team resolution, results export, publication
+and preparing the season's tournament. Editable actions show durable previews
+before applying. Owner signings and skips also require confirmation.
+Bot Owners, Bot Admins and website administrators can appoint or revoke Draft
+Admins from settings; delegated Draft Admins cannot appoint others.
+
+New squads start at zero. Importing previous teams copies their identities and
+roles; prior spending and players do not transfer. The catalogue includes
+players held in previous seasons, and **Add All Active Catalogue Players** can
+populate the pool without excluding previous-team players. Retention is off by
+default and requires explicit administrator configuration and contract approval.
+
+All website actions recheck authorization and rules on the server. Repeated
+confirmations cannot debit twice. Website picks create the same Telegram
+announcements and saved next-turn state. The website adapts to the current
+franchise and role; authenticated spectators cannot use management controls.
 
 1. From a completed tournament choose **Existing leagues → Draft**; Auction
    remains available as the other acquisition mode. Tournament management shows
@@ -125,6 +154,8 @@ clock. Durations up to 24 hours are accepted. `/dtimer 10` remains available and
 changes duration without changing the policy. Pause preserves remaining time;
 the next team gets a fresh full window. Restart recovery resolves one expired
 turn rather than skipping every team that would have timed out during downtime.
+Website refreshes also recover expired turns through this same approved policy
+while the bot worker is reconnecting; announcements remain queued for delivery.
 
 Automatic picks run the same validation and atomic signing as manual picks and
 are logged as **System**, not as a manual owner confirmation. If no legal choice

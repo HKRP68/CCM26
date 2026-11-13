@@ -110,9 +110,9 @@ def parse_csv(data):
     return result
 
 
-def import_players(db, season, rows, *, actor_tg_id, set_name='Imported'):
+def import_players(db, season, rows, *, actor_tg_id, set_name='Imported', trusted_admin=False):
     """Atomically import validated players. The caller owns commit/rollback."""
-    A.require_season_manager(db, season, actor_tg_id)
+    if not (trusted_admin and actor_tg_id is None):A.require_season_manager(db, season, actor_tg_id)
     if (not isinstance(rows, list) or not rows or len(rows) > MAX_ROWS
             or not all(isinstance(row, ImportRow) for row in rows)):
         raise A.AuctionError('Parse a valid player CSV before importing.')
@@ -136,8 +136,9 @@ def import_players(db, season, rows, *, actor_tg_id, set_name='Imported'):
                 raise A.AuctionError(f'The catalogue has multiple matches for {player.name}; resolve them before importing.')
             catalogue[key] = player
     lots = {lot.player_id: lot for lot in db.query(AuctionLot).filter_by(season_id=current.id).all()}
+    is_draft = A.franchise_draft_config(db,current) is not None
     for row in rows:
-        if row.overseas is not None and row.overseas != bool(home and row.country.casefold() != home):
+        if not is_draft and row.overseas is not None and row.overseas != bool(home and row.country.casefold() != home):
             raise A.AuctionError(f'{row.name}: overseas must match country and the auction home country.')
         player = catalogue.get(row.key)
         if player is None:

@@ -446,6 +446,20 @@ def preview_action(session,season,action):
     if action.kind=='start':card.facts([('Opening franchise',after['current'] or 'All squad places occupied'),
         ('Pick time','Timer off' if not after['timer_seconds'] else str(after['timer_seconds'])+' seconds'),
         ('On expiry',after['settings'].get('timeout_policy','skip'))])
+    if action.kind in ('team','removeteam'):
+        card.table(['Franchise','Owner / ID','Co-owners','Managers'],[[t['name'],f'{t["owner_name"] or "Owner"} · {t["owner"] or "Missing"}',
+             ', '.join(map(str,t['co_owners'])) or 'None',', '.join(map(str,t['managers'])) or 'None'] for t in after['teams']])
+        if action.kind=='removeteam':card.text('The existing franchise-removal rules redistribute its opening purse. Review every remaining purse below before confirming.')
+    if action.kind=='order':card.text('Initial order after confirmation: '+' → '.join(after['order']))
+    if action.kind=='rules':
+        card.table(['Role','Minimum','Maximum'],[[role,str(after['minimums'].get(role,0)),str(after['maximums'].get(role,'No cap'))] for role in _services()[0].SQUAD_ROLES])
+        for rule in after['rating_rules']:card.text(f'Rating ≤{rule["max_rating"]}: at least {rule["min_players"]} players')
+    if action.kind=='opening':card.facts([('Opening purse',_money(season,before['opening_purse'])+' → '+_money(season,after['opening_purse']))])
+    if action.kind=='bind':card.facts([('Telegram group',str(before['chat_id'] or 'Not bound')+' → '+str(after['chat_id']))])
+    if action.kind in ('publish','continue'):card.text('All final squads are validated. '+('Publish and lock squads for the season.' if action.kind=='publish' else 'Prepare the next tournament from these finalized squads.'))
+    if action.kind in ('draftadmin_add','draftadmin_remove'):
+        settings=json.loads(action.payload_json)
+        card.text(('Appoint Draft Admin: ' if action.kind=='draftadmin_add' else 'Remove Draft Admin: ')+str(settings['telegram_id'])+' '+str(settings.get('name','')))
     imported=data.get('team_import')
     if imported:
         source=imported['source']
@@ -505,16 +519,16 @@ def history(session,season,page=1):
             if player.get('price_lakh') is not None:description+=' · '+_money(season,player['price_lakh'])
         else:
             description='\n'.join(plain(line) for line in inline_lines(detail.get('html') or event.headline))[:700]
-        rows.append([str(event.id),[R.bold(event.headline),'\n',description],str(event.by_tg_id or 'System')])
+        rows.append([str(event.id),[R.bold(event.headline),'\n',description],'Website admin' if event.by_tg_id and event.by_tg_id<0 else str(event.by_tg_id or 'System')])
     if rows:card.table(['Event','Action / player / price','Actor'],rows)
     else:card.text('No events on this page.')
     card.footer('Signings, skips, retained contracts and administrative corrections remain in the audit log after undo.')
     return card.pair()
 
 
-def readiness(session,season):
+def readiness(session,season,check=None):
     from services.franchise_draft_admin import readiness as inspect
-    data=inspect(session,season)
+    data=check if check is not None else inspect(session,season)
     card=Card('✅ Ready to start' if data['ready'] else '⚠️ Draft setup needs attention',season.name)
     card.facts([('Rounds',str(data['rounds'])),('Franchises',str(len(data['teams']))),('Available players',str(data['eligible']))])
     for error in data['errors'][:30]:card.text('• '+error)

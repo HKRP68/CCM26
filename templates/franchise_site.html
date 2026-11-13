@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/auction_miniapp.css', v='auction-settings-v1') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/auction_arena.css', v='auction-settings-v1') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/franchise_site.css', v='auction-settings-v1') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/franchise_draft.css', v='1') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/franchise_draft.css', v='draft-controls-v2') }}">
 </head>
 <body class="franchise-website">
   <a class="fs-skip" href="#fs-main">Skip to content</a>
@@ -49,7 +49,7 @@
   <div id="fs-toast" class="fs-toast" role="status" aria-live="polite" hidden></div>
   <script id="fs-config" type="application/json">{{ {'bot_username': bot_username, 'login_configured': login_configured, 'csrf_token': csrf_token}|tojson }}</script>
   <script src="{{ url_for('static', filename='js/auction_updates.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/franchise_draft.js', v='1') }}"></script>
+  <script src="{{ url_for('static', filename='js/franchise_draft.js', v='draft-controls-v2') }}"></script>
   <script src="{{ url_for('static', filename='js/franchise_site.js', v='auction-settings-v1') }}"></script>
   <script src="{{ url_for('static', filename='js/auction_miniapp.js', v='auction-settings-v1') }}"></script>
   <script src="{{ url_for('static', filename='js/auction_arena.js', v='auction-settings-v1') }}"></script>
