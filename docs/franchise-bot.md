@@ -10,7 +10,8 @@ the complete command reference together.
 `python franchise_bot.py` starts **Franchise Auction HQ**, a separate Telegram
 bot using your **existing database** and a new BotFather token. It
 registers auction, retention, draft, RTM and trade handlers, the guided control
-menus and the restart-safe auction scheduler. No website, login widget,
+menus and the restart-safe auction scheduler. Its public HTTP page shows service
+status and links to Telegram. No browser auction workspace, login widget,
 collecting-game account, `/debut` or coin economy is part of this bot.
 
 The application uses the existing auction rules engine so native commands,
@@ -77,8 +78,8 @@ entry point for this deployment.
 | `FRANCHISE_OWNER_IDS` | Explicit owner Telegram IDs; required |
 | `FRANCHISE_ADMIN_IDS` | Optional global administrator IDs |
 | `FRANCHISE_BOT_USERNAME` | Optional username; Telegram supplies it at startup |
-| `PORT` | Render web-service port for health checks only |
-| `FRANCHISE_HEALTH_PORT` | Optional local health port; leave unset for worker mode |
+| `PORT` | Render web-service port for the public status page and monitoring |
+| `FRANCHISE_HEALTH_PORT` | Optional explicit health port; blank falls back to `PORT`; leave both unset for worker mode |
 | `FRANCHISE_SOLO_LEAGUE` | Keep `false` for the focused group auction bot |
 
 The dedicated runtime maps only its configured token, database and identities
@@ -132,9 +133,32 @@ Deploy a **new service** from this repository with the **Python** runtime:
 The included [`render.franchise-bot.yaml`](../render.franchise-bot.yaml) can
 create a new Python Web Service through **New → Blueprint**. Choose that file
 as its Blueprint path. It creates no database. Redeploy the original service
-first as described above. Its HTTP server serves only a
-small readiness endpoint; there is no browser application. Readiness becomes successful only after Telegram
-initialization and the auction scheduler are ready.
+first as described above. Its HTTP server starts before database preparation and
+Telegram initialization. The status page stays responsive while these finish.
+Readiness becomes successful after Telegram initialization and auction-clock
+registration. Updating Telegram's slash-command menu runs in the background;
+timeouts and rate limits retry without holding polling or readiness up.
+
+### Status and UptimeRobot
+
+| URL path | Meaning |
+| --- | --- |
+| `/`, `/status`, `/franchise` | Public status page with the startup stage and Telegram link; HTTP 200 while the server is running |
+| `/healthz`, `/readyz`, `/health` | Bot readiness: HTTP 200 when ready, HTTP 503 while starting, stopping or missing its event-loop heartbeat for over 60 seconds |
+| `/livez` | HTTP server liveness; always HTTP 200 while this server is responding |
+
+Use an **HTTP(s)** UptimeRobot monitor with
+`https://<dedicated-bot-service>.onrender.com/healthz`. Both **HEAD** and **GET**
+work, including trailing slashes and query strings. Health responses are not
+cached and never make database or Telegram requests. `/livez` monitors HTTP only;
+`/healthz` also detects a stalled bot event loop. The landing page distinguishes
+HTTP availability from bot readiness, so startup is visible without a raw 404.
+Unknown routes and private API paths still return 404.
+
+The browser auction workspace is a **separate** `website.py` service deployed
+with `render.franchise.yaml`; its URL is not the dedicated bot service URL.
+It also provides `/healthz` for fast HTTP monitoring. See
+[website deployment](franchise-website.md).
 
 For live competitions, an **always-on Background Worker or paid Web Service**
 is recommended. A Render Free Web Service can spin down when it receives no
@@ -147,7 +171,9 @@ Run exactly **one process for the new token**. Do not launch multiple workers,
 Gunicorn processes or replicas of this long-polling bot. A Telegram polling
 conflict stops the extra bot process. Startup ensures the existing application's
 schema is current and starts only the auction scheduler, rather than the original
-games and jobs.
+games and jobs. Startup inventories existing tables in one query rather than
+checking every table individually. New tables and normal column/index migrations
+still run; existing squads, prices and purses are preserved.
 
 ## From retention to published squads
 

@@ -7,19 +7,21 @@ performs no database, network or scheduler work. Both bots run in separate proce
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import json
+import asyncio
 import logging
 import os
 import re
 import sys
-import threading
 from typing import Mapping
+
+from services.franchise_health import HealthServer
 
 logger = logging.getLogger("franchise_bot")
 _ADMIN_KEYS = ("BOT_ADMIN_IDS", "ADMIN_IDS", "ADMIN_USER_IDS", "SUDO_USERS",
                "OWNER_IDS", "ADMIN_CHAT_ID", "BOT_OWNER_IDS")
 _LINK_KEYS = ("WEBAPP_URL", "MINIAPP_NAME", "FRANCHISE_WEBSITE_URL")
+HEARTBEAT_JOB = 'franchise_heartbeat'
+MENU_JOB = 'franchise_command_menu'
 
 
 @dataclass(frozen=True)
@@ -62,7 +64,8 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     username = values.get("FRANCHISE_BOT_USERNAME", "").strip().lstrip("@")
     if username and not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
         raise ValueError("FRANCHISE_BOT_USERNAME must be a Telegram bot username.")
-    raw_port = values.get("FRANCHISE_HEALTH_PORT", values.get("PORT", "")).strip()
+    raw_port = (values.get("FRANCHISE_HEALTH_PORT", "").strip()
+                or values.get("PORT", "").strip())
     try:
         health_port = int(raw_port) if raw_port else None
     except ValueError:
@@ -116,59 +119,51 @@ def configure_logging(settings: Settings) -> None:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
-class HealthServer:
-    """A readiness endpoint for Render; it exposes no website or bot records."""
-    def __init__(self, port: int, *, host="0.0.0.0"):
-        self.ready = False
-        self.server = None
-        self.thread = None
-        self.port, self.host = port, host
-
-    def start(self):
-        health = self
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                if self.path not in ("/healthz", "/healthz/"):
-                    self.send_error(404)
-                    return
-                payload = json.dumps({"service":"franchise-auction-bot", "status":"ready" if health.ready else "starting"}).encode()
-                self.send_response(200 if health.ready else 503)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-
-            def log_message(self, _format, *_args):
-                return
-        self.server = ThreadingHTTPServer((self.host, self.port), Handler)
-        self.thread = threading.Thread(target=self.server.serve_forever, name="franchise-health", daemon=True)
-        self.thread.start()
-        return self
-
-    def close(self):
-        self.ready = False
-        if self.server is not None:
-            self.server.shutdown()
-            self.server.server_close()
-            self.server = None
-        if self.thread is not None:
-            self.thread.join(timeout=2)
-            self.thread = None
-
-
 async def _error_handler(update, context):
     from telegram.error import Conflict
     if isinstance(context.error, Conflict):
         logger.error("Another process is polling this dedicated bot token. Run only one instance.")
+        health = context.application.bot_data.get('franchise_health')
+        if health is not None:
+            health.ready = False
+            health.stage = 'stopping'
         context.application.stop_running()
     else:
         # Network exceptions can contain request URLs with a bot token.
         logger.error("Franchise update failed (%s).", type(context.error).__name__)
 
 
-async def _post_init(application):
+async def _heartbeat_job(context):
+    health = context.application.bot_data.get('franchise_health')
+    if health is not None:
+        health.heartbeat()
+
+
+async def _sync_command_menu(context):
+    """Optional BotFather menu work must never hold polling or readiness up."""
     from telegram import BotCommand
+    from telegram.error import RetryAfter
+    from handlers.franchise_bot import BOT_COMMANDS
+    commands = [item if isinstance(item, BotCommand) else BotCommand(*item) for item in BOT_COMMANDS]
+    attempt = int(context.job.data or 0)
+    try:
+        await asyncio.wait_for(context.bot.set_my_commands(commands[:100]), timeout=8)
+        context.application.bot_data['franchise_menu_ready'] = True
+        return
+    except Exception as exc:
+        # Telegram exceptions can contain request URLs. Log only their type.
+        logger.warning('Bot command menu update delayed (%s); polling continues.', type(exc).__name__)
+        if isinstance(exc, RetryAfter):
+            delay = exc.retry_after
+            delay = delay.total_seconds() if hasattr(delay, 'total_seconds') else float(delay)
+            delay = max(5, delay)
+        else:
+            delay = min(300, 15 * 2**attempt)
+    if attempt < 5:
+        context.job_queue.run_once(_sync_command_menu, delay, data=attempt+1, name=MENU_JOB)
+
+
+async def _post_init(application):
     from services.auction_scheduler import SWEEP_JOB_NAME, start_auction_scheduler
     if application.job_queue is None:
         raise RuntimeError("The dedicated auction bot requires the JobQueue dependency.")
@@ -180,11 +175,15 @@ async def _post_init(application):
     username = getattr(application.bot, "username", None)
     if username:
         os.environ["BOT_USERNAME"] = username
-    from handlers.franchise_bot import BOT_COMMANDS
-    commands = [item if isinstance(item, BotCommand) else BotCommand(*item) for item in BOT_COMMANDS]
-    await application.bot.set_my_commands(commands[:100])
+    if not application.bot_data.get('franchise_background_jobs_started'):
+        application.job_queue.run_repeating(_heartbeat_job, interval=5, first=1, name=HEARTBEAT_JOB,
+            job_kwargs={'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 15})
+        application.job_queue.run_once(_sync_command_menu, 0, data=0, name=MENU_JOB)
+        application.bot_data['franchise_background_jobs_started'] = True
     health = application.bot_data.get("franchise_health")
     if health is not None:
+        health.bot_username = username or health.bot_username
+        health.heartbeat()
         health.ready = True
 
 
@@ -192,6 +191,7 @@ async def _post_shutdown(application):
     health = application.bot_data.get("franchise_health")
     if health is not None:
         health.ready = False
+        health.stage = 'stopping'
 
 
 def build_application(settings: Settings | None = None, *, register_extra=None):
@@ -231,9 +231,12 @@ def main() -> int:
     health = None
     try:
         if settings.health_port:
-            health = HealthServer(settings.health_port).start()
+            health = HealthServer(settings.health_port, bot_username=settings.username).start()
+            health.stage = "database"
         from database import init_db
         init_db()
+        if health:
+            health.stage = "telegram"
         application = build_application(settings)
         application.bot_data["franchise_health"] = health
         from telegram import Update

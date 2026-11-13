@@ -63,8 +63,15 @@ If creating the service manually, use these settings:
 | Root directory | Repository root; leave blank |
 | Build command | `pip install -r requirements.txt` |
 | Start command | `python website.py init-db && exec gunicorn --bind 0.0.0.0:$PORT --worker-class gthread --workers 2 --threads 32 --timeout 60 website:app` |
-| Health check path | `/` |
+| Health check path | `/healthz` |
 | Python version environment | `PYTHON_VERSION=3.11.9` |
+
+Use an HTTP(s) UptimeRobot monitor on `https://<website-service>/healthz`.
+The endpoint supports HEAD and GET and performs no database, login or Telegram
+requests. It checks the website's HTTP availability. For the separate Telegram
+bot, monitor its own `/healthz`, which also checks bot readiness. The dedicated
+bot's root URL shows a service-status page; the browser workspace is served by
+this `website.py` deployment at `/` or `/franchise/`.
 
 The manually selected **Python** runtime uses this start command even though
 the repository also contains a Dockerfile. Do not change the existing bot

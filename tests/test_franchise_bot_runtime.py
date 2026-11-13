@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 from types import ModuleType, SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
@@ -120,10 +120,11 @@ def test_health_is_read_only_and_tracks_readiness():
         server.ready = True
         with urlopen(address+'/healthz',timeout=3) as response:
             assert response.status == 200
-            assert json.load(response) == {'service':'franchise-auction-bot','status':'ready'}
-        with pytest.raises(HTTPError) as error:
-            urlopen(address+'/franchise',timeout=3)
-        assert error.value.code == 404
+            data=json.load(response)
+            assert data['service']=='franchise-auction-bot' and data['status']=='ready'
+            assert data['ready'] is True
+        with urlopen(address+'/franchise',timeout=3) as response:
+            assert response.status==200 and b'Franchise HQ' in response.read()
     finally:
         server.close()
     assert server.server is None and server.thread is None
@@ -163,8 +164,11 @@ def test_post_init_registers_one_clock_and_the_bot_menu(monkeypatch):
     menu.BOT_COMMANDS=[('start','Open Franchise Auction'),('auction','Auction workspace')]
     monkeypatch.setitem(sys.modules,'handlers.franchise_bot',menu)
     app=SimpleNamespace(bot_data={},bot=SimpleNamespace(username='NewFranchiseBot',set_my_commands=AsyncMock()),
-                        job_queue=SimpleNamespace(get_jobs_by_name=lambda name:jobs))
-    health=SimpleNamespace(ready=False)
+                        job_queue=SimpleNamespace(get_jobs_by_name=lambda name:jobs,
+                                                  run_once=Mock(),run_repeating=Mock()))
+    # Job registration is synchronous; records let the test run the deferred
+    # menu callback after startup instead of pretending a network call ran.
+    health=runtime.HealthServer(0,host='127.0.0.1')
     app.bot_data['franchise_health']=health
     with patch.dict(os.environ,{},clear=False):
         asyncio.run(runtime._post_init(app))
@@ -172,6 +176,13 @@ def test_post_init_registers_one_clock_and_the_bot_menu(monkeypatch):
         assert os.environ['BOT_USERNAME']=='NewFranchiseBot'
     assert len(starts)==1
     assert health.ready
+    assert health.snapshot()['ready']
+    app.bot.set_my_commands.assert_not_awaited()
+    app.job_queue.run_once.assert_called_once()
+    app.job_queue.run_repeating.assert_called_once()
+    menu_job=app.job_queue.run_once.call_args.args[0]
+    ctx=SimpleNamespace(bot=app.bot,application=app,job=SimpleNamespace(data=0),job_queue=app.job_queue)
+    asyncio.run(menu_job(ctx))
     assert [command.command for command in app.bot.set_my_commands.call_args.args[0]]==['start','auction']
     asyncio.run(runtime._post_shutdown(app))
     assert not health.ready
@@ -185,7 +196,7 @@ def test_clock_unavailable_never_reports_ready(monkeypatch):
 
 def test_polling_conflict_stops_the_extra_process():
     from telegram.error import Conflict
-    app=SimpleNamespace(stop_running=lambda:None)
+    app=SimpleNamespace(bot_data={},stop_running=lambda:None)
     called=[]
     app.stop_running=lambda:called.append(True)
     context=SimpleNamespace(error=Conflict('another poller'),application=app)

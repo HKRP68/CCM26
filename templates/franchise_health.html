@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Franchise HQ · Service status</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#0b1214;color:#e6eff0;font-family:system-ui,-apple-system,sans-serif;line-height:1.6;min-height:100svh;display:grid;place-items:center;padding:24px}
+    main{width:100%;max-width:660px}header{display:flex;align-items:center;gap:12px;margin-bottom:36px}.mark{width:42px;height:42px;display:grid;place-items:center;border-radius:12px;background:#163c36;color:#9be6c7;font-weight:800}
+    .brand{font-weight:750;letter-spacing:-.02em}.eyebrow{font-size:12px;letter-spacing:.13em;text-transform:uppercase;color:#86a09f;margin:0 0 12px}
+    article{border:1px solid #29413f;border-radius:22px;padding:clamp(24px,6vw,44px);background:#101e20;box-shadow:0 18px 70px #0003}
+    .badge{display:inline-flex;align-items:center;gap:8px;border:1px solid #705e36;background:#443a22;color:#f0d29b;border-radius:30px;padding:5px 12px;font-size:12px;font-weight:650}
+    .badge::before{content:"";width:7px;height:7px;background:currentColor;border-radius:50%}.badge[data-state="ready"]{border-color:#30654f;background:#173d30;color:#a5f1c8}
+    h1{font-size:clamp(29px,5vw,42px);line-height:1.17;letter-spacing:-.04em;margin:24px 0 14px}p{color:#aabebd;margin:12px 0}code{color:#d9ece5;font-size:.95em}
+    .primary{display:flex;justify-content:space-between;align-items:center;background:#bcf2d8;color:#112a22;border-radius:12px;padding:14px 18px;margin:28px 0;text-decoration:none;font-weight:750}.primary:hover{background:#d8ffe9}.primary:focus-visible,a:focus-visible{outline:3px solid #f0d29b;outline-offset:4px}
+    .checks{display:grid;grid-template-columns:1fr 1fr;gap:12px;border-top:1px solid #29413f;padding-top:22px;margin-top:28px}.checks small{display:block;color:#86a09f;font-size:12px}.checks strong{font-size:14px;font-weight:600}
+    footer{font-size:12px;color:#829b98;margin:22px 4px}footer a{color:#b7d3c8}.hint{margin-top:24px;font-size:14px}
+    @media(max-width:420px){.checks{grid-template-columns:1fr}header{margin-bottom:24px}}
+  </style>
+  <script src="/franchise-health.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><span class="mark" aria-hidden="true">F</span><span class="brand">Franchise HQ</span></header>
+    <p class="eyebrow">Auction &amp; Draft · Service status</p>
+    <article aria-labelledby="status-title">
+      <span class="badge" id="status-badge" data-state="${state}">HTTP server online</span>
+      <div aria-live="polite" aria-atomic="true">
+        <h1 id="status-title">${title}</h1>
+        <p id="status-description">${description}</p>
+      </div>
+      ${action}
+      <div class="checks">
+        <div><small>Server uptime</small><strong id="uptime">${uptime} seconds</strong></div>
+        <div><small>Bot readiness</small><strong id="readiness">${title}</strong></div>
+      </div>
+    </article>
+    <footer>This page monitors the Telegram bot. The browser auction workspace uses its own website service.<br>
+      <a href="/healthz">Bot readiness</a> · <a href="/livez">HTTP liveness</a> · Updates every 5 seconds
+    </footer>
+  </main>
+</body>
+</html>

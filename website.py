@@ -98,7 +98,7 @@ def create_app(test_config=None):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
-        if request.path.startswith("/api/") or request.path in ("/", "/franchise"):
+        if request.path.startswith("/api/") or request.path in ("/", "/franchise", "/franchise/", "/healthz", "/healthz/", "/livez"):
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -108,9 +108,18 @@ def create_app(test_config=None):
 
     @app.route("/")
     @app.route("/franchise")
+    @app.route("/franchise/")
     def franchise():
         return render_template("franchise_site.html", bot_username=app.config["BOT_USERNAME"],
                                login_configured=bool(configured()), csrf_token=csrf_token())
+
+    @app.get("/healthz")
+    @app.get("/healthz/")
+    @app.get("/livez")
+    def health():
+        # Uptime checks must stay fast even while authentication, SQL or card
+        # rendering is unavailable. Flask also handles HEAD without a body.
+        return dict(service="franchise-website", status="ok")
 
     @app.get("/api/franchise/auth/session")
     def auth_session():

@@ -184,6 +184,29 @@ class Base(DeclarativeBase):
     pass
 
 
+def _create_missing_tables():
+    """Inspect the table list once instead of probing every mapped table.
+
+    create_all(checkfirst=True) makes one existence query per table on every
+    restart, even on a current shared database. Only new tables need those
+    checks. Migrations still run afterwards to update existing tables.
+    """
+    from sqlalchemy import inspect
+    import logging
+    try:
+        existing = set(inspect(engine).get_table_names())
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            'Table inventory unavailable (%s); using normal schema checks', type(exc).__name__)
+        Base.metadata.create_all(bind=engine)
+        return
+    missing = [table for table in Base.metadata.tables.values()
+               if table.schema is not None or table.name not in existing]
+    if missing:
+        # Keep checkfirst enabled for races with another service's migrations.
+        Base.metadata.create_all(bind=engine, tables=missing)
+
+
 def init_db():
     from models import (  # noqa: F401
         User, UserWarning, Player, UserRoster, UserStats, Trade, ActivityLog,
@@ -217,7 +240,7 @@ def init_db():
     log = logging.getLogger(__name__)
 
     t0 = _time.perf_counter()
-    Base.metadata.create_all(bind=engine)
+    _create_missing_tables()
     t1 = _time.perf_counter()
     _migrate_add_columns()
     t2 = _time.perf_counter()
