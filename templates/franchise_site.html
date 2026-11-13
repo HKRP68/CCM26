@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/auction_miniapp.css', v='auction-settings-v1') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/auction_arena.css', v='auction-settings-v1') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/franchise_site.css', v='auction-settings-v1') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/franchise_draft.css', v='1') }}">
 </head>
 <body class="franchise-website">
   <a class="fs-skip" href="#fs-main">Skip to content</a>
@@ -19,6 +20,7 @@
       <nav id="fs-navigation" class="fs-navigation" aria-label="Main navigation">
         <button type="button" class="selected" data-fs-view="home" aria-current="page"><span data-fs-icon="overview"></span>Overview</button>
         <button type="button" data-fs-view="arena"><span data-fs-icon="arena"></span>Live auction<span class="fs-nav-dot" aria-hidden="true"></span></button>
+        <button type="button" data-fs-view="franchisedraft"><span data-fs-icon="picks"></span>Franchise Draft</button>
         <button type="button" data-fs-view="squads"><span data-fs-icon="squads"></span>Franchises & squads</button>
         <button type="button" data-fs-view="pool" data-fs-access="owner"><span data-fs-icon="pool"></span>Player pool</button>
         <button type="button" data-fs-view="preseason" data-fs-access="manager"><span data-fs-icon="picks"></span>Retention & picks</button>
@@ -39,6 +41,7 @@
           <div class="fs-features"><article><span class="fs-feature-icon" data-fs-icon="arena"></span><span class="fs-card-number">01</span><h3>Own the auction room</h3><p>Follow live bids, watch the clock, and know what your franchise can afford before you bid.</p><span class="fs-feature-tag">LIVE AUCTION & RTM</span></article><article><span class="fs-feature-icon" data-fs-icon="picks"></span><span class="fs-card-number">02</span><h3>Build around your core</h3><p>Keep the right players and prepare retention, draft and expansion picks from the same season.</p><span class="fs-feature-tag">RETENTION & PICKS</span></article><article><span class="fs-feature-icon" data-fs-icon="squads"></span><span class="fs-card-number">03</span><h3>See the whole squad</h3><p>Keep track of signings, available purse, squad requirements and the moves across your league.</p><span class="fs-feature-tag">SQUADS, PURSES & TRADES</span></article></div>
         </section>
         <section id="fs-dashboard" hidden><div class="fs-dashboard-toolbar"><label for="fs-season">Your auction<select id="fs-season" aria-label="Select auction"></select></label><div><span id="fs-updated" class="fs-updated"></span><button type="button" class="fs-button fs-button-quiet" id="fs-refresh"><span data-fs-icon="refresh"></span>Refresh</button></div></div><div id="fs-dashboard-content"></div></section>
+        <section id="fs-draft" hidden></section>
         <footer class="fs-footer"><span>FRANCHISE HQ<span class="fs-brand-dot">.</span></span><p>Every squad starts with a decision.</p><span>PLAY THE LONG GAME.</span></footer>
       </main>
     </div>
@@ -46,6 +49,7 @@
   <div id="fs-toast" class="fs-toast" role="status" aria-live="polite" hidden></div>
   <script id="fs-config" type="application/json">{{ {'bot_username': bot_username, 'login_configured': login_configured, 'csrf_token': csrf_token}|tojson }}</script>
   <script src="{{ url_for('static', filename='js/auction_updates.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/franchise_draft.js', v='1') }}"></script>
   <script src="{{ url_for('static', filename='js/franchise_site.js', v='auction-settings-v1') }}"></script>
   <script src="{{ url_for('static', filename='js/auction_miniapp.js', v='auction-settings-v1') }}"></script>
   <script src="{{ url_for('static', filename='js/auction_arena.js', v='auction-settings-v1') }}"></script>

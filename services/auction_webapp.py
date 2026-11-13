@@ -120,9 +120,10 @@ def any_admin_for(db, tg_id):
     return A.is_auction_admin(db, tg_id) or is_draft_admin(db, tg_id)
 
 
-def season_row(season):
+def season_row(season, mode=None):
     return dict(id=season.id, name=season.name, status=season.status,
-                chat_id=str(season.chat_id) if season.chat_id else None)
+                chat_id=str(season.chat_id) if season.chat_id else None,
+                **({'mode': mode} if mode else {}))
 
 
 def available_seasons(db, tg_id, *, check_member=None, origin_chat_id=None):
@@ -136,16 +137,23 @@ def available_seasons(db, tg_id, *, check_member=None, origin_chat_id=None):
              and check_member(s.chat_id, tg_id))]
 
 
-def resolve(db, tg_id, season_id=None, *, check_member=None, origin_chat_id=None):
+def resolve(db, tg_id, season_id=None, *, check_member=None, origin_chat_id=None, acquisition_mode=None):
     rows = available_seasons(db, tg_id, check_member=check_member,
                              origin_chat_id=origin_chat_id)
+    if acquisition_mode not in (None, 'auction', 'draft'):
+        raise A.AuctionError('Choose Franchise Auction or Franchise Draft.')
+    from models import FranchiseDraft
+    draft_ids = {sid for sid, in db.query(FranchiseDraft.season_id).all()} if acquisition_mode else set()
+    def matches(row):
+        return not acquisition_mode or ((row.id in draft_ids) == (acquisition_mode == 'draft'))
+    rows = [row for row in rows if matches(row)]
     if season_id is not None:
         sid = integer(season_id, "Auction id", 1)
         season = next((s for s in rows if s.id == sid), None)
         if season is None:
             # A direct link can name a group without relying on activity history.
             candidate = db.get(AuctionSeason, sid)
-            if not (candidate and candidate.chat_id and check_member
+            if not (candidate and matches(candidate) and candidate.chat_id and check_member
                     and check_member(candidate.chat_id, tg_id)):
                 raise AccessError("This auction is available to its owners, admins and group members.")
             season = candidate
@@ -255,7 +263,11 @@ def base_payload(db, season, tg_id, rows):
     roles.extend(role for role in ('team_owner', 'team_co_owner', 'team_manager')
                  if any(role in relationship for relationship in relationships.values()))
     roles = roles or ['spectator']
-    result = dict(ok=True, auctions=[season_row(s) for s in rows],
+    from models import FranchiseDraft
+    draft_ids = {sid for sid, in db.query(FranchiseDraft.season_id).filter(
+        FranchiseDraft.season_id.in_([s.id for s in rows] + ([season.id] if season else []))).all()}
+    mode = lambda row: 'draft' if row.id in draft_ids else 'auction'
+    result = dict(ok=True, auctions=[season_row(s, mode(s)) for s in rows],
                   admin=manager, bot_admin=bot_admin, bot_owner='bot_owner' in roles,
                   auction_admin=A.is_auction_admin(db,tg_id), draft_admin=is_draft_admin(db,tg_id),
                   role='manager' if manager else 'team' if owned else 'spectator',
@@ -265,7 +277,7 @@ def base_payload(db, season, tg_id, rows):
                   server_time=stamp(datetime.utcnow()), season=None)
     if season is None:
         return result
-    result.update(season={**season_row(season), "currency": season.currency_label,
+    result.update(season={**season_row(season, mode(season)), "currency": season.currency_label,
                           "max_squad": season.max_squad_size,
                           "min_squad": season.min_squad_size,
                           "telegram_url": telegram_link(season),
@@ -424,6 +436,9 @@ def rules_payload(season):
 
 def payload(db, season, tg_id, rows, data):
     result = base_payload(db, season, tg_id, rows)
+    if data.get('view') == 'franchisedraft':
+        from services.franchise_draft_web import payload as draft_payload
+        return draft_payload(db, season, result, data)
     if season is None:
         return result
     view = data.get('view', 'live')

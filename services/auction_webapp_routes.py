@@ -164,7 +164,8 @@ def register(app, authenticate, csrf_exempt, member_rpc):
             launch = auction_launch(request.headers.get('X-Tg-Start-Param', ''))
             origin = launch['chat_id'] if launch else None
             origin = origin or (getattr(user, 'last_miniapp_chat_id', None) if user else None)
-            requested = data.get('season_id') or (launch['season_id'] if launch else None)
+            mode = data.get('mode') if kind == 'read' else None
+            requested = data.get('season_id') or (launch['season_id'] if launch and mode is None else None)
             # Creation never needs access to a selected auction.
             if kind == 'action' and data.get('action') == 'admin_create':
                 if not W.admin_for(db, tg_id):
@@ -172,7 +173,7 @@ def register(app, authenticate, csrf_exempt, member_rpc):
                 result = W.perform(db, None, tg_id, data)
                 db.commit()
                 return dict(ok=True, **result)
-            season, rows = W.resolve(db, tg_id, requested, check_member=member, origin_chat_id=origin)
+            season, rows = W.resolve(db, tg_id, requested, check_member=member, origin_chat_id=origin, acquisition_mode=mode)
             if kind == 'read':
                 result = W.payload(db, season, tg_id, rows, data)
                 # trade_squad materializes last season's unsigned retention

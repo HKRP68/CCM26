@@ -36,7 +36,7 @@ const FranchiseSite = (() => {
   const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.overview}</svg>`;
   const money = value => `${data?.season?.currency || '₹'}${(Number(value || 0) / 100).toLocaleString('en-IN', {maximumFractionDigits:2})} Cr`;
   const initials = value => String(value || 'F').trim().split(/\s+/).map(v => v[0]).slice(0,2).join('').toUpperCase();
-  const viewNames = {home:'Overview',arena:'Live auction',squads:'Franchises & squads',pool:'Player pool',preseason:'Retention & picks',trades:'Trade centre',rules:'Rulebook',admin:'Auction settings',teams:'Players & purses',logs:'Auction activity'};
+  const viewNames = {home:'Overview',arena:'Live auction',franchisedraft:'Franchise Draft',squads:'Franchises & squads',pool:'Player pool',preseason:'Retention & picks',trades:'Trade centre',rules:'Rulebook',admin:'Auction settings',teams:'Players & purses',logs:'Auction activity'};
   const button = (label, view, style = 'fs-button') => `<button type="button" class="${style}" data-fs-view="${view}">${escapeHtml(label)}${icon('arrow')}</button>`;
   const roleNames = {bot_owner:'Bot Owner',bot_admin:'Bot Admin',auction_manager:'Auction Manager',team_owner:'Team Owner',team_co_owner:'Team Co-owner',team_manager:'Team Manager',spectator:'Spectator'};
   const roleHelp = {bot_owner:'Manages all auction settings and assigns Auction Managers.',bot_admin:'Manages all auction settings and appoints Auction Managers.',auction_manager:'Manages all auction settings, squads, purses, retention, picks and trades.',team_owner:'Bids and answers RTM for assigned franchises.',team_co_owner:'Bids and answers RTM for assigned franchises.',team_manager:'Bids and answers RTM for assigned franchises without changing auction settings.',spectator:'Watches live bidding, squads and auction results.'};
@@ -88,6 +88,7 @@ const FranchiseSite = (() => {
     if(roles) {roles.hidden = !user || !data;roles.innerHTML = roleBadges();}
   }
   function showLanding() {
+    hideDraft();
     clearTimeout(timer);stopDashboardUpdates();data = null;updateAccess();
     $('fs-landing').hidden = false;$('fs-dashboard').hidden = true;
     $('fs-title').innerHTML = 'Build a team.<br>Own the season.';
@@ -167,6 +168,7 @@ const FranchiseSite = (() => {
     } finally {$('fs-signout').disabled = false;}
   }
   async function home() {
+    hideDraft();
     currentScreen = 'home';clearTimeout(timer);
     document.querySelectorAll('.fs-navigation button').forEach(el => {el.classList.toggle('selected',el.dataset.fsView === 'home');if(el.dataset.fsView === 'home')el.setAttribute('aria-current','page');else el.removeAttribute('aria-current');});
     if(!user) {showLanding();return;}
@@ -183,7 +185,7 @@ const FranchiseSite = (() => {
     const sent=Date.now();
     try {
     if(!background) {$('fs-refresh').disabled = true;setStatus('Loading your auctions…');}
-    const result = await request('/api/webapp/auction',{season_id:selectedSeason,view:'arena'},12000);
+    const result = await request('/api/webapp/auction',{season_id:selectedSeason,view:'arena',mode:'auction'},12000);
     if(id !== requestId || !user || currentScreen !== 'home') return;
     $('fs-refresh').disabled = false;
     if(!result.ok) {
@@ -236,6 +238,14 @@ const FranchiseSite = (() => {
     if(view === 'home') {await home();return;}
     if(!Object.hasOwn(viewNames,view)) return;
     if(!user) {toast('Sign in with Telegram to open your franchise workspace.');$('fs-login-box').scrollIntoView({behavior:'smooth',block:'center'});return;}
+    if(view==='franchisedraft') {
+      clearTimeout(timer);stopDashboardUpdates();requestId++;currentScreen='franchisedraft';
+      $('fs-landing').hidden=true;$('fs-dashboard').hidden=true;$('fs-draft').hidden=false;
+      $('fs-title').textContent='Franchise Draft';setStatus('');
+      document.querySelectorAll('.fs-navigation button').forEach(el=>{const selected=el.dataset.fsView===view;el.classList.toggle('selected',selected);if(selected)el.setAttribute('aria-current','page');else el.removeAttribute('aria-current');});
+      await FranchiseDraftApp.open('fs-draft');return;
+    }
+    hideDraft();
     if(!data) {toast('Wait for your auctions to load, then try again.');return;}
     if(['preseason','trades','admin','teams'].includes(view) && !data.admin) {toast('Your Auction Manager can use these season tools.');return;}
     if(['pool','rules'].includes(view) && !data.admin && !data.my_team_ids?.length) {toast('This section is available to franchise owners and Auction Managers.');return;}
@@ -243,6 +253,10 @@ const FranchiseSite = (() => {
     if(typeof AuctionArena === 'undefined' || typeof AuctionArena.openWorkspace !== 'function') {currentScreen = 'home';toast('The auction workspace could not load. Refresh the page and try again.');return;}
     try {await AuctionArena.openWorkspace(view,selectedSeason);}
     catch (_) {currentScreen='home';toast('The auction could not be opened. Refresh and try again.');timer=setTimeout(() => refreshDashboard(true),2000);}
+  }
+  function hideDraft() {
+    if(typeof FranchiseDraftApp!=='undefined')FranchiseDraftApp.stop();
+    if($('fs-draft'))$('fs-draft').hidden=true;
   }
   function boot() {
     renderIcons();updateAccess();

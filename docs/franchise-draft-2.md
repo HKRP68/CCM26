@@ -7,6 +7,15 @@ used by auctions and drafts. Auction workflows retain their existing behavior.
 
 ## Prepare and launch
 
+**Franchise Draft** is available beside **Franchise Auction** in the Tournament
+Panel, the Mini App home tiles, the franchise website navigation and the bot's
+home menu. The administrator's `/franchise-drafts` section creates and lists
+draft seasons; setup reuses `/auctions/<season_id>` with draft-specific controls.
+Auction lists and draft lists show their own acquisition mode. The browser draft
+workspace shows the live board, available players, order, squads, purses, history
+and rules, with links to the existing Telegram draft controls for signings and
+administration. Selecting a section never converts an existing season's mode.
+
 1. From a completed tournament choose **Existing leagues → Draft**; Auction
    remains available as the other acquisition mode. Tournament management shows
    the selected mode. Existing squads and budgets do not copy automatically.

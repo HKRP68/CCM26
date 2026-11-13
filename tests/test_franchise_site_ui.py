@@ -28,7 +28,7 @@ async function boot(options={}) {
       addEventListener(name,fn){handlers[id+':'+name]=fn;},
       replaceChildren(...children){this.children=children;},scrollIntoView(){}};
   }
-  const ids=['fs-config','fs-main','fs-signout','fs-navigation','fs-account','fs-current-roles','fs-title','fs-landing','fs-dashboard','fs-login-box','fs-login-error','fs-login-setup','fs-telegram-login','fs-page-status','fs-season','fs-updated','fs-refresh','fs-dashboard-content','fs-toast'];
+  const ids=['fs-config','fs-main','fs-signout','fs-navigation','fs-account','fs-current-roles','fs-title','fs-landing','fs-dashboard','fs-draft','fs-login-box','fs-login-error','fs-login-setup','fs-telegram-login','fs-page-status','fs-season','fs-updated','fs-refresh','fs-dashboard-content','fs-toast'];
   const els=Object.fromEntries(ids.map(id=>[id,element(id)]));
   els['fs-config'].textContent=JSON.stringify({bot_username:'example_bot',login_configured:true,csrf_token:'initial-token'});
   const managerNav=element('manager-nav');managerNav.dataset.fsAccess='manager';
@@ -42,6 +42,7 @@ async function boot(options={}) {
     URLSearchParams,AbortController,console,
     setTimeout(){return 1;},clearTimeout(){},
     AuctionApp:{stop(){stops++;}},
+    FranchiseDraftApp:{async open(target){opened.push({draft:true,target});},stop(){}},
     AuctionArena:{async openWorkspace(view,id){opened.push({view,id});}},
     fetch:async(path,init={})=>{
       calls.push({path,init});
@@ -151,6 +152,14 @@ async function boot(options={}) {
   assert.equal(JSON.parse(recovered.init.body).season_id,null);
   assert.equal(recovered.init.headers['X-Tg-Start-Param'],undefined);
   assert.match(linked.els['fs-dashboard-content'].innerHTML,/Real season/);
+  const draftEntry=await boot({user:{id:42,first_name:'Owner'}});
+  await draftEntry.handlers.click({target:{closest:selector=>selector==='[data-fs-view]'?{dataset:{fsView:'franchisedraft'}}:null}});
+  assert.deepEqual(draftEntry.opened.at(-1),{draft:true,target:'fs-draft'});
+  assert.equal(draftEntry.els['fs-draft'].hidden,false);
+  assert.equal(draftEntry.els['fs-dashboard'].hidden,true);
+  await draftEntry.site.home();
+  assert.equal(draftEntry.els['fs-draft'].hidden,true);
+  assert.equal(draftEntry.els['fs-dashboard'].hidden,false);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """
         result = subprocess.run(['node', '-e', script, str(source)], text=True,

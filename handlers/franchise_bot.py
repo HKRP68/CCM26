@@ -19,7 +19,7 @@ from services.franchise_bot_settings import SETTINGS, GROUP_LABELS, parse_value,
 from handlers.franchise_commands import draft_command_menu
 
 BOT_COMMANDS = [BotCommand(*row) for row in [
-    ('auction','Open your auction workspace'),('start','Open Franchise Auction HQ'),
+    ('auction','Open Franchise Auction & Draft HQ'),('start','Open Franchise Auction & Draft HQ'),
     ('newauction','Create a new auction'),('bind','Bind an auction to this group'),
     ('settings','Manage auction rules'),('importplayers','Import player CSV into this group'),
     ('sampleplayers','Download the player CSV example'),
@@ -106,7 +106,14 @@ def _resolve(db, actor, sid, chat_id):
 
 
 def read_workspace(db, actor, sid, chat_id, view='home', argument=''):
+    if chat_id>0 and view in ('seasons','auctionseasons','draftseasons'):
+        sid=None
     season,rows=_resolve(db,actor,sid,chat_id)
+    if view in ('auctionseasons','draftseasons'):
+        result=W.base_payload(db,None,actor,rows)
+        mode='draft' if view=='draftseasons' else 'auction'
+        result['auctions']=[row for row in result['auctions'] if row['mode']==mode]
+        return result
     if view=='leagues':
         if not W.any_admin_for(db,actor):raise W.AccessError('Only Auction Managers and Draft Admins can browse previous leagues.')
         from models import ChallengeLeague
@@ -311,10 +318,12 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
     manager=bool(data.get('admin'));team_ids=data.get('my_team_ids') or []
     currency=season.get('currency') or '₹'
     draft=data.get('franchise_draft')
-    header=[f'<b>🏏 Franchise {"Draft" if draft else "Auction"} HQ</b>',_e(season.get('name') or 'Your auction workspace'),
+    workspace='Draft' if draft or view=='draftseasons' else 'Auction' if season or view=='auctionseasons' else 'Auction &amp; Draft'
+    header=[f'<b>🏏 Franchise {workspace} HQ</b>',_e(season.get('name') or 'Your franchise workspace'),
             '<b>Roles:</b> '+_e(' · '.join(data.get('role_labels') or ['Spectator']),400)]
     buttons=[]
     if view in ('home','roles'):
+        buttons += _rows(actor,sid,[[('🔨 Franchise Auction','v:auctionseasons'),('🏏 Franchise Draft','v:draftseasons')]])
         if season:
             counts=data.get('counts') or {}
             header += [f"Status: <b>{_e(season['status'])}</b>",
@@ -341,13 +350,18 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
         if create:buttons+=_rows(actor,sid,[create,[('📚 Existing leagues','v:leagues:1')]])
         if data.get('bot_admin'):
             buttons+=_rows(actor,sid,[[('Appoint Draft Admin','f:adddraftmanager'),('Remove Draft Admin','f:deldraftmanager')]])
-        buttons+=_rows(actor,sid,[[('🔀 Choose auction','v:seasons'),('❓ Help','v:help')]])
+        buttons+=_rows(actor,sid,[[('🔀 Choose season','v:seasons'),('❓ Help','v:help')]])
         from handlers.franchise_commands import command_button
         buttons.append([command_button(actor)])
-    elif view=='seasons':
-        header+=['','<b>Choose an auction</b>']
-        for row in (data.get('auctions') or [])[:30]:buttons+=_rows(actor,row['id'],[[(f"{row['name'][:30]} · {row['status']}",'v:home')]])
-        if not data.get('auctions'):header+=['Your assigned auctions will appear here.']
+    elif view in ('seasons','auctionseasons','draftseasons'):
+        mode='draft' if view=='draftseasons' else 'auction' if view=='auctionseasons' else None
+        header+=['',f'<b>Choose a franchise {mode or "season"}</b>']
+        for row in (data.get('auctions') or [])[:30]:
+            label='🏏 Draft' if row.get('mode')=='draft' else '🔨 Auction'
+            buttons+=_rows(actor,row['id'],[[(f"{label} · {row['name'][:28]} · {row['status']}",'v:home')]])
+        if not data.get('auctions'):header+=[f'Your assigned franchise {mode+"s" if mode else "seasons"} will appear here.']
+        if mode=='draft' and data.get('draft_admin'):buttons+=_rows(actor,sid,[[('➕ Create Franchise Draft','f:newdraft'),('📚 Continue existing season','v:leagues:1')]])
+        elif mode=='auction' and data.get('auction_admin'):buttons+=_rows(actor,sid,[[('➕ Create Franchise Auction','f:new'),('📚 Continue existing season','v:leagues:1')]])
     elif view=='leagues':
         page=max(1,int(argument or 1))
         header+=['',f'<b>Existing leagues · page {page}</b>',
@@ -576,10 +590,13 @@ async def menu_handler(update,context):
     _reset_prompt(context)
     args=list(context.args or [])
     sid=None
+    view='home'
     if args:
-        value=args[0].removeprefix('auction_')
+        draft_link=args[0].startswith('draft_')
+        value=args[0].removeprefix('draft_' if draft_link else 'auction_')
         if value.isdigit() and int(value)>0:sid=int(value)
-    try:await _show(update,context,'home',sid)
+        if draft_link:view='franchisedraft' if sid else 'draftseasons'
+    try:await _show(update,context,view,sid)
     except (A.AuctionError,ValueError,AuctionWorkerBusy) as exc:await _send(update,_e(str(exc),1000))
 
 

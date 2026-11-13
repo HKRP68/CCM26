@@ -1,17 +1,28 @@
 {% extends "base.html" %}
-{% block title %}Franchise Auctions{% endblock %}
+{% block title %}Franchise {{ 'Drafts' if draft_mode else 'Auctions' }}{% endblock %}
 {% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_auction.css') }}">{% endblock %}
 
 {% block content %}
 <div class="au-shell">
-  <h2 style="margin:0;">🔨 Franchise Auctions</h2>
+  <h2 style="margin:0;">{{ '🏏 Franchise Drafts' if draft_mode else '🔨 Franchise Auctions' }}</h2>
+  <nav class="au-actions" aria-label="Franchise acquisition mode">
+    <a class="btn {{ 'btn-ghost' if draft_mode else 'btn-primary' }}" href="{{ url_for('admin_auctions_list') }}">🔨 Franchise Auction</a>
+    <a class="btn {{ 'btn-primary' if draft_mode else 'btn-ghost' }}" href="{{ url_for('admin_franchise_drafts_list') }}">🏏 Franchise Draft</a>
+    <a class="btn btn-ghost" href="{{ url_for('admin_league_seasons') }}">Continue an existing season</a>
+  </nav>
 
   <div class="au-card">
-    <h3 style="margin-top:0;">Create an auction</h3>
+    <h3 style="margin-top:0;">Create {{ 'a franchise draft' if draft_mode else 'an auction' }}</h3>
     <p class="au-note" style="margin:.2rem 0 .8rem;">
+      {% if draft_mode %}
+      Fixed-price signings, rotating team order and a purse for each franchise.
+      Use the existing player catalogue, owners, squads and season workflow.
+      Set prices and start with <code>/draft</code> in the dedicated franchise bot.
+      {% else %}
       Franchises start with a purse and buy their squads lot by lot in a bound
       Telegram group. When every lot is resolved, publish the auction and the
       squads become a playable Challenge League — exactly as a draft does.
+      {% endif %}
     </p>
     <form method="POST" class="au-grid">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -20,12 +31,16 @@
         <label>Name</label>
         <input type="text" name="name" placeholder="Season 2" required>
       </div>
+      {% if draft_mode %}
+      <div><label>Rounds / squad size</label><input type="number" name="rounds" value="15" min="1" max="100" required></div>
+      <div><label>Starting purse per team (Cr)</label><input type="number" name="purse" value="100" min="0" step="0.01" required></div>
+      {% endif %}
       <div><button class="btn btn-primary" type="submit">Create</button></div>
     </form>
   </div>
 
   {% if not rows %}
-    <div class="au-card"><p class="au-note" style="margin:0;">No auctions yet.</p></div>
+    <div class="au-card"><p class="au-note" style="margin:0;">No {{ 'franchise drafts' if draft_mode else 'auctions' }} yet.</p></div>
   {% endif %}
 
   <div class="au-tiles">
@@ -36,18 +51,19 @@
         <span class="status-pill {{ row.season.status }}">{{ row.season.status }}</span>
       </div>
       <div class="dim" style="font-size:.8rem;">
-        {{ row.franchises }} franchises · {{ row.lots }} lots · {{ row.sold }} sold
+        {{ row.franchises }} franchises · {{ row.lots }} players · {{ row.sold }} {{ 'signed' if draft_mode else 'sold' }}
+        {% if row.draft %}· {{ row.draft.rounds }} rotating rounds{% endif %}
         {% if row.season.chat_id %}· bound to {{ row.season.chat_id }}{% else %}· not bound to a group{% endif %}
         {% if row.follows %}<br>follows <a href="{{ url_for('admin_auction_detail', season_id=row.follows.id) }}">{{ row.follows.name }}</a>{% endif %}
       </div>
       <div class="au-actions">
         <a class="btn btn-ghost" href="{{ url_for('admin_auction_detail', season_id=row.season.id) }}">⚙️ Set up</a>
-        <a class="btn btn-primary" href="{{ url_for('admin_auction_console', season_id=row.season.id) }}">🔨 Console</a>
+        {% if not draft_mode %}<a class="btn btn-primary" href="{{ url_for('admin_auction_console', season_id=row.season.id) }}">🔨 Console</a>{% endif %}
       </div>
       <details>
         <summary class="dim" style="cursor:pointer;font-size:.8rem;">Delete</summary>
         <form method="POST" style="margin-top:.5rem;display:flex;gap:.4rem;flex-wrap:wrap;"
-              onsubmit="return confirm('Delete {{ row.season.name }}? Its pool, bids and purse ledger go with it. This cannot be undone.');">
+              onsubmit="return confirm('Delete this franchise season? Its pool, draft history, bids and purse ledger go with it. This cannot be undone.');">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="action" value="delete">
           <input type="hidden" name="season_id" value="{{ row.season.id }}">
@@ -55,7 +71,7 @@
           <button class="btn btn-ghost danger" type="submit">Delete</button>
         </form>
         <p class="au-note" style="margin:.4rem 0 0;">
-          This removes the auction, its pool, every bid and the whole purse
+          This removes the {{ 'draft' if draft_mode else 'auction' }}, its pool, every {{ 'draft turn' if draft_mode else 'bid' }} and the whole purse
           ledger. A published Challenge League is left alone.
         </p>
       </details>

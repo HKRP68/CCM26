@@ -484,7 +484,8 @@ hr.pitch-line { border: none; height: 1px; background: linear-gradient(90deg, tr
     <a href="{{ url_for('admin_tournaments_list') }}" class="{{ 'active' if request.endpoint == 'admin_tournaments_list' }}">🏆 Challenge League Tournaments</a>
     <a href="{{ url_for('admin_lp_tournaments_list') }}" class="{{ 'active' if request.endpoint == 'admin_lp_tournaments_list' }}">🏏 Lets Play Tournaments</a>
     <a href="{{ url_for('admin_drafts_list') }}" class="{{ 'active' if request.endpoint in ('admin_drafts_list','admin_draft_detail') }}">🎯 Player Drafts</a>
-    <a href="{{ url_for('admin_auctions_list') }}" class="{{ 'active' if request.endpoint in ('admin_auctions_list','admin_auction_detail','admin_auction_console') }}">🔨 Franchise Auctions</a>
+    <a href="{{ url_for('admin_auctions_list') }}" class="{{ 'active' if request.endpoint in ('admin_auctions_list','admin_auction_detail','admin_auction_console') and not franchise_draft }}">🔨 Franchise Auctions</a>
+    <a href="{{ url_for('admin_franchise_drafts_list') }}" class="{{ 'active' if request.endpoint == 'admin_franchise_drafts_list' or franchise_draft }}">🏏 Franchise Drafts</a>
     <a href="{{ url_for('admin_league_seasons') }}" class="{{ 'active' if request.endpoint in ('admin_league_seasons','admin_league_series','admin_league_season_release','admin_league_season_manual') }}">🏟 League Seasons</a>
 
     <div class="section-label">Economy & Rewards</div>

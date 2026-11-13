@@ -22,11 +22,11 @@
 {% block content %}
 <div class="au-shell">
   <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;">
-    <h2 style="margin:0;">🔨 {{ season.name }} <span class="status-pill {{ season.status }}">{{ season.status }}</span></h2>
+    <h2 style="margin:0;">{{ '🏏' if franchise_draft else '🔨' }} {{ season.name }} <span class="status-pill {{ season.status }}">{{ season.status }}</span></h2>
     <div class="au-actions">
       <button class="btn btn-ghost btn-sm" type="button" id="au-expand-all">⤢ Expand all</button>
       {% if not franchise_draft %}<a class="btn btn-primary" href="{{ url_for('admin_auction_console', season_id=season.id) }}">🔨 Live console</a>{% endif %}
-      <a class="btn btn-ghost" href="{{ url_for('admin_auctions_list') }}">← All auctions</a>
+      <a class="btn btn-ghost" href="{{ url_for('admin_franchise_drafts_list' if franchise_draft else 'admin_auctions_list') }}">← All {{ 'franchise drafts' if franchise_draft else 'auctions' }}</a>
     </div>
   </div>
 

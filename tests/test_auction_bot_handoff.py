@@ -50,6 +50,16 @@ def test_old_retention_buttons_and_media_commands_cannot_mutate_shared_records(h
     with pytest.raises(ApplicationHandlerStop):asyncio.run(H.auction_handoff_guard(update,ctx()))
 
 
+def test_draft_entry_and_forwarded_draft_buttons_handoff_to_draft_controls(handed_off):
+    update=event('/draft')
+    with pytest.raises(ApplicationHandlerStop):asyncio.run(H.auction_handoff_guard(update,ctx()))
+    text=update.effective_message.reply_text.call_args.args[0]
+    assert 'Franchise Draft' in text and '/draft' in text
+    update=event(callback='fd_y_oldtoken')
+    with pytest.raises(ApplicationHandlerStop):asyncio.run(H.auction_handoff_guard(update,ctx()))
+    assert '/draft' in update.callback_query.answer.call_args.args[0]
+
+
 def test_other_games_and_commands_addressed_to_the_new_bot_are_untouched(handed_off):
     for update in [event('/claim'),event('/bid@NewAuctionBot 1.5',chat='supergroup'),
                    event(callback='claim_1'),event('.'),event('.unrelated')]:

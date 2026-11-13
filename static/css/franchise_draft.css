@@ -1,0 +1,4 @@
+.fd-rich { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+.fd-rich pre { overflow-x: auto; white-space: pre; }
+.fd-rich blockquote { margin: 1rem 0; padding: .8rem 1rem; border-left: 3px solid #5ba0ff; background: #648aff0d; border-radius: .4rem; }
+#screen-franchisedraft, #fs-draft { max-width: 1000px; margin-inline: auto; }

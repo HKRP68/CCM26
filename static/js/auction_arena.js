@@ -169,7 +169,7 @@ const AuctionArena = (() => {
     const request=++epoch, sent=Date.now();
     reads++;
     try {
-    const result=await api('/api/webapp/auction',{season_id:seasonId,view:'arena'},10000);
+    const result=await api('/api/webapp/auction',{season_id:seasonId,view:'arena',mode:'auction'},10000);
     if(request!==epoch||!root.open)return;
     const recovered=!connected&&!!result.ok;
     connected=!!result.ok;

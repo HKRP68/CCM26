@@ -24727,35 +24727,46 @@ def _auction_pool_filters():
 
 
 @app.route("/auctions", methods=["GET", "POST"])
+@app.route("/franchise-drafts", methods=["GET", "POST"], endpoint="admin_franchise_drafts_list")
 @login_required
 def admin_auctions_list():
+    from services import franchise_draft as franchise_draft_svc
+    draft_mode = request.endpoint == "admin_franchise_drafts_list"
+    list_endpoint = "admin_franchise_drafts_list" if draft_mode else "admin_auctions_list"
     db = get_session()
     try:
         if request.method == "POST":
             action = (request.form.get("action") or "").strip()
             try:
                 if action == "create":
-                    season = auction_svc.create_season(
-                        db, request.form.get("name"))
-                    # The staged clock (60 40 20 10 5) for every new auction.
-                    auction_svc.apply_staged_defaults(season)
-                    log_admin(db, "auction_create", "auction", season.id,
+                    options = {}
+                    if draft_mode:
+                        options['opening_purse_lakh'] = franchise_draft_svc.parse_money(request.form.get('purse', '100') + 'cr')
+                    season = auction_svc.create_season(db, request.form.get("name"), **options)
+                    if draft_mode:
+                        franchise_draft_svc.enable(db, season, rounds=request.form.get('rounds', '15'))
+                    else:
+                        # The staged clock (60 40 20 10 5) for every new auction.
+                        auction_svc.apply_staged_defaults(season)
+                    log_admin(db, "draft_create" if draft_mode else "auction_create", "auction", season.id,
                               season.name)
                     db.commit()
-                    flash(f"🔨 “{season.name}” created.", "success")
+                    flash(f"{'🏏' if draft_mode else '🔨'} “{season.name}” created.", "success")
                     return redirect(url_for("admin_auction_detail",
                                             season_id=season.id))
                 elif action == "delete":
                     season = _auction_or_404(db, _parse_int(
                         request.form.get("season_id")))
+                    if bool(franchise_draft_svc.get_draft(db, season)) != draft_mode:
+                        raise auction_svc.AuctionError('Open the matching Franchise Auction or Franchise Draft section to delete this season.')
                     # Destructive and unrecoverable: the whole auction, its
                     # pool, its bids and its purse ledger. Typed confirmation,
                     # checked here on the server and not only in the browser.
                     typed = (request.form.get("confirm_name") or "").strip()
                     if typed.lower() != (season.name or "").strip().lower():
-                        flash("⚠️ Type the auction's name exactly to delete it.",
+                        flash("⚠️ Type the season's name exactly to delete it.",
                               "error")
-                        return redirect(url_for("admin_auctions_list"))
+                        return redirect(url_for(list_endpoint))
                     name = season.name
                     from services import league_season_service as _ls
                     _ls.forget_auction(db, season.id)
@@ -24772,16 +24783,20 @@ def admin_auctions_list():
                 db.rollback()
                 logger.exception("admin_auctions_list failed")
                 flash(f"Error: {exc}", "error")
-            return redirect(url_for("admin_auctions_list"))
+            return redirect(url_for(list_endpoint))
 
         all_seasons = (db.query(AuctionSeason)
                        .order_by(AuctionSeason.id.desc()).all())
         by_id = {s.id: s for s in all_seasons}
         rows = []
         for season in all_seasons:
+            draft = franchise_draft_svc.get_draft(db, season)
+            if bool(draft) != draft_mode:
+                continue
             counts = auction_svc.pool_counts(db, season.id)
             rows.append({
                 "season": season,
+                "draft": draft,
                 "label": auction_svc.status_label(season),
                 "franchises": len(auction_svc.franchises(db, season.id)),
                 "lots": counts.get("total", 0),
@@ -24790,7 +24805,7 @@ def admin_auctions_list():
                 # each, so a page of twenty seasons stays one round trip.
                 "follows": by_id.get(season.previous_season_id or 0),
             })
-        return render_template("admin_auctions.html", rows=rows)
+        return render_template("admin_auctions.html", rows=rows, draft_mode=draft_mode)
     finally:
         db.close()
 
