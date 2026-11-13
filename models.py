@@ -4978,6 +4978,16 @@ class AuctionAdmin(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class FranchiseDraftAdmin(Base):
+    """A bot-appointed draft organiser, with no auction or global admin grant."""
+    __tablename__ = "franchise_draft_admins"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tg_id = Column(BigInteger, nullable=False, unique=True, index=True)
+    name = Column(String(120), nullable=True)
+    added_by_tg_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class AuctionTrade(Base):
     """An IPL-style trade between two auction franchises: the offer, then the record.
 

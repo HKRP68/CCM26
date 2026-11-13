@@ -16,10 +16,10 @@ _MAX_AGE = 15 * 60
 
 
 def _scope(db, actor_id, chat_id, expected_season=None):
-    A.require_auction_manager(db, actor_id)
     season = A.season_for_chat(db, chat_id)
     if season is None:
         raise A.AuctionError('Create and bind an auction in this group before importing players.')
+    A.require_season_manager(db, season, actor_id)
     if expected_season is not None and season.id != expected_season:
         raise A.AuctionError('This group now has a different auction. Start /importplayers again.')
     if season.status not in (A.STATUS_SETUP, A.STATUS_PAUSED):

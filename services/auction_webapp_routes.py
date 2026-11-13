@@ -188,7 +188,7 @@ def register(app, authenticate, csrf_exempt, member_rpc):
                 result = W.perform(db, season, tg_id, data)
                 db.commit()
                 return dict(ok=True, **result)
-            if not W.admin_for(db, tg_id):
+            if not W.admin_for(db, tg_id, season):
                 raise W.AccessError('Only Auction Managers can manage auction setup.')
             if kind == 'catalogue':
                 from models import Player

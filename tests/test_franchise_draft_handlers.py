@@ -237,7 +237,7 @@ def test_navigation_has_persistent_owner_and_group_binding(room):
 def test_management_buttons_recheck_current_authority(room, monkeypatch):
     data = f'fd_a_{ADMIN}_{room.season.id}_start'
     monkeypatch.setenv('BOT_ADMIN_IDS', '')
-    with pytest.raises(room.A.AuctionError, match='Managers'):
+    with pytest.raises(room.A.AuctionError, match='Draft Admins'):
         room.H.execute_callback(room.db, ADMIN, CHAT, None, data)
 
 

@@ -38,7 +38,7 @@ _DRAFT_HELP = {
     'draft': ('/draft', 'Show the current draft turn, squads and purses.'),
     'dboard': ('/dboard', 'Show the franchise draft board.'),
     'dnew': ('/dnew Season 2', 'Manager: create a new franchise draft season.'),
-    'dsetup': ('/dsetup 15', 'Manager: enable a draft on an empty season, with 15 rounds.'),
+    'dsetup': ('/dsetup 15', 'Convert an empty auction to a draft. Requires both Draft Admin and Auction Manager authority; bot admins have both.'),
     'dprices': ('/dprices\n96:23cr\n95:21cr', 'Manager: set the fixed price for each player rating.'),
     'dcustom': ('/dcustom\nJoe Root:25.5cr', 'Manager: override a player’s rating price.'),
     'dorder': ('/dorder Team 1 | Team 2 | Team 3', 'Manager: set round 1 order; random generates it. Later rounds rotate the first team to last.'),
@@ -57,7 +57,58 @@ _DRAFT_HELP = {
     'dskip': ('/dskip', 'Current team owner or co-owner: defer this pick to the catch-up round without spending purse.'),
     'dskips': ('/dskips 1', 'View catch-up picks in the exact order teams skipped or timed out.'),
     'dtimer': ('/dtimer 10', 'Manager: set minutes per turn while in setup or paused; 0 disables automatic skipping.'),
+    'dadmin': ('/dadmin', 'Open the Draft Admin control panel and setup buttons.'),
+    'dadminadd': ('/dadminadd 123456 Name', 'Bot Owner/Admin: appoint a Draft Admin. Name is optional.'),
+    'dadminremove': ('/dadminremove 123456', 'Bot Owner/Admin: revoke an appointed Draft Admin immediately.'),
+    'dadmins': ('/dadmins', 'Draft Admin: list current appointments. Bot Owners/Admins also have draft authority.'),
+    'draftcommands': ('/draftcommands', 'Show the full draft command reference together, including setup and examples.'),
+    'dcommands': ('/dcommands', 'Alias for /draftcommands; sends the complete command reference.'),
+    'dcmds': ('/dcmds', 'Alias for /draftcommands; sends the complete command reference.'),
+    'dbind': ('/dbind draftID', 'Draft Admin: bind a draft to this group during setup or while paused.'),
+    'dpublish': ('/dpublish', 'Draft Admin: publish completed squads after scheduled and catch-up picks finish.'),
+    'dpurse': ('/dpurse or /dpurse Team | 120cr', 'View purses. Draft Admins can set a team’s balance during setup or while paused.'),
+    'downer': ('/downer Team | 123456', 'Draft Admin: assign the team owner during setup or while paused.'),
+    'dco': ('/dco Team | 123456,234567', 'Draft Admin: set co-owner IDs during setup or while paused; clear removes co-owners.'),
+    'dpooladd': ('/dpooladd 80-96', 'Draft Admin: add players from the shared catalogue by rating range.'),
+    'drolemin': ('/drolemin BAT=4,BOWL=4,AR=2,WK=1', 'Draft Admin: set role minimums; clear removes them. Draft must be in setup or paused.'),
+    'drolemax': ('/drolemax BAT=8,BOWL=8,AR=6,WK=3', 'Draft Admin: set role maximums; clear removes them. Draft must be in setup or paused.'),
+    'dratingrule': ('/dratingrule 83=4', 'Draft Admin: require at least 4 players rated 83 or below; clear removes rating rules.'),
+    'dcancel': ('/dcancel Exact draft name', 'Draft Admin: cancel a draft with its exact name. Squads and purse history remain saved.'),
 }
+_DRAFT_HELP = {name:(usage,description.replace('Manager:', 'Draft Admin:'))
+               for name,(usage,description) in _DRAFT_HELP.items()}
+
+
+def draft_command_menu():
+    return [(name,description[:256]) for name,(_,description) in _DRAFT_HELP.items()]
+
+
+def draft_commands_html():
+    """One complete reference, sent in consecutive rich messages if needed."""
+    groups = (
+        ('🛡 Appointments & help', ('dadmin','dadminadd','dadminremove','dadmins','draftcommands','dcommands','dcmds','dhelp')),
+        ('🏗 Setup & teams', ('dnew','dsetup','dbind','dteam','downer','dco','dpooladd','dpurse')),
+        ('💰 Prices, order & squad rules', ('dprices','dcustom','dorder','drounds','daddrounds','drolemin','drolemax','dratingrule')),
+        ('⏱ Live draft & recovery', ('dtimer','dstart','dpause','dresume','dpick','dskip','dundo','dcancel','dpublish')),
+        ('👀 Views', ('draft','dboard','dpool','dsquad','dskips','drules')),
+    )
+    lines=['🏏 <b>All Franchise Draft Commands</b>',
+           'Draft Admins manage drafts. Auction Managers manage auctions. Bot Owners/Admins have both permissions.',
+           'Only the current team’s owner or co-owner can pick or skip. Each button rechecks current authority.']
+    for title,names in groups:
+        lines+=['', '<b>'+title+'</b>']
+        for name in names:
+            usage,description=_DRAFT_HELP[name]
+            lines+=['<code>'+html.escape(usage)+'</code>\n'+html.escape(description)]
+    lines+=['', '<b>Shared setup tools</b>',
+            '<code>/auction</code> — choose Draft → guided setup, next season, teams and purse.',
+            '<code>/importplayers</code> — import player CSV in the bound group; <code>/sampleplayers</code> downloads the format.',
+            '<code>/settings</code> — guided rule settings; <code>/roles</code> — current roles; <code>/id</code> — Telegram IDs; <code>/cancel</code> — stop a form.',
+            '', '<b>Quick start</b>',
+            'Appoint a Draft Admin → /dnew → /dteam → /importplayers or /dpooladd → /dprices → /dorder → /dtimer → /dstart.',
+            'Prices: <code>96:23cr</code> and <code>Joe Root:25.5cr</code>. Role/rating edits replace their current table; use clear to remove it.',
+            'Skipped picks play after scheduled rounds in skip order. Timeouts skip automatically. Pause freezes remaining time. No overseas limit.']
+    return '\n'.join(lines)
 
 
 def command_catalogue(query=''):

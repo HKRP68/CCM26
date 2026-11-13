@@ -969,6 +969,11 @@ def bind_chat(session, season, chat_id):
     refusal even said "cancel or finish it first" when finishing it was exactly
     what had already happened.
     """
+    if franchise_draft_config(session, season) is not None:
+        from services import franchise_draft as D
+        D._editable(session, season)
+        D._claim(session, season)
+        D._editable(session, season)
     chat_id = int(chat_id)
     other = season_for_chat(session, chat_id)
     if other is not None and other.id != season.id:
@@ -1585,7 +1590,7 @@ def set_opening_purse(session, season, purse_lakh, *, by_tg_id=None,
     franchises only — for a caller that wants it.
     """
     if by_tg_id is not None:
-        require_auction_manager(session, by_tg_id)
+        require_season_manager(session, season, by_tg_id)
     _claim_draft_purse(session, season)
     new_purse = _as_int(purse_lakh, None)
     if new_purse is None or new_purse < 0:
@@ -1677,7 +1682,7 @@ def correct_purse(session, season, franchise, amount_lakh, *, note=None,
     it, so it had better be the most visible.
     """
     if by_tg_id is not None:
-        require_auction_manager(session, by_tg_id)
+        require_season_manager(session, season, by_tg_id)
     if _claim_draft_purse(session, season) is not None:
         session.refresh(franchise)
     amount = _as_int(amount_lakh, 0)
@@ -7551,6 +7556,14 @@ def is_auction_admin(session, tg_id):
 def require_auction_manager(session, tg_id):
     if not is_auction_admin(session, tg_id):
         raise AuctionError("Only Auction Managers can manage the auction.")
+
+
+def require_season_manager(session, season, tg_id):
+    if franchise_draft_config(session, season) is not None:
+        from services.franchise_draft import require_draft_admin
+        require_draft_admin(session, tg_id)
+    else:
+        require_auction_manager(session, tg_id)
 
 
 def auction_admins(session):

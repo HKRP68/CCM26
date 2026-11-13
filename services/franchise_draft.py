@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 from models import (AuctionBid, AuctionFranchise, AuctionLot, AuctionSeason,
                     FranchiseDraft, FranchiseDraftConfirmation, FranchiseDraftPick,
-                    FranchiseDraftTurn)
+                    FranchiseDraftTurn, FranchiseDraftAdmin)
 from sqlalchemy import func
 from services import auction_service as A
 
@@ -96,7 +96,88 @@ def _rounds(value):
 def _manager(session, actor):
     # None is reserved for trusted internal callers (season setup, migrations).
     if actor is not None:
-        A.require_auction_manager(session, actor)
+        require_draft_admin(session, actor)
+
+
+def is_draft_admin(session, actor):
+    from services.admin_ids import is_bot_admin
+    if isinstance(actor, bool) or not str(actor).isascii() or not str(actor).isdigit() or int(actor) <= 0:
+        return False
+    return is_bot_admin(actor) or session.query(FranchiseDraftAdmin.id).filter_by(tg_id=int(actor)).first() is not None
+
+
+def require_draft_admin(session, actor):
+    if not is_draft_admin(session, actor):
+        raise AuctionError("Only Draft Admins can manage a franchise draft.")
+
+
+def draft_admins(session):
+    return session.query(FranchiseDraftAdmin).order_by(FranchiseDraftAdmin.id).all()
+
+
+def add_draft_admin(session, actor, *, name=None, by_tg_id=None):
+    from services.admin_ids import is_bot_admin
+    if by_tg_id is not None and not is_bot_admin(by_tg_id):
+        raise AuctionError("Only Bot Owners and Bot Admins can appoint Draft Admins.")
+    if isinstance(actor, bool) or not str(actor).isdigit() or not 0 < int(actor) < 10**16:
+        raise AuctionError("A Draft Admin needs a positive Telegram user ID.")
+    if session.query(FranchiseDraftAdmin.id).filter_by(tg_id=int(actor)).first():
+        raise AuctionError("That person is already a Draft Admin.")
+    row = FranchiseDraftAdmin(tg_id=int(actor), name=str(name).strip()[:120] if name else None,
+                             added_by_tg_id=by_tg_id)
+    session.add(row)
+    session.flush()
+    return row
+
+
+def remove_draft_admin(session, actor, *, by_tg_id=None):
+    from services.admin_ids import is_bot_admin
+    if by_tg_id is not None and not is_bot_admin(by_tg_id):
+        raise AuctionError("Only Bot Owners and Bot Admins can remove Draft Admins.")
+    if isinstance(actor, bool) or not str(actor).isdigit() or not 0 < int(actor) < 10**16:
+        raise AuctionError("Give a positive Telegram user ID.")
+    row = session.query(FranchiseDraftAdmin).filter_by(tg_id=int(actor)).first()
+    if row is None:
+        raise AuctionError("That person is not an appointed Draft Admin.")
+    session.delete(row)
+    session.flush()
+    return row
+
+
+def update_team_roles(session, season, team, *, owner_tg_id=None, co_owners=None, by_tg_id=None):
+    _manager(session, by_tg_id)
+    draft = _editable(session, season)
+    draft = _claim(session, season, draft)
+    _editable(session, season)
+    if team.season_id != season.id:
+        raise AuctionError("That team belongs to another draft.")
+    if owner_tg_id is not None:
+        if isinstance(owner_tg_id, bool) or not str(owner_tg_id).isdigit() or not 0 < int(owner_tg_id) < 10**16:
+            raise AuctionError("Give a positive owner Telegram ID.")
+        if team.owner_tg_id != int(owner_tg_id):
+            team.owner_name = None
+        team.owner_tg_id = int(owner_tg_id)
+    if co_owners is not None:
+        if len(co_owners) > 30 or any(isinstance(i, bool) or not str(i).isdigit() or not 0 < int(i) < 10**16 for i in co_owners):
+            raise AuctionError("Give up to 30 positive co-owner Telegram IDs, or clear.")
+        A.set_co_owners(session, team, [int(i) for i in co_owners])
+    _event(session, season, 'fd_roles', f'🏷 <b>{_e(team.name)} ownership updated</b>\nExisting pick confirmations have expired.',
+           by_tg_id=by_tg_id, franchise=team)
+    return team
+
+
+def update_squad_rules(session, season, *, minimums=None, maximums=None, ratings=None, by_tg_id=None):
+    _manager(session, by_tg_id)
+    draft = _editable(session, season)
+    _claim(session, season, draft)
+    _editable(session, season)
+    A.set_role_rules(session, season,
+        A.normalize_draft_roles(minimums) if minimums is not None else A.role_minimums(season),
+        A.normalize_draft_roles(maximums) if maximums is not None else A.role_maximums(season))
+    if ratings is not None:
+        A.set_rating_rules(session, season, ratings)
+    _event(session, season, 'fd_rules', '📜 <b>Draft squad rules updated</b>\n'
+           + _e(A.role_rule_line(season)) + '\n' + _e(A.rating_rule_line(season)), by_tg_id=by_tg_id)
 
 
 def _invariants(season, draft):

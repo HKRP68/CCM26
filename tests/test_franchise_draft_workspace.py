@@ -7,6 +7,13 @@ from test_franchise_bot_ui import (ADMIN, DELEGATE, OWNER, context, input_step,
                                    menu, run, site, update)  # noqa: F401
 
 
+@pytest.fixture(autouse=True)
+def appointed_draft_admin(site):
+    from services import franchise_draft as D
+    D.add_draft_admin(site.db, DELEGATE, by_tg_id=ADMIN)
+    site.db.commit()
+
+
 def as_draft(site, rounds=3):
     from services import franchise_draft as D
     D.enable(site.db, site.season, rounds=rounds, by_tg_id=DELEGATE)
@@ -100,7 +107,7 @@ def test_native_draft_pricing_order_and_rounds_use_shared_engine(site, menu):
 ])
 def test_owner_cannot_use_native_draft_manager_actions(site, menu, action, values):
     as_draft(site)
-    with pytest.raises(menu.W.AccessError, match='Managers'):
+    with pytest.raises(menu.W.AccessError, match='Draft Admins'):
         menu.execute_action(site.db, OWNER, site.season.id, 1, action, values)
 
 

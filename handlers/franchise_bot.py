@@ -16,6 +16,7 @@ from database import get_session
 from services import auction_service as A, auction_webapp as W
 from services.auction_async import run_session, AuctionWorkerBusy, BUSY_MESSAGE
 from services.franchise_bot_settings import SETTINGS, GROUP_LABELS, parse_value, whole, ids
+from handlers.franchise_commands import draft_command_menu
 
 BOT_COMMANDS = [BotCommand(*row) for row in [
     ('auction','Open your auction workspace'),('start','Open Franchise Auction HQ'),
@@ -28,7 +29,11 @@ BOT_COMMANDS = [BotCommand(*row) for row in [
     ('draft','Open the franchise season draft'),('dpick','Choose a player for your draft turn'),
     ('dhelp','Franchise draft setup and commands'),
     ('dskip','Defer your current draft pick'),('dskips','View the skipped-pick queue'),
+    ('dadmin','Open the Draft Admin panel'),('draftcommands','Every draft command and example'),
+    ('dadminadd','Appoint a Draft Admin (bot admins only)'),('dadmins','List Draft Admins'),
 ]]
+_menu_names={command.command for command in BOT_COMMANDS}
+BOT_COMMANDS.extend(BotCommand(name,description) for name,description in draft_command_menu() if name not in _menu_names)
 PROMPT_KEY = 'franchise_prompt'
 
 # form key: shared service action, fields (key, label, parser).
@@ -60,6 +65,8 @@ FORMS = {
     'simulate':('admin_simulate',[('confirm_name','Type the exact auction name to simulate the remaining lots','text')]),
     'addmanager':('admin_add_admin',[('telegram_id','Telegram user ID to appoint as Auction Manager','id')]),
     'delmanager':('admin_remove_admin',[('telegram_id','Telegram user ID to remove as Auction Manager','id')]),
+    'adddraftmanager':('native_draft_admin_add',[('telegram_id','Telegram user ID to appoint as Draft Admin','id')]),
+    'deldraftmanager':('native_draft_admin_remove',[('telegram_id','Telegram user ID to remove as Draft Admin','id')]),
     'previous':('admin_previous_league',[('league_id','Previous published league ID','id')]),
     'previous_team':('admin_previous_team',[('team_name','Exact previous team name','text')]),
     'teamplayer':('admin_team_add_player',[('player_id','Player catalogue ID','id'),('price_lakh','Signing price in whole lakh; 0 is free','int'),('note','Reason for this signing','text')]),
@@ -67,7 +74,7 @@ FORMS = {
     'clear':('admin_pool_clear',[('confirm_name','Type the exact auction name to clear eligible queued players','text')]),
 }
 TEAM_FORMS = {'purse','retain','unretain','picks','rtm','previous_team','teamplayer','removeplayer'}
-MANAGER_ROLES = {'addmanager','delmanager'}
+MANAGER_ROLES = {'addmanager','delmanager','adddraftmanager','deldraftmanager'}
 
 
 def _e(value, limit=150):
@@ -91,7 +98,7 @@ def _resolve(db, actor, sid, chat_id):
 def read_workspace(db, actor, sid, chat_id, view='home', argument=''):
     season,rows=_resolve(db,actor,sid,chat_id)
     if view=='leagues':
-        if not W.admin_for(db,actor):raise W.AccessError('Only Auction Managers can browse previous leagues.')
+        if not W.any_admin_for(db,actor):raise W.AccessError('Only Auction Managers and Draft Admins can browse previous leagues.')
         from models import ChallengeLeague
         page=max(1,int(argument or 1))
         leagues=db.query(ChallengeLeague).order_by(ChallengeLeague.id.desc()).offset((page-1)*8).limit(9).all()
@@ -140,9 +147,16 @@ def _native_perform(db, season, actor, action, values):
 
 
 def execute_action(db, actor, sid, chat_id, action, values):
+    if action in ('native_draft_admin_add','native_draft_admin_remove'):
+        from services import franchise_draft as D
+        from services.admin_ids import is_bot_admin
+        if not is_bot_admin(actor):raise W.AccessError('Only Bot Owners and Bot Admins can appoint or remove Draft Admins.')
+        fn=D.add_draft_admin if action.endswith('_add') else D.remove_draft_admin
+        fn(db,whole(values.get('telegram_id')),by_tg_id=actor)
+        return dict(message='Draft Admin assignment updated.')
     if action in ('native_newdraft','native_draft_from_league'):
-        if not W.admin_for(db,actor):raise W.AccessError('Only Auction Managers can create a draft season.')
         from services import franchise_draft as D, league_season_service as LS
+        if not D.is_draft_admin(db,actor):raise W.AccessError('Only Draft Admins can create a draft season.')
         from models import ChallengeLeague, LeagueSeason
         name=str(values.get('name') or '').strip()
         rounds=whole(values.get('rounds'))
@@ -157,8 +171,8 @@ def execute_action(db, actor, sid, chat_id, action, values):
                 except LS.LeagueSeasonError as exc:raise A.AuctionError(str(exc)) from None
             else:
                 season=A.season_from_league(db,league,name,by_tg_id=actor)
-                A.set_opening_purse(db,season,purse,by_tg_id=actor)
                 D.enable(db,season,rounds=rounds,by_tg_id=actor)
+                A.set_opening_purse(db,season,purse,by_tg_id=actor)
         else:
             season=A.create_season(db,name,opening_purse_lakh=purse)
             D.enable(db,season,rounds=rounds,by_tg_id=actor)
@@ -180,8 +194,8 @@ def execute_action(db, actor, sid, chat_id, action, values):
     season,_=_resolve(db,actor,sid,chat_id)
     if season is None:raise A.AuctionError('Select an auction first.')
     if action.startswith('native_fd_'):
-        if not W.admin_for(db,actor):raise W.AccessError('Only Auction Managers can manage a draft.')
         from services import franchise_draft as D
+        if not D.is_draft_admin(db,actor):raise W.AccessError('Only Draft Admins can manage a draft.')
         operation=action.removeprefix('native_fd_')
         if operation=='prices':D.set_rating_prices(db,season,values.get('text',''),by_tg_id=actor)
         elif operation=='custom':D.set_custom_prices(db,season,values.get('text',''),by_tg_id=actor)
@@ -197,7 +211,7 @@ def execute_action(db, actor, sid, chat_id, action, values):
         else:raise A.AuctionError('Choose a draft control.')
         return dict(message='Draft updated. Open /draft for the current turn, squads and purses.')
     if action=='admin_previous_league':
-        if not W.admin_for(db,actor):raise W.AccessError('Only Auction Managers can link previous leagues.')
+        if not W.admin_for(db,actor,season):raise W.AccessError('Only this season’s admins can link previous leagues.')
         from models import ChallengeLeague
         if db.get(ChallengeLeague,whole(values.get('league_id'))) is None:
             raise A.AuctionError('That previous league does not exist. Open Existing leagues to choose one.')
@@ -294,7 +308,12 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
             header+=['','Use existing competitions or create the next season. No debut, coins or collecting-game account is required.']
             if manager:header+=['Choose an existing auction, or start from an existing league for retention.']
             else:header+=['Ask your organiser to assign your Telegram ID to a franchise. Open /auction in its group to watch.']
-        if manager:buttons+=_rows(actor,sid,[[('➕ New auction','f:new'),('📋 New draft','f:newdraft')],[('📚 Existing leagues','v:leagues:1')]])
+        create=[]
+        if data.get('auction_admin'):create.append(('➕ New auction','f:new'))
+        if data.get('draft_admin'):create.append(('📋 New draft','f:newdraft'))
+        if create:buttons+=_rows(actor,sid,[create,[('📚 Existing leagues','v:leagues:1')]])
+        if data.get('bot_admin'):
+            buttons+=_rows(actor,sid,[[('Appoint Draft Admin','f:adddraftmanager'),('Remove Draft Admin','f:deldraftmanager')]])
         buttons+=_rows(actor,sid,[[('🔀 Choose auction','v:seasons'),('❓ Help','v:help')]])
         from handlers.franchise_commands import command_button
         buttons.append([command_button(actor)])
@@ -308,8 +327,8 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
                  'Choose an auction or a fixed-price draft for the next season. Check franchise owners before starting.']
         for league in data.get('leagues',[]):
             header+=[f"#{league['id']} · {_e(league['name'],70)}"]
-            buttons+=_rows(actor,sid,[[(f"Next season: {league['name'][:25]}",f"f:fromleague:{league['id']}")]])
-            buttons+=_rows(actor,sid,[[(f"Draft: {league['name'][:25]}",f"f:fromleaguedraft:{league['id']}")]])
+            if data.get('auction_admin'):buttons+=_rows(actor,sid,[[(f"Next season: {league['name'][:25]}",f"f:fromleague:{league['id']}")]])
+            if data.get('draft_admin'):buttons+=_rows(actor,sid,[[(f"Draft: {league['name'][:25]}",f"f:fromleaguedraft:{league['id']}")]])
         if not data.get('leagues'):header+=['No leagues found on this page.']
         if page>1:buttons+=_rows(actor,sid,[[('← Previous leagues',f'v:leagues:{page-1}')]])
         if data.get('has_more_leagues'):buttons+=_rows(actor,sid,[[('More leagues →',f'v:leagues:{page+1}')]])
@@ -467,7 +486,7 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
             '/commands searches every command and alias, including retention, picks, settings, trades and publishing.',
             'Private guided controls use whole lakh: 100 = 1 Cr. /cancel stops an unfinished input.',
             'For a full season draft: New draft or Existing leagues → Draft. /dhelp explains prices, rotating rounds and /dpick confirmations.',
-            'Only global auction roles change settings. Team roles bid and answer RTM for their assigned franchises.']
+            'Auction Managers manage auctions; Draft Admins manage drafts. Owners and co-owners alone make draft picks and skips.']
     else:raise A.AuctionError('Open /auction for a fresh menu.')
     if view not in ('home','roles'):buttons+=_rows(actor,sid,[[('🏠 Auction home','v:home')]])
     buttons+=_rows(actor,sid,[[('↻ Refresh',f'v:{view}'+(':'+str(argument) if argument else ''))]])
@@ -491,7 +510,7 @@ async def _show(update,context,view='home',sid=None,argument=''):
     if chat_id<0 and view in private_views:
         # Never show owner IDs, ledgers, private shortlists or forms in a group.
         data=await run_session(get_session,lambda db:read_workspace(db,actor,sid,chat_id,'roles'))
-        if not data.get('admin'):raise W.AccessError('Only Auction Managers can use these controls.')
+        if not data.get('admin'):raise W.AccessError('Only this season’s admins can use these controls.')
         selected=(data.get('season') or {}).get('id') or sid
         url=_private_url(context,selected)
         rows=[[InlineKeyboardButton('Open private auction controls',url=url)]] if url else []
@@ -556,11 +575,15 @@ async def _start_form(update,context,key,sid,team_id=None,role_key=None):
         await _show(update,context,'control',sid);return
     actor=_actor(update)
     if key in ('new','fromleague','newdraft','fromleaguedraft'):
-        allowed=await run_session(get_session,lambda db:W.admin_for(db,actor))
-        if not allowed:raise W.AccessError('Only Auction Managers can create an auction.')
+        from services import franchise_draft as D
+        allowed=await run_session(get_session,lambda db:D.is_draft_admin(db,actor) if key in ('newdraft','fromleaguedraft') else W.admin_for(db,actor))
+        if not allowed:raise W.AccessError('Only the corresponding Auction Managers or Draft Admins can create a season.')
         data={}
+    elif key in MANAGER_ROLES:
+        from services.admin_ids import is_bot_admin
+        data={'bot_admin':is_bot_admin(actor)}
     else:data=await run_session(get_session,lambda db:read_workspace(db,actor,sid,update.effective_chat.id,'form'))
-    if key in MANAGER_ROLES and not data.get('bot_admin'):raise W.AccessError('Only Bot Owners and Bot Admins appoint Auction Managers.')
+    if key in MANAGER_ROLES and not data.get('bot_admin'):raise W.AccessError('Only Bot Owners and Bot Admins appoint Auction Managers and Draft Admins.')
     if role_key:
         if role_key not in ('owner_tg_id','co_owners','team_managers'):raise A.AuctionError('Choose a team role.')
         record=dict(kind='role',sid=sid,key=role_key,team_id=int(team_id),payload={},step=0)
@@ -601,10 +624,10 @@ async def bind_handler(update,context):
             await _start_form(update,context,'bind',sid);return
         if not sid:raise A.AuctionError('Use /bind auction_id in the target group, or create one here with /anew Name.')
         def work(db):
-            if not W.admin_for(db,actor):raise W.AccessError('Only Auction Managers can bind groups.')
             from models import AuctionSeason
             season=db.get(AuctionSeason,sid)
-            if season is None:raise A.AuctionError('No such auction.')
+            if season is None:raise A.AuctionError('No such season.')
+            if not W.admin_for(db,actor,season):raise W.AccessError('Only this season’s admins can bind its group.')
             result=_native_perform(db,season,actor,'admin_bind',{'chat_id':chat_id})
             return result
         await run_session(get_session,work,commit=True)
@@ -640,7 +663,7 @@ async def callback_handler(update,context):
             operation=parts[1]
             if operation not in ('start','pause','undo'):raise A.AuctionError('Choose a draft control.')
             data=await run_session(get_session,lambda db:read_workspace(db,_actor(update),sid,update.effective_chat.id,'control'))
-            if not data.get('admin'):raise W.AccessError('Only Auction Managers can manage drafts.')
+            if not data.get('admin'):raise W.AccessError('Only Draft Admins can manage drafts.')
             key=_store_action(context,update.effective_chat.id,sid,'native_fd_'+operation,{})
             await _send(update,'Confirm '+_e(operation)+' for this draft?',InlineKeyboardMarkup(_rows(_actor(update),sid,[[('Confirm','op:'+key),('Back','v:franchisedraft')]])))
             return
@@ -689,7 +712,7 @@ def _parse_form(kind,value):
 
 def _setting_action(db,actor,sid,chat_id,key,value):
     season,_=_resolve(db,actor,sid,chat_id)
-    if not season or not W.admin_for(db,actor):raise W.AccessError('Only Auction Managers can change settings.')
+    if not season or not W.admin_for(db,actor,season):raise W.AccessError('Only this season’s admins can change settings.')
     action='admin_settings';values={'settings':{key:value}}
     # Safe live controls use their existing service actions; squad/retention
     # rulebook edits retain the shared setup-only guard.
@@ -731,7 +754,7 @@ async def prompt_handler(update,context):
                 value=value[0] if value else None
             def work(db):
                 season,_=_resolve(db,actor,record['sid'],chat_id)
-                if not season or not W.admin_for(db,actor):raise W.AccessError('Only Auction Managers can change team roles.')
+                if not season or not W.admin_for(db,actor,season):raise W.AccessError('Only this season’s admins can change team roles.')
                 team=W.team(db,season,record['team_id'])
                 payload=dict(team_id=team.id,name=team.name,owner_tg_id=team.owner_tg_id,owner_name=team.owner_name,
                              co_owners=A.co_owner_ids(team),team_managers=A.team_manager_ids(team))

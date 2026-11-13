@@ -22,6 +22,8 @@ COMMANDS = (
                'dorder', 'drounds', 'daddrounds', 'dstart', 'dpause', 'dresume',
                'dundo', 'dpick', 'dpool', 'dsquad', 'drules', 'dhelp',
                'dteam', 'dskip', 'dskips', 'dtimer'), 'command_handler'),
+    ('draft', ('dadmin','dadminadd','dadminremove','dadmins','draftcommands','dcommands','dcmds',
+               'dbind','dpublish','dpurse','downer','dco','dpooladd','drolemin','drolemax','dratingrule','dcancel'), 'command_handler'),
     ('auction', ('bid', 'bd'), 'bid_handler'),
     ('auction', ('artm', 'rtm'), 'artm_handler'),
     ('auction', ('aboard', 'auctionboard'), 'aboard_handler'),

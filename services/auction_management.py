@@ -65,7 +65,7 @@ def adjust_purse(session, season, franchise, *, mode, amount_lakh,
                  expected_purse_lakh, note, by_tg_id=None):
     from services import auction_service as A
     if by_tg_id is not None:
-        A.require_auction_manager(session, by_tg_id)
+        A.require_season_manager(session, season, by_tg_id)
     amount = whole(amount_lakh, 'Amount')
     # This is a snapshot of an existing balance, not a new monetary input.
     # Credits, refunds or imports can legitimately put it above the input cap;

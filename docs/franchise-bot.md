@@ -3,6 +3,9 @@
 For a full fixed-price season draft, use **New draft** or **Existing leagues →
 Draft** in `/auction`. See [Franchise season draft](franchise-draft.md) for
 rating prices, custom prices, rotating rounds, owner confirmations and purses.
+Draft organisers use their own **Draft Admin** role. Bot Owners/Admins appoint
+one with `/dadminadd ID`; `/dadmin` opens its panel and `/draftcommands` shows
+the complete command reference together.
 
 `python franchise_bot.py` starts **Franchise Auction HQ**, a separate Telegram
 bot using your **existing database** and a new BotFather token. It
@@ -36,7 +39,7 @@ entry point for this deployment.
 - Sensitive manager controls and unfinished forms stay in private chats.
   Bidding buttons stay shared in the auction group. Menus, selected auction
   IDs, roles and pending actions are rechecked against current authority.
-- A person can be Bot Owner, Bot Admin, appointed Auction Manager, Team Owner,
+- A person can be Bot Owner, Bot Admin, appointed Auction Manager, Draft Admin, Team Owner,
   Co-owner and Team Manager at the same time. Team roles apply only to their
   assigned franchises. Only Bot Owners/Admins appoint global Auction Managers.
 - Existing auctions, players, franchise assignments, previous squads, retention

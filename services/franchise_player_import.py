@@ -112,7 +112,7 @@ def parse_csv(data):
 
 def import_players(db, season, rows, *, actor_tg_id, set_name='Imported'):
     """Atomically import validated players. The caller owns commit/rollback."""
-    A.require_auction_manager(db, actor_tg_id)
+    A.require_season_manager(db, season, actor_tg_id)
     if (not isinstance(rows, list) or not rows or len(rows) > MAX_ROWS
             or not all(isinstance(row, ImportRow) for row in rows)):
         raise A.AuctionError('Parse a valid player CSV before importing.')

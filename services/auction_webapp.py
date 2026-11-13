@@ -31,6 +31,7 @@ ROLE_LABELS = {
     'bot_owner': 'Bot Owner',
     'bot_admin': 'Bot Admin',
     'auction_manager': 'Auction Manager',
+    'draft_admin': 'Draft Admin',
     'team_owner': 'Team Owner',
     'team_co_owner': 'Team Co-owner',
     'team_manager': 'Team Manager',
@@ -38,7 +39,7 @@ ROLE_LABELS = {
 }
 
 
-def global_roles(tg_id, *, appointed=False):
+def global_roles(tg_id, *, appointed=False, appointed_draft=False):
     """Explicit assignments, with inherited permissions kept separate.
 
     Owners inherit bot administration, but receive a second Bot Admin badge
@@ -58,6 +59,8 @@ def global_roles(tg_id, *, appointed=False):
         roles.append('bot_admin')
     if appointed:
         roles.append('auction_manager')
+    if appointed_draft:
+        roles.append('draft_admin')
     return roles
 
 
@@ -104,9 +107,17 @@ def plain(value):
     return html.unescape(re.sub(r"<[^>]*>", "", value or ""))
 
 
-def admin_for(db, tg_id):
-    """Use the same manager allowlist as the Telegram commands."""
+def admin_for(db, tg_id, season=None):
+    """Management authority is scoped to the season's draft or auction mode."""
+    if season is not None and A.franchise_draft_config(db, season) is not None:
+        from services.franchise_draft import is_draft_admin
+        return is_draft_admin(db, tg_id)
     return A.is_auction_admin(db, tg_id)
+
+
+def any_admin_for(db, tg_id):
+    from services.franchise_draft import is_draft_admin
+    return A.is_auction_admin(db, tg_id) or is_draft_admin(db, tg_id)
 
 
 def season_row(season):
@@ -115,13 +126,12 @@ def season_row(season):
 
 
 def available_seasons(db, tg_id, *, check_member=None, origin_chat_id=None):
-    admin = admin_for(db, tg_id)
     rows = db.query(AuctionSeason).order_by(AuctionSeason.id.desc()).all()
     owned = {f.season_id for f in db.query(AuctionFranchise).all()
              if A.may_bid_for(f, tg_id)}
     # A chat hint never grants access. Spectators require an affirmative
     # membership check; owners and admins do not depend on the Telegram API.
-    return [s for s in rows if admin or s.id in owned or
+    return [s for s in rows if admin_for(db, tg_id, s) or s.id in owned or
             (origin_chat_id and s.chat_id == origin_chat_id and check_member
              and check_member(s.chat_id, tg_id))]
 
@@ -230,23 +240,24 @@ def telegram_link(season):
 
 
 def base_payload(db, season, tg_id, rows):
-    manager = admin_for(db, tg_id)
+    manager = admin_for(db, tg_id, season) if season is not None else any_admin_for(db, tg_id)
     bot_admin = is_bot_admin(tg_id)
     # Global identities inherit management authority. Read explicit appointment
     # separately so all actual assignments can be shown together.
-    appointed = manager and not bot_admin
-    if bot_admin:
-        from models import AuctionAdmin
-        appointed = db.query(AuctionAdmin.id).filter(AuctionAdmin.tg_id == tg_id).first() is not None
+    from models import AuctionAdmin, FranchiseDraftAdmin
+    from services.franchise_draft import is_draft_admin
+    appointed = db.query(AuctionAdmin.id).filter_by(tg_id=tg_id).first() is not None
+    appointed_draft = db.query(FranchiseDraftAdmin.id).filter_by(tg_id=tg_id).first() is not None
     field = A.franchises(db, season.id) if season else []
     relationships = {f.id: team_roles(f, tg_id) for f in field}
     owned = [fid for fid, relationship in relationships.items() if relationship]
-    roles = global_roles(tg_id, appointed=appointed)
+    roles = global_roles(tg_id, appointed=appointed, appointed_draft=appointed_draft)
     roles.extend(role for role in ('team_owner', 'team_co_owner', 'team_manager')
                  if any(role in relationship for relationship in relationships.values()))
     roles = roles or ['spectator']
     result = dict(ok=True, auctions=[season_row(s) for s in rows],
                   admin=manager, bot_admin=bot_admin, bot_owner='bot_owner' in roles,
+                  auction_admin=A.is_auction_admin(db,tg_id), draft_admin=is_draft_admin(db,tg_id),
                   role='manager' if manager else 'team' if owned else 'spectator',
                   roles=roles, role_labels=[ROLE_LABELS[role] for role in roles],
                   primary_role=roles[0], role_label=ROLE_LABELS[roles[0]], my_team_ids=owned,
@@ -291,7 +302,7 @@ def live_payload(db, season, tg_id):
                 playback=playback_status(db, season),
                 direct_bids=A.direct_bids_on(season),
                 upcoming=[lot_row(l) for l in A.queued_lots(db, season, limit=5)]
-                if admin_for(db, tg_id) or any(t['mine'] for t in teams) else [],
+                if admin_for(db, tg_id, season) or any(t['mine'] for t in teams) else [],
                 bids=[dict(id=b.id, team=names.get(b.franchise_id, "Team"),
                            amount_lakh=b.amount_lakh, source=b.source,
                            void=bool(b.is_void), at=stamp(b.created_at)) for b in bids],
@@ -336,7 +347,7 @@ def pool_payload(db, season, data):
 
 def preseason_payload(db, season, tg_id, raw_team=None):
     field = A.franchises(db, season.id)
-    manager = admin_for(db, tg_id)
+    manager = admin_for(db, tg_id, season)
     row = (team(db, season, raw_team) if manager and raw_team is not None else
            own_team(db, season, tg_id, raw_team) if raw_team is not None else
            A.franchise_for_actor(db, season.id, tg_id) or (next(iter(field), None) if manager else None))
@@ -385,7 +396,7 @@ def trades_payload(db, season, tg_id):
                 trades=[trade_row(db, season, t, tg_id) for t in rows
                         if t.status in (T.STATUS_COMPLETED, T.STATUS_REVERSED)
                         or t.team_a_id in owned or (t.team_b_id in owned and t.status != T.STATUS_BUILDING)
-                        or admin_for(db, tg_id)],
+                        or admin_for(db, tg_id, season)],
                 teams=[dict(id=f.id, name=f.name, mine=f.id in owned,
                             players=[lot_row(l) for l in T.trade_squad(db, season, f)])
                        for f in A.franchises(db, season.id)],
@@ -500,12 +511,12 @@ def perform(db, season, tg_id, data):
     if not isinstance(action, str):
         raise A.AuctionError("Choose an auction action.")
     if action.startswith('admin_'):
-        if not admin_for(db, tg_id):
+        if not admin_for(db, tg_id, season):
             raise AccessError("Only Auction Managers can manage the auction.")
         return admin_action(db, season, tg_id, data)
     if season is None:
         raise A.AuctionError("Choose an auction first.")
-    if action not in ('bid', 'rtm', 'rtm_stand') and not admin_for(db, tg_id):
+    if action not in ('bid', 'rtm', 'rtm_stand') and not admin_for(db, tg_id, season):
         raise AccessError("Only Auction Managers can change squads, retentions, drafts or trades. Team users can bid and view the auction.")
     if action.startswith('trade_'):
         return trade_action(db, season, tg_id, data)
@@ -515,7 +526,7 @@ def perform(db, season, tg_id, data):
         if action == 'bid':
             verdict = SPAM.check_bid(season.chat_id or season.id, tg_id,
                                      revision=SPAM.bid_revision(lot, row))
-            if not verdict.allowed and not admin_for(db, tg_id):
+            if not verdict.allowed and not admin_for(db, tg_id, season):
                 raise SPAM.RateLimited(verdict)
             A.place_bid(db, season, lot, row, integer(data.get('amount_lakh'), 'Bid', 1),
                         by_tg_id=tg_id, source='miniapp')
@@ -652,9 +663,11 @@ def optional_date(raw, name):
 
 
 def admin_action(db, season, tg_id, data):
-    if not admin_for(db, tg_id):
+    if not admin_for(db, tg_id, season):
         raise AccessError("Only Auction Managers can manage the auction.")
     action = data['action'][6:]
+    if action in ('create','clone') and not A.is_auction_admin(db,tg_id):
+        raise AccessError('Only Auction Managers can create an auction. Use /dnew to create a draft.')
     if action == 'create':
         name = str(data.get('name', '')).strip()
         if not name:

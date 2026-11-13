@@ -977,6 +977,8 @@ def start_franchise_draft(session, series, *, purse_lakh=None, rounds=15,
     from services import auction_service as A
     from services import franchise_draft as D
 
+    if by_tg_id is not None:
+        D.require_draft_admin(session, by_tg_id)
     prev, league = _require_next(session, series)
     purse = int(default_mega_purse(session, series)
                 if purse_lakh is None else purse_lakh or 0)
@@ -999,8 +1001,8 @@ def start_franchise_draft(session, series, *, purse_lakh=None, rounds=15,
         auction.retention_deadline_at = None
         auction.retention_locked_at = None
         auction.retention_mode = None
-        A.set_opening_purse(session, auction, purse, by_tg_id=by_tg_id)
         D.enable(session, auction, rounds=rounds, by_tg_id=by_tg_id)
+        A.set_opening_purse(session, auction, purse, by_tg_id=by_tg_id)
         _zero_rtm_cards(session, auction)
     except A.AuctionError as exc:
         raise LeagueSeasonError(str(exc))

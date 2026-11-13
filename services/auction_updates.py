@@ -63,12 +63,13 @@ def snapshot(db, season_id, tg_id):
     Season updated_at covers rule edits; the event cursor covers pool/ledger
     and preseason operations. The hash never exposes owner IDs or shortlists.
     """
-    from models import AuctionAdmin, AuctionEvent, AuctionFranchise, AuctionLot, AuctionSeason
+    from models import AuctionAdmin, AuctionEvent, AuctionFranchise, AuctionLot, AuctionSeason, FranchiseDraftAdmin
     from services import auction_service as A
     from services.auction_webapp import global_roles, team_roles
     from services.admin_ids import is_bot_admin
 
     delegated = select(AuctionAdmin.id).where(AuctionAdmin.tg_id == tg_id).exists()
+    draft_delegated = select(FranchiseDraftAdmin.id).where(FranchiseDraftAdmin.tg_id == tg_id).exists()
     bot_admin = is_bot_admin(tg_id)
     if season_id is None:
         # An empty dashboard must discover a newly created/assigned season.
@@ -78,9 +79,11 @@ def snapshot(db, season_id, tg_id):
             select(func.count(AuctionFranchise.id)).scalar_subquery(),
             select(func.max(AuctionFranchise.updated_at)).scalar_subquery(),
             delegated.label("delegated"),
+            draft_delegated.label("draft_delegated"),
         )
         rows = db.execute(statement).all()
-        authority = (bot_admin, tuple(global_roles(tg_id, appointed=bool(rows[0][-1]))), ())
+        authority = (bot_admin, tuple(global_roles(tg_id, appointed=bool(rows[0]._mapping['delegated']),
+                        appointed_draft=bool(rows[0]._mapping['draft_delegated']))), ())
     else:
         event_cursor = select(func.max(AuctionEvent.id)).where(
             AuctionEvent.season_id == season_id).scalar_subquery()
@@ -92,7 +95,7 @@ def snapshot(db, season_id, tg_id):
         columns += [column.label("franchise__" + column.name)
                     for column in AuctionFranchise.__table__.columns]
         statement = select(*columns, event_cursor.label("event_cursor"),
-                           delegated.label("delegated")).select_from(AuctionSeason).outerjoin(
+                           delegated.label("delegated"), draft_delegated.label("draft_delegated")).select_from(AuctionSeason).outerjoin(
             AuctionLot, AuctionLot.id == AuctionSeason.current_lot_id).outerjoin(
             AuctionFranchise, AuctionFranchise.season_id == AuctionSeason.id).where(
             AuctionSeason.id == season_id).order_by(AuctionFranchise.id)
@@ -105,7 +108,8 @@ def snapshot(db, season_id, tg_id):
                                         team_manager_ids_json=values.get("franchise__team_manager_ids_json"))
             if A.may_bid_for(franchise, tg_id):
                 owned.append((values["franchise__id"], tuple(team_roles(franchise, tg_id))))
-        authority = (bot_admin, tuple(global_roles(tg_id, appointed=bool(rows[0]._mapping["delegated"]) if rows else False)),
+        authority = (bot_admin, tuple(global_roles(tg_id, appointed=bool(rows[0]._mapping["delegated"]) if rows else False,
+                                        appointed_draft=bool(rows[0]._mapping['draft_delegated']) if rows else False)),
                      tuple(owned), bool(rows))
     raw = json.dumps([authority, [list(row) for row in rows]], default=str,
                      ensure_ascii=True, separators=(",", ":"))

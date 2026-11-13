@@ -10,12 +10,71 @@ The draft uses the existing player catalogue, CSV importer, franchise roles,
 squad rules, purse ledger and league publishing. It is a full season draft;
 the auction's existing pre-auction expansion picks remain separate.
 
+## Draft Admins and all commands
+
+Draft Admin is a separate role from Auction Manager. Bot Owners and Bot Admins
+can manage both modes. An appointed Draft Admin can manage drafts without
+owning a franchise or receiving auction/global administration rights.
+Existing Auction Managers need a Draft Admin appointment to operate drafts.
+
+```text
+/dadminadd 123456 Draft organiser
+/dadminremove 123456
+/dadmins
+/dadmin
+/draftcommands
+```
+
+Only Bot Owners and Bot Admins can appoint or remove Draft Admins. The optional
+name in `/dadminadd` is for the directory. `/dadmins` lists the appointments;
+`/dadmin` opens draft controls. The bot's private workspace also has appointment
+buttons. Role changes are checked again on each command, button and form reply.
+A Draft Admin cannot pick or skip for a team unless they also own or co-own it.
+
+`/draftcommands` sends **all 39 draft commands and aliases together**, with
+examples and role requirements. `/dcommands`, `/dcmds` and `/dhelp` open the
+same complete reference. Its button sends every section even when Telegram
+needs two messages. All draft commands are also registered in the slash-command
+menu; `/commands draft` remains searchable.
+
+| Purpose | Commands |
+| --- | --- |
+| Administration | `/dadmin`, `/dadminadd`, `/dadminremove`, `/dadmins` |
+| Complete reference | `/draftcommands`, `/dcommands`, `/dcmds`, `/dhelp` |
+| Create and bind | `/dnew`, `/dsetup`, `/dbind` |
+| Teams and money | `/dteam`, `/downer`, `/dco`, `/dpurse` |
+| Pool and fixed prices | `/dpooladd`, `/dprices`, `/dcustom` |
+| Order and rounds | `/dorder`, `/drounds`, `/daddrounds` |
+| Role and rating rules | `/drolemin`, `/drolemax`, `/dratingrule` |
+| Live draft | `/dtimer`, `/dstart`, `/dpause`, `/dresume`, `/dpick`, `/dskip` |
+| Recovery and completion | `/dundo`, `/dcancel`, `/dpublish` |
+| Public views | `/draft`, `/dboard`, `/dpool`, `/dsquad`, `/dskips`, `/drules` |
+
+Examples:
+
+```text
+/downer Team 1 | 123456
+/dco Team 1 | 234567,345678
+/dpurse Team 1 | 120cr
+/dpooladd 80-96
+/drolemin BAT=4,BOWL=4,AR=2,WK=1
+/drolemax BAT=8,BOWL=8,AR=6,WK=3
+/dratingrule 83=4
+```
+
+Owner, co-owner, role, rating and purse edits require setup or pause. Role and
+rating commands replace their table; `clear` removes it. `/dpurse` without an
+amount shows purses to everyone. `/dpublish` requires all regular and catch-up
+picks to finish. `/dcancel` requires the exact draft name, preserving squads
+and financial history. Shared `/importplayers` and guided settings recognise
+Draft Admin authority only for drafts.
+
 ## Setup
 
 1. Create the draft in the guided menu, entering a name, round count and
    opening purse. Alternatively, `/dnew Premier Season 2` creates a draft
    with 15 rounds and the default purse. In a group it binds there; in private,
-   use `/bind <season ID>` in the intended group afterwards.
+   use `/dbind <draft ID>` in the intended group afterwards.
 2. Add franchises, owners and co-owners through **Teams & roles**. A Team
    Manager role alone does not grant permission to draft players.
    New franchises can join alongside teams carried from the previous season:
@@ -27,7 +86,9 @@ the auction's existing pre-auction expansion picks remain separate.
 4. Set draft prices, order, squad rules, purse and `/dtimer 10` before `/dstart`.
 
 To use an existing empty auction setup as a draft, select it in `/auction`
-and run `/dsetup 15`. A setup with existing signings or bids cannot change mode.
+and run `/dsetup 15`. Converting an auction requires both Auction Manager and
+Draft Admin authority (Bot Owners/Admins have both). A setup with existing
+signings or bids cannot change mode.
 
 ## Prices
 
@@ -164,7 +225,7 @@ restored turn a full window when resumed. Published squads are locked. The turn 
 confirmation state, turn, purses and announcement cursor survive restarts.
 Telegram delivery runs after committed picks; failed sends are retried.
 
-After all scheduled and catch-up picks, publish with `/apublish` or **Publish squads**. The normal
+After all scheduled and catch-up picks, publish with `/dpublish` or **Publish squads**. The normal
 League Season tournament creation and previous-season statistics continue to
 work. Ordinary auction bidding, timers, simulated finishing, expansion picks,
 manual roster edits and pre-publication trades cannot change a draft's squads.
