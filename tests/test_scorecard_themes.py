@@ -9,7 +9,7 @@ import pytest
 from PIL import Image, ImageChops
 
 from services import match_summary_card as summary
-from services.scorecard_theme_catalog import THEMES, THEME_BY_KEY, NORMAL, theme_from_config
+from services.scorecard_theme_catalog import THEMES, THEME_BY_KEY, NORMAL, SPACIAL, theme_from_config
 
 
 def _summary_payload():
@@ -88,7 +88,15 @@ def test_turning_off_restores_the_normal_pixels_without_leaking_palette(summary_
     assert summary.generate_match_summary(**payload, theme="unknown") == normal_png
 
 
-@pytest.mark.parametrize("theme", [t.key for t in THEMES if t.key != NORMAL])
+def test_spacial_renders_the_original_html_without_a_tournament_switch():
+    from services.tournament_summary_card import preview_payload
+    payload = preview_payload()
+    payload.pop("special_graphics")
+    image = _image(summary.generate_match_summary(**payload, theme=SPACIAL))
+    assert image.size == (1536, 864)
+
+
+@pytest.mark.parametrize("theme", [t.key for t in THEMES if t.key not in (NORMAL, SPACIAL)])
 def test_each_theme_preserves_live_table_values_and_has_its_own_art(theme, summary_images):
     payload, normal_png, _ = summary_images
     image = _image(summary.generate_match_summary(**payload, theme=theme))
@@ -230,6 +238,22 @@ def test_resaving_the_same_theme_keeps_cached_images_and_rollback_is_atomic(pane
         assert session.query(panel.models.MatchScorecardImage).one().file_id == "normal-photo"
 
 
+def test_spacial_is_named_saved_previewed_and_invalidates_old_images(panel):
+    _cached_card(panel)
+    response = panel.client.post("/settings/scorecard", data=_form(scorecard_theme=SPACIAL))
+    assert response.status_code == 302
+    assert panel.config.get_scorecard_theme() == SPACIAL
+    page = panel.client.get("/settings/scorecard")
+    assert _selected_theme(page.text) == SPACIAL
+    assert '<strong>Spacial</strong>' in page.text
+    assert 'spacial-thumb.webp' in page.text
+    with panel.sessions() as session:
+        assert session.query(panel.models.MatchScorecardImage).one().file_id is None
+    preview = panel.client.get("/settings/scorecard/preview?card_type=summary&theme=spacial")
+    assert preview.status_code == 200
+    assert _image(preview.data).size == (1536, 864)
+
+
 def test_switching_between_festivals_keeps_exactly_one_active_and_redraws_replays(panel):
     _cached_card(panel)
     for theme in [t.key for t in THEMES if t.key != NORMAL] + [NORMAL]:
@@ -357,7 +381,7 @@ const source = fs.readFileSync(process.argv[1], 'utf8').split('<script>')[1].spl
 const handlers = {}, elements = {
   scorecard_theme_state: {textContent:''}, color_inn1:{value:'#0065b3'}, color_inn2:{value:'#ed6500'}
 };
-const choices = [['normal','Normal'],['diwali','Diwali'],['winter','Winter'],['christmas','Christmas'],
+const choices = [['normal','Normal'],['spacial','Spacial'],['diwali','Diwali'],['winter','Winter'],['christmas','Christmas'],
  ['new_year','New Year'],['makar_sankranti','Makar Sankranti'],['republic_day','Republic Day']];
 const radios = choices.map(([value,label])=>({value,checked:value==='normal',dataset:{themeLabel:label},
  addEventListener:(event, callback)=>handlers[event]=callback}));

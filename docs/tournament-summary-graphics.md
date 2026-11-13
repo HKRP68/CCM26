@@ -4,6 +4,9 @@ Open **Tournament → Manage → Match-summary graphics**, choose **Special
 tournament graphics · Original HTML**, and save. Challenge League and Lets
 Play tournaments have independent switches; the default remains standard.
 
+You can also select **Spacial** in **Scorecard Designer** to use this original
+HTML summary globally, including matches outside tournaments.
+
 The supplied file is preserved unchanged at
 `templates/graphics/CMU_S5_Match_Summary.html`, including its embedded stadium
 artwork, angled innings panels, gold result banner and slim POTM ticker.

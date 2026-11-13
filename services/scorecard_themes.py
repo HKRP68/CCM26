@@ -25,7 +25,7 @@ _ART = _ROOT / "static" / "scorecard_themes"
 _FONTS = _ROOT / "assets" / "fonts"
 
 
-@lru_cache(maxsize=7)
+@lru_cache(maxsize=8)
 def _artwork(theme):
     with Image.open(_ART / f"{theme}.webp") as source:
         return source.convert("RGBA")

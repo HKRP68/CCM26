@@ -482,6 +482,18 @@ class SummaryVisualsTests(_Base):
         self.assertEqual(visuals["inn1_color"], "#aa001b")
         self.assertEqual(visuals["inn2_color"], "#0065b3")
 
+    def test_global_spacial_theme_keeps_brand_colours_without_a_tournament(self):
+        from unittest.mock import patch
+        one = self._user(team_name="Spacial One", colour="#ffee00")
+        two = self._user(team_name="Spacial Two", colour="#ffee00")
+        with patch("services.config_service.get_scorecard_theme", return_value="spacial"):
+            visuals = self.ci.summary_visuals(self.session, inn1_user_id=one.id,
+                                             inn2_user_id=two.id, include_style=False)
+        self.assertEqual(visuals["theme"], "spacial")
+        self.assertEqual(visuals["inn1_color"], "#ffee00")
+        self.assertEqual(visuals["inn2_color"], "#ffee00")
+        self.assertNotIn("special_graphics", visuals)
+
     def test_special_graphics_are_scoped_to_the_match_tournament(self):
         from models import Tournament
         special = Tournament(name="Broadcast Cup", special_graphics_enabled=True)

@@ -7,12 +7,19 @@ to turn seasonal artwork off and use the standard broadcast design.
 | Theme | Presentation |
 | --- | --- |
 | Normal | Floodlit stadium, midnight navy, brushed gold, bright team tables and a framed Player of the Match showcase. |
+| Spacial | The supplied original CMU HTML match summary, with angled panels, team colours, gold result banner and slim POTM ticker. |
 | Diwali | Ornate lanterns, glowing oil lamps, marigolds, rangoli and gold trim. |
 | Winter | Alpine peaks, frosted pines, a snowy cricket ball, ice rims and icicles. |
 | Christmas | Garlands, warm fairy lights, ruby ribbons, presents and a snowy village. |
 | New Year | Champagne fireworks, a golden skyline, an hourglass and the celebration year. |
 | Makar Sankranti | Silk kites, sunset rooftops, brass bowls, festival sweets and a kite reel. |
 | Republic Day | Tricolour ribbons, civic landmarks, a flypast and a 24-spoke Chakra. |
+
+Select **Spacial** in the Scorecard tab to use the original HTML match summary
+globally, including outside tournaments. The existing tournament graphics switch
+can also enable it for one tournament. Batting, bowling and four-innings Test
+cards keep their broadcast layouts. PNG export requires Chromium, included in
+the Docker setup. See [Original HTML tournament summaries](tournament-summary-graphics.md).
 
 The base and six seasonal designs use locally bundled illustrated artwork,
 shaded metallic frames and their own palette. The batting/bowling cards, match summary,
@@ -41,7 +48,7 @@ text is fitted within its band, while explicit X/Y controls still reposition it.
 Unused batting and bowling rows show muted dashes instead of padding zeroes.
 
 `game_config.scorecard_theme` is the authoritative single selection. Its values
-are `normal`, `diwali`, `winter`, `christmas`, `new_year`, `makar_sankranti` and
+are `normal`, `spacial`, `diwali`, `winter`, `christmas`, `new_year`, `makar_sankranti` and
 `republic_day`. The normal startup migration adds this nullable column. A null
 selection falls back to the old `scorecard_diwali_theme` flag, preserving an
 existing Diwali installation. Saving synchronizes that legacy flag with the

@@ -579,6 +579,7 @@ def summary_visuals(session, *, inn1_team=None, inn2_team=None,
     can explicitly select it for a sample preview without changing the setting.
     """
     from services.config_service import get_scorecard_theme
+    from services.scorecard_theme_catalog import SPACIAL
     theme = get_scorecard_theme(session)
     default1, default2, text_settings, dynamic = _admin_colours()
 
@@ -609,7 +610,7 @@ def summary_visuals(session, *, inn1_team=None, inn2_team=None,
     # Only separate when the two sides actually chose colours that clash;
     # the admin defaults are already distinct by design.
     rgb1, rgb2 = hex_to_rgb(colour1), hex_to_rgb(colour2)
-    if rgb1 and rgb2 and not special_graphics:
+    if rgb1 and rgb2 and not (special_graphics or theme == SPACIAL):
         moved = separate_colours(rgb1, rgb2, fallback=hex_to_rgb(default2))
         if moved and tuple(moved) != tuple(rgb2):
             logger.info("team colours %s/%s were too close; innings 2 shifted to %s",

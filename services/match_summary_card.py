@@ -32,7 +32,7 @@ from services.scorecard_themes import (
     draw_theme_panel, draw_header_ornament, normalize_theme,
 )
 from services.scorecard_theme_catalog import (
-    CHRISTMAS, NEW_YEAR, REPUBLIC_DAY, SANKRANTI, theme_definition,
+    CHRISTMAS, NEW_YEAR, REPUBLIC_DAY, SANKRANTI, SPACIAL, theme_definition,
 )
 
 try:
@@ -1383,7 +1383,7 @@ def generate_match_summary(*,
     The default keeps the normal poster. Match values and branding stay live.
     ``special_graphics`` renders the supplied original HTML tournament design.
     """
-    if special_graphics:
+    if special_graphics or normalize_theme(theme) == SPACIAL:
         payload = dict(locals())
         from services.tournament_summary_card import generate_tournament_summary
         return generate_tournament_summary(payload)
