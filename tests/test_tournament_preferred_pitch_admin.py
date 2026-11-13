@@ -165,6 +165,63 @@ class PreferredPitchAdminTests(unittest.TestCase):
         self.assertEqual(t.mid_match_injury_chance, 100,
                          "older forms must not reset the medical chance")
 
+    def test_special_tournament_graphics_can_be_enabled_previewed_and_disabled(self):
+        import io
+        from PIL import Image
+        t = self.create()
+        self.assertFalse(t.special_graphics_enabled)
+        self.assertIn('name="special_graphics_enabled"', self.detail(t))
+        for enabled in ("1", "0"):
+            self.detail(t, {"action": "save_graphics", "special_graphics_enabled": enabled})
+            self.assertEqual(t.special_graphics_enabled, enabled == "1")
+        self.detail(t, {"action": "save_graphics", "special_graphics_enabled": "invalid"})
+        self.assertFalse(t.special_graphics_enabled)
+        response = self.client.get(f"/tournaments/{t.id}/summary-preview.png")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "image/png")
+        self.assertEqual(Image.open(io.BytesIO(response.data)).size, (1536, 864))
+        html = self.client.get(f"/tournaments/{t.id}/summary-preview.html")
+        self.assertEqual(html.status_code, 200)
+        self.assertEqual(html.mimetype, "text/html")
+        self.assertIn('class="potm-strip-inner"', html.get_data(as_text=True))
+        self.session.expire_all()
+        self.assertFalse(t.special_graphics_enabled, "preview must not enable the design")
+
+    def test_letsplay_has_an_independent_graphics_switch(self):
+        from models import Tournament
+        t = Tournament(name="LP graphics", kind="letsplay")
+        self.session.add(t)
+        self.session.commit()
+        body = self.detail(t, {"action": "save_graphics", "special_graphics_enabled": "1"})
+        self.assertTrue(t.special_graphics_enabled)
+        self.assertIn("Special tournament graphics", body)
+
+    def test_changing_graphics_invalidates_only_this_tournaments_summary_cache(self):
+        from models import Match, MatchScorecardImage, TournamentMatch, User
+        tour, other = self.create(), self.create()
+        users = [User(telegram_id=8_900_000 + next(_PID)) for _ in range(2)]
+        self.session.add_all(users)
+        self.session.flush()
+        matches = [Match(user1_id=users[0].id, user2_id=users[1].id,
+                         tournament_id=tour_id)
+                   for tour_id in (tour.id, other.id, None, None)]
+        self.session.add_all(matches)
+        self.session.flush()
+        self.session.add(TournamentMatch(tournament_id=tour.id, match_id=matches[3].id))
+        images = [MatchScorecardImage(match_id=match.id, card_type=kind,
+                      innings=0 if kind == "summary" else 1, payload_json="{}",
+                      file_id="cached", delivered=True)
+                  for match in matches for kind in ("summary", "batting")]
+        self.session.add_all(images)
+        self.session.commit()
+        self.detail(tour, {"action": "save_graphics", "special_graphics_enabled": "1"})
+        for image in images:
+            changed = image.card_type == "summary" and image.match_id in (
+                matches[0].id, matches[3].id)
+            self.assertEqual(image.file_id, None if changed else "cached")
+            self.assertTrue(image.delivered)
+            self.assertEqual(image.payload_json, "{}")
+
     def test_mid_match_injury_probability_is_clamped_and_defaults_to_five(self):
         t = self.create()
         self.assertEqual(t.mid_match_injury_chance, 5)

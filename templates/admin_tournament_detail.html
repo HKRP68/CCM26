@@ -88,6 +88,31 @@
     <p style="color:var(--muted); font-size:.84rem; margin:.7rem 0 0;">{% if is_lp %}<code>/lptour</code>{% else %}The tournament command{% endif %} only starts matches when this tournament is <strong>active</strong> (status = active and live). Activating it deactivates any other active {% if is_lp %}Lets Play{% else %}Challenge League{% endif %} tournament — the two kinds run independently, so one of each can be live at the same time.</p>
   </section>
 
+  <section class="tour-card" id="match-summary-graphics">
+    <h3 style="margin-top:0;">Match-summary graphics</h3>
+    <p style="color:var(--muted);font-size:.88rem;">Special tournament graphics use your original CMU HTML design: angled team panels, stadium artwork, a gold result banner and the slim POTM strip. Team colours and readable text are applied automatically.</p>
+    <form method="POST" class="tour-form-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="save_graphics">
+      <div>
+        <label for="special-graphics">Summary design</label>
+        <select name="special_graphics_enabled" id="special-graphics">
+          <option value="0" {{ 'selected' if not t.special_graphics_enabled else '' }}>Standard graphics</option>
+          <option value="1" {{ 'selected' if t.special_graphics_enabled else '' }}>Special tournament graphics · Original HTML</option>
+        </select>
+      </div>
+      <div style="align-self:end;"><button class="btn btn-primary" type="submit">Save graphics</button></div>
+    </form>
+    <p style="color:var(--muted);font-size:.82rem;">Applies to this tournament's new summaries and scorecards rendered again with /lastscorecard. Team colours and crests come from the participating teams. Existing Telegram images keep their original appearance.</p>
+    <details>
+      <summary style="cursor:pointer;">Preview special graphics with your teams</summary>
+      <p style="color:var(--muted);font-size:.82rem;">Sample scores and players; previewing does not change your tournament.</p>
+      <iframe src="{{ url_for('admin_tournament_summary_preview_html', tournament_id=t.id) }}" loading="lazy" title="Original CMU HTML summary with sample scores" style="width:100%;aspect-ratio:16/9;border:0;display:block;"></iframe>
+      <a href="{{ url_for('admin_tournament_summary_preview_html', tournament_id=t.id) }}" target="_blank" rel="noopener">Open editable HTML preview</a>
+      · <a href="{{ url_for('admin_tournament_summary_preview', tournament_id=t.id) }}" target="_blank" rel="noopener">Open PNG preview</a>
+    </details>
+  </section>
+
   <!-- Settings -->
   <section class="tour-card">
     <h3 style="margin-top:0;">Settings</h3>

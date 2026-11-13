@@ -482,6 +482,38 @@ class SummaryVisualsTests(_Base):
         self.assertEqual(visuals["inn1_color"], "#aa001b")
         self.assertEqual(visuals["inn2_color"], "#0065b3")
 
+    def test_special_graphics_are_scoped_to_the_match_tournament(self):
+        from models import Tournament
+        special = Tournament(name="Broadcast Cup", special_graphics_enabled=True)
+        standard = Tournament(name="Standard Cup")
+        self.session.add_all([special, standard])
+        self.session.commit()
+        for tour, expected in ((special, True), (standard, False)):
+            with self.subTest(tournament=tour.name):
+                visuals = self.ci.summary_visuals(self.session, tournament_id=tour.id)
+                self.assertEqual(visuals["special_graphics"], expected)
+                self.assertEqual(visuals["tournament_name"], tour.name)
+        self.assertFalse(self.ci.summary_visuals(self.session).get("special_graphics"))
+
+    def test_special_graphics_keep_identical_brand_colours_and_resolve_changes_live(self):
+        from models import Tournament
+        one = self._user(team_name="Same One", colour="#ffee00")
+        two = self._user(team_name="Same Two", colour="#ffee00")
+        tour = Tournament(name="Brand Cup", special_graphics_enabled=True)
+        self.session.add(tour)
+        self.session.commit()
+        def visuals():
+            return self.ci.summary_visuals(self.session, tournament_id=tour.id,
+                inn1_user_id=one.id, inn2_user_id=two.id)
+        special = visuals()
+        self.assertEqual((special["inn1_color"], special["inn2_color"]),
+                         ("#ffee00", "#ffee00"))
+        tour.special_graphics_enabled = False
+        self.session.commit()
+        standard = visuals()
+        self.assertFalse(standard["special_graphics"])
+        self.assertNotEqual(standard["inn2_color"], "#ffee00")
+
     def test_the_card_renders_from_what_it_returns(self):
         """The contract that matters: whatever comes back has to be spreadable
         straight into the generator."""

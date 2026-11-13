@@ -353,7 +353,8 @@ def queue_fixture_result(session, fixture):
             inn1_runs=fixture.inn1_runs, inn1_wickets=fixture.inn1_wickets, inn1_overs=_overs(fixture.inn1_balls),
             inn2_runs=fixture.inn2_runs, inn2_wickets=fixture.inn2_wickets, inn2_overs=_overs(fixture.inn2_balls),
             winner_name=result['winner'] or 'Match Tied', win_margin_text=fixture.result_text or '',
-            overs_total=tour.overs, tournament_id=tour.id))
+            overs_total=tour.overs, tournament_id=tour.id,
+            match_no=fixture.match_no, stadium=fixture.venue, pitch_type=fixture.pitch_type))
     except Exception:
         logger.exception('Manual match summary render failed for fixture %s', fixture.id)
     return queue(session, tour, f'fixture:{fixture.id}', 'match', caption, photo)

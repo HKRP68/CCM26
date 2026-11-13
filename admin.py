@@ -11234,6 +11234,7 @@ def _build_match_summary_image(match, sc, result_text, arena, pom,
             top_wicket=top_wicket,
             top_per_team=top_per_team,
             stadium=match.stadium or arena.get("stadium"),
+            pitch_type=getattr(match, "pitch_type", None) or arena.get("pitch_type"),
             match_date=(getattr(match, "completed_at", None)
                         or _dt.utcnow()).isoformat(),
             is_spectator=bool(arena.get("is_spectator")),
@@ -17653,6 +17654,18 @@ def admin_tournament_detail(tournament_id):
                                   "fixture(s) re-stamped.", "info")
                     log_admin(db, "tournament_edit", "tournament", t.id, t.name)
                     flash("✅ Saved tournament settings.", "success")
+                elif action == "save_graphics":
+                    choice = request.form.get("special_graphics_enabled")
+                    if choice not in ("0", "1"):
+                        raise ValueError("Choose standard or special tournament graphics.")
+                    enabled = choice == "1"
+                    if bool(t.special_graphics_enabled) != enabled:
+                        from services.scorecard_delivery import invalidate_tournament_summary_cache
+                        invalidate_tournament_summary_cache(db, t.id)
+                    t.special_graphics_enabled = enabled
+                    log_admin(db, "tournament_graphics", "tournament", t.id,
+                              "special" if t.special_graphics_enabled else "standard")
+                    flash("Tournament match-summary graphics saved.", "success")
                 elif action == "save_fixture_release":
                     from services import league_schedule_service as _release
                     _release.configure_release(db, t, request.form.get("fixture_release_mode"),
@@ -18427,6 +18440,42 @@ def admin_tournament_detail(tournament_id):
                                               and t.status == "completed"),
                                follows=auction_svc.season_following_league(
                                    db, t.league_id))
+    finally:
+        db.close()
+
+
+@app.route("/tournaments/<int:tournament_id>/summary-preview.html",
+           defaults={"as_html": True}, endpoint="admin_tournament_summary_preview_html")
+@app.route("/tournaments/<int:tournament_id>/summary-preview.png")
+@login_required
+def admin_tournament_summary_preview(tournament_id, as_html=False):
+    """Preview this tournament's branding with clearly labelled sample scores."""
+    from services.card_identity import summary_visuals
+    from services.tournament_summary_card import (
+        build_tournament_summary_html, generate_tournament_summary, preview_payload,
+    )
+    db = get_session()
+    try:
+        tour = _get_tournament_or_404(db, tournament_id)
+        if not tour:
+            abort(404)
+        teams = (db.query(TournamentTeam).filter_by(tournament_id=tour.id)
+                 .order_by(TournamentTeam.sort_order, TournamentTeam.id).limit(2).all())
+        payload = preview_payload(teams, tournament_name=tour.name)
+        payload.update(summary_visuals(
+            db, inn1_team=payload["inn1_team"], inn2_team=payload["inn2_team"],
+            tournament_id=tour.id,
+            inn1_team_id=teams[0].id if teams else None,
+            inn2_team_id=teams[1].id if len(teams) > 1 else None,
+            include_style=False, special_graphics=True))
+        payload["preview"] = True
+        if as_html:
+            return Response(build_tournament_summary_html(payload, editable=True),
+                            mimetype="text/html", headers={"Cache-Control": "no-store"})
+        png = generate_tournament_summary(payload)
+        if not png:
+            abort(503)
+        return Response(png, mimetype="image/png", headers={"Cache-Control": "no-store"})
     finally:
         db.close()
 

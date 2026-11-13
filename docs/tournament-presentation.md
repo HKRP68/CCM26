@@ -1,5 +1,9 @@
 # Tournament records and presentations
 
+**Tournament → Manage → Match-summary graphics** enables the original CMU HTML
+summary with team colours, automatic text contrast and a sample
+preview. See [Special tournament match summaries](tournament-summary-graphics.md).
+
 - Records stay silent during play. Once the scorecard is committed, the group receives one `match-<id>-all-seasons-records.md` document for the competition. It includes a short match summary, all-time records established/broken/equalled in that match with previous holders, the complete all-seasons record book, and career runs/wickets leaderboards through rank three (including ties). Linked live and archived seasons count; later matches and seasons do not. Individual performance records include their season, match, venue and scorecard link when available. Historical aggregates are labelled, qualification rules are shown, and missing delivery evidence is never invented. Scorecard corrections update the same document, including later reports affected by an earlier season's correction.
 - `/seasons record [competition]` downloads the latest season's current holders, including joint holders and rate qualification minimums. The season and record cards also have a Records file button and an opener-only Close button.
 - League fixtures and each playoff stage appear in separate sections in Telegram, the tournament Mini App and the admin overview.

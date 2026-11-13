@@ -765,6 +765,7 @@ def _migrate_add_columns():
     _try_add("tournaments", "league_match_target", "FLOAT")
     _try_add("tournaments", "group_points_mode", "VARCHAR(20) DEFAULT 'separate'")
     _try_add("tournaments", "schedule_generated", "BOOLEAN DEFAULT FALSE")
+    _try_add("tournaments", "special_graphics_enabled", "BOOLEAN NOT NULL DEFAULT FALSE")
     _try_add("tournaments", "knockout_type", "VARCHAR(30)")
     _try_add("tournaments", "knockout_config_json", "TEXT")
     _try_add("tournaments", "knockout_generated", "BOOLEAN DEFAULT FALSE")

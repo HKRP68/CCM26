@@ -6939,6 +6939,7 @@ async def _end_innings(ctx, mid):
                 "top_per_team": top_per_team,
                 "stadium": s.get("stadium"),
                 "match_date": datetime.utcnow().isoformat(),
+                "pitch_type": s.get("pitch_type"),
                 "is_spectator": bool(s.get("is_spectator")),
                 "match_no": mid,
                 # Each side's owner, and the competition this was played in.

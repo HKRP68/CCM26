@@ -563,7 +563,7 @@ def summary_visuals(session, *, inn1_team=None, inn2_team=None,
                     potm_player_id=None, potm_name=None, league_key=None,
                     tournament_id=None, inn1_team_id=None, inn2_team_id=None,
                     inn1_challenge_team_id=None, inn2_challenge_team_id=None,
-                    potm_card=False, include_style=True):
+                    potm_card=False, include_style=True, special_graphics=None):
     """Every branded argument the summary card takes.
 
     Spread this into ``generate_match_summary(**payload, **visuals)`` and the
@@ -575,10 +575,24 @@ def summary_visuals(session, *, inn1_team=None, inn2_team=None,
     ``inn1_challenge_team_id``/``inn2_challenge_team_id`` are ``ChallengeTeam``
     ids: pass whichever the mode has, and the event's crest is what the card
     wears. ``potm_card`` adds the award winner's collectible card to the strip.
+    Tournament settings select the summary design live. ``special_graphics``
+    can explicitly select it for a sample preview without changing the setting.
     """
     from services.config_service import get_scorecard_theme
     theme = get_scorecard_theme(session)
     default1, default2, text_settings, dynamic = _admin_colours()
+
+    tour = None
+    if session is not None and tournament_id:
+        from models import Tournament
+        try:
+            tour_id = int(tournament_id)
+        except (TypeError, ValueError):
+            tour_id = None
+        if tour_id is not None:
+            tour = session.get(Tournament, tour_id)
+    if special_graphics is None:
+        special_graphics = bool(getattr(tour, "special_graphics_enabled", False))
 
     event1 = {"league_key": league_key, "tournament_id": tournament_id,
               "tournament_team_id": inn1_team_id,
@@ -595,7 +609,7 @@ def summary_visuals(session, *, inn1_team=None, inn2_team=None,
     # Only separate when the two sides actually chose colours that clash;
     # the admin defaults are already distinct by design.
     rgb1, rgb2 = hex_to_rgb(colour1), hex_to_rgb(colour2)
-    if rgb1 and rgb2:
+    if rgb1 and rgb2 and not special_graphics:
         moved = separate_colours(rgb1, rgb2, fallback=hex_to_rgb(default2))
         if moved and tuple(moved) != tuple(rgb2):
             logger.info("team colours %s/%s were too close; innings 2 shifted to %s",
@@ -613,6 +627,11 @@ def summary_visuals(session, *, inn1_team=None, inn2_team=None,
                                             name=potm_name),
     }
     visuals["theme"] = theme
+    # Other summary generators (including Test matches) spread these visuals
+    # too. Only tournament summaries opt into the additional design arguments.
+    if tour is not None or special_graphics:
+        visuals["special_graphics"] = bool(special_graphics)
+        visuals["tournament_name"] = getattr(tour, "name", None)
     if potm_card:
         visuals["potm_card_png"] = potm_card_png(session, player_id=potm_player_id,
                                                  name=potm_name)

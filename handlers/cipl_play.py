@@ -6060,6 +6060,7 @@ def _build_cipl_summary_image(state, result):
         "is_hundred": is_hundred,
         "stadium": state.get("stadium"),
         "potm_name": potm_name,
+        "pitch_type": state.get("pitch_type"),
         "potm_stats": potm_stats,
         "potm_team": with_bot_tag(state, potm_team),
         "top_per_team": {

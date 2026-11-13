@@ -9,3 +9,4 @@ flask-wtf>=1.2.0
 bcrypt>=4.0.0
 PyYAML>=6.0
 requests>=2.32.0
+playwright>=1.49,<2

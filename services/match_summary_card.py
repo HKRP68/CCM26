@@ -1367,9 +1367,12 @@ def generate_match_summary(*,
     tagline=None,
     dynamic_flourish=False,
     conditions=None,
+    pitch_type=None,
     inn1_score_text=None,
     inn2_score_text=None,
     theme=NORMAL,
+    special_graphics=False,
+    tournament_name=None,
 ) -> bytes | None:
     """Render the match summary card. Returns PNG bytes or ``None`` on failure.
 
@@ -1378,7 +1381,12 @@ def generate_match_summary(*,
     the strip's height; without chips it is the standard 1675×986 broadcast card.
     A seasonal ``theme`` adds its illustrated artwork, frame and footer.
     The default keeps the normal poster. Match values and branding stay live.
+    ``special_graphics`` renders the supplied original HTML tournament design.
     """
+    if special_graphics:
+        payload = dict(locals())
+        from services.tournament_summary_card import generate_tournament_summary
+        return generate_tournament_summary(payload)
     try:
         ts = text_settings
         theme = normalize_theme(theme)

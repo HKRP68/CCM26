@@ -417,6 +417,26 @@ def _sort_key(card):
     return (innings_rank, type_rank)
 
 
+def invalidate_tournament_summary_cache(session, tournament_id):
+    """Redraw this tournament's summaries on replay after a design change.
+
+    Only cached pixels change. Delivery history and the stored cricket payload
+    stay intact. Fixture links include older matches lacking Match.tournament_id.
+    The caller commits this together with the tournament setting.
+    """
+    from sqlalchemy import select
+    from models import Match, MatchScorecardImage, TournamentMatch
+    match_ids = select(Match.id).where(Match.tournament_id == tournament_id).union(
+        select(TournamentMatch.match_id).where(
+            TournamentMatch.tournament_id == tournament_id,
+            TournamentMatch.match_id.isnot(None)))
+    return session.query(MatchScorecardImage).filter(
+        MatchScorecardImage.card_type == CARD_SUMMARY,
+        MatchScorecardImage.match_id.in_(match_ids),
+        MatchScorecardImage.file_id.isnot(None),
+    ).update({MatchScorecardImage.file_id: None}, synchronize_session=False)
+
+
 def record_cards(match_id, chat_id, cards):
     """Persist render-ready payloads for one or more cards of a match.
 
