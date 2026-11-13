@@ -134,6 +134,9 @@ def perform(db,season,actor,kind,payload,reason):
         for lot in D._available(db,season):D.price_for(db,season,lot)
     elif kind=='rounds':D.configure_rounds(db,season,payload['rounds'],by_tg_id=actor)
     elif kind=='undo':D.undo_last(db,season,by_tg_id=actor)
+    elif kind=='importteams':
+        from services import franchise_team_import as I
+        I.apply(db,season,payload['source_kind'],payload['source_id'],fingerprint=payload['fingerprint'],actor=actor)
     elif kind=='start':
         check=readiness(db,season)
         if not check['ready']:raise A.AuctionError('\n'.join(check['errors'][:20]))
@@ -233,6 +236,11 @@ def prepare(db,season,actor,kind,payload,reason=''):
     if len(reason)>300:raise A.AuctionError('Use a correction reason of at most 300 characters.')
     if D.started(db,season) and kind not in ('start',) and not reason:
         raise A.AuctionError('A live-season correction needs a reason. Pause first, then use /dcorrect kind | reason | value.')
+    team_import=None
+    if kind=='importteams':
+        from services import franchise_team_import as I
+        team_import=I.preview(db,season,payload['source_kind'],payload['source_id'])
+        payload=dict(payload,fingerprint=team_import['fingerprint'])
     before=summary(db,season)
     old_prices={}
     for lot in D._available(db,season):
@@ -259,7 +267,7 @@ def prepare(db,season,actor,kind,payload,reason=''):
     finally:
         transaction.rollback()
     db.expire_all()
-    preview=dict(before=before,after=after,prices=prices,requested_ids=requested_ids,fingerprint=stamp)
+    preview=dict(before=before,after=after,prices=prices,requested_ids=requested_ids,fingerprint=stamp,team_import=team_import)
     row=FranchiseDraftAction(token=secrets.token_hex(12),season_id=season.id,actor_tg_id=actor,
         revision=D.get_draft(db,season).revision,kind=kind,payload_json=D._dump(payload),
         preview_json=D._dump(preview),reason=reason,status='pending')

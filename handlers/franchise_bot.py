@@ -109,6 +109,15 @@ def read_workspace(db, actor, sid, chat_id, view='home', argument=''):
     if chat_id>0 and view in ('seasons','auctionseasons','draftseasons'):
         sid=None
     season,rows=_resolve(db,actor,sid,chat_id)
+    if view=='draftsources':
+        from services import franchise_draft as D,franchise_team_import as I
+        D.require_draft_admin(db,actor)
+        if season is None or D.get_draft(db,season) is None:raise A.AuctionError('Select a Franchise Draft season first.')
+        if D.started(db,season) or season.status!=A.STATUS_SETUP:raise A.AuctionError('Import teams before the draft starts.')
+        result=W.base_payload(db,season,actor,rows)
+        result['import_sources'],result['has_more_sources']=I.sources(db,max(1,int(argument or 1)))
+        result['franchise_draft']={'source_picker':True}
+        return result
     if view in ('auctionseasons','draftseasons'):
         result=W.base_payload(db,None,actor,rows)
         mode='draft' if view=='draftseasons' else 'auction'
@@ -200,6 +209,8 @@ def execute_action(db, actor, sid, chat_id, action, values):
                 season=A.season_from_league(db,league,name,by_tg_id=actor)
                 D.enable(db,season,rounds=rounds,by_tg_id=actor)
                 A.set_opening_purse(db,season,purse,by_tg_id=actor)
+            from services import franchise_team_import as I
+            I.apply(db,season,'league',league.id,actor=actor)
         else:
             season=A.create_season(db,name,opening_purse_lakh=purse)
             D.enable(db,season,rounds=rounds,by_tg_id=actor)
@@ -374,6 +385,17 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
         if page>1:buttons+=_rows(actor,sid,[[('← Previous leagues',f'v:leagues:{page-1}')]])
         if data.get('has_more_leagues'):buttons+=_rows(actor,sid,[[('More leagues →',f'v:leagues:{page+1}')]])
         if season:buttons+=_rows(actor,sid,[[('Link league to this auction','f:previous')]])
+    elif view=='draftsources':
+        header+=['','<b>🏟 Import franchises, owners &amp; team details</b>',
+                 'Choose a previous tournament or league. Review its teams and ownership before confirming. Existing roles and budgets stay intact.']
+        for source in data.get('import_sources',[]):
+            label=('🏆 Tournament' if source['kind']=='tournament' else '🏟 League')+f' #{source["id"]} · '+source['name'][:35]
+            buttons+=_rows(actor,sid,[[(label,f'timp:{source["kind"]}:{source["id"]}')]])
+        if not data.get('import_sources'):header+=['No previous tournaments or leagues found.']
+        page=max(1,int(argument or 1))
+        if page>1:buttons+=_rows(actor,sid,[[('← Earlier sources',f'v:draftsources:{page-1}')]])
+        if data.get('has_more_sources'):buttons+=_rows(actor,sid,[[('More sources →',f'v:draftsources:{page+1}')]])
+        buttons+=_rows(actor,sid,[[('Back to Draft','v:franchisedraft')]])
     elif view=='franchisedraft' or (draft and view in ('live','control')):
         if not draft:raise A.AuctionError('Select a draft season, or use /dsetup during setup.')
         header += ['',draft['board'],'','Pick: <code>/dpick Joe Root</code> · /dpool · /dsquad · /drules']
@@ -388,6 +410,7 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
                 [('Refund retained contract','f:draftunretain')],
                 [('Undo last turn','dgo:undo'),('Squad rules','v:settings')],
                 [('Teams & roles','v:teamroles'),('Publish squads','f:publish')]])
+            if season.get('status')=='setup':buttons+=_rows(actor,sid,[[('🏟 Import previous teams & owners','v:draftsources:1')]])
             if season.get('status') in ('setup','paused'):buttons+=_rows(actor,sid,[[('Start / resume','dgo:start')]])
             elif season.get('status')=='live':buttons+=_rows(actor,sid,[[('Pause','dgo:pause')]])
     elif view=='live':
@@ -416,6 +439,7 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
             header += [f"{_e(team['name'],45)} · {_money(team['purse_lakh'],currency)} · {team['size']}/{season['max_squad']} players"]
             buttons+=_rows(actor,sid,[[(_e(team['name'],30).replace('&amp;','&'),f"v:team:{team['id']}")]])
         if manager:buttons+=_rows(actor,sid,[[('➕ Add franchise','f:teamadd')]])
+        if manager and draft and season.get('status')=='setup':buttons+=_rows(actor,sid,[[('🏟 Import previous teams & owners','v:draftsources:1')]])
     elif view=='team':
         pieces=(argument or '').split('-');tid=int(pieces[0]);page=max(1,int(pieces[1] if len(pieces)>1 else 1))
         team=next((t for t in data.get('teams',[]) if t['id']==tid),None)
@@ -555,7 +579,7 @@ async def _send(update,text,markup=None,*,blocks=None):
 async def _show(update,context,view='home',sid=None,argument=''):
     actor=_actor(update);chat_id=update.effective_chat.id
     sid=sid if sid is not None else (_current_sid(context) if chat_id>0 else None)
-    private_views={'control','settings','fields','form','teamroles','preseason','draft','trades','finish','leagues'}
+    private_views={'control','settings','fields','form','teamroles','preseason','draft','trades','finish','leagues','draftsources'}
     if chat_id<0 and view in private_views:
         # Never show owner IDs, ledgers, private shortlists or forms in a group.
         data=await run_session(get_session,lambda db:read_workspace(db,actor,sid,chat_id,'roles'))
@@ -717,6 +741,15 @@ async def callback_handler(update,context):
         await query.answer()
         _reset_prompt(context)
         parts=route.split(':');kind=parts[0]
+        if kind=='timp':
+            from handlers.franchise_draft_v2 import action_packet
+            def preview_import(db):
+                season,_=_resolve(db,_actor(update),sid,update.effective_chat.id)
+                if season is None:raise A.AuctionError('Select a draft first.')
+                if update.effective_chat.id<0:raise A.AuctionError('Open the import controls privately with this bot.')
+                return action_packet(db,season,_actor(update),'importteams',{'source_kind':parts[1],'source_id':whole(parts[2])})
+            packet=await run_session(get_session,preview_import,commit=True)
+            await _send(update,packet['text'],packet.get('markup'),blocks=packet.get('blocks'));return
         if kind=='v':await _show(update,context,parts[1],sid,':'.join(parts[2:]));return
         if kind=='f':await _start_form(update,context,parts[1],sid,int(parts[2]) if len(parts)>2 else None);return
         if kind=='role':await _start_form(update,context,'role',sid,int(parts[2]),parts[1]);return

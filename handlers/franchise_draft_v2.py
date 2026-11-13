@@ -4,7 +4,7 @@ from telegram import InlineKeyboardButton,InlineKeyboardMarkup
 from services import auction_service as A,franchise_draft as D,franchise_draft_rich as R
 from services import franchise_draft_admin as M
 
-COMMANDS=('dpreview','dsearch','dhistory','dclock','dcorrect','dpoolremove','dretention','dretain','dunretain')
+COMMANDS=('dpreview','dsearch','dhistory','dclock','dcorrect','dpoolremove','dretention','dretain','dunretain','dimportteams')
 
 
 def action_packet(db,season,actor,kind,payload,reason=''):
@@ -18,6 +18,15 @@ def action_packet(db,season,actor,kind,payload,reason=''):
 
 def route(db,season,actor,command,raw):
     from handlers import franchise_draft as H
+    if command=='dimportteams':
+        D.require_draft_admin(db,actor)
+        if not raw.strip():
+            blocks,text=R.Card('🏟 Import previous franchises',season.name).text('Copy teams, owners, co-owners and available team details from a previous tournament or league. Preview before applying.').pair()
+            return dict(text=text,blocks=blocks,sid=season.id,markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton('🏟 Choose previous tournament / league',callback_data=f'fa:{actor}:{season.id}:v:draftsources:1')]]))
+        match=re.fullmatch(r'\s*(league|tournament)\s+(\d+)\s*',raw,re.IGNORECASE)
+        if not match:raise A.AuctionError('Use /dimportteams league 12 or /dimportteams tournament 34, or open /dimportteams for source buttons.')
+        return action_packet(db,season,actor,'importteams',{'source_kind':match[1].lower(),'source_id':int(match[2])})
     if command=='dpreview':
         D.require_draft_admin(db,actor)
         blocks,text=R.readiness(db,season)

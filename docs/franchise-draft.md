@@ -35,7 +35,7 @@ name in `/dadminadd` is for the directory. `/dadmins` lists the appointments;
 buttons. Role changes are checked again on each command, button and form reply.
 A Draft Admin cannot pick or skip for a team unless they also own or co-own it.
 
-`/draftcommands` sends **all 48 draft commands and aliases together**, with
+`/draftcommands` sends **all 49 draft commands and aliases together**, with
 examples and role requirements. `/dcommands`, `/dcmds` and `/dhelp` open the
 same complete reference. Its button sends every section even when Telegram
 needs two messages. All draft commands are also registered in the slash-command
@@ -46,7 +46,7 @@ menu; `/commands draft` remains searchable.
 | Administration | `/dadmin`, `/dadminadd`, `/dadminremove`, `/dadmins` |
 | Complete reference | `/draftcommands`, `/dcommands`, `/dcmds`, `/dhelp` |
 | Create and bind | `/dnew`, `/dsetup`, `/dbind` |
-| Teams and money | `/dteam`, `/downer`, `/dco`, `/dpurse` |
+| Teams and money | `/dteam`, `/downer`, `/dco`, `/dpurse`, `/dimportteams` |
 | Pool and fixed prices | `/dpooladd`, `/dprices`, `/dcustom` |
 | Order and rounds | `/dorder`, `/drounds`, `/daddrounds` |
 | Role and rating rules | `/drolemin`, `/drolemax`, `/dratingrule` |

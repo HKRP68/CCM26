@@ -47,6 +47,33 @@ All money is stored as integer lakh and displayed in Crores. Values must resolve
 to whole lakh, for example `25.5cr` or `0.01cr`; finer values are refused instead
 of rounded. No floating-point money calculation is used.
 
+## Import previous franchises and owners
+
+On the **Franchise Drafts** creation form, choose **Import franchises and owners
+from**. For a draft already created, use **Draft setup → Franchises → Import
+teams & owners from a previous tournament / league**, preview, then confirm.
+In Telegram open **Draft controls → Import previous teams & owners**, or use
+`/dimportteams`, `/dimportteams league 12` or `/dimportteams tournament 34`.
+
+The preview shows each team, owner name/Telegram ID, co-owners, managers and
+available short name, logo and city. Selecting a tournament uses its exact
+participants and recorded ownership; selecting a league uses its teams and the
+latest recorded tournament ownership, with the existing published franchise or
+player-draft records as fallback. Unrecorded owners stay missing and must be set
+before launch. Team managers remain separate from owner/co-owner draft authority.
+
+Existing assigned roles, current team names, purses, squads and ledger balances
+are preserved; missing details can be filled. New teams use the current draft's
+opening purse. Re-importing does not duplicate teams, including linked teams
+renamed after import. Prior-team links preserve retention rights; no old players
+or spending are imported. The existing order is kept and new teams are appended.
+An existing previous-league link must match the chosen source's league.
+
+Imports lock after launch. Telegram approval is actor-bound, expiring and
+restart-safe; website confirmation rechecks the source snapshot and target
+revision. Source ownership changes require a fresh preview. Every import is
+recorded in the existing draft audit history.
+
 ## Retained contracts and slots
 
 Retention defaults to zero. `/dretention 2` previews a cap of two retained
@@ -152,5 +179,5 @@ undo a completed signing or double-charge a retry.
 
 Only one administrator-action table and two nullable fields on the existing
 draft configuration were added. Startup creates/migrates these without replacing
-seasons or squads. `/draftcommands` lists all 48 commands/aliases, including the
+seasons or squads. `/draftcommands` lists all 49 commands/aliases, including the
 new controls; the native draft room also offers their guided forms.

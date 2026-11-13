@@ -446,9 +446,19 @@ def preview_action(session,season,action):
     if action.kind=='start':card.facts([('Opening franchise',after['current'] or 'All squad places occupied'),
         ('Pick time','Timer off' if not after['timer_seconds'] else str(after['timer_seconds'])+' seconds'),
         ('On expiry',after['settings'].get('timeout_policy','skip'))])
+    imported=data.get('team_import')
+    if imported:
+        source=imported['source']
+        card.section('🏟 Import from previous '+source['kind'])
+        card.text(f'{source["name"]} · #{source["id"]} · {imported["added"]} new franchises')
+        card.table(['Franchise / action','Owner / ID','Co-owners','Managers / other details'],
+            [[r['name']+' · '+r['operation'],f'{r["final"]["owner_name"] or "Owner"} · {r["final"]["owner_tg_id"] or "Missing"}',
+              ', '.join(map(str,json.loads(r['final']['co_owner_ids_json'] or '[]'))) or 'None',
+              ' · '.join(filter(None,['Managers: '+', '.join(map(str,json.loads(r['final']['team_manager_ids_json'] or '[]'))),r['final']['short_name'],r['final']['city'],r['final']['logo_url'],*r['warnings']])) or '—'] for r in imported['rows']])
+        card.text('Existing assigned roles and budgets are preserved. New teams use this draft’s starting purse. Squads require the configured retention or draft signings.')
     delta=after['eligible']-before['eligible']
     if delta>0:card.text(f'{delta} players added after confirmation.')
-    if before['settings']!=after['settings']:
+    if before['settings']!=after['settings'] and not imported:
         options=after['settings']
         seconds=options.get('pick_seconds')
         rows=[('Timeout handling',{'pause':'Pause and wait','admin':'Pause for administrator','skip':'Defer to catch-up queue','auto':'Highest-rated eligible, affordable player'}.get(options.get('timeout_policy'),'Pause and wait')),

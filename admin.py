@@ -24745,6 +24745,10 @@ def admin_auctions_list():
                     season = auction_svc.create_season(db, request.form.get("name"), **options)
                     if draft_mode:
                         franchise_draft_svc.enable(db, season, rounds=request.form.get('rounds', '15'))
+                        if request.form.get('team_source'):
+                            from services import franchise_team_import as team_import
+                            kind,source_id=team_import.selection(request.form['team_source'])
+                            team_import.apply(db,season,kind,source_id)
                     else:
                         # The staged clock (60 40 20 10 5) for every new auction.
                         auction_svc.apply_staged_defaults(season)
@@ -24805,7 +24809,9 @@ def admin_auctions_list():
                 # each, so a page of twenty seasons stays one round trip.
                 "follows": by_id.get(season.previous_season_id or 0),
             })
-        return render_template("admin_auctions.html", rows=rows, draft_mode=draft_mode)
+        from services import franchise_team_import as team_import
+        return render_template("admin_auctions.html", rows=rows, draft_mode=draft_mode,
+                               team_sources=team_import.sources(db,per_page=None)[0] if draft_mode else [])
     finally:
         db.close()
 
@@ -24955,7 +24961,15 @@ def admin_auction_detail(season_id):
     db = get_session()
     try:
         season = _auction_or_404(db, season_id)
-        if request.method == "POST":
+        team_import_preview=None
+        if request.method == "POST" and request.form.get('action')=='source_import_preview':
+            from services import franchise_team_import as team_import
+            try:
+                kind,source_id=team_import.selection(request.form.get('team_source'))
+                team_import_preview=team_import.preview(db,season,kind,source_id)
+            except auction_svc.AuctionError as exc:
+                db.rollback();flash(f'⚠️ {exc}','error')
+        elif request.method == "POST":
             action = (request.form.get("action") or "").strip()
             landing = None
             try:
@@ -25009,10 +25023,13 @@ def admin_auction_detail(season_id):
         retention_previews = [P.retention_preview(db, season, f)
                               for f in auction_svc.franchises(db, season.id) if f.id not in new_ids]
         sets = auction_svc.list_sets(db, season)
+        from services import franchise_team_import as team_import
         return render_template(
             "admin_auction_detail.html",
             season=season,
             franchise_draft=auction_svc.franchise_draft_config(db, season),
+            team_sources=team_import.sources(db,per_page=None)[0] if auction_svc.franchise_draft_config(db,season) else [],
+            team_import_preview=team_import_preview,
             label=auction_svc.status_label(season),
             field=auction_svc.franchises(db, season.id),
             lots=auction_svc.lots(db, season.id),
@@ -25309,6 +25326,17 @@ def admin_auction_sets_file(season_id, fmt):
 
 def _auction_detail_action(db, season, action):
     """One if/elif chain, in the shape every other multi-action page uses."""
+    if action=='source_import_apply':
+        from services import franchise_team_import as team_import
+        fingerprint=request.form.get('import_fingerprint','')
+        revision=_parse_int(request.form.get('import_revision'))
+        if not re.fullmatch(r'[a-f0-9]{64}',fingerprint) or revision is None:
+            raise auction_svc.AuctionError('Preview the team import before confirming it.')
+        kind,source_id=team_import.selection(request.form.get('team_source'))
+        imported=team_import.apply(db,season,kind,source_id,fingerprint=fingerprint,revision=revision)
+        log_admin(db,'draft_teams_imported','auction',season.id,f'{kind} {source_id}: {imported["added"]} added')
+        flash(f'🏟 Imported franchises and ownership from {imported["source"]["name"]}.','success')
+        return
     franchise_draft = auction_svc.franchise_draft_config(db, season)
     if franchise_draft is not None:
         # These legacy forms write auction fields directly. Draft settings

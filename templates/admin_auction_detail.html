@@ -14,7 +14,7 @@
 #}
 
 {% macro fold(id, title, summary) %}
-<details class="au-fold" id="{{ id }}" data-fold="{{ id }}">
+<details class="au-fold" id="{{ id }}" data-fold="{{ id }}" {% if id == 'franchises' and team_import_preview %}open{% endif %}>
   <summary>{{ title }}{% if summary %}<span class="au-sum">{{ summary }}</span>{% endif %}</summary>
   <div class="au-fold-body">
 {% endmacro %}
@@ -475,6 +475,37 @@
       <div style="grid-column:span 2;"><label>Co-owners</label><input type="text" name="co_owners" placeholder="111, 222"></div>
       <div><button class="btn btn-primary" type="submit">Add</button></div>
     </form>
+
+    {% if franchise_draft %}
+    <h4 style="margin-top:1.2rem;">🏟 Import teams &amp; owners from a previous tournament / league</h4>
+    <p class="au-note">Copy franchise names, owners, co-owners, available short names, logos, city and team managers. Existing assigned roles, purses and squads are preserved. New teams start with this draft's purse. Import during setup.</p>
+    {% if season.status == 'setup' and not franchise_draft.started_at and not franchise_draft.cursor %}
+    <form method="POST" class="au-grid" action="{{ url_for('admin_auction_detail',season_id=season.id) }}#team-import-preview">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="source_import_preview">
+      <div style="grid-column:span 2;"><label>Previous tournament / league</label><select name="team_source" required>
+        <option value="">Choose a source</option>
+        {% for source in team_sources %}<option value="{{ source.kind }}:{{ source.id }}">{{ source.kind|title }} #{{ source.id }} · {{ source.name }}</option>{% endfor %}
+      </select></div><div><button class="btn btn-primary" type="submit">Preview teams &amp; owners</button></div>
+    </form>
+    {% if team_import_preview %}
+    <div class="au-card" id="team-import-preview" role="region" aria-label="Team import preview">
+      <h4>Review import: {{ team_import_preview.source.name }}</h4>
+      <p>{{ team_import_preview.added }} new franchises. Nothing has been imported yet.</p>
+      <div style="overflow-x:auto;"><table class="table"><thead><tr><th>Franchise</th><th>Owner / Telegram ID</th><th>Co-owners</th><th>Details / action</th></tr></thead><tbody>
+      {% for row in team_import_preview.rows %}<tr><td>{{ row.name }}</td><td>{{ row.final.owner_name or 'Owner' }} · {{ row.final.owner_tg_id or 'Missing' }}</td>
+      <td>{{ row.final.co_owner_ids_json or '[]' }}</td><td>{{ row.operation }} · Managers: {{ row.final.team_manager_ids_json or '[]' }} · {{ row.final.short_name or '' }} · {{ row.final.city or '' }}{% if row.final.logo_url %}<br>{{ row.final.logo_url }}{% endif %}{% for warning in row.warnings %}<br>{{ warning }}{% endfor %}</td></tr>{% endfor %}
+      </tbody></table></div>
+      <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="source_import_apply">
+        <input type="hidden" name="team_source" value="{{ team_import_preview.source.kind }}:{{ team_import_preview.source.id }}">
+        <input type="hidden" name="import_fingerprint" value="{{ team_import_preview.fingerprint }}"><input type="hidden" name="import_revision" value="{{ team_import_preview.revision }}">
+        <input type="hidden" name="back_query" value="#franchises"><button class="btn btn-primary" type="submit">✅ Confirm team import</button>
+        <a class="btn btn-ghost" href="{{ url_for('admin_auction_detail',season_id=season.id) }}#franchises">Cancel</a>
+      </form>
+    </div>
+    {% endif %}
+    {% else %}<p class="au-note">Team import is locked after the draft starts. Existing ownership can be managed with the authorized draft controls.</p>{% endif %}
+    {% endif %}
 
     <!-- ── The field, as a file ──────────────────────────────── -->
     <h4 style="margin:1.1rem 0 .4rem;">📦 The field, as a file</h4>
