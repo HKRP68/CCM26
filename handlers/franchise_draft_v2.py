@@ -57,8 +57,13 @@ def route(db,season,actor,command,raw):
     if command in ('dprices','dcustom') and raw:
         return action_packet(db,season,actor,'prices' if command=='dprices' else 'custom',{'text':raw},reason)
     if command in ('drounds','daddrounds') and raw:
+        if command=='drounds' and '|' in raw:
+            parts=[p.strip() for p in raw.split('|')]
+            if len(parts)!=2:raise A.AuctionError('Use /drounds minimum | maximum. Rounds equal the maximum squad size.')
+            return action_packet(db,season,actor,'rounds',{'min_squad_size':H._whole(parts[0],'Minimum squad size'),'rounds':H._whole(parts[1],'Maximum squad size')},reason)
         count=H._whole(raw,'Rounds')+(D.get_draft(db,season).rounds if command=='daddrounds' else 0)
         return action_packet(db,season,actor,'rounds',{'rounds':count},reason)
+    if command=='dfinish':return action_packet(db,season,actor,'finish',{},raw or reason)
     if command in ('dstart','dresume','dundo'):
         return action_packet(db,season,actor,'undo' if command=='dundo' else 'start',{},reason or (raw if command=='dundo' else ''))
     if command=='dclock':

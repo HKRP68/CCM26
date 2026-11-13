@@ -25,7 +25,7 @@ def fingerprint(db,season):
     draft=D.get_draft(db,season)
     state=dict(season=[season.id,season.name,season.chat_id,season.currency_label,season.previous_league_id,season.league_id,season.published_at,season.status],
         config=[draft.rounds,draft.order_json,draft.rating_prices_json,draft.custom_prices_json,draft.settings_json],
-        rules=[season.role_minimums_json,season.role_maximums_json,season.rating_rules_json],
+        rules=[season.min_squad_size,season.max_squad_size,season.role_minimums_json,season.role_maximums_json,season.rating_rules_json],
         teams=[(t.id,t.name,t.short_name,t.city,t.logo_url,t.owner_tg_id,t.owner_name,t.co_owner_ids_json,t.team_manager_ids_json,t.purse_total_lakh,t.purse_remaining_lakh,t.squad_size) for t in A.franchises(db,season.id)],
         pool=[(p.id,p.player_id,p.name,p.version,p.country,p.rating,p.bat_rating,p.bowl_rating,p.category,p.status,p.sold_to_id,p.sold_price_lakh) for p in A.lots(db,season.id)])
     return hashlib.sha256(json.dumps(state,sort_keys=True,default=str).encode()).hexdigest()
@@ -35,7 +35,7 @@ def validate_final(db,season):
     draft=D.get_draft(db,season)
     for team in A.franchises(db,season.id):
         lots=A.squad(db,team.id)
-        if len(lots)!=draft.rounds or team.squad_size!=len(lots):
+        if not season.min_squad_size <= len(lots) <= draft.rounds or team.squad_size!=len(lots):
             raise A.AuctionError(f'{team.name} has an incomplete squad. Resolve remaining picks first.')
         short,over=A.role_shortfall(db,season,team)
         if short or over or team.purse_remaining_lakh<0:
@@ -51,7 +51,7 @@ def summary(db,season):
     draft=D.get_draft(db,season)
     teams=A.franchises(db,season.id)
     current=D.turn(db,season)
-    return dict(rounds=draft.rounds,eligible=len(D._available(db,season)),status=season.status,
+    return dict(rounds=draft.rounds,min_squad_size=season.min_squad_size,max_squad_size=draft.rounds,eligible=len(D._available(db,season)),status=season.status,
         name=season.name,chat_id=season.chat_id,published=bool(season.published_at),opening_purse=season.opening_purse_lakh,
         order=[t.name for t in D._ordered_teams(db,season)],
         minimums=A.role_minimums(season),maximums=A.role_maximums(season),rating_rules=A.rating_rules(season),
@@ -156,7 +156,9 @@ def perform(db,season,actor,kind,payload,reason,*,trusted_admin=False):
             fn(db,season,text,by_tg_id=actor,correction_reason=reason)
         # Preview reports every unresolved eligible rating before acceptance.
         for lot in D._available(db,season):D.price_for(db,season,lot)
-    elif kind=='rounds':D.configure_rounds(db,season,payload['rounds'],by_tg_id=actor)
+    elif kind=='rounds':D.configure_rounds(db,season,payload.get('max_squad_size',payload.get('rounds')),
+        min_squad_size=payload.get('min_squad_size') if str(payload.get('min_squad_size','')).strip() else None,by_tg_id=actor)
+    elif kind=='finish':D.finish(db,season,by_tg_id=actor)
     elif kind=='undo':D.undo_last(db,season,by_tg_id=actor)
     elif kind=='pause':D.pause(db,season,by_tg_id=actor)
     elif kind=='rules':
@@ -329,7 +331,7 @@ def prepare(db,season,actor,kind,payload,reason='',*,trusted_admin=False):
     require_admin(db,actor,trusted_admin)
     reason=str(reason).strip()
     if len(reason)>300:raise A.AuctionError('Use a correction reason of at most 300 characters.')
-    if D.started(db,season) and kind not in ('start','pause','publish','continue','draftadmin_add','draftadmin_remove') and not reason:
+    if D.started(db,season) and kind not in ('start','pause','finish','publish','continue','draftadmin_add','draftadmin_remove') and not reason:
         raise A.AuctionError('A live-season correction needs a reason. Pause first, then use /dcorrect kind | reason | value.')
     team_import=None
     if kind=='order' and str(payload.get('text','')).strip().casefold()=='random':

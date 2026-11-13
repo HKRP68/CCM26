@@ -124,6 +124,7 @@ def test_admin_manage_draft_settings_upload_with_csrf_and_expired_session(page, 
         browser=engine.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
         try:
             tab=browser.new_page(viewport={'width':1200,'height':950})
+            tab.add_init_script("HTMLDialogElement.prototype.showModal = function(){throw new Error('Native dialog unavailable in this WebView');};")
             def serve(route):
                 req=route.request;path=urlsplit(req.url).path
                 headers={key:value for key,value in req.headers.items() if key in ('x-csrftoken','referer','content-type')}
@@ -132,6 +133,18 @@ def test_admin_manage_draft_settings_upload_with_csrf_and_expired_session(page, 
             tab.route('**/*',serve)
             tab.goto(f'https://localhost/franchise-drafts/{season.id}/workspace')
             tab.get_by_role('button',name='⚙️ Draft Settings',exact=True).click()
+            sizes=tab.locator('[data-fd-form="rounds"]')
+            sizes.locator('xpath=..').locator('summary').click()
+            sizes.locator('[name="min_squad_size"]').fill('1')
+            sizes.locator('[name="rounds"]').fill('3')
+            assert sizes.locator('[data-fd-rounds]').inner_text()=='3'
+            sizes.get_by_role('button',name='Preview change',exact=True).click()
+            tab.locator('[data-fd-dialog]').wait_for(state='visible')
+            assert '1' in tab.locator('[data-fd-dialog]').inner_text()
+            tab.get_by_role('button',name='✅ Confirm',exact=True).click()
+            tab.locator('[data-fd-dialog]').wait_for(state='hidden')
+            c.db.expire_all()
+            assert (season.min_squad_size,season.max_squad_size,D.get_draft(c.db,season).rounds)==(1,3,3)
             form=tab.locator('[data-fd-form="custom"]')
             form.locator('xpath=..').locator('summary').click()
             import csv,io

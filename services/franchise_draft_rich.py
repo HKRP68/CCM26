@@ -272,7 +272,7 @@ def board(session,season):
         rows.append(row);base_size+=cost
     if rows:card.table(['Franchise','Squad','Purse left'],rows,align_right=(1,2),caption='Teams & purses')
     if len(rows)<len(teams):card.footer(f'{len(teams)-len(rows)} more franchises · /dsquad for every team')
-    card.footer(f'Squad limit: {config.rounds} · No overseas limit · /dskips')
+    card.footer(f'Squad size: {season.min_squad_size}–{config.rounds} · No overseas limit · /dskips')
     card.append(tail)
     return card.pair()
 
@@ -404,7 +404,7 @@ def rules(session,season):
     A,D = _services()
     config = D.get_draft(session,season)
     card = Card('📜 Draft rulebook',season.name)
-    card.facts([('Rounds / maximum squad',str(config.rounds)),('Pick authority','Current team owner or co-owner'),
+    card.facts([('Minimum squad',str(season.min_squad_size)),('Rounds / maximum squad',str(config.rounds)),('Pick authority','Current team owner or co-owner'),
                 ('Overseas players','No limit'),('Maximum retained contracts',str(D._loads(config.settings_json,{}).get('retention_max',0)))]+_clock_rows(config,season))
     minimums,maximums = A.role_minimums(season),A.role_maximums(season)
     card.table(['Role','Minimum','Maximum'],[[role,str(minimums.get(role,0)),str(maximums[role]) if role in maximums else 'No cap']
@@ -440,9 +440,12 @@ def preview_action(session,season,action):
     card=Card('🛡 Confirm draft configuration',f'{season.name} · {action.kind}')
     card.text('Nothing has been applied. This preview expires after ten minutes and checks your current role again.')
     card.facts([('Rounds',f'{before["rounds"]} → {after["rounds"]}'),
+                ('Minimum squad',f'{before.get("min_squad_size",before["rounds"])} → {after.get("min_squad_size",after["rounds"])}'),
+                ('Maximum squad',f'{before.get("max_squad_size",before["rounds"])} → {after.get("max_squad_size",after["rounds"])}'),
                 ('Status',f'{before["status"]} → {after["status"]}'),
                 ('Eligible players',f'{before["eligible"]} → {after["eligible"]}'),
                 ('Reason',action.reason or 'Setup configuration')])
+    if action.kind=='finish':card.text('Every franchise meets its minimum squad size and final rules. Confirm to close all remaining optional picks; squads and purses stay unchanged.')
     if action.kind=='start':card.facts([('Opening franchise',after['current'] or 'All squad places occupied'),
         ('Pick time','Timer off' if not after['timer_seconds'] else str(after['timer_seconds'])+' seconds'),
         ('On expiry',after['settings'].get('timeout_policy','skip'))])

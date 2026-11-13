@@ -20,7 +20,7 @@ DOT_ALIASES = frozenset({
 COMMANDS = (
     ('draft', ('dpreview','dsearch','dhistory','dclock','dcorrect','dpoolremove','dretention','dretain','dunretain','dimportteams'), 'command_handler'),
     ('draft', ('draft', 'dboard', 'dnew', 'dsetup', 'dprices', 'dcustom',
-               'dorder', 'drounds', 'daddrounds', 'dstart', 'dpause', 'dresume',
+               'dorder', 'drounds', 'daddrounds', 'dstart', 'dpause', 'dresume', 'dfinish',
                'dundo', 'dpick', 'dpool', 'dsquad', 'drules', 'dhelp',
                'dteam', 'dskip', 'dskips', 'dtimer'), 'command_handler'),
     ('draft', ('dadmin','dadminadd','dadminremove','dadmins','draftcommands','dcommands','dcmds',

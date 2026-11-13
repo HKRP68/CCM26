@@ -203,7 +203,10 @@ def update_squad_rules(session, season, *, minimums=None, maximums=None, ratings
 
 
 def _invariants(season, draft):
-    season.min_squad_size = season.max_squad_size = int(draft.rounds)
+    season.max_squad_size = int(draft.rounds)
+    season.min_squad_size = int(_loads(draft.settings_json, {}).get('min_squad_size', draft.rounds))
+    if not 1 <= season.min_squad_size <= season.max_squad_size:
+        raise AuctionError('Minimum squad size must be between 1 and the maximum squad size.')
     season.min_overseas = 0
     season.max_overseas = int(draft.rounds)
     season.max_retentions = season.min_retentions = season.expansion_picks = 0
@@ -213,9 +216,12 @@ def _invariants(season, draft):
     season.current_lot_id = None
 
 
-def enable(session, season, rounds=15, *, by_tg_id=None):
+def enable(session, season, rounds=15, *, min_squad_size=None, by_tg_id=None):
     _manager(session, by_tg_id)
     count = _rounds(rounds)
+    minimum = count if min_squad_size is None else _rounds(min_squad_size)
+    if minimum > count:
+        raise AuctionError('Minimum squad size cannot exceed maximum squad size.')
     if get_draft(session, season) is not None:
         raise AuctionError("This season already uses Franchise Draft.")
     if season.status != A.STATUS_SETUP or season.league_id:
@@ -226,7 +232,7 @@ def enable(session, season, rounds=15, *, by_tg_id=None):
             or any(int(f.squad_size or 0) for f in A.franchises(session, season.id))):
         raise AuctionError("Choose draft mode before any players are signed or bid on.")
     row = FranchiseDraft(season_id=season.id, rounds=count, cursor=0, revision=0,
-                         settings_json=_dump({'timeout_policy': 'pause'}))
+                         settings_json=_dump({'timeout_policy': 'pause', **({'min_squad_size': minimum} if min_squad_size is not None else {})}))
     session.add(row)
     _invariants(season, row)
     # A setup may have been prepared as a dynamic-retention auction before
@@ -254,14 +260,18 @@ def enable(session, season, rounds=15, *, by_tg_id=None):
         team.draft_shortlist_json = None
     session.flush()
     _event(session, season, "fd_enabled", "🏏 <b>Franchise Draft selected</b>\n"
-           f"{count} rounds · {count} players per team · no overseas limit.", by_tg_id=by_tg_id)
+           f"{count} rounds · {minimum}–{count} players per team · no overseas limit.", by_tg_id=by_tg_id)
     return row
 
 
-def configure_rounds(session, season, rounds, *, by_tg_id=None):
+def configure_rounds(session, season, rounds, *, min_squad_size=None, by_tg_id=None):
     _manager(session, by_tg_id)
     count = _rounds(rounds)
     draft = _draft(session, season)
+    settings = _loads(draft.settings_json, {})
+    minimum = _rounds(min_squad_size) if min_squad_size is not None else int(settings.get('min_squad_size', count))
+    if minimum > count:
+        raise AuctionError('Minimum squad size cannot exceed maximum squad size.')
     if season.league_id:
         raise AuctionError("Add rounds before publishing the squads.")
     if season.status == A.STATUS_COMPLETED:
@@ -281,6 +291,10 @@ def configure_rounds(session, season, rounds, *, by_tg_id=None):
     if season.status not in (A.STATUS_SETUP, A.STATUS_PAUSED, A.STATUS_COMPLETED):
         raise AuctionError("Pause the draft before changing its rounds.")
     draft.rounds = count
+    if min_squad_size is not None:
+        settings = _loads(draft.settings_json, {})
+        settings['min_squad_size'] = minimum
+        draft.settings_json = _dump(settings)
     _invariants(season, draft)
     for team in teams:
         team.draft_picks_total = count - int(team.retained_count or 0)
@@ -290,7 +304,7 @@ def configure_rounds(session, season, rounds, *, by_tg_id=None):
     A.set_role_rules(session, season, A.role_minimums(season), A.role_maximums(season))
     A.set_rating_rules(session, season, A.rating_rules(season))
     _event(session, season, "fd_rounds", f"🔢 <b>Draft rounds updated: {count}</b>\n"
-           f"Squad maximum: {count}." + (" Resume the draft to continue picking." if was_completed else ""),
+           f"Squad minimum: {minimum}. Squad maximum: {count}." + (" Resume the draft to continue picking." if was_completed else ""),
            by_tg_id=by_tg_id)
     return draft
 
@@ -765,7 +779,7 @@ def _available(session, season):
 
 
 def _validate_pool(session, season, draft, teams, available):
-    required = sum(max(0, draft.rounds - int(team.squad_size or 0)) for team in teams)
+    required = sum(_required_slots(session, season, team) for team in teams)
     if len(available) < required:
         raise AuctionError(f"The draft needs {required} available players; the pool has {len(available)}.")
     _validate_distinct_names(session, season, draft, teams, available)
@@ -786,8 +800,9 @@ def _validate_pool(session, season, draft, teams, available):
             raise AuctionError(f"Not enough players rated ≤{cap} remain for every team's rating minimum.")
     for team in teams:
         slots = max(0, draft.rounds - int(team.squad_size or 0))
-        if sum(prices[:slots]) > int(team.purse_remaining_lakh or 0):
-            raise AuctionError(f"{team.name}'s purse cannot cover its remaining {slots} picks.")
+        mandatory = _required_slots(session, season, team)
+        if sum(prices[:mandatory]) > int(team.purse_remaining_lakh or 0):
+            raise AuctionError(f"{team.name}'s purse cannot cover its remaining {mandatory} required picks.")
         if completion_reserve(session,season,team,available)>int(team.purse_remaining_lakh or 0):
             raise AuctionError(f'{team.name} cannot afford its mandatory category/rating slots.')
         owed, over = A.role_shortfall(session, season, team)
@@ -809,8 +824,9 @@ def _validate_pool(session, season, draft, teams, available):
         needs=[sum(max(0,r['min_players']-sum(v<=r['max_rating'] for v in A.squad_ratings(session,t.id))) for t in teams) for r in rules]
         ceiling=max(int(t.purse_remaining_lakh) for t in teams)
         affordable=[p for p in available if price_for(session,season,p)<=ceiling]
-        reserve=_completion_flow(affordable,required,totals,owed,caps,rules,needs,
-                                lambda p:price_for(session,season,p),distinct_names=False)
+        capacity=sum(max(0,draft.rounds-t.squad_size) for t in teams)
+        reserve=_completion_flow(affordable,capacity,totals,owed,caps,rules,needs,
+                                lambda p:price_for(session,season,p),distinct_names=False,min_slots=required)
         if reserve>sum(int(t.purse_remaining_lakh) for t in teams):
             raise AuctionError('The franchises collectively cannot afford the mandatory squad composition.')
 
@@ -820,12 +836,13 @@ def _validate_distinct_names(session, season, draft, teams, available, *, signin
     supply = Counter(lot.name.strip().casefold() for lot in available)
     needs, owned = {}, {}
     for team in teams:
-        owned[team.id] = {lot.name.strip().casefold() for lot in A.squad(session, team.id)}
-        count = int(team.squad_size or 0)
+        signed = list(A.squad(session, team.id))
+        owned[team.id] = {lot.name.strip().casefold() for lot in signed}
         if signing_team is not None and team.id == signing_team.id:
             owned[team.id].add(signing_lot.name.strip().casefold())
-            count += 1
-        needs[team.id] = max(0, int(draft.rounds) - count)
+            signed.append(signing_lot)
+        needs[team.id] = _required_slots(session,season,team,
+            signing_lot=signing_lot if signing_team is not None and team.id == signing_team.id else None,_signed=signed)
         if len(set(supply) - owned[team.id]) < needs[team.id]:
             raise AuctionError(f"{team.name} need {needs[team.id]} different players; "
                                "the pool has too few unique names. A squad can hold only one version of a player.")
@@ -895,6 +912,30 @@ def pause(session, season, *, by_tg_id=None, now=None):
     return draft
 
 
+def finish(session, season, *, by_tg_id=None):
+    """Close optional places only after every squad meets all final rules."""
+    _manager(session, by_tg_id)
+    draft = _claim(session, season)
+    if season.status not in (A.STATUS_LIVE, A.STATUS_PAUSED) or season.published_at:
+        raise AuctionError('Only a live or paused, unpublished draft can finish.')
+    _invariants(season, draft)
+    from services.franchise_draft_admin import validate_final
+    teams = _ordered_teams(session, season)
+    if not teams:
+        raise AuctionError('Add franchises before finishing a draft.')
+    validate_final(session, season)
+    before = _turn_state(draft)
+    _record_turn(session, season, teams[0], 'finish', before, actor=by_tg_id)
+    draft.cursor = draft.rounds * len(teams)
+    draft.skipped_turns_json = '[]'
+    draft.pick_deadline_at = draft.paused_seconds_left = None
+    season.status = A.STATUS_COMPLETED
+    session.flush()
+    _event(session, season, 'fd_completed', '🏆 <b>Franchise Draft completed</b>\n'
+           'Every squad meets its minimum and final rules. Remaining optional places are closed.', by_tg_id=by_tg_id)
+    return draft
+
+
 def _validate_pick(session, season, team, lot, price):
     draft = _draft(session, season)
     # Previewing is read-only apart from its durable quote. The shared
@@ -918,7 +959,7 @@ def _validate_pick(session, season, team, lot, price):
     season.min_base_price_lakh = min(actual_prices, default=0)
     A.validate_preauction_signing(session, season, team, lot, price)
     A.check_role_rules(session, season, team, lot)
-    slots_after = int(draft.rounds) - int(team.squad_size or 0) - 1
+    slots_after = _required_slots(session, season, team, signing_lot=lot)
     remaining = [p for p in available if p.id != lot.id]
     _validate_distinct_names(session, season, draft, A.franchises(session, season.id), remaining,
                              signing_team=team, signing_lot=lot)
@@ -963,6 +1004,16 @@ def _validate_pick(session, season, team, lot, price):
     return season.min_base_price_lakh
 
 
+def _required_slots(session, season, team, *, signing_lot=None, _signed=None):
+    if int(season.min_squad_size) == int(season.max_squad_size):
+        return max(0, int(season.min_squad_size) - int(team.squad_size or 0) - int(signing_lot is not None))
+    signed = _signed if _signed is not None else list(A.squad(session, team.id)) + ([signing_lot] if signing_lot else [])
+    counts = Counter(p.category for p in signed)
+    return max([0, int(season.min_squad_size) - len(signed),
+        sum(max(0,n-counts[role]) for role,n in A.role_minimums(season).items())] +
+        [max(0,r['min_players']-sum(p.rating<=r['max_rating'] for p in signed)) for r in A.rating_rules(season)])
+
+
 def completion_reserve(session,season,team,available,*,signing_lot=None):
     """Budget floor for mandatory roles/ratings; exact combined check at the end.
 
@@ -972,6 +1023,7 @@ def completion_reserve(session,season,team,available,*,signing_lot=None):
     from itertools import combinations
     signed=list(A.squad(session,team.id))+([signing_lot] if signing_lot else [])
     slots=_draft(session,season).rounds-len(signed)
+    mandatory=_required_slots(session,season,team,signing_lot=signing_lot,_signed=signed)
     names={p.name.strip().casefold() for p in signed}
     pool=[p for p in available if p.name.strip().casefold() not in names]
     costs={p.id:price_for(session,season,p) for p in pool}
@@ -991,15 +1043,15 @@ def completion_reserve(session,season,team,available,*,signing_lot=None):
         prices=sorted(distinct.values())
         if len(prices)<n:raise AuctionError('Too few distinct eligible players remain for mandatory slots.')
         return sum(prices[:n])
-    floor=cheapest(pool,slots)
+    floor=cheapest(pool,mandatory)
     role_floor=sum(cheapest([p for p in pool if p.category==role],need) for role,need in owed.items())
-    floor=max(floor,role_floor+cheapest(pool,max(0,slots-sum(owed.values()))))
+    floor=max(floor,role_floor+cheapest(pool,max(0,mandatory-sum(owed.values()))))
     for rule,need in zip(rules,needs):
-        floor=max(floor,cheapest([p for p in pool if p.rating<=rule['max_rating']],need)+cheapest(pool,slots-need))
+        floor=max(floor,cheapest([p for p in pool if p.rating<=rule['max_rating']],need)+cheapest(pool,max(0,mandatory-need)))
     if not slots:
         return 0
     floor=max(floor,_completion_flow(pool,slots,counts,owed,highs,rules,needs,
-                                    lambda p:costs[p.id]))
+                                    lambda p:costs[p.id],min_slots=mandatory))
     if slots<=3:
         groups={}
         for p in sorted(pool,key=lambda p:(costs[p.id],p.id)):
@@ -1008,9 +1060,10 @@ def completion_reserve(session,season,team,available,*,signing_lot=None):
             if len(group)<slots and p.name.strip().casefold() not in {v.name.strip().casefold() for v in group}:group.append(p)
         candidates=[p for group in groups.values() for p in group]
         best=None
-        for index,choice in enumerate(combinations(candidates,slots)):
+        from itertools import chain
+        for index,choice in enumerate(chain.from_iterable(combinations(candidates,n) for n in range(mandatory,slots+1))):
             if index>100000:raise AuctionError('The final-slot rules need administrator review; simplify overlapping rating requirements before resuming.')
-            if len({p.name.strip().casefold() for p in choice})!=slots:continue
+            if len({p.name.strip().casefold() for p in choice})!=len(choice):continue
             final=counts+Counter(p.category for p in choice)
             if any(final[role]<n for role,n in lows.items()) or any(final[role]>n for role,n in highs.items()):continue
             if any(sum(p.rating<=r['max_rating'] for p in choice)<n for r,n in zip(rules,needs)):continue
@@ -1022,7 +1075,7 @@ def completion_reserve(session,season,team,available,*,signing_lot=None):
     return floor
 
 
-def _completion_flow(pool,slots,counts,owed,highs,rules,needs,price,*,distinct_names=True):
+def _completion_flow(pool,slots,counts,owed,highs,rules,needs,price,*,distinct_names=True,min_slots=None):
     """Minimum-cost lower-bound circulation for roles and nested rating rules.
 
     Bucket-chain flow is the count rated at or below each threshold. This
@@ -1053,8 +1106,8 @@ def _completion_flow(pool,slots,counts,owed,highs,rules,needs,price,*,distinct_n
         grouped[key]=min(grouped.get(key,value),value)
     for (role,bucket,_),cost in grouped.items():edge(roles.index(role)+1,start+bucket,0,1,cost)
     for index,(_,minimum) in enumerate(ordered):edge(start+index,start+index+1,minimum,slots)
-    edge(start+buckets-1,sink,slots,slots)
-    edge(sink,source,slots,slots)
+    edge(start+buckets-1,sink,slots if min_slots is None else min_slots,slots)
+    edge(sink,source,slots if min_slots is None else 0,slots)
     required=0
     for node in range(sink+1):
         if balance[node]>0:edge(ss,node,0,balance[node]);required+=balance[node]
@@ -1222,7 +1275,7 @@ def undo_last(session, season, *, by_tg_id=None):
                .order_by(FranchiseDraftTurn.number.desc()).first())
     if history is not None:
         before = _loads(history.before_state_json, {})
-        if history.kind in ("skip", "timeout"):
+        if history.kind in ("skip", "timeout", "finish"):
             team = session.get(AuctionFranchise, history.franchise_id)
             draft.cursor = before['cursor']
             draft.skipped_turns_json = _dump(before['skipped'])
@@ -1230,7 +1283,7 @@ def undo_last(session, season, *, by_tg_id=None):
             draft.paused_seconds_left = timer_seconds(draft) or None
             season.status = A.STATUS_PAUSED
             session.delete(history)
-            _event(session, season, "fd_undo", f"↩️ <b>Last skipped turn restored</b>\n"
+            _event(session, season, "fd_undo", f"↩️ <b>{'Optional draft places reopened' if history.kind == 'finish' else 'Last skipped turn restored'}</b>\n"
                    f"{_e(team.name)} can pick when the draft resumes. No purse change.\n\n"
                    + next_team_html(session, season), by_tg_id=by_tg_id, franchise=team)
             return None

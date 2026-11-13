@@ -52,7 +52,8 @@ _DRAFT_HELP = {
     'dprices': ('/dprices\n96:23cr\n95:21cr', 'Manager: set the fixed price for each player rating.'),
     'dcustom': ('/dcustom\nJoe Root:25.5cr', 'Manager: override a player’s rating price, or reply to a CSV/TSV file with /dcustom. Columns: player_id,name,version,rating,category,price_lakh (100 lakh = 1 Cr).'),
     'dorder': ('/dorder Team 1 | Team 2 | Team 3', 'Manager: set round 1 order; random generates it. Later rounds rotate the first team to last.'),
-    'drounds': ('/drounds 15', 'Manager: set the round count and maximum squad size.'),
+    'drounds': ('/drounds 11 | 15', 'Manager: set minimum and maximum squad sizes. Rounds always equal the maximum; /drounds 15 changes only the maximum.'),
+    'dfinish': ('/dfinish', 'Manager: preview closing optional picks after every squad meets its minimum and final rules.'),
     'daddrounds': ('/daddrounds 2', 'Manager: add more rounds before squads are published.'),
     'dstart': ('/dstart', 'Manager: validate setup and start the draft.'),
     'dpause': ('/dpause', 'Manager: pause the draft and lock picks.'),
@@ -99,7 +100,7 @@ def draft_commands_html():
         ('🛡 Appointments & help', ('dadmin','dadminadd','dadminremove','dadmins','draftcommands','dcommands','dcmds','dhelp')),
         ('🏗 Setup & teams', ('dnew','dsetup','dbind','dteam','downer','dco','dpooladd','dpurse')),
         ('💰 Prices, order & squad rules', ('dprices','dcustom','dorder','drounds','daddrounds','drolemin','drolemax','dratingrule')),
-        ('⏱ Live draft & recovery', ('dtimer','dstart','dpause','dresume','dpick','dskip','dundo','dcancel','dpublish')),
+        ('⏱ Live draft & recovery', ('dtimer','dstart','dpause','dresume','dpick','dskip','dfinish','dundo','dcancel','dpublish')),
         ('👀 Views', ('draft','dboard','dpool','dsquad','dskips','drules')),
         ('🛡 Draft 2.0 previews & contracts',('dpreview','dsearch','dhistory','dclock','dcorrect','dpoolremove','dretention','dretain','dunretain','dimportteams')),
     )

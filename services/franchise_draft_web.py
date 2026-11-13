@@ -7,7 +7,7 @@ from datetime import datetime,timedelta
 
 from services import auction_service as A, franchise_draft as D, franchise_draft_rich as R,franchise_draft_admin as M
 
-ADMIN_ACTIONS={'prices','custom','rounds','order','rules','team','removeteam','bind','clock','opening','purse','pooladd','poolremove','csv','importteams','retention','retain','unretain','start','pause','undo','resolve','publish','continue','cancel','draftadmin_add','draftadmin_remove'}
+ADMIN_ACTIONS={'prices','custom','rounds','order','rules','team','removeteam','bind','clock','opening','purse','pooladd','poolremove','csv','importteams','retention','retain','unretain','start','pause','finish','undo','resolve','publish','continue','cancel','draftadmin_add','draftadmin_remove'}
 
 
 def _admin(db,actor,trusted):
@@ -19,7 +19,7 @@ def _admin(db,actor,trusted):
 def _state(db,season,actor,manage):
     draft=D.get_draft(db,season)
     current=D.turn(db,season)
-    result=dict(revision=draft.revision,rounds=draft.rounds,started=D.started(db,season),
+    result=dict(revision=draft.revision,rounds=draft.rounds,min_squad_size=season.min_squad_size,max_squad_size=draft.rounds,started=D.started(db,season),
                 status=season.status,seconds=D.timer_seconds(draft),policy=D._loads(draft.settings_json,{}).get('timeout_policy','skip'),
                 deadline=season and draft.pick_deadline_at.isoformat()+'Z' if draft.pick_deadline_at else None,
                 can_pick=bool(current and season.status==A.STATUS_LIVE and actor in D.owner_ids(current)),
@@ -163,6 +163,7 @@ def perform(db,season,actor,data,*,trusted_admin=False):
         name=str(data.get('name','')).strip()
         if not name:raise A.AuctionError('Enter a name for the draft season.')
         rounds=integer(data.get('rounds'),'Rounds',1,D.MAX_ROUNDS)
+        minimum=integer(data['min_squad_size'],'Minimum squad size',1,rounds) if str(data.get('min_squad_size','')).strip() else None
         purse=D.parse_money(str(data.get('purse',''))+'cr')
         kind,source_id=I.selection(data['source']) if data.get('source') else (None,None)
         previous=db.query(LeagueSeason).filter_by(league_id=source_id).order_by(LeagueSeason.season_no.desc()).first() if kind=='league' else None
@@ -175,7 +176,8 @@ def perform(db,season,actor,data,*,trusted_admin=False):
             except LS.LeagueSeasonError as exc:raise A.AuctionError(str(exc)) from None
         else:
             season=A.create_season(db,name,opening_purse_lakh=purse)
-            D.enable(db,season,rounds=rounds,by_tg_id=by)
+            D.enable(db,season,rounds=rounds,min_squad_size=minimum,by_tg_id=by)
+        if previous and minimum is not None:D.configure_rounds(db,season,rounds,min_squad_size=minimum,by_tg_id=by)
         if kind:I.apply(db,season,kind,source_id,actor=by)
         return dict(season_id=season.id,message='Draft created with empty squads. Previous-team players remain available in the catalogue.')
     if season is None or D.get_draft(db,season) is None:raise A.AuctionError('Select a Franchise Draft season.')

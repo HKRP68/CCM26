@@ -6424,7 +6424,7 @@ def publish_to_league(session, season, *, league_name=None):
         field = franchises(session, season.id)
         if (not field or int(draft.cursor or 0) != int(draft.rounds) * len(field)
                 or D.skipped_turns(session, season)
-                or any(len(squad(session, team.id)) != int(draft.rounds) for team in field)):
+                or any(not int(season.min_squad_size) <= len(squad(session, team.id)) <= int(draft.rounds) for team in field)):
             raise AuctionError("Complete every draft round before publishing its squads.")
         for team in field:
             owed, over = role_shortfall(session, season, team)

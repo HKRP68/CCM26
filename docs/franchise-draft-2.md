@@ -31,6 +31,9 @@ rules, rounds, order/randomization, timers, readiness, start/pause/resume,
 audited corrections/undo, inactive-team resolution, results export, publication
 and preparing the season's tournament. Editable actions show durable previews
 before applying. Owner signings and skips also require confirmation.
+Previews appear in an inline review panel, including in Telegram WebViews that
+cannot open native browser dialogs. Confirm or cancel before making another
+change. Request failures and screen rendering failures have separate messages.
 Bot Owners, Bot Admins and website administrators can appoint or revoke Draft
 Admins from settings; delegated Draft Admins cannot appoint others.
 
@@ -72,8 +75,12 @@ franchise and role; authenticated spectators cannot use management controls.
 1. From a completed tournament choose **Existing leagues → Draft**; Auction
    remains available as the other acquisition mode. Tournament management shows
    the selected mode. Existing squads and budgets do not copy automatically.
-2. Set rounds and franchise owners. `/drounds 15` previews a 15-place squad for
-   each team. New franchises can join during setup. Acquisition mode/order
+2. Set minimum/maximum squad sizes and franchise owners. In Draft Settings,
+   enter both limits; rounds automatically equal the maximum. For example,
+   `/drounds 11 | 15` sets a minimum of 11 and maximum of 15, with 15 rounds.
+   `/drounds 15` changes the maximum while keeping an explicitly set minimum.
+   Existing drafts without a separate minimum retain their original full-squad
+   requirement. New franchises can join during setup. Acquisition mode/order
    cannot be silently switched after activity begins.
 3. Preview equal purses with `/dpurse all | 100cr`, or individual balances with
    `/dpurse North | 120cr`. Explicit adjustments can account for carryover
@@ -95,6 +102,14 @@ franchise and role; authenticated spectators cannot use management controls.
 7. Configure any permitted retention and the timeout policy below. `/dpreview`
    checks readiness. `/dstart` opens a preview; confirm it to launch and announce
    the first team. Cancelling does not start the draft.
+
+When the minimum is smaller than the maximum, the extra places are optional.
+Pool and purse checks reserve enough for each team's minimum and mandatory
+category/rating requirements. An administrator can use **Finish Draft** or
+`/dfinish` to preview closing the remaining places once every franchise meets
+all final rules. Confirming preserves squads and purses; **Undo Latest Draft
+Turn** can reopen those places before publication. Teams cannot exceed the
+maximum, and an incomplete team blocks finishing and publication.
 
 All money is stored as integer lakh and displayed in Crores. Values must resolve
 to whole lakh, for example `25.5cr` or `0.01cr`; finer values are refused instead
@@ -234,5 +249,5 @@ undo a completed signing or double-charge a retry.
 
 Only one administrator-action table and two nullable fields on the existing
 draft configuration were added. Startup creates/migrates these without replacing
-seasons or squads. `/draftcommands` lists all 49 commands/aliases, including the
+seasons or squads. `/draftcommands` lists the supported commands/aliases, including the
 new controls; the native draft room also offers their guided forms.
