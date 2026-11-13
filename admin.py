@@ -24948,6 +24948,7 @@ def admin_auction_detail(season_id):
         return render_template(
             "admin_auction_detail.html",
             season=season,
+            franchise_draft=auction_svc.franchise_draft_config(db, season),
             label=auction_svc.status_label(season),
             field=auction_svc.franchises(db, season.id),
             lots=auction_svc.lots(db, season.id),
@@ -25244,6 +25245,21 @@ def admin_auction_sets_file(season_id, fmt):
 
 def _auction_detail_action(db, season, action):
     """One if/elif chain, in the shape every other multi-action page uses."""
+    franchise_draft = auction_svc.franchise_draft_config(db, season)
+    if franchise_draft is not None:
+        # These legacy forms write auction fields directly. Draft settings
+        # must go through its revision lock, with squad caps tied to rounds.
+        if (action in {"settings", "squad_rules", "price_rules", "increment_rules",
+                       "lot_price", "retain", "unretain", "team_retention_final"}
+                or action.startswith(("retention_", "rtm_", "expansion_", "draft_"))):
+            raise auction_svc.AuctionError(
+                "Manage draft rounds, prices and squad rules with /draft in "
+                "the dedicated franchise bot. Auction settings do not apply to this draft.")
+        if (action in {"franchise", "franchise_delete", "franchise_import"}
+                and (season.status != auction_svc.STATUS_SETUP or franchise_draft.cursor)):
+            raise auction_svc.AuctionError(
+                "The draft's franchises are fixed after it starts. "
+                "Use the dedicated franchise bot to manage team roles.")
     if action == "settings":
         season.name = (request.form.get("name") or season.name).strip()[:120]
         season.chat_id = _tg_chat_form("chat_id", season.chat_id)
@@ -26793,6 +26809,17 @@ def _league_series_post(db, ls, series, action):
               f"auction. Owners keep up to {auction.max_retentions} — then build "
               f"the pool and start it in the group.", "success")
         return None
+    elif action == "start_draft":
+        new, auction = ls.start_franchise_draft(
+            db, series, purse_lakh=auction_svc.parse_amount(request.form.get("purse", "")),
+            rounds=request.form.get("rounds", "15"),
+            name=request.form.get("draft_name"), by_tg_id=None)
+        log_admin(db, "league_season_draft", "auction", auction.id, auction.name)
+        db.commit()
+        flash(f"📋 {ls.season_title(new)}: “{auction.name}” is ready for draft "
+              f"setup. Add players, set fixed prices and the order, then use "
+              f"/draft in the dedicated franchise bot for live drafting.", "success")
+        return None
     elif action == "start_mini":
         new, auction, report = ls.start_mini_auction(
             db, series, purse_lakh=_money_form("purse"),
@@ -26859,7 +26886,7 @@ def _league_series_post(db, ls, series, action):
 @login_required
 def admin_league_series(series_id):
     """One competition: its seasons, the current one's next step, and the
-    turn of the season — 🔨 mega, 🔁 mini or ✍️ manual."""
+    turn of the season — 🔨 mega, 🔁 mini, 📋 draft or ✍️ manual."""
     from services import league_season_service as ls
     from models import StatsSeason
     db = get_session()
@@ -26891,8 +26918,11 @@ def admin_league_series(series_id):
         rows = ls.overview(db, series)
         current = rows[0] if rows else None
         checklist, candidates, money = [], [], {}
+        current_draft = None
         if current is not None:
             if current["auction"] is not None and current["league"] is None:
+                from services.franchise_draft import get_draft
+                current_draft = get_draft(db, current["auction"])
                 checklist = ls.auction_checklist(db, current["auction"])
                 sym = current["auction"].currency_label or "₹"
                 money = {f.id: (auction_svc.render_money(f.purse_remaining_lakh, sym),
@@ -26921,7 +26951,7 @@ def admin_league_series(series_id):
                    "wkts": ls.all_time_leaders(db, series, "wkts", limit=5)}
         return render_template(
             "admin_league_series.html", series=series, rows=rows,
-            current=current, checklist=checklist, candidates=candidates,
+            current=current, current_draft=current_draft, checklist=checklist, candidates=candidates,
             blocker=blocker, prev=prev, attachable=attachable, saved=saved,
             next_no=ls.next_number(db, series),
             mega_purse=_crore(ls.default_mega_purse(db, series)),

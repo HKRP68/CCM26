@@ -1,5 +1,9 @@
 # Dedicated Franchise Auction bot
 
+For a full fixed-price season draft, use **New draft** or **Existing leagues →
+Draft** in `/auction`. See [Franchise season draft](franchise-draft.md) for
+rating prices, custom prices, rotating rounds, owner confirmations and purses.
+
 `python franchise_bot.py` starts **Franchise Auction HQ**, a separate Telegram
 bot using your **existing database** and a new BotFather token. It
 registers auction, retention, draft, RTM and trade handlers, the guided control

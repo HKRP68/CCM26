@@ -25,13 +25,23 @@ BOT_COMMANDS = [BotCommand(*row) for row in [
     ('roles','Show your current roles'),('id','Show Telegram user and group IDs'),
     ('bid','Bid in the auction group'),('help','How auctions and setup work'),('cancel','Cancel a guided input'),
     ('commands','Search every auction command and alias'),
+    ('draft','Open the franchise season draft'),('dpick','Choose a player for your draft turn'),
+    ('dhelp','Franchise draft setup and commands'),
+    ('dskip','Defer your current draft pick'),('dskips','View the skipped-pick queue'),
 ]]
 PROMPT_KEY = 'franchise_prompt'
 
 # form key: shared service action, fields (key, label, parser).
 FORMS = {
     'new':('admin_create',[('name','Name of the new auction','text')]),
+    'newdraft':('native_newdraft',[('name','Name of the new draft season','text'),('rounds','Number of rounds and players per squad','id'),('purse_lakh','Opening purse per team in whole lakh: 10000 = 100 Cr','id')]),
     'fromleague':('native_from_league',[('league_id','Previous league ID from Existing leagues','id'),('name','Name of the next auction season','text')]),
+    'fromleaguedraft':('native_draft_from_league',[('league_id','Previous league ID from Existing leagues','id'),('name','Name of the next draft season','text'),('rounds','Number of rounds and players per squad','id'),('purse_lakh','Opening purse per team in whole lakh: 10000 = 100 Cr','id')]),
+    'draftprices':('native_fd_prices',[('text','Rating prices, one per line, for example 96:23cr and 95:21cr','text')]),
+    'draftcustom':('native_fd_custom',[('text','Custom prices, one per line, for example Joe Root:25.5cr','text')]),
+    'draftrounds':('native_fd_rounds',[('rounds','Total rounds and maximum squad size; add rounds by increasing this number','id')]),
+    'draftorderfull':('native_fd_order',[('text','Team IDs or exact names separated by |, in round 1 order; or random','text')]),
+    'drafttimer':('native_fd_timer',[('minutes','Pick time in whole minutes (5, 8, 10, 15 etc.); 0 disables the timer','nonnegative')]),
     'bind':('admin_bind',[('chat_id','Telegram group ID (negative; use /id in the group)','int')]),
     'teamadd':('admin_franchise',[('name','Franchise name','text'),('owner_tg_id','Owner Telegram user ID','id'),('co_owners','Co-owner IDs, comma separated; skip for none','ids'),('team_managers','Team Manager IDs, comma separated; skip for none','ids')]),
     'pool':('admin_pool_range',[('low','Minimum player rating','int'),('high','Maximum player rating','int'),('set_name','Set name; skip uses the default','optional')]),
@@ -92,7 +102,7 @@ def read_workspace(db, actor, sid, chat_id, view='home', argument=''):
         return W.base_payload(db,None,actor,rows)
     if season is None:raise A.AuctionError('Create or select an auction first. Use /auction.')
     if view=='seasons':return W.base_payload(db,season,actor,rows)
-    api_view={'home':'arena','live':'arena','team':'teams','teams':'teams','myteam':'teams','pool':'pool','rules':'rules',
+    api_view={'home':'arena','live':'arena','franchisedraft':'arena','team':'teams','teams':'teams','myteam':'teams','pool':'pool','rules':'rules',
               'control':'admin','settings':'admin','fields':'admin','form':'admin','teamroles':'admin','finish':'admin',
               'preseason':'preseason','draft':'preseason','trades':'trades','roles':'arena','help':'arena'}.get(view)
     if api_view is None:raise A.AuctionError('Open /auction for a fresh menu.')
@@ -100,6 +110,14 @@ def read_workspace(db, actor, sid, chat_id, view='home', argument=''):
     if api_view=='pool':request['page']=(max(1,int(argument or 1))-1)//4+1
     if api_view=='preseason' and argument:request['team_id']=int(argument)
     result=W.payload(db,season,actor,rows,request)
+    from services import franchise_draft as D
+    draft=D.get_draft(db,season)
+    if draft:
+        result['franchise_draft']={'rounds':draft.rounds,'cursor':draft.cursor,
+            'signed':sum(int(t.squad_size or 0) for t in A.franchises(db,season.id)),
+            'skipped':len(D.skipped_turns(db,season)),
+            'board':D.render_board(db,season),'order':D.render_order(db,season)}
+        if view=='pool':result['franchise_draft']['pool']=D.render_pool(db,season,page=max(1,int(argument or 1)))
     if view in ('preseason','draft'):
         result['previous_league_id']=season.previous_league_id
     return result
@@ -122,6 +140,29 @@ def _native_perform(db, season, actor, action, values):
 
 
 def execute_action(db, actor, sid, chat_id, action, values):
+    if action in ('native_newdraft','native_draft_from_league'):
+        if not W.admin_for(db,actor):raise W.AccessError('Only Auction Managers can create a draft season.')
+        from services import franchise_draft as D, league_season_service as LS
+        from models import ChallengeLeague, LeagueSeason
+        name=str(values.get('name') or '').strip()
+        rounds=whole(values.get('rounds'))
+        purse=whole(values.get('purse_lakh'))
+        if not 1 <= purse <= 1_000_000:raise A.AuctionError('Opening purse must be between 1 and 1,000,000 whole lakh.')
+        if action=='native_draft_from_league':
+            league=db.get(ChallengeLeague,whole(values.get('league_id')))
+            if league is None:raise A.AuctionError('That previous league does not exist.')
+            previous=db.query(LeagueSeason).filter_by(league_id=league.id).order_by(LeagueSeason.season_no.desc()).first()
+            if previous:
+                try:_,season=LS.start_franchise_draft(db,previous.series,name=name,purse_lakh=purse,rounds=rounds,by_tg_id=actor)
+                except LS.LeagueSeasonError as exc:raise A.AuctionError(str(exc)) from None
+            else:
+                season=A.season_from_league(db,league,name,by_tg_id=actor)
+                A.set_opening_purse(db,season,purse,by_tg_id=actor)
+                D.enable(db,season,rounds=rounds,by_tg_id=actor)
+        else:
+            season=A.create_season(db,name,opening_purse_lakh=purse)
+            D.enable(db,season,rounds=rounds,by_tg_id=actor)
+        return dict(message='Draft season created. Add teams and player pool, set draft prices, then start from /draft.',season_id=season.id)
     if action=='native_from_league':
         if not W.admin_for(db,actor):raise W.AccessError('Only Auction Managers can create auctions from previous leagues.')
         from models import ChallengeLeague
@@ -138,6 +179,23 @@ def execute_action(db, actor, sid, chat_id, action, values):
         return result
     season,_=_resolve(db,actor,sid,chat_id)
     if season is None:raise A.AuctionError('Select an auction first.')
+    if action.startswith('native_fd_'):
+        if not W.admin_for(db,actor):raise W.AccessError('Only Auction Managers can manage a draft.')
+        from services import franchise_draft as D
+        operation=action.removeprefix('native_fd_')
+        if operation=='prices':D.set_rating_prices(db,season,values.get('text',''),by_tg_id=actor)
+        elif operation=='custom':D.set_custom_prices(db,season,values.get('text',''),by_tg_id=actor)
+        elif operation=='rounds':D.configure_rounds(db,season,whole(values.get('rounds')),by_tg_id=actor)
+        elif operation=='timer':D.set_timer(db,season,whole(values.get('minutes')),by_tg_id=actor)
+        elif operation=='order':
+            from handlers.franchise_draft import parse_order
+            raw=values.get('text','')
+            D.set_order(db,season,parse_order(db,season,raw),randomize=raw.strip().casefold()=='random',by_tg_id=actor)
+        elif operation in ('start','pause','undo'):
+            fn={'start':D.start,'pause':D.pause,'undo':D.undo_last}[operation]
+            fn(db,season,by_tg_id=actor)
+        else:raise A.AuctionError('Choose a draft control.')
+        return dict(message='Draft updated. Open /draft for the current turn, squads and purses.')
     if action=='admin_previous_league':
         if not W.admin_for(db,actor):raise W.AccessError('Only Auction Managers can link previous leagues.')
         from models import ChallengeLeague
@@ -211,25 +269,32 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
     season=data.get('season') or {};sid=season.get('id') or sid
     manager=bool(data.get('admin'));team_ids=data.get('my_team_ids') or []
     currency=season.get('currency') or '₹'
-    header=[f'<b>🏏 Franchise Auction HQ</b>',_e(season.get('name') or 'Your auction workspace'),
+    draft=data.get('franchise_draft')
+    header=[f'<b>🏏 Franchise {"Draft" if draft else "Auction"} HQ</b>',_e(season.get('name') or 'Your auction workspace'),
             '<b>Roles:</b> '+_e(' · '.join(data.get('role_labels') or ['Spectator']),400)]
     buttons=[]
     if view in ('home','roles'):
         if season:
             counts=data.get('counts') or {}
-            header += [f"Status: <b>{_e(season['status'])}</b>",f"{counts.get('sold',0)} sold · {counts.get('queued',0)} waiting"]
-            buttons += _rows(actor,sid,[[('🔨 Live room','v:live'),('👥 Squads','v:teams')]])
+            header += [f"Status: <b>{_e(season['status'])}</b>",
+                f"{counts.get('drafted',0)} drafted · {counts.get('queued',0)} available" if draft else f"{counts.get('sold',0)} sold · {counts.get('queued',0)} waiting"]
+            if draft:
+                header += [f"📋 Draft · {draft['rounds']} rounds · {draft['signed']} signed · {draft['skipped']} deferred"]
+                buttons += _rows(actor,sid,[[('📋 Draft room','v:franchisedraft'),('👥 Squads','v:teams')]])
+            else:buttons += _rows(actor,sid,[[('🔨 Live room','v:live'),('👥 Squads','v:teams')]])
             if team_ids:buttons += _rows(actor,sid,[[('💼 My franchises','v:myteam'),('📚 Player pool','v:pool:1')],[('📖 Rulebook','v:rules')]])
             if manager:
                 field=data.get('teams') or []
                 checks=[('Group bound',bool(season.get('chat_id'))),('At least two franchises',len(field)>=2),('Player pool ready',bool(counts.get('total')))]
                 header += ['','<b>Setup checklist</b>']+[('✅ ' if ready else '○ ')+label for label,ready in checks]
-                buttons += _rows(actor,sid,[[('🎛 Control room','v:control'),('⚙️ All settings','v:settings')],[('🏷 Teams & roles','v:teamroles'),('🛡 Retention','v:preseason')],[('🆕 Expansion draft','v:draft'),('🤝 Trades','v:trades')]])
+                if draft:
+                    buttons += _rows(actor,sid,[[('🎛 Draft controls','v:franchisedraft'),('⚙️ Squad rules','v:settings')],[('🏷 Teams & roles','v:teamroles'),('🏁 Publish & next season','v:finish')]])
+                else:buttons += _rows(actor,sid,[[('🎛 Control room','v:control'),('⚙️ All settings','v:settings')],[('🏷 Teams & roles','v:teamroles'),('🛡 Retention','v:preseason')],[('🆕 Expansion draft','v:draft'),('🤝 Trades','v:trades')]])
         else:
             header+=['','Use existing competitions or create the next season. No debut, coins or collecting-game account is required.']
             if manager:header+=['Choose an existing auction, or start from an existing league for retention.']
             else:header+=['Ask your organiser to assign your Telegram ID to a franchise. Open /auction in its group to watch.']
-        if manager:buttons+=_rows(actor,sid,[[('➕ New auction','f:new'),('📚 Existing leagues','v:leagues:1')]])
+        if manager:buttons+=_rows(actor,sid,[[('➕ New auction','f:new'),('📋 New draft','f:newdraft')],[('📚 Existing leagues','v:leagues:1')]])
         buttons+=_rows(actor,sid,[[('🔀 Choose auction','v:seasons'),('❓ Help','v:help')]])
         from handlers.franchise_commands import command_button
         buttons.append([command_button(actor)])
@@ -240,14 +305,26 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
     elif view=='leagues':
         page=max(1,int(argument or 1))
         header+=['',f'<b>Existing leagues · page {page}</b>',
-                 'Create the next auction from a league to carry its franchises and previous-squad rights. Assign owners before starting.']
+                 'Choose an auction or a fixed-price draft for the next season. Check franchise owners before starting.']
         for league in data.get('leagues',[]):
             header+=[f"#{league['id']} · {_e(league['name'],70)}"]
             buttons+=_rows(actor,sid,[[(f"Next season: {league['name'][:25]}",f"f:fromleague:{league['id']}")]])
+            buttons+=_rows(actor,sid,[[(f"Draft: {league['name'][:25]}",f"f:fromleaguedraft:{league['id']}")]])
         if not data.get('leagues'):header+=['No leagues found on this page.']
         if page>1:buttons+=_rows(actor,sid,[[('← Previous leagues',f'v:leagues:{page-1}')]])
         if data.get('has_more_leagues'):buttons+=_rows(actor,sid,[[('More leagues →',f'v:leagues:{page+1}')]])
         if season:buttons+=_rows(actor,sid,[[('Link league to this auction','f:previous')]])
+    elif view=='franchisedraft' or (draft and view in ('live','control')):
+        if not draft:raise A.AuctionError('Select a draft season, or use /dsetup during setup.')
+        header += ['',draft['board'],'','Pick: <code>/dpick Joe Root</code> · /dpool · /dsquad · /drules']
+        if manager:
+            header+=['','Manage draft prices and rounds here. Configure role minimums, maximums and rating rules under Squad rules.']
+            buttons+=_rows(actor,sid,[[('Rating prices','f:draftprices'),('Custom player prices','f:draftcustom')],
+                [('Draft order','f:draftorderfull'),('Total rounds','f:draftrounds')],
+                [('⏱ Pick time (minutes)','f:drafttimer'),('➕ Add franchise','f:teamadd')],
+                [('Start / resume','dgo:start'),('Pause','dgo:pause')],
+                [('Undo last turn','dgo:undo'),('Squad rules','v:settings')],
+                [('Teams & roles','v:teamroles'),('Publish squads','f:publish')]])
     elif view=='live':
         lot=data.get('lot')
         if lot:
@@ -286,32 +363,46 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
         if page>1:buttons+=_rows(actor,sid,[[('← Players',f'v:team:{tid}-{page-1}')]])
         if page*8<len(squad):buttons+=_rows(actor,sid,[[('More players →',f'v:team:{tid}-{page+1}')]])
         if manager:
-            buttons+=_rows(actor,sid,[[('💰 Adjust purse',f'f:purse:{tid}'),('🆕 Add player',f'f:teamplayer:{tid}')],
+            if draft:
+                buttons+=_rows(actor,sid,[[('💰 Adjust purse',f'f:purse:{tid}'),('Owner ID',f'role:owner_tg_id:{tid}')],
+                    [('Co-owner IDs',f'role:co_owners:{tid}'),('Draft room','v:franchisedraft')]])
+            else:buttons+=_rows(actor,sid,[[('💰 Adjust purse',f'f:purse:{tid}'),('🆕 Add player',f'f:teamplayer:{tid}')],
                 [('Remove player',f'f:removeplayer:{tid}'),('Team Manager IDs',f'role:team_managers:{tid}')],
                 [('Owner ID',f'role:owner_tg_id:{tid}'),('Co-owner IDs',f'role:co_owners:{tid}')],
                 [('Retention',f'v:preseason:{tid}'),('Expansion picks',f'f:picks:{tid}')],[('RTM cards',f'f:rtm:{tid}'),('Previous team',f'f:previous_team:{tid}')]])
     elif view=='pool':
         page=max(1,int(argument or 1));start=((page-1)%4)*10
-        header+=['',f'<b>Player pool · page {page}</b>']
-        for p in data.get('players',[])[start:start+10]:header+=[f"#{p['player_id']} · {_e(p['name'],38)} · {p['rating']} · {_e(p['status'])} · {_money(p['base_lakh'],currency)}"]
+        if draft:header+=['',draft['pool']]
+        else:
+            header+=['',f'<b>Player pool · page {page}</b>']
+            for p in data.get('players',[])[start:start+10]:header+=[f"#{p['player_id']} · {_e(p['name'],38)} · {p['rating']} · {_e(p['status'])} · {_money(p['base_lakh'],currency)}"]
         nav=[]
         if page>1:nav.append(('← Previous',f'v:pool:{page-1}'))
-        if page*10<data.get('total',0):nav.append(('Next →',f'v:pool:{page+1}'))
+        if page*(12 if draft else 10)<data.get('total',0):nav.append(('Next →',f'v:pool:{page+1}'))
         if nav:buttons+=_rows(actor,sid,[nav])
         if manager:header+=['','Import fresh players with /importplayers in the bound group.'];buttons+=_rows(actor,sid,[[('Build rating set','f:pool')]])
     elif view=='rules':
         rules=data.get('rules') or {}
-        header+=['','<b>Auction rulebook</b>',f"Purse {_money(rules.get('opening_lakh'),currency)} · squad {rules.get('min_squad')}–{rules.get('max_squad')}",
+        if draft:
+            header+=['','<b>Draft rulebook</b>',f"Purse {_money(rules.get('opening_lakh'),currency)} · {draft['rounds']} rounds / players per team",
+                'Each new round moves its first team to the end. No overseas limit.',
+                'Rating prices apply to every matching player; custom player prices take priority.',
+                'Only the current team owner or co-owner may confirm a pick. /drules shows role and rating requirements.']
+        else:header+=['','<b>Auction rulebook</b>',f"Purse {_money(rules.get('opening_lakh'),currency)} · squad {rules.get('min_squad')}–{rules.get('max_squad')}",
             f"Overseas {rules.get('min_overseas')}–{rules.get('max_overseas')} · opening clock {rules.get('bid_seconds')}s",
             f"Retention {rules.get('min_retentions')}–{rules.get('max_retentions')} · RTM {'on' if rules.get('rtm_enabled') else 'off'}",
             'The server enforces purse reserves, role/rating limits, turn order, stale bids and deadlines.','Use /arules in the auction group for the complete rule tables.']
     elif view in ('settings','fields'):
         header+=['','<b>All auction settings</b>','Common values use guided replies. Money is whole lakh: 100 = 1 Cr.']
+        draft_keys={'name','currency_label','opening_purse_lakh','role_minimums','role_maximums','rating_rules'}
+        if draft:header+=['Draft rounds, order and fixed prices are managed in Draft room. Overseas players have no limit.']
         if view=='settings':
-            for group,label in GROUP_LABELS.items():buttons+=_rows(actor,sid,[[(label,'v:fields:'+group+'-1')]])
+            for group,label in GROUP_LABELS.items():
+                if draft and group not in ('general','squad'):continue
+                buttons+=_rows(actor,sid,[[(label,'v:fields:'+group+'-1')]])
         else:
             parts=(argument or 'general-1').rsplit('-',1);group=parts[0];page=int(parts[1])
-            keys=[key for key,field in SETTINGS.items() if field.group==group]
+            keys=[key for key,field in SETTINGS.items() if field.group==group and (not draft or key in draft_keys)]
             if not keys:raise A.AuctionError('Choose a settings category.')
             for key in keys[(page-1)*6:page*6]:buttons+=_rows(actor,sid,[[(SETTINGS[key].label,'s:'+key)]])
             nav=[]
@@ -361,7 +452,8 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
         buttons+=_rows(actor,sid,[[('Sell current player','go:admin_sold'),('Mark unsold','go:admin_unsold')],[('Undo latest bid','go:admin_undo_bid')]])
     elif view=='finish':
         header+=['','<b>Finish & next season</b>','Actions ask for the exact auction name. Existing clock, squad and trade safeguards remain active.']
-        buttons+=_rows(actor,sid,[[('Publish squads','f:publish'),('Clone next season','f:clone')],[('Simulate remainder','f:simulate'),('Restart auction','f:restart')],[('Cancel auction','f:cancelauction')]])
+        if draft:buttons+=_rows(actor,sid,[[('Publish squads','f:publish'),('Existing leagues → next season','v:leagues:1')],[('Add rounds','f:draftrounds'),('Draft room','v:franchisedraft')],[('Cancel draft','f:cancelauction')]])
+        else:buttons+=_rows(actor,sid,[[('Publish squads','f:publish'),('Clone next season','f:clone')],[('Simulate remainder','f:simulate'),('Restart auction','f:restart')],[('Cancel auction','f:cancelauction')]])
     elif view=='help':
         header+=['','<b>From retention to published squads</b>',
             '1. Choose an existing auction, or Existing leagues → Next season to carry previous franchises and squad rights.',
@@ -374,6 +466,7 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
             '/aboard · /asquad · /apurse · /arules · /adminhelp',
             '/commands searches every command and alias, including retention, picks, settings, trades and publishing.',
             'Private guided controls use whole lakh: 100 = 1 Cr. /cancel stops an unfinished input.',
+            'For a full season draft: New draft or Existing leagues → Draft. /dhelp explains prices, rotating rounds and /dpick confirmations.',
             'Only global auction roles change settings. Team roles bid and answer RTM for their assigned franchises.']
     else:raise A.AuctionError('Open /auction for a fresh menu.')
     if view not in ('home','roles'):buttons+=_rows(actor,sid,[[('🏠 Auction home','v:home')]])
@@ -382,16 +475,13 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
 
 
 async def _send(update,text,markup=None):
+    from services import rich_message as R
+    from services.franchise_draft_delivery import blocks_for_html
+    blocks=blocks_for_html(text)
     query=getattr(update,'callback_query',None)
     if query is not None and getattr(query,'message',None) is not None:
-        try:
-            await query.edit_message_text(text,parse_mode='HTML',reply_markup=markup,disable_web_page_preview=True)
-            return
-        except Exception as exc:
-            from telegram.error import BadRequest
-            if isinstance(exc,BadRequest) and 'not modified' in str(exc).lower():return
-            if not isinstance(exc,BadRequest):raise
-    await update.effective_message.reply_text(text,parse_mode='HTML',reply_markup=markup,disable_web_page_preview=True)
+        if await R.edit_rich(query,blocks,text,reply_markup=markup):return
+    await R.reply_rich(update.effective_message,blocks,text,reply_markup=markup)
 
 
 async def _show(update,context,view='home',sid=None,argument=''):
@@ -465,7 +555,7 @@ async def _start_form(update,context,key,sid,team_id=None,role_key=None):
     if update.effective_chat.id<0:
         await _show(update,context,'control',sid);return
     actor=_actor(update)
-    if key in ('new','fromleague'):
+    if key in ('new','fromleague','newdraft','fromleaguedraft'):
         allowed=await run_session(get_session,lambda db:W.admin_for(db,actor))
         if not allowed:raise W.AccessError('Only Auction Managers can create an auction.')
         data={}
@@ -480,7 +570,7 @@ async def _start_form(update,context,key,sid,team_id=None,role_key=None):
     if key not in FORMS:raise A.AuctionError('Choose a form from /auction.')
     payload={}
     step=0
-    if key=='fromleague' and team_id:
+    if key in ('fromleague','fromleaguedraft') and team_id:
         payload['league_id']=int(team_id)
         step=1
     if key in TEAM_FORMS:
@@ -545,6 +635,14 @@ async def callback_handler(update,context):
             _prompt(context,update,dict(kind='setting',sid=sid,key=key,payload={},step=0))
             field=SETTINGS[key]
             await _send(update,f'<b>{_e(field.label)}</b>\nCurrent: <code>{_e(json.dumps(current,ensure_ascii=False),500)}</code>\n\nSend {_e(field.example,650)}.\n\nMoney uses whole lakh. /cancel keeps the current value.')
+            return
+        if kind=='dgo':
+            operation=parts[1]
+            if operation not in ('start','pause','undo'):raise A.AuctionError('Choose a draft control.')
+            data=await run_session(get_session,lambda db:read_workspace(db,_actor(update),sid,update.effective_chat.id,'control'))
+            if not data.get('admin'):raise W.AccessError('Only Auction Managers can manage drafts.')
+            key=_store_action(context,update.effective_chat.id,sid,'native_fd_'+operation,{})
+            await _send(update,'Confirm '+_e(operation)+' for this draft?',InlineKeyboardMarkup(_rows(_actor(update),sid,[[('Confirm','op:'+key),('Back','v:franchisedraft')]])))
             return
         if kind=='go':
             action=parts[1]

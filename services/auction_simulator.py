@@ -59,6 +59,7 @@ BID_LIMIT = 400          # a bidding war that long is a bug, not an auction
 # ──────────────────────────────────────────────────────────────────────
 
 def _check_can_finish(session, season):
+    A.require_auction_mode(session, season)
     if season.status in (A.STATUS_COMPLETED, A.STATUS_CANCELLED):
         raise AuctionError(f"This auction is already {season.status}.")
     if not A.franchises(session, season.id):

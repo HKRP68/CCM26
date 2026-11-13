@@ -18,6 +18,10 @@ DOT_ALIASES = frozenset({
 # module, command aliases, callable name. Kept explicit so the supported bot
 # surface can be reviewed without importing the main cricket application.
 COMMANDS = (
+    ('draft', ('draft', 'dboard', 'dnew', 'dsetup', 'dprices', 'dcustom',
+               'dorder', 'drounds', 'daddrounds', 'dstart', 'dpause', 'dresume',
+               'dundo', 'dpick', 'dpool', 'dsquad', 'drules', 'dhelp',
+               'dteam', 'dskip', 'dskips', 'dtimer'), 'command_handler'),
     ('auction', ('bid', 'bd'), 'bid_handler'),
     ('auction', ('artm', 'rtm'), 'artm_handler'),
     ('auction', ('aboard', 'auctionboard'), 'aboard_handler'),
@@ -122,6 +126,7 @@ COMMANDS = (
 )
 
 CALLBACKS = (
+    ('draft', 'callback_handler', '^fd_'),
     ('auction', 'bid_callback', '^au_bid_'),
     ('auction', 'me_callback', '^au_me_'),
     ('auction', 'rtm_callback', '^au_rtm_'),
@@ -155,7 +160,8 @@ def register_auction_handlers(app, *, include_solo_league=False):
     app.add_handler(TypeHandler(Update, button_access_guard), group=-60)
     app.add_handler(TypeHandler(Update, bind_update_owner), group=-50)
     modules = {'auction':import_module('handlers.auction'),
-               'trade':import_module('handlers.auction_trade')}
+               'trade':import_module('handlers.auction_trade'),
+               'draft':import_module('handlers.franchise_draft')}
     for module, commands, name in COMMANDS:
         app.add_handler(CommandHandler(list(commands), getattr(modules[module], name)))
     for module, name, pattern in CALLBACKS:

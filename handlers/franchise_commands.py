@@ -34,6 +34,31 @@ _TRADE_HELP = {
     'atradeblock': 'List players available for trading and manage your trade block.',
 }
 
+_DRAFT_HELP = {
+    'draft': ('/draft', 'Show the current draft turn, squads and purses.'),
+    'dboard': ('/dboard', 'Show the franchise draft board.'),
+    'dnew': ('/dnew Season 2', 'Manager: create a new franchise draft season.'),
+    'dsetup': ('/dsetup 15', 'Manager: enable a draft on an empty season, with 15 rounds.'),
+    'dprices': ('/dprices\n96:23cr\n95:21cr', 'Manager: set the fixed price for each player rating.'),
+    'dcustom': ('/dcustom\nJoe Root:25.5cr', 'Manager: override a player’s rating price.'),
+    'dorder': ('/dorder Team 1 | Team 2 | Team 3', 'Manager: set round 1 order; random generates it. Later rounds rotate the first team to last.'),
+    'drounds': ('/drounds 15', 'Manager: set the round count and maximum squad size.'),
+    'daddrounds': ('/daddrounds 2', 'Manager: add more rounds before squads are published.'),
+    'dstart': ('/dstart', 'Manager: validate setup and start the draft.'),
+    'dpause': ('/dpause', 'Manager: pause the draft and lock picks.'),
+    'dresume': ('/dresume', 'Manager: resume a paused draft.'),
+    'dundo': ('/dundo', 'Manager: while paused, undo the latest pick or skip, refunding any signing.'),
+    'dpick': ('/dpick Joe Root', 'Current team owner or co-owner: review and confirm a player signing.'),
+    'dpool': ('/dpool 1', 'Browse available draft players and their fixed prices.'),
+    'dsquad': ('/dsquad Team name', 'Show a drafted squad, remaining purse and rule progress.'),
+    'drules': ('/drules', 'Show draft role and rating rules. Overseas players have no limit.'),
+    'dhelp': ('/dhelp', 'Read the complete franchise draft setup and picking guide.'),
+    'dteam': ('/dteam Team name | owner ID | co-owner IDs', 'Manager: add a new franchise during draft setup, with its own purse and full pick allowance.'),
+    'dskip': ('/dskip', 'Current team owner or co-owner: defer this pick to the catch-up round without spending purse.'),
+    'dskips': ('/dskips 1', 'View catch-up picks in the exact order teams skipped or timed out.'),
+    'dtimer': ('/dtimer 10', 'Manager: set minutes per turn while in setup or paused; 0 disables automatic skipping.'),
+}
+
 
 def command_catalogue(query=''):
     # Use the same reference text as /adminhelp. The registry, rather than a
@@ -46,6 +71,11 @@ def command_catalogue(query=''):
                 reference.setdefault(name,(section,usage,description))
     result=[]
     for module, names, handler in COMMANDS:
+        if module=='draft':
+            for name in names:
+                usage,description=_DRAFT_HELP[name]
+                result.append(dict(names=(name,),section='📋 Franchise Draft',usage=usage,description=description))
+            continue
         section,usage,description=next((reference[name] for name in names if name in reference),
             ('🤝 Trades' if module=='trade' else '🔨 Auction commands','/'+names[0],
              _TRADE_HELP.get(names[0],'Open /adminhelp for usage, or /atradehelp for trade examples.')))

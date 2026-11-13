@@ -4454,10 +4454,82 @@ class AuctionSeason(Base):
                           cascade="all, delete-orphan")
     events = relationship("AuctionEvent", back_populates="season",
                           cascade="all, delete-orphan")
+    franchise_draft = relationship("FranchiseDraft", uselist=False,
+                                   cascade="all, delete-orphan")
+    draft_confirmations = relationship("FranchiseDraftConfirmation",
+                                        cascade="all, delete-orphan")
+    franchise_draft_picks = relationship("FranchiseDraftPick",
+                                         cascade="all, delete-orphan")
+    franchise_draft_turns = relationship("FranchiseDraftTurn",
+                                         cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_auction_season_chat_unique", "chat_id", unique=True),
     )
+
+
+class FranchiseDraft(Base):
+    """Fixed-price, rotating-round draft configuration for a franchise season.
+
+    Kept in its own table so existing auction rows and schema remain unchanged.
+    ``revision`` is the compare-and-swap lock for picks and setup changes.
+    """
+    __tablename__ = "franchise_drafts"
+    season_id = Column(Integer, ForeignKey("auction_seasons.id", ondelete="CASCADE"), primary_key=True)
+    rounds = Column(Integer, default=15, nullable=False)
+    cursor = Column(Integer, default=0, nullable=False)
+    revision = Column(Integer, default=0, nullable=False)
+    order_json = Column(Text, nullable=True)
+    rating_prices_json = Column(Text, nullable=True)
+    custom_prices_json = Column(Text, nullable=True)
+    # Regular turns advance cursor; skipped turns wait here in FIFO order.
+    skipped_turns_json = Column(Text, nullable=True)
+    pick_minutes = Column(Integer, default=10, nullable=False)
+    pick_deadline_at = Column(DateTime, nullable=True)
+    paused_seconds_left = Column(Integer, nullable=True)
+
+
+class FranchiseDraftConfirmation(Base):
+    """Durable, one-use quote bound to its opener and exact draft revision."""
+    __tablename__ = "franchise_draft_confirmations"
+    token = Column(String(32), primary_key=True)
+    season_id = Column(Integer, ForeignKey("auction_seasons.id", ondelete="CASCADE"), nullable=False, index=True)
+    franchise_id = Column(Integer, ForeignKey("auction_franchises.id", ondelete="CASCADE"), nullable=False)
+    lot_id = Column(Integer, ForeignKey("auction_lots.id", ondelete="CASCADE"), nullable=False)
+    actor_tg_id = Column(BigInteger, nullable=False)
+    revision = Column(Integer, nullable=False)
+    price_lakh = Column(Integer, nullable=False)
+    status = Column(String(12), default="pending", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FranchiseDraftPick(Base):
+    """Ordered pick journal; the ledger retains financial history after undo."""
+    __tablename__ = "franchise_draft_picks"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_id = Column(Integer, ForeignKey("auction_seasons.id", ondelete="CASCADE"), nullable=False, index=True)
+    overall_no = Column(Integer, nullable=False)
+    franchise_id = Column(Integer, ForeignKey("auction_franchises.id", ondelete="CASCADE"), nullable=False)
+    lot_id = Column(Integer, ForeignKey("auction_lots.id", ondelete="CASCADE"), nullable=False)
+    price_lakh = Column(Integer, nullable=False)
+    actor_tg_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    __table_args__ = (Index("ix_franchise_draft_pick_number", "season_id", "overall_no", unique=True),)
+
+
+class FranchiseDraftTurn(Base):
+    """Pick/skip history with the exact queue needed to undo the last turn."""
+    __tablename__ = "franchise_draft_turns"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_id = Column(Integer, ForeignKey("auction_seasons.id", ondelete="CASCADE"), nullable=False, index=True)
+    number = Column(Integer, nullable=False)
+    kind = Column(String(12), nullable=False)  # pick | skip | timeout
+    franchise_id = Column(Integer, ForeignKey("auction_franchises.id", ondelete="CASCADE"), nullable=False)
+    pick_no = Column(Integer, nullable=True)
+    before_state_json = Column(Text, nullable=False)
+    by_tg_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    __table_args__ = (Index("ix_franchise_draft_turn_number", "season_id", "number", unique=True),)
 
 
 class AuctionFranchise(Base):

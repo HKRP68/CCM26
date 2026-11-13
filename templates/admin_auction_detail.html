@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ season.name }} — Auction{% endblock %}
+{% block title %}{{ season.name }} — {{ 'Draft' if franchise_draft else 'Auction' }}{% endblock %}
 {% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_auction.css') }}">{% endblock %}
 
 {#
@@ -25,10 +25,17 @@
     <h2 style="margin:0;">🔨 {{ season.name }} <span class="status-pill {{ season.status }}">{{ season.status }}</span></h2>
     <div class="au-actions">
       <button class="btn btn-ghost btn-sm" type="button" id="au-expand-all">⤢ Expand all</button>
-      <a class="btn btn-primary" href="{{ url_for('admin_auction_console', season_id=season.id) }}">🔨 Live console</a>
+      {% if not franchise_draft %}<a class="btn btn-primary" href="{{ url_for('admin_auction_console', season_id=season.id) }}">🔨 Live console</a>{% endif %}
       <a class="btn btn-ghost" href="{{ url_for('admin_auctions_list') }}">← All auctions</a>
     </div>
   </div>
+
+  {% if franchise_draft %}
+  <div class="au-card">
+    <b>📋 Franchise draft · {{ franchise_draft.rounds }} rounds</b>
+    <p class="au-note">Manage players, franchise roles and purses here. Open <code>/draft</code> in the dedicated franchise bot for draft settings, fixed rating prices, custom player prices, the pick order and live drafting. Squad size follows the number of rounds, with no overseas limit.</p>
+  </div>
+  {% endif %}
 
   {# A one-line reading of the whole auction, so the closed page still answers
      "where is this up to" without opening anything. #}
@@ -63,6 +70,7 @@
   {% endif %}
 
   <!-- ── Settings ──────────────────────────────────────────────── -->
+  {% if not franchise_draft %}
   {% include '_auction_preseason.html' %}
 
   {{ fold("settings", "⚙️ Settings",
@@ -337,6 +345,7 @@
     </p>
   </div></details>
 
+  {% endif %}
   <!-- ── Franchises ────────────────────────────────────────────── -->
   {{ fold("franchises", "🏛 Franchises",
           field|length ~ " in the field") }}
@@ -517,6 +526,7 @@
   </div></details>
 
   <!-- ── Retention ─────────────────────────────────────────────── -->
+  {% if not franchise_draft %}
   {{ fold("retention", "🔒 Retention",
           ("closed" if retention_locked else
            ("unavailable" if not retention_open else
@@ -1175,7 +1185,8 @@
      card of its own — the live console still includes it as a standalone card,
      because there it sits among the console's own controls.
   #}
-  {{ fold("pool", "📋 Auction pool",
+  {% endif %}
+  {{ fold("pool", "📋 Draft player pool" if franchise_draft else "📋 Auction pool",
           counts.get('total', 0) ~ " lots in " ~ sets|length ~ " set"
           ~ ("" if sets|length == 1 else "s") ~ " · "
           ~ counts.get('queued', 0) ~ " waiting") }}

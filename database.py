@@ -691,6 +691,15 @@ def _migrate_add_columns():
             except Exception:
                 continue  # try next form, or just give up
 
+    # Draft clocks and skipped-pick queues survive a restart or upgrade.
+    for col, coltype in (
+        ("skipped_turns_json", "TEXT"),
+        ("pick_minutes", "INTEGER DEFAULT 10"),
+        ("pick_deadline_at", "TIMESTAMP"),
+        ("paused_seconds_left", "INTEGER"),
+    ):
+        _try_add("franchise_drafts", col, coltype)
+
     for col, coltype in new_user_cols.items():
         _try_add("users", col, coltype)
     for col, coltype in new_match_cols.items():

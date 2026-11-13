@@ -62,6 +62,61 @@ class AuctionError(Exception):
     """
 
 
+def franchise_draft_config(session, season):
+    """Read the alternate squad-building mode without importing its engine."""
+    from models import FranchiseDraft
+    return session.get(FranchiseDraft, season.id)
+
+
+def require_auction_mode(session, season):
+    """Keep legacy auction actions away from a round draft's turn ledger."""
+    if franchise_draft_config(session, season) is not None:
+        raise AuctionError("This season uses a Franchise Draft. Use /draft, "
+                           "/dstart, /dpause, /dpick or /dundo for draft controls.")
+
+
+def _draft_field_editable(session, season):
+    draft = franchise_draft_config(session, season)
+    if draft is not None and (draft.cursor or season.status != "setup"):
+        raise AuctionError("The draft field is locked after it starts. "
+                           "Keep the same franchises for every round.")
+
+
+def normalize_draft_roles(rules):
+    """Resolve the role codes accepted by native guided settings."""
+    aliases = {
+        'bat': 'Batsman', 'batter': 'Batsman', 'batsman': 'Batsman',
+        'bowl': 'Bowler', 'bowler': 'Bowler',
+        'ar': 'All-rounder', 'alr': 'All-rounder', 'allrounder': 'All-rounder',
+        'wk': 'Wicket Keeper', 'wicketkeeper': 'Wicket Keeper', 'keeper': 'Wicket Keeper',
+    }
+    if rules is None:
+        return {}
+    if not isinstance(rules, dict):
+        raise AuctionError("Give role limits as a role/count table.")
+    clean = {}
+    for name, count in rules.items():
+        key = ''.join(c for c in str(name).casefold() if c.isalpha())
+        role = aliases.get(key)
+        if role is None:
+            raise AuctionError("Use BAT, BOWL, AR or WK for draft role limits.")
+        if role in clean:
+            raise AuctionError(f"{role} appears more than once in this role table.")
+        clean[role] = count
+    return clean
+
+
+def _claim_draft_purse(session, season):
+    draft = franchise_draft_config(session, season)
+    if draft is None:
+        return
+    from services import franchise_draft as D
+    D._claim(session, season, draft)
+    if season.published_at or season.status not in ("setup", "paused"):
+        raise AuctionError("Pause the draft before adjusting purses; published draft purses are locked.")
+    return draft
+
+
 # ── Lifecycle ─────────────────────────────────────────────────────────
 STATUS_SETUP = "setup"
 STATUS_LIVE = "live"
@@ -1188,6 +1243,7 @@ def create_franchise(session, season, name, *, quiet=False, **fields):
     to post where one summary would do. The ledger row is written either way:
     that one is the record, not the announcement.
     """
+    _draft_field_editable(session, season)
     name = (name or "").strip()
     if not name:
         raise AuctionError("A franchise needs a name.")
@@ -1350,6 +1406,7 @@ def import_franchises(session, season, payload, *, replace=False,
     Off by default: an import is far more often "here is the field" than "and
     nobody else", and a flag that deletes is a flag that has to be asked for.
     """
+    _draft_field_editable(session, season)
     rows = _franchise_rows(payload)
     existing = {(f.name or "").strip().lower(): f
                 for f in franchises(session, season.id)}
@@ -1529,6 +1586,7 @@ def set_opening_purse(session, season, purse_lakh, *, by_tg_id=None,
     """
     if by_tg_id is not None:
         require_auction_manager(session, by_tg_id)
+    _claim_draft_purse(session, season)
     new_purse = _as_int(purse_lakh, None)
     if new_purse is None or new_purse < 0:
         raise AuctionError("A purse cannot be negative.")
@@ -1620,6 +1678,8 @@ def correct_purse(session, season, franchise, amount_lakh, *, note=None,
     """
     if by_tg_id is not None:
         require_auction_manager(session, by_tg_id)
+    if _claim_draft_purse(session, season) is not None:
+        session.refresh(franchise)
     amount = _as_int(amount_lakh, 0)
     if amount == 0:
         raise AuctionError("A correction of nothing is not a correction.")
@@ -2253,6 +2313,7 @@ def set_range_retention_limits(session, season, minimum, maximum):
 
 def set_range_rules(session, season, rows, *, draft=False, min_total=None, max_total=None):
     """Inclusive, non-overlapping rating bands, quotas and fixed player costs."""
+    require_auction_mode(session, season)
     from services import retention_negotiation as RN
     _range_rules_editable(session, season)
     clean = []
@@ -2850,6 +2911,7 @@ def retain(session, season, franchise, player, price_lakh=None, *,
     finally reachability — the same rule, and the same call, that refuses a
     bid which would leave a franchise unable to fill its minimum squad.
     """
+    require_auction_mode(session, season)
     from services import auction_preseason as P
     P.claim_turn(session, season)
     if by_admin:
@@ -3024,6 +3086,7 @@ def deal_expansion_picks(session, season):
     used one keeps what it has left, the same call ``set_rtm_rules`` makes
     about Right To Match cards.
     """
+    require_auction_mode(session, season)
     allowance = _as_int(getattr(season, "expansion_picks", 0), 0)
     new_sides = expansion_franchises(session, season)
     for franchise in new_sides:
@@ -3034,6 +3097,7 @@ def deal_expansion_picks(session, season):
 
 
 def set_draft_order(session, season, ids):
+    require_auction_mode(session, season)
     if season.status != STATUS_SETUP or any(f.draft_picks_used for f in pick_order(session, season)):
         raise AuctionError("Set draft order before the first pick.")
     if len(ids) != len(set(ids)) or set(ids) != {f.id for f in pick_order(session, season)}:
@@ -3129,6 +3193,7 @@ def draft_pick(session, season, franchise, player, price_lakh=None, *,
     here is the turn, the allowance, and that the player must not already have
     been signed by anybody, which ``_signing_lot`` enforces and names.
     """
+    require_auction_mode(session, season)
     now = now or datetime.utcnow()
     from services import auction_preseason as P
     P.claim_turn(session, season)
@@ -3164,6 +3229,7 @@ def skip_pick(session, season, franchise, *, by_tg_id=None, now=None):
     The allowance is spent either way, which is the point: a side that does
     not want its pick must not be able to stall the order by never taking it.
     """
+    require_auction_mode(session, season)
     from services import auction_preseason as P
     P.claim_turn(session, season)
     _pick_window(session, season)
@@ -3199,6 +3265,7 @@ def undo_pick(session, season, lot, *, by_tg_id=None):
     pick that quietly ate one leaves a side a player short for somebody else's
     slip.
     """
+    require_auction_mode(session, season)
     if lot is None or lot.acquisition != ACQ_DRAFTED or lot.status != LOT_SOLD:
         raise AuctionError(f"{lot.name if lot else 'That player'} was not an "
                            f"expansion pick.")
@@ -3253,6 +3320,7 @@ def undo_pick(session, season, lot, *, by_tg_id=None):
 
 def set_expansion_picks(session, season, count):
     """Set the season's allowance and deal it out."""
+    require_auction_mode(session, season)
     season.expansion_picks = max(0, _as_int(count, 0))
     session.flush()
     return deal_expansion_picks(session, season)
@@ -3260,6 +3328,7 @@ def set_expansion_picks(session, season, count):
 
 def set_franchise_picks(session, season, franchise, count):
     """One side's own allowance, never below what it has already used."""
+    require_auction_mode(session, season)
     franchise.draft_picks_total = max(int(franchise.draft_picks_used or 0),
                                       _as_int(count, 0))
     session.flush()
@@ -3275,6 +3344,7 @@ def unretain(session, season, franchise, lot, *, by_tg_id=None, by_admin=True,
     the queue at its base price rather than deleted — the player is available
     again. After opening, release requires a pause and preserves RTM cards.
     """
+    require_auction_mode(session, season)
     from services import auction_preseason as P
     P.claim_turn(session, season)
     if not by_admin:
@@ -3497,6 +3567,7 @@ def release_by_owner(session, season, lot, tg_id, *, now=None):
     paused. ``unretain`` checks the lock and status but not the preseason
     deadline, so that deadline is checked here.
     """
+    require_auction_mode(session, season)
     if lot is None or lot.season_id != season.id:
         raise AuctionError("That player is not in this auction.")
     rights = lot.status == LOT_QUEUED and lot.acquisition == ACQ_TRADE_RIGHTS
@@ -3736,6 +3807,7 @@ def set_base_price(session, season, lot, price_lakh):
 
 def relist(session, season, lot):
     """Send an unsold player back to the tail of the queue for another round."""
+    require_auction_mode(session, season)
     if lot.status != LOT_UNSOLD:
         raise AuctionError(f"Only an unsold player can be re-listed — "
                            f"{lot.name} is {lot.status}.")
@@ -3785,6 +3857,7 @@ def relist_all(session, season, *, lot_ids=None, by_tg_id=None,
     ``complete_if_done``) rather than an admin asking: it words the
     announcement for a room that did not see it coming.
     """
+    require_auction_mode(session, season)
     if season.status == STATUS_CANCELLED:
         raise AuctionError("This auction was cancelled.")
 
@@ -3925,6 +3998,7 @@ def next_queued(session, season_id):
 
 def open_lot(session, season, lot, *, now=None):
     """Put one queued lot on the block and start its clock."""
+    require_auction_mode(session, season)
     now = now or datetime.utcnow()
     if season.status != STATUS_LIVE:
         raise AuctionError("The auction is not running.")
@@ -3960,6 +4034,7 @@ def open_lot(session, season, lot, *, now=None):
 
 def open_next_lot(session, season, *, now=None):
     """Open the next queued lot, or finish the auction when none is left."""
+    require_auction_mode(session, season)
     upcoming = next_queued(session, season.id)
     if upcoming is None:
         return complete_if_done(session, season)
@@ -3977,6 +4052,7 @@ def complete_if_done(session, season):
     happens when an admin resolves the final lot from the website, where the
     commit comes after this call rather than before it.
     """
+    require_auction_mode(session, season)
     session.flush()
     if current_lot(session, season) is not None:
         return None
@@ -4016,6 +4092,7 @@ def complete_if_done(session, season):
 
 def start(session, season, *, now=None, by_tg_id=None):
     """Open the auction. Refuses anything that would strand it halfway."""
+    require_auction_mode(session, season)
     if by_tg_id is not None:
         require_auction_manager(session, by_tg_id)
     if season.status == STATUS_LIVE:
@@ -4117,6 +4194,7 @@ def pause(session, season, *, by_tg_id=None):
     sweeper simply cannot act on, which is the same call
     ``draft_service.pause`` makes.
     """
+    require_auction_mode(session, season)
     if by_tg_id is not None:
         require_auction_manager(session, by_tg_id)
     if season.status != STATUS_LIVE:
@@ -4134,6 +4212,10 @@ def pause(session, season, *, by_tg_id=None):
 
 
 def cancel(session, season, *, by_tg_id=None):
+    draft = franchise_draft_config(session, season)
+    if draft is not None:
+        from services import franchise_draft as D
+        D._claim(session, season, draft)
     if season.status in (STATUS_COMPLETED, STATUS_CANCELLED):
         raise AuctionError(f"This auction is already {season.status}.")
     lot = current_lot(session, season)
@@ -4148,9 +4230,15 @@ def cancel(session, season, *, by_tg_id=None):
     season.status = STATUS_CANCELLED
     season.current_lot_id = None
     _focus_changed(season, session)
-    log_event(session, season, "season_cancelled",
-              "🚫 The auction has been cancelled.",
-              by_tg_id=by_tg_id, by_admin=True)
+    if draft is not None:
+        draft.pick_deadline_at = None
+        draft.paused_seconds_left = None
+        D._event(session, season, "fd_cancelled", "🚫 <b>The draft has been cancelled.</b>\n"
+                 "Existing squads and purse records are preserved; picks are closed.", by_tg_id=by_tg_id)
+    else:
+        log_event(session, season, "season_cancelled",
+                  "🚫 The auction has been cancelled.",
+                  by_tg_id=by_tg_id, by_admin=True)
     return season
 
 
@@ -4188,6 +4276,7 @@ def restart_auction(session, season, *, now=None, by_tg_id=None):
 
     Returns ``(first lot or None, number of players returned to the pool)``.
     """
+    require_auction_mode(session, season)
     now = now or datetime.utcnow()
     if season.status == STATUS_SETUP:
         raise AuctionError("The auction has not started yet — /astart opens "
@@ -4648,6 +4737,7 @@ def validate_bid(session, season, lot, franchise, amount_lakh, *, now=None,
     "that bid is invalid" costs somebody the lot; every message below says what
     would have worked instead.
     """
+    require_auction_mode(session, season)
     now = now or datetime.utcnow()
     amount = int(amount_lakh)
     symbol = season.currency_label or "₹"
@@ -5018,6 +5108,7 @@ def sell_lot(session, season, lot, *, now=None, by_tg_id=None, by_admin=False):
     milliseconds ago — the whole transaction rolls back *including the sale*,
     and the lot is still on the block. It cannot half-happen.
     """
+    require_auction_mode(session, season)
     now = now or datetime.utcnow()
     if lot is None or lot.status != LOT_ON_BLOCK:
         raise AuctionError("Nothing is on the block.")
@@ -5150,6 +5241,7 @@ def pass_lot(session, season, lot, *, by_tg_id=None, by_admin=False):
     undoing the bid first leaves a ``bid_undone`` row with their name on it,
     which is the difference between a correction and a disappearance.
     """
+    require_auction_mode(session, season)
     if lot is None or lot.status != LOT_ON_BLOCK:
         raise AuctionError("Nothing is on the block.")
     if lot.current_bidder_id is not None:
@@ -5258,6 +5350,7 @@ def force_next(session, season, lot, *, now=None, by_tg_id=None):
     Verma" works whatever happened to him earlier. A sold one is refused: he
     is on a squad, and forcing him would sell him twice.
     """
+    require_auction_mode(session, season)
     if lot is None:
         raise AuctionError("No such lot.")
     if lot.status in LOT_LIVE:
@@ -5489,6 +5582,7 @@ def undo_sale(session, season, lot, *, now=None, by_tg_id=None):
     to make the league agree again, and doing that silently is how a squad
     people are already playing with changes underneath them.
     """
+    require_auction_mode(session, season)
     now = now or datetime.utcnow()
     if lot is None or lot.status != LOT_SOLD:
         raise AuctionError(f"{lot.name if lot else 'That lot'} is not sold.")
@@ -5802,6 +5896,7 @@ def set_rtm_rules(session, season, *, enabled=None, per_team=None,
     at least what it spent, because taking a card back from underneath a live
     auction is a way to lose one.
     """
+    require_auction_mode(session, season)
     if enabled is not None:
         season.rtm_enabled = bool(enabled)
     if per_team is not None:
@@ -5819,6 +5914,7 @@ def set_rtm_rules(session, season, *, enabled=None, per_team=None,
 
 def set_rtm_cards(session, season, franchise, cards):
     """Give one franchise its own number of cards, never below what it spent."""
+    require_auction_mode(session, season)
     franchise.rtm_cards_total = max(int(franchise.rtm_cards_used or 0),
                                     _as_int(cards, 0))
     session.flush()
@@ -6313,6 +6409,22 @@ def publish_to_league(session, season, *, league_name=None):
     if season.status != STATUS_COMPLETED:
         raise AuctionError("Finish the auction first — only a completed "
                            "auction can be published.")
+    draft = franchise_draft_config(session, season)
+    if draft is not None:
+        from services import franchise_draft as D
+        draft = D._claim(session, season, draft)
+        session.expire_all()
+        if season.status != STATUS_COMPLETED:
+            raise AuctionError("Complete every draft round before publishing its squads.")
+        field = franchises(session, season.id)
+        if (not field or int(draft.cursor or 0) != int(draft.rounds) * len(field)
+                or D.skipped_turns(session, season)
+                or any(len(squad(session, team.id)) != int(draft.rounds) for team in field)):
+            raise AuctionError("Complete every draft round before publishing its squads.")
+        for team in field:
+            owed, over = role_shortfall(session, season, team)
+            if owed or over or RR.shortfalls(rating_rules(season), squad_ratings(session, team.id), 0):
+                raise AuctionError(f"{team.name}'s squad must meet its role and rating rules before publishing.")
     bought = (session.query(AuctionLot)
               .filter(AuctionLot.season_id == season.id,
                       AuctionLot.status == LOT_SOLD,
@@ -6995,6 +7107,7 @@ def remove_franchise(session, season, franchise, *, by_tg_id=None):
     it, once squads are published, and for the last franchise standing.
     Returns ``(released lots, {franchise: share})``.
     """
+    _draft_field_editable(session, season)
     if season.status == STATUS_CANCELLED:
         raise AuctionError("This auction was cancelled.")
     if season.published_at is not None:
@@ -7146,6 +7259,7 @@ def autofill_short_squads(session, season, *, now=None):
     records the signing, and the purse is not touched. Returns
     ``[(franchise name, lot)]`` in the order they were handed out.
     """
+    require_auction_mode(session, season)
     now = now or datetime.utcnow()
     minimum = _as_int(season.min_squad_size, 0)
     maximum = _as_int(season.max_squad_size, 0)
@@ -7274,6 +7388,7 @@ def offer_retention(session, season, franchise, player, price_lakh=None, *,
     checked again, for real, by ``retain()`` when the franchise presses
     Accept, because the purse may well have moved in between.
     """
+    require_auction_mode(session, season)
     from services import auction_preseason as P
     P.claim_turn(session, season)
     from services import retention_negotiation as RN
@@ -7367,6 +7482,7 @@ def answer_retention_offer(session, season, offer, tg_id, accept, *, now=None):
     this spends the franchise's money, and the whole point of the button is
     that they chose to.
     """
+    require_auction_mode(session, season)
     from services import auction_preseason as P
     P.claim_turn(session, season)
     if offer is None or offer.season_id != season.id:

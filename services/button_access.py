@@ -36,6 +36,9 @@ _current_button_owner: contextvars.ContextVar[Optional[int]] = contextvars.Conte
 # second participant, and match-control buttons where the match state itself
 # validates whose turn/action it is.
 SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
+    # Franchise draft handlers persist the confirmation's actor and check
+    # current team authority; navigation and controls carry their own actor.
+    "fd_",
     # (Tournament Draft's dr_view_ / dr_pick_ / dr_srch_ buttons used to be
     # listed here. They are now owner-locked to whoever ran the command that
     # posted them — see OWNER_RULES below — because a draft group is a busy

@@ -8,7 +8,7 @@ thread through one season's league, auction and tournament — plus the honours,
 copied in, because a deleted tournament takes its final with it.
 
 What it adds is the **turn of the season**, IPL-style. When a season is
-completed the next one starts one of three ways:
+completed the next one starts one of four ways:
 
 * **🔨 Mega auction** — squads dissolve; every franchise may keep a few
   (retention + Right To Match, IPL 2025: six), purses reset to full, everyone
@@ -20,6 +20,8 @@ completed the next one starts one of three ways:
   (``auction_service.carry_previous_squads``).
 * **✍️ Manual teams** — the squads are typed, Challenge Data style, starting
   from last season's (``previous_squads_text``).
+* **📋 Franchise draft** — empty squads and fresh purses, with fixed player
+  prices and a rotating pick order instead of bidding.
 
 Then the squads are published, the season's tournament is made from the last
 one's rules, and the league's commands move to the new league so ``/cipl`` and
@@ -56,11 +58,13 @@ class LeagueSeasonError(Exception):
 MODE_MEGA = "mega"
 MODE_MINI = "mini"
 MODE_MANUAL = "manual"
+MODE_DRAFT = "draft"
 MODE_EXISTING = "existing"
 SQUAD_MODES = {
     MODE_MEGA: ("🔨", "Mega auction"),
     MODE_MINI: ("🔁", "Mini auction"),
     MODE_MANUAL: ("✍️", "Manual teams"),
+    MODE_DRAFT: ("📋", "Franchise draft"),
     MODE_EXISTING: ("📥", "Added"),
 }
 
@@ -301,6 +305,17 @@ def season_stage(session, season, now=None):
     auction = season_auction(session, season)
     if auction is not None:
         status = auction.status
+        from services.franchise_draft import get_draft
+        if get_draft(session, auction) is not None:
+            if status == A.STATUS_SETUP:
+                return _stage("pool", "📋", "Build the pool and start the draft", 1)
+            if status == A.STATUS_LIVE:
+                return _stage("draft", "🟢", "Franchise draft live", 1)
+            if status == A.STATUS_PAUSED:
+                return _stage("draft", "⏸", "Franchise draft paused", 1)
+            if status == A.STATUS_COMPLETED:
+                return _stage("publish", "📤", "Draft done — publish the squads", 1)
+            return _stage("cancelled", "🚫", "Draft cancelled", 1)
         mini = season.squad_mode == MODE_MINI
         if status == A.STATUS_SETUP:
             if A.retention_open(auction, now):
@@ -946,6 +961,52 @@ def start_mini_auction(session, series, *, purse_lakh, deadline=None, name=None,
     season = _new_season_row(session, series, prev, MODE_MINI,
                              auction_season_id=auction.id)
     return season, auction, report
+
+
+def start_franchise_draft(session, series, *, purse_lakh=None, rounds=15,
+                          name=None, by_tg_id=None):
+    """Season N+1 by fixed-price, rotating-order franchise draft.
+
+    Franchises and their owners continue, but the squads and purses start
+    afresh. Last season's squads remain available in their original league.
+    A setup already following that league may be adopted only while nobody
+    has signed, so changing the next-season method never discards a signing.
+    Returns ``(season, auction)``; the shared auction row owns the squads and
+    money and the draft config owns the rounds and turn cursor.
+    """
+    from services import auction_service as A
+    from services import franchise_draft as D
+
+    prev, league = _require_next(session, series)
+    purse = int(default_mega_purse(session, series)
+                if purse_lakh is None else purse_lakh or 0)
+    if purse <= 0:
+        raise LeagueSeasonError("The purse has to be more than zero.")
+    existing = A.season_following_league(session, league.id)
+    if existing is not None and season_for_auction(session, existing.id) is None:
+        counts = A.pool_counts(session, existing.id)
+        if sum(counts.get(key, 0) for key in ("sold", "retained", "drafted")):
+            raise LeagueSeasonError(
+                f"“{existing.name}” already has signed players. Add it as "
+                "the next season instead of replacing its squads with a draft.")
+    title = ((name or "").strip() or
+             f"{series.name} · Season {prev.season_no + 1} Franchise Draft")
+    auction, _adopted = _next_auction(session, series, prev, league, title,
+                                     by_tg_id=by_tg_id)
+    try:
+        # A clone carries the old rulebook, including a retention deadline.
+        # A full draft has no retention window or inherited squad rights to use.
+        auction.retention_deadline_at = None
+        auction.retention_locked_at = None
+        auction.retention_mode = None
+        A.set_opening_purse(session, auction, purse, by_tg_id=by_tg_id)
+        D.enable(session, auction, rounds=rounds, by_tg_id=by_tg_id)
+        _zero_rtm_cards(session, auction)
+    except A.AuctionError as exc:
+        raise LeagueSeasonError(str(exc))
+    season = _new_season_row(session, series, prev, MODE_DRAFT,
+                             auction_season_id=auction.id)
+    return season, auction
 
 
 def _league_squads(session, league_id):

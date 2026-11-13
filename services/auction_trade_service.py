@@ -355,6 +355,8 @@ def trade_phase(session, season, now=None, *, ignore_deadline=False):
     and the end of the league still close it: those are not a line somebody
     drew, they are the season moving on.
     """
+    if not season.published_at and A.franchise_draft_config(session, season) is not None:
+        return None, "Publish the completed draft squads before trading. Draft turns and undo history must stay intact."
     now = now or datetime.utcnow()
     status = season.status
     if status == A.STATUS_CANCELLED:
@@ -816,6 +818,8 @@ def validate(session, trade, *, now=None, check_window=True, agreed=False):
     can still stop it. Every squad rule applies as ever.
     """
     season = trade.season
+    if not season.published_at and A.franchise_draft_config(session, season) is not None:
+        raise AuctionError("Publish the completed draft squads before trading.")
     if agreed:
         phase, reason = trade_phase(session, season, now, ignore_deadline=True)
         if phase is None:
@@ -1131,6 +1135,8 @@ def _move_money(session, season, team, delta, rows, *, trade, by_tg_id):
 def _apply(session, season, trade, team_a, team_b, a_lots, b_lots, cash, *,
            by_tg_id, label):
     """Move the players and the money for a trade (or its reversal)."""
+    if not season.published_at and A.franchise_draft_config(session, season) is not None:
+        raise AuctionError("Publish the completed draft squads before trading.")
     for lots, src, dst in ((a_lots, team_a, team_b), (b_lots, team_b, team_a)):
         if not lots:
             continue
@@ -1290,6 +1296,8 @@ def reverse(session, trade, *, by_tg_id=None, by_web=False, now=None):
         raise AuctionError(f"Trade #{trade.id} is not a completed trade.")
     now = now or datetime.utcnow()
     season = trade.season
+    if not season.published_at and A.franchise_draft_config(session, season) is not None:
+        raise AuctionError("Publish the completed draft squads before trading.")
     if season.status == A.STATUS_SETUP:
         from services import auction_preseason as P
         P.claim_turn(session, season)
@@ -1385,6 +1393,8 @@ def admin_trade(session, season, team_a, team_b, a_lots, b_lots, cash_lakh=0,
     """
     if not by_web and not is_trade_manager(session, by_tg_id):
         raise AuctionError("Only Auction Managers can force a trade.")
+    if not season.published_at and A.franchise_draft_config(session, season) is not None:
+        raise AuctionError("Publish the completed draft squads before trading.")
     now = now or datetime.utcnow()
     if team_a is None or team_b is None or team_a.id == team_b.id:
         raise AuctionError("Pick two different franchises.")

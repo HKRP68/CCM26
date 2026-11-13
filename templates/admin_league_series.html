@@ -34,11 +34,17 @@
     <div class="ls-stage">{{ st.label }}{% if st.detail %}<small>{{ st.detail }}</small>{% endif %}</div>
 
     {% if current.auction and not current.league %}{% set au = current.auction %}
+      {% if current_draft %}
+      <div class="ls-note">📋 <b>{{ current_draft.rounds }} draft rounds · {{ current_draft.rounds }} players per squad</b><br>Use the setup page to manage players, franchise roles and purses. In the dedicated franchise bot, open <code>/draft</code> to set rating prices and custom player prices, choose the order and run live picks. Only each team's owner and co-owners can sign players. There is no overseas limit.</div>
+      {% else %}
       <ul class="ls-checklist">{% for ok, text in checklist %}<li>{{ '✅' if ok else '⬜' }} {{ text }}</li>{% endfor %}</ul>
+      {% endif %}
       <div class="ls-actions" style="margin-top:.9rem;">
-        <a class="action-btn accent-btn" href="{{ url_for('admin_auction_detail', season_id=au.id) }}">🔨 Auction setup</a>
+        <a class="action-btn accent-btn" href="{{ url_for('admin_auction_detail', season_id=au.id) }}">{{ '📋 Draft setup & squads' if current_draft else '🔨 Auction setup' }}</a>
+        {% if not current_draft %}
         <a class="action-btn outline-btn" href="{{ url_for('admin_auction_console', season_id=au.id) }}">🎛 Console</a>
         <a class="action-btn outline-btn" href="{{ url_for('admin_league_season_release', series_id=series.id, season_id=s.id) }}">🔁 Release board</a>
+        {% endif %}
         {% if st.key == 'publish' %}
         <form method="POST" class="inline-form" style="width:auto;">{{ csrf('publish') }}<input type="hidden" name="season_id" value="{{ s.id }}"><button class="action-btn play-btn" type="submit">📤 Publish squads</button></form>
         {% endif %}
@@ -83,7 +89,7 @@
   <section class="section-card">
     <div class="section-header"><div>
       <h2 class="section-title">🌱 Next season{% if prev %} — Season {{ prev.season_no + 1 }}{% endif %}</h2>
-      <div class="section-subtitle">When a season ends, its squads become the next one three ways.</div>
+      <div class="section-subtitle">Choose how the next season's squads are built.</div>
     </div></div>
     {% if blocker %}
       <div class="ls-note">⏳ {{ blocker }}</div>
@@ -113,6 +119,19 @@
           </div>
           <input name="auction_name" placeholder="Auction name (optional)">
           <button class="action-btn accent-btn" type="submit">Start mini auction</button>
+        </form>
+      </div>
+      <div class="ls-option">
+        <h3>📋 Franchise draft</h3>
+        <p>Franchises and owners continue with empty squads and fresh purses. Players have fixed rating prices or custom prices. The first team rotates each round; rounds set the squad size. No overseas limit.</p>
+        <form method="POST">{{ csrf('start_draft') }}
+          <div class="form-grid">
+            <div><label for="draft-purse">Purse (₹ Cr)</label><input id="draft-purse" name="purse" value="{{ mega_purse }}" required></div>
+            <div><label for="draft-rounds">Rounds / squad size</label><input id="draft-rounds" name="rounds" type="number" min="1" max="100" value="15" required></div>
+          </div>
+          <label for="draft-name">Draft name (optional)</label><input id="draft-name" name="draft_name" placeholder="Next season draft">
+          <p class="ls-muted">Set prices and the pick order, then use <code>/draft</code> in the dedicated franchise bot for live drafting.</p>
+          <button class="action-btn accent-btn" type="submit">Create franchise draft</button>
         </form>
       </div>
       <div class="ls-option">

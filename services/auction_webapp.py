@@ -994,6 +994,18 @@ def save_settings(db, season, tg_id, settings):
     """Validated auction rulebook; lifecycle and derived purse state stay separate."""
     if not isinstance(settings, dict):
         raise A.AuctionError("Give settings as an object.")
+    draft = A.franchise_draft_config(db, season)
+    if draft is not None:
+        allowed = {'name', 'currency_label', 'opening_purse_lakh', 'home_country',
+                   'role_minimums', 'role_maximums', 'rating_rules', 'trades_open',
+                   'trade_rules'}
+        if set(settings) - allowed:
+            raise A.AuctionError("Draft squad size equals its rounds; use /drounds to change it. "
+                                 "Overseas limits, retention, RTM and auction rules do not apply. "
+                                 "Set draft prices with /dprices and /dcustom.")
+        settings = dict(settings)
+        settings['role_minimums'] = A.normalize_draft_roles(settings.get('role_minimums', A.role_minimums(season)))
+        settings['role_maximums'] = A.normalize_draft_roles(settings.get('role_maximums', A.role_maximums(season)))
     if season.status != A.STATUS_SETUP:
         raise A.AuctionError("Edit the rulebook during setup. Live clock controls are separate.")
     scalar = {

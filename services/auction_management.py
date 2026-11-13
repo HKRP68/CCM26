@@ -31,6 +31,8 @@ def reason_required(note):
 
 def roster_block_reason(session, season):
     from services import auction_service as A
+    if A.franchise_draft_config(session, season) is not None:
+        return "Draft squads follow the round order. Use /dpick to sign and /dundo to return the last pick."
     if season.published_at:
         return "Squads are published. Correct players in the Challenge League."
     if season.status not in (A.STATUS_SETUP, A.STATUS_PAUSED):
@@ -42,7 +44,13 @@ def roster_block_reason(session, season):
 
 def _claim(session, season, franchise, *, roster=False):
     from services import auction_service as A, auction_preseason as P
-    P.claim_turn(session, season)
+    if A.franchise_draft_config(session, season) is None:
+        P.claim_turn(session, season)
+    else:
+        # Purse changes serialize against picks and invalidate quoted balances.
+        # Roster changes are refused below rather than altering the draft journal.
+        A._claim_draft_purse(session, season)
+        session.refresh(franchise)
     if franchise.season_id != season.id:
         raise A.AuctionError("That team is not in this auction.")
     if season.published_at or season.status == A.STATUS_CANCELLED:

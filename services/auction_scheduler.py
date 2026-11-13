@@ -230,6 +230,11 @@ async def refresh_board(bot, session, season, *, force=False, now=None):
     global _board_rich_ok
     from services import auction_service as A
     from services import auction_rich as AR
+    from services import franchise_draft as D
+
+    if D.get_draft(session, season) is not None:
+        from services import franchise_draft_delivery as DD
+        return await DD.refresh_board(bot, session, season, force=force)
 
     if not season.chat_id:
         return None
@@ -398,6 +403,11 @@ async def drain_events(bot, session, season, *, limit=DRAIN_PER_TICK):
     """
     from services import auction_service as A
     from services import auction_rich as AR
+    from services import franchise_draft as D
+
+    if D.get_draft(session, season) is not None:
+        from services import franchise_draft_delivery as DD
+        return await DD.drain_events(bot, session, season, limit=limit)
 
     if not season.chat_id:
         return 0
@@ -539,6 +549,9 @@ def maybe_start_countdown(bot, session, season, *, now=None):
     task can land its first number on time; it sleeps the rest itself.
     """
     from services import auction_service as A
+    from services import franchise_draft as D
+    if D.get_draft(session, season) is not None:
+        return None
     seconds = A.countdown_seconds(season)
     if seconds <= 0 or season.status != A.STATUS_LIVE or not season.chat_id:
         return None
@@ -730,12 +743,14 @@ def playback_seasons(session):
     pending ``sim_*`` events so an old finished auction never suddenly
     re-announces whatever it happened to leave undrained.
     """
-    from models import AuctionEvent, AuctionSeason
+    from models import AuctionEvent, AuctionSeason, FranchiseDraft
     from services import auction_service as A
 
     return (session.query(AuctionSeason)
             .filter(AuctionSeason.status == A.STATUS_COMPLETED,
                     AuctionSeason.chat_id.isnot(None),
+                    ~session.query(FranchiseDraft.season_id).filter(
+                        FranchiseDraft.season_id == AuctionSeason.id).exists(),
                     session.query(AuctionEvent.id)
                     .filter(AuctionEvent.season_id == AuctionSeason.id,
                             AuctionEvent.id > func.coalesce(
@@ -760,15 +775,18 @@ async def _playback_tick(context, session, season):
 async def _auction_tick(context):
     """One sweep: move the going-once clock on, and resolve what has expired."""
     from database import get_session
-    from models import AuctionSeason
+    from models import AuctionSeason, FranchiseDraft
     from services import auction_service as A
+    from services import franchise_draft_delivery as DD
 
     session = get_session()
     try:
         now = datetime.utcnow()
+        is_draft = session.query(FranchiseDraft.season_id).filter(
+            FranchiseDraft.season_id == AuctionSeason.id).exists()
         live = (session.query(AuctionSeason)
                 .filter(AuctionSeason.status == A.STATUS_LIVE,
-                        AuctionSeason.chat_id.isnot(None)).all())
+                        AuctionSeason.chat_id.isnot(None), ~is_draft).all())
         for season in live:
             # One broken auction must not stall the others — the same
             # isolation ``_draft_tick`` uses, for the same reason.
@@ -781,11 +799,13 @@ async def _auction_tick(context):
                 session.rollback()
                 logger.exception("auction #%s tick failed", season.id)
         await _refresh_idle_boards(context, session, now)
+        await DD.sweep(context, session)
         from services import auction_preseason as P
         from models import AuctionEvent
         setup = (session.query(AuctionSeason)
                  .filter(AuctionSeason.status == A.STATUS_SETUP,
                          AuctionSeason.chat_id.isnot(None),
+                         ~is_draft,
                          AuctionSeason.draft_pick_seconds > 0).all())
         for season in setup:
             try:
@@ -823,7 +843,7 @@ async def _auction_tick(context):
 
 async def _refresh_idle_boards(context, session, now):
     """Pausing the clock must not freeze purse changes on the pinned board."""
-    from models import AuctionEvent, AuctionSeason
+    from models import AuctionEvent, AuctionSeason, FranchiseDraft
     from services import auction_service as A
     pending = session.query(AuctionEvent.id).filter(
         AuctionEvent.season_id == AuctionSeason.id,
@@ -832,6 +852,8 @@ async def _refresh_idle_boards(context, session, now):
             .filter(AuctionSeason.status.in_((A.STATUS_SETUP, A.STATUS_PAUSED,
                                              A.STATUS_COMPLETED, A.STATUS_CANCELLED)),
                     AuctionSeason.chat_id.isnot(None),
+                    ~session.query(FranchiseDraft.season_id).filter(
+                        FranchiseDraft.season_id == AuctionSeason.id).exists(),
                     ((AuctionSeason.status == A.STATUS_PAUSED)
                      | AuctionSeason.board_message_id.isnot(None)),
                     pending.exists(),
@@ -972,6 +994,12 @@ async def _trade_tick(context, session, now):
 
 async def _tick_one(context, session, season, now):
     from services import auction_service as A
+    from services import franchise_draft as D
+
+    if D.get_draft(session, season) is not None:
+        from services import franchise_draft_delivery as DD
+        await DD.tick(context.bot, session, season)
+        return
 
     lot = A.current_lot(session, season)
 
