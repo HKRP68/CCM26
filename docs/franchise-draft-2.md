@@ -61,6 +61,13 @@ In an unbound group, Draft Admins see available drafts and their `/dbind ID`
 commands. Bind the intended draft, then use `/dstart` and confirm to launch it.
 Private-chat selections never override the current group's draft.
 
+**Call draft teams:** A Draft Admin can send `/dcall Draft starts in 5 minutes`
+in the bound draft group. Like `/acall`, it mentions franchise owners, co-owners
+and Team Managers in the group and DMs each unique contact. `/dcallteams` is an
+alias. Put the command in a photo/image-document caption, or reply to an image
+with `/dcall Your message`, to include that image. A blocked or unopened DM does
+not stop other deliveries; the bot reports delivered and unavailable counts.
+
 New squads start at zero. Importing previous teams copies their identities and
 roles; prior spending and players do not transfer. The catalogue includes
 players held in previous seasons, and **Add All Active Catalogue Players** can

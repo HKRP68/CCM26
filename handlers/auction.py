@@ -3779,13 +3779,13 @@ async def aaccelmode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # Admin — the teams
 # ════════════════════════════════════════════════════════════════════
 
-async def _send_auction_call(bot, chat_id, parts, media=None, reply_markup=None):
+async def _send_auction_call(bot, chat_id, parts, media=None, reply_markup=None, *, draft=False):
     """Keep photo captions within Telegram's limit and preserve long text."""
     remaining = list(parts)
     if media:
         kind, file_id = media
         caption = (remaining.pop(0) if len(remaining[0].encode("utf-16-le")) // 2 <= 1000
-                   else "📣 Auction announcement")
+                   else "📣 Draft announcement" if draft else "📣 Auction announcement")
         kwargs = dict(chat_id=chat_id, caption=caption, parse_mode="HTML",
                       reply_markup=reply_markup if not remaining else None)
         if kind == "photo":
@@ -3800,16 +3800,22 @@ async def _send_auction_call(bot, chat_id, parts, media=None, reply_markup=None)
 
 async def acall_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/acall [message]: group tags and DMs, including attached/replied images."""
+    await _team_call(update, context)
+
+
+async def _team_call(update, context, *, draft=False, session_factory=None):
+    """Share call delivery while enforcing each competition's admin authority."""
     chat = update.effective_chat
     if chat is None or chat.type not in GROUP_CHAT_TYPES:
-        await _reply(update, GROUP_ONLY)
+        await _reply(update, 'Use /dcall in the group bound to your draft. A Draft Admin can bind it with /dbind draftID.' if draft else GROUP_ONLY)
         return
-    if not await _require_admin(update):
+    if not draft and not await _require_admin(update):
         return
     message = _arg_text(context)
     command = update.effective_message
     caption = getattr(command, "caption", None) or ""
-    if caption and caption.split(None, 1)[0].split("@")[0].lower() in ("/acall", "/acallteams"):
+    aliases = ('/dcall', '/dcallteams') if draft else ('/acall', '/acallteams')
+    if caption and caption.split(None, 1)[0].split("@")[0].lower() in aliases:
         addressed_to = caption.split(None, 1)[0].partition("@")[2]
         if addressed_to and addressed_to.casefold() != (getattr(context.bot, "username", None) or "").casefold():
             return
@@ -3827,9 +3833,14 @@ async def acall_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message = getattr(source, "caption", None) or ""
             break
     def prepare(session):
+        if draft:
+            from services import franchise_draft as D
+            D.require_draft_admin(session, update.effective_user.id if update.effective_user else None)
         season = _season_for(session, update)
         if season is None:
-            raise AuctionError("No auction is running in this chat.")
+            raise AuctionError('No draft is bound to this group. Use /dbind draftID first.' if draft else 'No auction is running in this chat.')
+        if draft and D.get_draft(session, season) is None:
+            raise AuctionError('This group is bound to an auction. Use /acall here, or /dcall in your draft group.')
         teams = A.franchises(session, season.id)
         for team in teams:
             A.restore_retention_owners(session, season, team)
@@ -3837,7 +3848,7 @@ async def acall_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = AR.call_html(session, season, message or None)
         return recipients, parts
     try:
-        recipients, parts = await run_session(get_session, prepare, commit=True)
+        recipients, parts = await run_session(session_factory or get_session, prepare, commit=True)
     except AuctionWorkerBusy:
         await _reply(update, BUSY_MESSAGE)
         return
@@ -3850,17 +3861,18 @@ async def acall_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     user = update.effective_user
     await _send_auction_call(context.bot, chat.id, parts, media,
-                              AR.with_close(None, user.id if user else None))
+                              AR.with_close(None, user.id if user else None), draft=draft)
     delivered, failed = 0, 0
     for recipient in recipients:
         try:
-            await _send_auction_call(context.bot, recipient, parts, media)
+            await _send_auction_call(context.bot, recipient, parts, media, draft=draft)
             delivered += 1
         except Exception:
             # A blocked/unstarted DM must not prevent the other teams' calls.
             failed += 1
             logger.info("auction call DM unavailable for %s", recipient)
-    await _reply(update, f"📨 Team owner/co-owner DMs: {delivered} delivered, {failed} unavailable."
+    label = 'Team contact DMs' if draft else 'Team owner/co-owner DMs'
+    await _reply(update, f"📨 {label}: {delivered} delivered, {failed} unavailable."
                  + (" Unavailable recipients need to start/unblock the bot." if failed else ""))
 
 

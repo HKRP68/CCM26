@@ -35,6 +35,8 @@ _TRADE_HELP = {
 }
 
 _DRAFT_HELP = {
+    'dcall':('/dcall Draft starts in 5 minutes','Draft Admin: tag franchise owners, co-owners and Team Managers in the bound group and DM each unique contact. Supports photo captions and replies to images, like /acall.'),
+    'dcallteams':('/dcallteams Draft starts in 5 minutes','Alias for /dcall, including images and team contact DMs.'),
     'dimportteams':('/dimportteams league 12','Draft Admin: preview importing franchises, owners, co-owners, logos and available team details. Also accepts tournament 34; bare opens source buttons. Setup only; existing roles, budgets and squads are preserved.'),
     'dpreview':('/dpreview','Draft Admin: run owner, pool, pricing, budget and squad feasibility checks.'),
     'dsearch':('/dsearch Joe Root','Search eligible players by name, version, country, role or database ID; select an exact card by button.'),
@@ -100,7 +102,7 @@ def draft_commands_html():
         ('🛡 Appointments & help', ('dadmin','dadminadd','dadminremove','dadmins','draftcommands','dcommands','dcmds','dhelp')),
         ('🏗 Setup & teams', ('dnew','dsetup','dbind','dteam','downer','dco','dpooladd','dpurse')),
         ('💰 Prices, order & squad rules', ('dprices','dcustom','dorder','drounds','daddrounds','drolemin','drolemax','dratingrule')),
-        ('⏱ Live draft & recovery', ('dtimer','dstart','dpause','dresume','dpick','dskip','dfinish','dundo','dcancel','dpublish')),
+        ('⏱ Live draft & recovery', ('dcall','dcallteams','dtimer','dstart','dpause','dresume','dpick','dskip','dfinish','dundo','dcancel','dpublish')),
         ('👀 Views', ('draft','dboard','dpool','dsquad','dskips','drules')),
         ('🛡 Draft 2.0 previews & contracts',('dpreview','dsearch','dhistory','dclock','dcorrect','dpoolremove','dretention','dretain','dunretain','dimportteams')),
     )

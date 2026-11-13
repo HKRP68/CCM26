@@ -18,6 +18,7 @@ DOT_ALIASES = frozenset({
 # module, command aliases, callable name. Kept explicit so the supported bot
 # surface can be reviewed without importing the main cricket application.
 COMMANDS = (
+    ('draft', ('dcall', 'dcallteams'), 'dcall_handler'),
     ('draft', ('dpreview','dsearch','dhistory','dclock','dcorrect','dpoolremove','dretention','dretain','dunretain','dimportteams'), 'command_handler'),
     ('draft', ('draft', 'dboard', 'dnew', 'dsetup', 'dprices', 'dcustom',
                'dorder', 'drounds', 'daddrounds', 'dstart', 'dpause', 'dresume', 'dfinish',
@@ -173,5 +174,7 @@ def register_auction_handlers(app, *, include_solo_league=False):
                                    modules['auction'].dot_command_handler), group=11)
     app.add_handler(MessageHandler((filters.PHOTO | filters.Document.IMAGE) & filters.CaptionRegex(
         r'(?i)^/acall(?:teams)?(?:@[a-z0-9_]+)?(?:\s|$)'), modules['auction'].acall_handler))
+    app.add_handler(MessageHandler((filters.PHOTO | filters.Document.IMAGE) & filters.CaptionRegex(
+        r'(?i)^/dcall(?:teams)?(?:@[a-z0-9_]+)?(?:\s|$)'), modules['draft'].dcall_handler))
     if include_solo_league:
         import_module('handlers.auction_league').register(app)

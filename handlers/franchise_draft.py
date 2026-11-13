@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 GROUP_TYPES = ('group', 'supergroup')
 
 
+async def dcall_handler(update, context):
+    """/dcall [message]: call draft owners/co-owners, with optional images."""
+    from handlers.auction import _team_call
+    await _team_call(update, context, draft=True, session_factory=get_session)
+
+
 def _e(value):
     return html.escape(str(value if value is not None else ''))
 
