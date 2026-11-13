@@ -170,6 +170,8 @@ def test_announcements_store_the_original_purse_and_next_owner_for_delayed_deliv
 
 
 def test_timeout_card_names_skipped_team_and_next_owners_without_spending(room):
+    room.D.set_timer(room.db,room.season,10,by_tg_id=ADMIN,timeout_policy='skip')
+    room.db.commit()
     live(room)
     draft=room.D.get_draft(room.db,room.season)
     room.D.resolve_timeout(room.db,room.season,now=draft.pick_deadline_at+timedelta(seconds=1))

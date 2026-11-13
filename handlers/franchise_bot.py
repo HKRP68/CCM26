@@ -47,6 +47,14 @@ FORMS = {
     'draftrounds':('native_fd_rounds',[('rounds','Total rounds and maximum squad size; add rounds by increasing this number','id')]),
     'draftorderfull':('native_fd_order',[('text','Team IDs or exact names separated by |, in round 1 order; or random','text')]),
     'drafttimer':('native_fd_timer',[('minutes','Pick time in whole minutes (5, 8, 10, 15 etc.); 0 disables the timer','nonnegative')]),
+    'draftclockpolicy':('native_fd_clock',[('text','Pick duration and timeout policy: 30s | pause, 120s | skip, 5m | auto, or 0 | admin','text')]),
+    'draftretention':('native_fd_retention',[('maximum','Maximum retained contracts per team (0 disables retention)','nonnegative')]),
+    'draftretain':('native_fd_retain',[('team','Exact franchise name or ID','text'),('player','Exact pool #ID or catalogue pID to retain','text'),('price','Contract price, for example 10cr','text')]),
+    'draftunretain':('native_fd_unretain',[('team','Exact franchise name or ID','text'),('player','Retained pool #ID to refund','text')]),
+    'draftpool':('native_fd_pooladd',[('text','Catalogue players: ids 12,34 or 80-96 | BAT | Base; * includes every category/version','text')]),
+    'draftwithdraw':('native_fd_poolremove',[('text','Eligible pool #IDs to withdraw, separated by spaces','text')]),
+    'draftcorrection':('native_fd_correction',[('kind','Correction: prices, custom, rounds, undo, purse, pooladd, poolremove, clock or resolve','text'),('reason','Reason recorded in the audit log (up to 300 characters)','text'),('value','Correction value; skip for undo','optional')]),
+    'draftundo':('native_fd_undo',[('reason','Reason to reverse the latest turn (up to 300 characters)','text')]),
     'bind':('admin_bind',[('chat_id','Telegram group ID (negative; use /id in the group)','int')]),
     'teamadd':('admin_franchise',[('name','Franchise name','text'),('owner_tg_id','Owner Telegram user ID','id'),('co_owners','Co-owner IDs, comma separated; skip for none','ids'),('team_managers','Team Manager IDs, comma separated; skip for none','ids')]),
     'pool':('admin_pool_range',[('low','Minimum player rating','int'),('high','Maximum player rating','int'),('set_name','Set name; skip uses the default','optional')]),
@@ -82,7 +90,9 @@ def _e(value, limit=150):
 
 
 def _money(value, currency='₹'):
-    return _e(currency,10) + f'{int(value or 0)/100:,.2f} Cr'
+    amount=int(value or 0)
+    whole,fraction=divmod(abs(amount),100)
+    return _e(currency,10) + ('-' if amount<0 else '') + f'{whole:,}.{fraction:02d} Cr'
 
 
 def _resolve(db, actor, sid, chat_id):
@@ -129,6 +139,9 @@ def read_workspace(db, actor, sid, chat_id, view='home', argument=''):
         if view=='pool':
             blocks,text=DR.pool(db,season,page=max(1,int(argument or 1)))
             result['franchise_draft'].update(pool=text,pool_blocks=blocks)
+            from handlers.franchise_draft_v2 import pick_buttons
+            available=D._available(db,season);page=max(1,min(max(1,(len(available)+11)//12),int(argument or 1)))
+            result['franchise_draft']['picks']=[dict(text=b.text,data=b.callback_data) for row in (pick_buttons(db,season,actor,available[(page-1)*12:page*12]) if chat_id<0 else []) for b in row]
         elif view=='rules':
             blocks,text=DR.rules(db,season)
             result['franchise_draft'].update(rulebook=text,rulebook_blocks=blocks)
@@ -204,17 +217,24 @@ def execute_action(db, actor, sid, chat_id, action, values):
         from services import franchise_draft as D
         if not D.is_draft_admin(db,actor):raise W.AccessError('Only Draft Admins can manage a draft.')
         operation=action.removeprefix('native_fd_')
-        if operation=='prices':D.set_rating_prices(db,season,values.get('text',''),by_tg_id=actor)
-        elif operation=='custom':D.set_custom_prices(db,season,values.get('text',''),by_tg_id=actor)
-        elif operation=='rounds':D.configure_rounds(db,season,whole(values.get('rounds')),by_tg_id=actor)
-        elif operation=='timer':D.set_timer(db,season,whole(values.get('minutes')),by_tg_id=actor)
+        if operation in ('clock','retention','retain','unretain','pooladd','poolremove','correction'):
+            from handlers.franchise_draft_v2 import route
+            command={'clock':'dclock','retention':'dretention','retain':'dretain','unretain':'dunretain','pooladd':'dpooladd','poolremove':'dpoolremove','correction':'dcorrect'}[operation]
+            raw=(str(values.get('maximum','')) if operation=='retention' else
+                 f'{values.get("team", "")} | {values.get("player", "")} | {values.get("price", "")}' if operation=='retain' else
+                 f'{values.get("team", "")} | {values.get("player", "")}' if operation=='unretain' else
+                 f'{values.get("kind", "")} | {values.get("reason", "")} | {values.get("value") or ""}' if operation=='correction' else values.get('text',''))
+            return dict(message='Review the draft preview.',draft_packet=route(db,season,actor,command,raw))
+        if operation in ('prices','custom','rounds','start','undo'):
+            from handlers.franchise_draft_v2 import action_packet
+            payload={'text':values.get('text','')} if operation in ('prices','custom') else {'rounds':whole(values.get('rounds'))} if operation=='rounds' else {}
+            return dict(message='Review and confirm the draft configuration.',draft_packet=action_packet(db,season,actor,operation,payload,values.get('reason','')))
+        if operation=='timer':D.set_timer(db,season,whole(values.get('minutes')),by_tg_id=actor)
         elif operation=='order':
             from handlers.franchise_draft import parse_order
             raw=values.get('text','')
             D.set_order(db,season,parse_order(db,season,raw),randomize=raw.strip().casefold()=='random',by_tg_id=actor)
-        elif operation in ('start','pause','undo'):
-            fn={'start':D.start,'pause':D.pause,'undo':D.undo_last}[operation]
-            fn(db,season,by_tg_id=actor)
+        elif operation=='pause':D.pause(db,season,by_tg_id=actor)
         else:raise A.AuctionError('Choose a draft control.')
         return dict(message='Draft updated. Open /draft for the current turn, squads and purses.')
     if action=='admin_previous_league':
@@ -348,9 +368,14 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
             buttons+=_rows(actor,sid,[[('Rating prices','f:draftprices'),('Custom player prices','f:draftcustom')],
                 [('Draft order','f:draftorderfull'),('Total rounds','f:draftrounds')],
                 [('⏱ Pick time (minutes)','f:drafttimer'),('➕ Add franchise','f:teamadd')],
-                [('Start / resume','dgo:start'),('Pause','dgo:pause')],
+                [('⏱ Seconds & timeout policy','f:draftclockpolicy'),('🛡 Audited correction','f:draftcorrection')],
+                [('📥 Add pool players','f:draftpool'),('📤 Withdraw pool players','f:draftwithdraw')],
+                [('🔒 Retention rules','f:draftretention'),('Keep contract','f:draftretain')],
+                [('Refund retained contract','f:draftunretain')],
                 [('Undo last turn','dgo:undo'),('Squad rules','v:settings')],
                 [('Teams & roles','v:teamroles'),('Publish squads','f:publish')]])
+            if season.get('status') in ('setup','paused'):buttons+=_rows(actor,sid,[[('Start / resume','dgo:start')]])
+            elif season.get('status')=='live':buttons+=_rows(actor,sid,[[('Pause','dgo:pause')]])
     elif view=='live':
         lot=data.get('lot')
         if lot:
@@ -406,6 +431,8 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
         if page>1:nav.append(('← Previous',f'v:pool:{page-1}'))
         if page*(12 if draft else 10)<data.get('total',0):nav.append(('Next →',f'v:pool:{page+1}'))
         if nav:buttons+=_rows(actor,sid,[nav])
+        if draft:
+            buttons=[[InlineKeyboardButton(pick['text'],callback_data=pick['data'])] for pick in draft.get('picks',[])]+buttons
         if manager:header+=['','Import fresh players with /importplayers in the bound group.'];buttons+=_rows(actor,sid,[[('Build rating set','f:pool')]])
     elif view=='rules':
         rules=data.get('rules') or {}
@@ -616,6 +643,9 @@ async def _start_form(update,context,key,sid,team_id=None,role_key=None):
     if key not in FORMS:raise A.AuctionError('Choose a form from /auction.')
     payload={}
     step=0
+    corrections={'draftprices':'prices','draftcustom':'custom','draftrounds':'rounds','draftpool':'pooladd','draftwithdraw':'poolremove','draftclockpolicy':'clock'}
+    if key in corrections and data.get('franchise_draft') and (data.get('season') or {}).get('status')!='setup':
+        payload['kind']=corrections[key];key='draftcorrection';step=1
     if key in ('fromleague','fromleaguedraft') and team_id:
         payload['league_id']=int(team_id)
         step=1
@@ -688,6 +718,13 @@ async def callback_handler(update,context):
             if operation not in ('start','pause','undo'):raise A.AuctionError('Choose a draft control.')
             data=await run_session(get_session,lambda db:read_workspace(db,_actor(update),sid,update.effective_chat.id,'control'))
             if not data.get('admin'):raise W.AccessError('Only Draft Admins can manage drafts.')
+            if operation=='undo':
+                await _start_form(update,context,'draftundo',sid);return
+            if operation=='start':
+                result=await run_session(get_session,lambda db:execute_action(db,_actor(update),sid,update.effective_chat.id,'native_fd_start',{}),commit=True)
+                packet=result['draft_packet']
+                await _send(update,packet['text'],packet.get('markup'),blocks=packet.get('blocks'))
+                return
             key=_store_action(context,update.effective_chat.id,sid,'native_fd_'+operation,{})
             await _send(update,'Confirm '+_e(operation)+' for this draft?',InlineKeyboardMarkup(_rows(_actor(update),sid,[[('Confirm','op:'+key),('Back','v:franchisedraft')]])))
             return
@@ -709,7 +746,9 @@ async def callback_handler(update,context):
             if not record or record['sid']!=sid or record['chat_id']!=update.effective_chat.id or time.monotonic()-record['created']>600:
                 raise A.AuctionError('This action expired. Open a fresh menu.')
             result=await run_session(get_session,lambda db:execute_action(db,_actor(update),sid,update.effective_chat.id,record['action'],record['values']),commit=True)
-            await _send(update,_e(result.get('message','Auction updated.'))+'\nOpen /auction to see the latest state.')
+            packet=result.get('draft_packet')
+            if packet:await _send(update,packet['text'],packet.get('markup'),blocks=packet.get('blocks'))
+            else:await _send(update,_e(result.get('message','Auction updated.'))+'\nOpen /auction to see the latest state.')
             return
         raise A.AuctionError('Open /auction for a fresh menu.')
     except (A.AuctionError,ValueError,TypeError,IndexError,KeyError,AuctionWorkerBusy) as exc:
@@ -802,7 +841,9 @@ async def prompt_handler(update,context):
                 except TelegramError:raise ValueError('This bot cannot access that group. Add it to the group and check /id, then try again.') from None
             result=await run_session(get_session,lambda db:execute_action(db,actor,record['sid'],chat_id,action,record['payload']),commit=True)
         if result.get('season_id'):context.user_data['franchise_season_id']=result['season_id']
-        await _send(update,'✅ '+_e(result.get('message','Auction updated.'))+'\nOpen /auction to continue.')
+        packet=result.get('draft_packet')
+        if packet:await _send(update,packet['text'],packet.get('markup'),blocks=packet.get('blocks'))
+        else:await _send(update,'✅ '+_e(result.get('message','Auction updated.'))+'\nOpen /auction to continue.')
     except ApplicationHandlerStop:raise
     except (A.AuctionError,ValueError,TypeError,IndexError,KeyError,AuctionWorkerBusy) as exc:
         # An action denied after revocation is not kept alive as a pending form.

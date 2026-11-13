@@ -74,6 +74,7 @@ def _keyboard(db, season, actor, *, page=None, skip_page=None):
             [button('🔎 Player pool', 'pool', '1'), button('🔄 Round order', 'order')],
             [button('⏭ Skipped picks', 'skips'), button('📜 Rules', 'rules')],
             [button('📋 All draft commands', 'commands')]]
+    rows.append([button('💰 Purses','purses'),button('📜 History','history'),button('💼 My franchise','me')])
     if page is not None:
         rows.append([button('◀ Previous', 'pool', str(max(1, page - 1))),
                      button('Next ▶', 'pool', str(page + 1))])
@@ -85,6 +86,7 @@ def _keyboard(db, season, actor, *, page=None, skip_page=None):
     if current is not None and actor in D.owner_ids(current):
         rows.append([InlineKeyboardButton('⏭ Skip my turn', callback_data=f'fd_s_{actor}_{sid}_{config.revision}')])
     if D.is_draft_admin(db, actor):
+        rows.append([button('✅ Pre-draft validation','preview')])
         rows.append([InlineKeyboardButton('🎛 Draft Admin panel', callback_data=_cb(actor,sid,'admin')),
                      InlineKeyboardButton('⚙️ Setup & settings', callback_data=f'fa:{actor}:{sid}:v:franchisedraft')])
         controls = []
@@ -177,8 +179,31 @@ def _render_view(db, season, actor, view, argument='0'):
         page = max(1, _whole(argument, 'Page'))
         blocks,text = DR.pool(db,season,page=page)
         markup = _keyboard(db,season,actor,page=page)
+        from handlers.franchise_draft_v2 import pick_buttons
+        lots=D._available(db,season)
+        page=min(page,max(1,(len(lots)+11)//12))
+        markup=InlineKeyboardMarkup(pick_buttons(db,season,actor,lots[(page-1)*12:page*12])+list(markup.inline_keyboard))
     elif view == 'order':
-        blocks,text = DR.order(db, season)
+        page=max(1,_whole(argument or '1'))
+        blocks,text = DR.order(db, season,page=page)
+        markup=InlineKeyboardMarkup(list(markup.inline_keyboard)+[[
+            InlineKeyboardButton('◀ Earlier rounds',callback_data=_cb(actor,season.id,'order',str(max(1,page-3)))),
+            InlineKeyboardButton('Later rounds ▶',callback_data=_cb(actor,season.id,'order',str(min(D.get_draft(db,season).rounds,page+3))))]])
+    elif view == 'purses':
+        blocks,text=DR.purses(db,season)
+    elif view == 'preview':
+        D.require_draft_admin(db,actor)
+        blocks,text=DR.readiness(db,season)
+    elif view == 'history':
+        page=max(1,_whole(argument or '1'))
+        blocks,text=DR.history(db,season,page=page)
+        markup=InlineKeyboardMarkup(list(markup.inline_keyboard)+[[
+            InlineKeyboardButton('◀ Previous events',callback_data=_cb(actor,season.id,'history',str(max(1,page-1)))),
+            InlineKeyboardButton('More events ▶',callback_data=_cb(actor,season.id,'history',str(page+1)))]])
+    elif view == 'me':
+        team=A.franchise_for_actor(db,season.id,actor)
+        if team is None:raise A.AuctionError('No franchise is assigned to your Telegram account.')
+        blocks,text=DR.squad(db,season,team)
     elif view == 'skips':
         page = max(1, _whole(argument, 'Page'))
         blocks,text = DR.skips(db,season,page=page)
@@ -246,6 +271,10 @@ def execute(db, actor, chat_id, selected_sid, command, raw=''):
                 f'For a private setup, use <code>/dbind {season.id}</code> in the intended group.')
         return dict(text=text, markup=_keyboard(db, season, actor), sid=season.id)
     season = _resolve(db, actor, chat_id, selected_sid, require_draft=command != 'dsetup')
+    if command!='dsetup':
+        from handlers.franchise_draft_v2 import route
+        packet=route(db,season,actor,command,raw)
+        if packet is not None:return packet
     if command == 'dsetup':
         D.require_draft_admin(db, actor)
         A.require_auction_manager(db, actor)
@@ -276,7 +305,7 @@ def execute(db, actor, chat_id, selected_sid, command, raw=''):
         team = db.get(AuctionFranchise, quote.franchise_id)
         blocks,text = DR.confirmation(db,season,quote,lot,team)
         markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton('✅ Sign', callback_data=f'fd_y_{quote.token}'),
+            InlineKeyboardButton('✅ Confirm Signing', callback_data=f'fd_y_{quote.token}'),
             InlineKeyboardButton('❌ Cancel', callback_data=f'fd_n_{quote.token}')]])
         return dict(text=text,blocks=blocks, markup=markup, sid=season.id)
     else:
@@ -380,6 +409,12 @@ def execute(db, actor, chat_id, selected_sid, command, raw=''):
 
 async def _send(update, packet, *, edit=False):
     blocks = packet.get('blocks') or build_blocks(packet['text'])
+    if update.effective_chat.id>0 and packet.get('markup'):
+        rows=packet['markup'].inline_keyboard
+        allowed=[list(row) for row in rows if not any((button.callback_data or '').startswith('fd_p_') for button in row)]
+        if len(allowed)!=len(rows):
+            packet=dict(packet,markup=InlineKeyboardMarkup(allowed),text=packet['text']+'\n\n<i>Open the bound draft group to select and confirm a signing.</i>')
+            blocks=(blocks or [])+[R.paragraph('Open the bound draft group to select and confirm a signing.')]
     if edit and len(R.html_parts(packet['text']))>1:
         return await R.reply_rich(update.callback_query.message,blocks,packet['text'],reply_markup=packet.get('markup'))
     if edit:
@@ -420,6 +455,31 @@ async def command_handler(update, context):
 
 def execute_callback(db, actor, chat_id, selected_sid, data):
     from models import FranchiseDraftConfirmation
+    if data.startswith('fd_b_'):
+        _,_,sid,view=data.split('_',3)
+        season=_resolve(db,actor,chat_id,selected_sid,expected_sid=_whole(sid))
+        if view not in ('board','pool','purses','teams','order','history','me'):raise A.AuctionError('Open /draft.')
+        return _render_view(db,season,actor,view,'1')
+    if data.startswith('fd_p_'):
+        parts=data.split('_')
+        if len(parts)!=6 or _whole(parts[2])!=actor:raise A.AuctionError('Open your own /dsearch or /dpool.')
+        season=_resolve(db,actor,chat_id,selected_sid,expected_sid=_whole(parts[3]))
+        if D.get_draft(db,season).revision!=_whole(parts[5]):raise A.AuctionError('This player button is stale. Search again.')
+        return execute(db,actor,chat_id,season.id,'dpick','#'+str(_whole(parts[4])))
+    if data.startswith('fd_c_'):
+        from models import FranchiseDraftAction
+        from services import franchise_draft_admin as M
+        parts=data.split('_')
+        if len(parts)!=4 or parts[2] not in ('y','n'):raise A.AuctionError('Invalid configuration preview.')
+        action=db.get(FranchiseDraftAction,parts[3])
+        if action is None:raise A.AuctionError('This configuration preview expired.')
+        season=_resolve(db,actor,chat_id,selected_sid,expected_sid=action.season_id)
+        M.answer(db,season,actor,parts[3],accept=parts[2]=='y')
+        packet=_render_view(db,season,actor,'board')
+        blocks,text=DR.Card('✅ Configuration applied' if parts[2]=='y' else '❌ Configuration cancelled').text(
+            'The change was validated and recorded in the audit log.' if parts[2]=='y' else 'No configuration, squad or purse was changed.').pair()
+        packet['blocks']=blocks+packet['blocks'];packet['text']=text+'\n\n'+packet['text']
+        return packet
     if data.startswith(('fd_s_', 'fd_m_')):
         parts = data.split('_')
         if len(parts) != 5 or _whole(parts[2], 'Owner ID') != actor:
@@ -464,7 +524,7 @@ def execute_callback(db, actor, chat_id, selected_sid, data):
     if parts[1] == 'a':
         D.require_draft_admin(db, actor)
         if parts[4] == 'start':
-            D.start(db, season, by_tg_id=actor)
+            return execute(db,actor,chat_id,season.id,'dstart')
         elif parts[4] == 'pause':
             D.pause(db, season, by_tg_id=actor)
         else:

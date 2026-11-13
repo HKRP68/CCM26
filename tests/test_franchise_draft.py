@@ -288,7 +288,7 @@ def test_price_changes_invalidate_old_confirmation(room):
     confirmation = room.D.preview_pick(room.db, room.season, 1000, 'Joe Root')
     room.db.commit()
     room.D.pause(room.db, room.season)
-    room.D.set_custom_prices(room.db, room.season, 'Joe Root:25.5cr')
+    room.D.set_custom_prices(room.db, room.season, 'Joe Root:25.5cr',correction_reason='Corrected price sheet')
     room.db.commit()
     start(room)
     with pytest.raises(room.A.AuctionError):

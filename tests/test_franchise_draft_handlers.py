@@ -155,6 +155,12 @@ def test_multiline_command_preserves_rating_table_and_rich_fallback(room):
     ctx.args = ['96:23cr', '95:21cr']
     run(room.H.command_handler(event, ctx))
     room.db.expire_all()
+    # Rating commands now preview the real change, then apply it once.
+    _,preview_options=event.effective_message.replies[-1]
+    confirm=preview_options['reply_markup'].inline_keyboard[0][0].callback_data
+    assert json.loads(room.D.get_draft(room.db,room.season).rating_prices_json)=={'96':2300}
+    run(room.H.callback_handler(update(ADMIN,callback=confirm),ctx))
+    room.db.expire_all()
     prices = json.loads(room.D.get_draft(room.db, room.season).rating_prices_json)
     assert prices == {'96': 2300, '95': 2100}
     text, kwargs = event.effective_message.replies[-1]

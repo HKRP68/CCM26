@@ -49,12 +49,15 @@ def test_existing_table_columns_still_receive_normal_migrations(database,monkeyp
     database._create_missing_tables()
     with database.engine.begin() as conn:
         conn.execute(text('ALTER TABLE franchise_drafts DROP COLUMN pick_minutes'))
+        conn.execute(text('ALTER TABLE franchise_drafts DROP COLUMN started_at'))
+        conn.execute(text('ALTER TABLE franchise_drafts DROP COLUMN settings_json'))
     monkeypatch.setattr(database,'_seed_traits',lambda:None)
     monkeypatch.setattr(database,'_seed_competition_templates',lambda:None)
     monkeypatch.setattr(database,'_restore_uploaded_assets',lambda:None)
     database.init_db()
     columns={col['name'] for col in inspect(database.engine).get_columns('franchise_drafts')}
     assert 'pick_minutes' in columns
+    assert {'started_at','settings_json'}<=columns
 
 
 def test_inventory_failure_falls_back_to_complete_schema_checks(database,monkeypatch):

@@ -11,7 +11,7 @@ NOW = datetime(2030, 1, 2, 12, 0, 0)
 
 def launch(room, *, rounds=1, minutes=10):
     room.D.configure_rounds(room.db, room.season, rounds)
-    room.D.set_timer(room.db, room.season, minutes)
+    room.D.set_timer(room.db, room.season, minutes,timeout_policy='skip')
     room.D.start(room.db, room.season, now=NOW)
     room.db.commit()
 

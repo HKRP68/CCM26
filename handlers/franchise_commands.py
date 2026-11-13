@@ -35,6 +35,15 @@ _TRADE_HELP = {
 }
 
 _DRAFT_HELP = {
+    'dpreview':('/dpreview','Draft Admin: run owner, pool, pricing, budget and squad feasibility checks.'),
+    'dsearch':('/dsearch Joe Root','Search eligible players by name, version, country, role or database ID; select an exact card by button.'),
+    'dhistory':('/dhistory 1','Read the durable signing, skip and administrator audit history.'),
+    'dclock':('/dclock 30s | pause','Draft Admin: preview seconds/minutes and explicitly approve pause, skip, auto or admin timeout handling; 0 disables the clock.'),
+    'dcorrect':('/dcorrect prices | correction reason | 96:23cr','Draft Admin: preview a reasoned paused-season correction: prices, custom, rounds, undo, pooladd, poolremove, purse, clock or resolve.'),
+    'dpoolremove':('/dpoolremove #12 #34','Draft Admin: withdraw eligible pool IDs before launch; a live-season correction needs /dcorrect and a reason.'),
+    'dretention':('/dretention 2','Draft Admin: preview the maximum permitted retained contracts per franchise. Default zero.'),
+    'dretain':('/dretain Team | p123 | 10cr','Draft Admin: preview keeping an exact previous-season player contract. Charges the purse and occupies a squad slot.'),
+    'dunretain':('/dunretain Team | #12','Draft Admin: preview a full retained-contract refund before draft launch.'),
     'draft': ('/draft', 'Show the current draft turn, squads and purses.'),
     'dboard': ('/dboard', 'Show the franchise draft board.'),
     'dnew': ('/dnew Season 2', 'Manager: create a new franchise draft season.'),
@@ -47,7 +56,7 @@ _DRAFT_HELP = {
     'dstart': ('/dstart', 'Manager: validate setup and start the draft.'),
     'dpause': ('/dpause', 'Manager: pause the draft and lock picks.'),
     'dresume': ('/dresume', 'Manager: resume a paused draft.'),
-    'dundo': ('/dundo', 'Manager: while paused, undo the latest pick or skip, refunding any signing.'),
+    'dundo': ('/dundo Wrong player version selected', 'Manager: while paused, preview undo of the latest turn with a recorded reason and refund.'),
     'dpick': ('/dpick Joe Root', 'Current team owner or co-owner: review and confirm a player signing.'),
     'dpool': ('/dpool 1', 'Browse available draft players and their fixed prices.'),
     'dsquad': ('/dsquad Team name', 'Show a drafted squad, remaining purse and rule progress.'),
@@ -56,7 +65,7 @@ _DRAFT_HELP = {
     'dteam': ('/dteam Team name | owner ID | co-owner IDs', 'Manager: add a new franchise during draft setup, with its own purse and full pick allowance.'),
     'dskip': ('/dskip', 'Current team owner or co-owner: defer this pick to the catch-up round without spending purse.'),
     'dskips': ('/dskips 1', 'View catch-up picks in the exact order teams skipped or timed out.'),
-    'dtimer': ('/dtimer 10', 'Manager: set minutes per turn while in setup or paused; 0 disables automatic skipping.'),
+    'dtimer': ('/dtimer 10', 'Manager: set minutes per turn while in setup or paused; 0 disables the timer. Keeps the approved timeout policy; /dclock chooses it.'),
     'dadmin': ('/dadmin', 'Open the Draft Admin control panel and setup buttons.'),
     'dadminadd': ('/dadminadd 123456 Name', 'Bot Owner/Admin: appoint a Draft Admin. Name is optional.'),
     'dadminremove': ('/dadminremove 123456', 'Bot Owner/Admin: revoke an appointed Draft Admin immediately.'),
@@ -69,7 +78,7 @@ _DRAFT_HELP = {
     'dpurse': ('/dpurse or /dpurse Team | 120cr', 'View purses. Draft Admins can set a team’s balance during setup or while paused.'),
     'downer': ('/downer Team | 123456', 'Draft Admin: assign the team owner during setup or while paused.'),
     'dco': ('/dco Team | 123456,234567', 'Draft Admin: set co-owner IDs during setup or while paused; clear removes co-owners.'),
-    'dpooladd': ('/dpooladd 80-96', 'Draft Admin: add players from the shared catalogue by rating range.'),
+    'dpooladd': ('/dpooladd 80-96 | BAT | Base', 'Draft Admin: preview catalogue players by rating, category and version, or use ids 12,34,56.'),
     'drolemin': ('/drolemin BAT=4,BOWL=4,AR=2,WK=1', 'Draft Admin: set role minimums; clear removes them. Draft must be in setup or paused.'),
     'drolemax': ('/drolemax BAT=8,BOWL=8,AR=6,WK=3', 'Draft Admin: set role maximums; clear removes them. Draft must be in setup or paused.'),
     'dratingrule': ('/dratingrule 83=4', 'Draft Admin: require at least 4 players rated 83 or below; clear removes rating rules.'),
@@ -91,6 +100,7 @@ def draft_commands_html():
         ('💰 Prices, order & squad rules', ('dprices','dcustom','dorder','drounds','daddrounds','drolemin','drolemax','dratingrule')),
         ('⏱ Live draft & recovery', ('dtimer','dstart','dpause','dresume','dpick','dskip','dundo','dcancel','dpublish')),
         ('👀 Views', ('draft','dboard','dpool','dsquad','dskips','drules')),
+        ('🛡 Draft 2.0 previews & contracts',('dpreview','dsearch','dhistory','dclock','dcorrect','dpoolremove','dretention','dretain','dunretain')),
     )
     lines=['🏏 <b>All Franchise Draft Commands</b>',
            'Draft Admins manage drafts. Auction Managers manage auctions. Bot Owners/Admins have both permissions.',
@@ -107,7 +117,9 @@ def draft_commands_html():
             '', '<b>Quick start</b>',
             'Appoint a Draft Admin → /dnew → /dteam → /importplayers or /dpooladd → /dprices → /dorder → /dtimer → /dstart.',
             'Prices: <code>96:23cr</code> and <code>Joe Root:25.5cr</code>. Role/rating edits replace their current table; use clear to remove it.',
-            'Skipped picks play after scheduled rounds in skip order. Timeouts skip automatically. Pause freezes remaining time. No overseas limit.']
+            'Skipped picks play after scheduled rounds in skip order. /dclock chooses timeout handling explicitly. Pause freezes remaining time. No overseas limit.',
+            'Prices, rounds, budgets, pool edits, retention, start and undo open expiring administrator previews. Confirm to apply; Cancel changes nothing.',
+            'After launch, normal prices are locked. Pause and use /dcorrect with a reason for an audited correction. /dcustom remove #12 restores the rating price.']
     return '\n'.join(lines)
 
 

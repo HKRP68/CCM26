@@ -193,12 +193,15 @@ def _services():
 
 
 def _money(season,value):
-    A,_ = _services()
-    return A.render_money(int(value or 0),season.currency_label or '₹')
+    _,D = _services()
+    return D._money(season,int(value or 0))
 
 
 def _clock_rows(config,season):
-    rows = [('Pick time',f'{config.pick_minutes} minutes' if config.pick_minutes else 'Timer off')]
+    _,D=_services()
+    seconds=D.timer_seconds(config)
+    rows = [('Pick time',f'{seconds//60} minutes' if seconds and seconds%60==0 else f'{seconds} seconds' if seconds else 'Timer off'),
+            ('On timeout',D._loads(config.settings_json,{}).get('timeout_policy','skip'))]
     if config.pick_deadline_at:
         rows.append(('Deadline (UTC)',config.pick_deadline_at.strftime('%d %b · %H:%M:%S')))
     elif season.status == 'paused' and config.paused_seconds_left is not None:
@@ -243,8 +246,19 @@ def board(session,season):
     phase = 'Skipped-pick round' if config.cursor >= total and queue else f'Round {round_no}/{config.rounds}'
     status = {'live':'🟢 Live','paused':'⏸ Paused','setup':'⚙️ Setup','completed':'🏁 Completed','cancelled':'🚫 Cancelled'}.get(season.status,season.status)
     filled = min(10,int(signed / total * 10)) if total else 0
-    card = Card('🏏 Franchise Draft',season.name[:70])
+    card = Card('🏏 CMU Franchise Draft 2.0',season.name[:70])
+    upcoming=None
+    grid=D.schedule(session,season)
+    future=grid[config.cursor+1:] if config.cursor<len(grid) else []
+    future += [session.get(__import__('models').AuctionFranchise,e['franchise_id']) for e in (queue[1:] if config.cursor>=len(grid) else queue)]
+    upcoming=next((t for t in future if t is not None and t.squad_size<config.rounds),None)
     card.facts([('Status',status),('Round',phase),('Signed',R.bold(f'{signed}/{total}')),
+                ('Confirmed draft selections',str(sum(int(t.draft_picks_used or 0) for t in teams))),
+                ('Retained contracts',str(sum(int(t.retained_count or 0) for t in teams))),
+                ('Pick / scheduled turns',f'{min(config.cursor+1,total)}/{total}'),
+                ('Pending squad places',str(max(0,total-signed))),
+                ('Available players',str(len(D._available(session,season)))),
+                ('Franchises',str(len(teams))),('Next franchise',upcoming.name[:45] if upcoming else '—'),
                 ('Deferred picks',str(len(queue)))])
     card.text([R.code('▰'*filled+'▱'*(10-filled)),f'  {signed} players signed'])
     tail = next_turn(session,season) if season.status in ('live','paused','completed','setup') else Card('🚫 Draft cancelled').text('Squads and purse history are preserved.')
@@ -268,7 +282,11 @@ def confirmation(session,season,quote,lot,team):
     config = D.get_draft(session,season)
     card = Card('✍️ Confirm signing',team.name)
     card.hero(lot.name,caption=f'{lot.category} · {lot.rating} OVR')
-    card.facts([('Signing price',R.bold(_money(season,quote.price_lakh))),
+    card.facts([('Player database ID',str(lot.player_id)),('Pool ID',f'#{lot.id}'),
+                ('Version / country',f'{lot.version or "Base"} · {lot.country}'),
+                ('Batting / bowling',f'{lot.bat_rating} / {lot.bowl_rating}'),
+                ('Current purse',_money(season,team.purse_remaining_lakh)),
+                ('Signing price',R.bold(_money(season,quote.price_lakh))),
                 ('Purse after signing',R.bold(_money(season,team.purse_remaining_lakh-quote.price_lakh))),
                 ('Squad after signing',f'{team.squad_size+1}/{config.rounds}')])
     card.facts(_clock_rows(config,season))
@@ -280,8 +298,9 @@ def confirmation(session,season,quote,lot,team):
 def receipt(session,season,lot,team,*,phase=None):
     _,D = _services()
     config = D.get_draft(session,season)
-    card = Card('✅ Signing confirmed',phase)
+    card = Card('✅ Signing confirmed · CMU',phase or season.name)
     card.hero(lot.name,caption=f'{team.name} · {lot.rating} OVR · {lot.category}')
+    card.text(f'{lot.country} · {lot.version or "Base"} · Player ID {lot.player_id} · Pool #{lot.id}')
     card.facts([('Signed for',R.bold(_money(season,lot.sold_price_lakh))),
                 ('Purse left',R.bold(_money(season,team.purse_remaining_lakh))),
                 ('Squad',f'{team.squad_size}/{config.rounds}')])
@@ -294,7 +313,17 @@ def event_card(session,season,kind,text,*,lot=None,team=None,metadata=None):
     try:
         if kind == 'fd_picked' and lot is not None and team is not None:
             phase = 'Skipped-pick round' if metadata.get('catch_up') else f'Round {metadata.get("round_no", "")}'
+            if metadata.get('automatic'):phase+=' · Automatic selection (approved timeout policy)'
             return receipt(session,season,lot,team,phase=phase)
+        if kind == 'fd_started':
+            return board(session,season)
+        if kind == 'fd_completed':
+            card=Card('🏆 CMU Franchise Draft completed',season.name)
+            card.text('All final squads satisfy the configured category, rating and purse rules.')
+            blocks,text=purses(session,season)
+            card.blocks.extend(blocks);card.parts.append(text)
+            card.footer('/dsquad · /dhistory · /dpublish to continue the tournament season')
+            return card.pair()
         if kind == 'fd_skipped' and team is not None:
             _,D = _services()
             timeout = bool(metadata.get('timeout'))
@@ -322,10 +351,11 @@ def pool(session,season,page=1):
     for lot in lots[(page-1)*12:page*12]:
         try:price = R.bold(_money(season,D.price_for(session,season,lot)))
         except A.AuctionError:price = '⚠️ Price needed'
-        rows.append([R.code(f'#{lot.id}'),[R.bold(lot.name), '\n',R.italic(lot.category)],str(lot.rating),price])
-    if rows:card.table(['Pool ID','Player / role','OVR','Price'],rows,align_right=(2,3))
+        rows.append([R.code(f'#{lot.id} / p{lot.player_id}'),[R.bold(lot.name),'\n',R.italic(f'{lot.version or "Base"} · {lot.category} · {lot.country}')],
+                     f'{lot.rating} / {lot.bat_rating} / {lot.bowl_rating}',price])
+    if rows:card.table(['Pool / player ID','Player / version / role','OVR / BAT / BOWL','Price'],rows,align_right=(2,3))
     else:card.hero('No available players',caption='Ask a Draft Admin to add players before resuming.')
-    card.footer('Pick by name or exact pool ID: /dpick Joe Root · /dpick #123')
+    card.footer('Pick publicly in the bound draft group: /dpick Joe Root · /dpick #123')
     return card.pair()
 
 
@@ -336,11 +366,13 @@ def squad(session,season,team):
     lots = A.squad(session,team.id)
     card = Card('👥 Draft squad',team.name)
     card.facts([('Players',R.bold(f'{team.squad_size}/{config.rounds}')),
+                ('Retained / drafted',f'{team.retained_count or 0} / {team.draft_picks_used or 0}'),
+                ('Open acquisition slots',str(max(0,config.rounds-team.squad_size))),
                 ('Purse left',R.bold(_money(season,team.purse_remaining_lakh))),
                 ('Spent',_money(season,team.purse_total_lakh-team.purse_remaining_lakh))])
     if not lots:card.hero('No players signed yet',caption='Your confirmed signings will appear here.')
     for start in range(0,len(lots),12):
-        rows = [[str(i),[R.bold(lot.name),'\n',R.italic(lot.category)],str(lot.rating),_money(season,lot.sold_price_lakh)]
+        rows = [[str(i),[R.bold(lot.name),'\n',R.italic(f'{lot.version or "Base"} · {lot.category} · {lot.country} · p{lot.player_id}')],str(lot.rating),_money(season,lot.sold_price_lakh)]
                 for i,lot in enumerate(lots[start:start+12],start+1)]
         card.table(['#','Player / role','OVR','Signed for'],rows,align_right=(0,2,3),
                    details=f'Players {start+1}–{min(len(lots),start+12)}',opened=start==0)
@@ -373,7 +405,7 @@ def rules(session,season):
     config = D.get_draft(session,season)
     card = Card('📜 Draft rulebook',season.name)
     card.facts([('Rounds / maximum squad',str(config.rounds)),('Pick authority','Current team owner or co-owner'),
-                ('Overseas players','No limit')]+_clock_rows(config,season))
+                ('Overseas players','No limit'),('Maximum retained contracts',str(D._loads(config.settings_json,{}).get('retention_max',0)))]+_clock_rows(config,season))
     minimums,maximums = A.role_minimums(season),A.role_maximums(season)
     card.table(['Role','Minimum','Maximum'],[[role,str(minimums.get(role,0)),str(maximums[role]) if role in maximums else 'No cap']
                for role in A.SQUAD_ROLES],align_right=(1,2),caption='Squad composition')
@@ -382,22 +414,102 @@ def rules(session,season):
     else:card.text('Rating rules: no extra requirement.')
     card.section('🔄 Turn order & catch-up picks')
     card.text('The first team moves to the end each round. Voluntary skips and timeouts join a catch-up round in skip order after scheduled rounds.')
+    card.text('Approved retained contracts occupy squad places. Teams with a full squad receive no further acquisition turn.')
     card.text('Custom player prices override rating prices. Each signing requires confirmation; the timer continues while the confirmation is open.')
     card.footer('Draft Admins: /drolemin · /drolemax · /dratingrule · /dtimer · /dprices · /dcustom')
     return card.pair()
 
 
-def order(session,season):
+def order(session,season,page=None):
     _,D = _services()
     config = D.get_draft(session,season)
     teams = D._ordered_teams(session,season)
-    current = min(config.rounds,config.cursor//max(1,len(teams))+1)
+    current = min(config.rounds,config.cursor//max(1,len(teams))+1) if page is None else max(1,min(config.rounds,int(page)))
     card = Card('🔄 Rotating draft order',f'{season.name} · {config.rounds} rounds')
     for number in range(current,min(config.rounds,current+2)+1):
-        rows = [[str(i),R.bold(t.name),R.code(f'#{t.id}')] for i,t in enumerate(D.round_order(session,season,number),1)]
+        rows = [[str((number-1)*len(teams)+i),R.bold(t.name),R.code(f'#{t.id}')] for i,t in enumerate(D.round_order(session,season,number),1)]
         if rows:card.table(['Pick','Franchise','Team ID'],rows,align_right=(0,),details=f'Round {number}',opened=number==current)
     if not teams:card.text('No franchises yet. Add teams with /dteam before setting the order.')
     card.footer('Each new round moves the first team to the end. /dskips shows the catch-up queue.')
+    return card.pair()
+
+
+def preview_action(session,season,action):
+    data=json.loads(action.preview_json)
+    before,after=data['before'],data['after']
+    card=Card('🛡 Confirm draft configuration',f'{season.name} · {action.kind}')
+    card.text('Nothing has been applied. This preview expires after ten minutes and checks your current role again.')
+    card.facts([('Rounds',f'{before["rounds"]} → {after["rounds"]}'),
+                ('Status',f'{before["status"]} → {after["status"]}'),
+                ('Eligible players',f'{before["eligible"]} → {after["eligible"]}'),
+                ('Reason',action.reason or 'Setup configuration')])
+    if action.kind=='start':card.facts([('Opening franchise',after['current'] or 'All squad places occupied'),
+        ('Pick time','Timer off' if not after['timer_seconds'] else str(after['timer_seconds'])+' seconds'),
+        ('On expiry',after['settings'].get('timeout_policy','skip'))])
+    delta=after['eligible']-before['eligible']
+    if delta>0:card.text(f'{delta} players added after confirmation.')
+    if before['settings']!=after['settings']:
+        options=after['settings']
+        seconds=options.get('pick_seconds')
+        rows=[('Timeout handling',{'pause':'Pause and wait','admin':'Pause for administrator','skip':'Defer to catch-up queue','auto':'Highest-rated eligible, affordable player'}.get(options.get('timeout_policy'),'Pause and wait')),
+              ('Maximum retained contracts',str(options.get('retention_max',0)))]
+        if seconds is not None:rows.insert(0,('Pick time','Timer off' if not seconds else f'{seconds} seconds'))
+        card.facts(rows)
+    rows=[[t['name'],str(t['squad']),str(t['slots']),_money(season,t['purse'])] for t in after['teams']]
+    if rows:card.table(['Franchise','Squad','Open slots','Purse after'],rows)
+    prices=data.get('prices',[])
+    changed=[p for p in prices if p['previous_price']!=p['price']]
+    if action.kind=='prices':
+        counts={}
+        for p in prices:counts[str(p['rating'])]=counts.get(str(p['rating']),0)+1
+        card.table(['Configured rating','Price','Eligible players'],
+            [[rating,_money(season,value),str(counts.get(rating,0))]
+             for rating,value in sorted(after['rating_prices'].items(),key=lambda pair:int(pair[0]),reverse=True)])
+    if prices:
+        card.text(f'{len(prices)} eligible players priced; {len(changed)} prices change. Custom overrides take priority.')
+        shown=[p for p in prices if p['id'] in data['requested_ids']] if action.kind=='custom' else prices[:20]
+        card.table(['Player / version','Previous','Rating price','Final price'],
+            [[f'#{p["id"]} {p["name"]} · {p["version"] or "Base"}',
+              _money(season,p['previous_price']) if p['previous_price'] is not None else 'Missing',
+              _money(season,p['rating_price']) if p['rating_price'] is not None else 'Missing',
+              _money(season,p['price'])] for p in shown])
+        if action.kind!='custom' and len(prices)>20:card.footer(f'{len(prices)-20} more eligible players use the same price rules.')
+    return card.pair()
+
+
+def history(session,season,page=1):
+    from models import AuctionEvent
+    page=max(1,int(page))
+    events=(session.query(AuctionEvent).filter(AuctionEvent.season_id==season.id)
+            .order_by(AuctionEvent.id.desc()).offset((page-1)*12).limit(12).all())
+    card=Card('📜 CMU Draft history',f'{season.name} · Page {page}')
+    rows=[]
+    for event in events:
+        try:detail=json.loads(event.detail_json or '{}')
+        except (TypeError,ValueError):detail={}
+        if not isinstance(detail,dict):detail={}
+        player=detail.get('player_snapshot') or {}
+        team=detail.get('franchise_snapshot') or {}
+        if player:
+            description=f'{team.get("name", "")} · {player["name"]} · {player.get("version") or "Base"} · p{player["id"]}'
+            if player.get('price_lakh') is not None:description+=' · '+_money(season,player['price_lakh'])
+        else:
+            description='\n'.join(plain(line) for line in inline_lines(detail.get('html') or event.headline))[:700]
+        rows.append([str(event.id),[R.bold(event.headline),'\n',description],str(event.by_tg_id or 'System')])
+    if rows:card.table(['Event','Action / player / price','Actor'],rows)
+    else:card.text('No events on this page.')
+    card.footer('Signings, skips, retained contracts and administrative corrections remain in the audit log after undo.')
+    return card.pair()
+
+
+def readiness(session,season):
+    from services.franchise_draft_admin import readiness as inspect
+    data=inspect(session,season)
+    card=Card('✅ Ready to start' if data['ready'] else '⚠️ Draft setup needs attention',season.name)
+    card.facts([('Rounds',str(data['rounds'])),('Franchises',str(len(data['teams']))),('Available players',str(data['eligible']))])
+    for error in data['errors'][:30]:card.text('• '+error)
+    if data['ready']:card.text('Owners, prices, budgets, pool supply and category/rating requirements passed the pre-draft check.')
+    card.footer('/dstart opens a confirmation preview · /draftcommands lists setup controls')
     return card.pair()
 
 
@@ -430,6 +542,7 @@ def prices(session,season,*,custom=False):
         card.table(['Player' if custom else 'Rating','Signing price'],rows,align_right=(1,))
     else:card.hero('No prices configured yet',caption='Set prices before starting the draft.')
     card.text('Custom player prices override rating prices. Existing signings keep their agreed price.')
+    card.footer('After launch, pause and use /dcorrect with a reason to correct future prices. Signed contracts keep their original price.')
     card.footer('Update with /dcustom\nJoe Root:25.5cr' if custom else 'Update with /dprices\n96:23cr\n95:21cr')
     return card.pair()
 

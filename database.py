@@ -720,6 +720,8 @@ def _migrate_add_columns():
         ("pick_minutes", "INTEGER DEFAULT 10"),
         ("pick_deadline_at", "TIMESTAMP"),
         ("paused_seconds_left", "INTEGER"),
+        ("started_at", "TIMESTAMP"),
+        ("settings_json", "TEXT"),
     ):
         _try_add("franchise_drafts", col, coltype)
 

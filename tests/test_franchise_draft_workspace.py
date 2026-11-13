@@ -84,8 +84,13 @@ def test_native_draft_pricing_order_and_rounds_use_shared_engine(site, menu):
         ('native_fd_order', {'text': 'Others | Owners'}),
         ('native_fd_rounds', {'rounds': 5}),
     ]:
-        menu.execute_action(site.db, DELEGATE, sid, 1, action, values)
+        result=menu.execute_action(site.db, DELEGATE, sid, 1, action, values)
         site.db.commit()
+        if result.get('draft_packet'):
+            from handlers import franchise_draft as H
+            data=result['draft_packet']['markup'].inline_keyboard[0][0].callback_data
+            H.execute_callback(site.db,DELEGATE,1,sid,data)
+            site.db.commit()
     config = D.get_draft(site.db, site.season)
     assert json.loads(config.rating_prices_json) == {'85': 1500, '84': 1250}
     assert list(json.loads(config.custom_prices_json).values()) == [1625]

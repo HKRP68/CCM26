@@ -18,6 +18,7 @@ DOT_ALIASES = frozenset({
 # module, command aliases, callable name. Kept explicit so the supported bot
 # surface can be reviewed without importing the main cricket application.
 COMMANDS = (
+    ('draft', ('dpreview','dsearch','dhistory','dclock','dcorrect','dpoolremove','dretention','dretain','dunretain'), 'command_handler'),
     ('draft', ('draft', 'dboard', 'dnew', 'dsetup', 'dprices', 'dcustom',
                'dorder', 'drounds', 'daddrounds', 'dstart', 'dpause', 'dresume',
                'dundo', 'dpick', 'dpool', 'dsquad', 'drules', 'dhelp',

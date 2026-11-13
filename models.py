@@ -4465,6 +4465,8 @@ class AuctionSeason(Base):
                                          cascade="all, delete-orphan")
     franchise_draft_turns = relationship("FranchiseDraftTurn",
                                          cascade="all, delete-orphan")
+    franchise_draft_actions = relationship("FranchiseDraftAction",
+                                          cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_auction_season_chat_unique", "chat_id", unique=True),
@@ -4490,6 +4492,23 @@ class FranchiseDraft(Base):
     pick_minutes = Column(Integer, default=10, nullable=False)
     pick_deadline_at = Column(DateTime, nullable=True)
     paused_seconds_left = Column(Integer, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    settings_json = Column(Text, nullable=True)
+
+
+class FranchiseDraftAction(Base):
+    """Expiring, actor-bound administrator preview; applied once under the draft lock."""
+    __tablename__ = "franchise_draft_actions"
+    token = Column(String(32), primary_key=True)
+    season_id = Column(Integer, ForeignKey("auction_seasons.id", ondelete="CASCADE"), nullable=False, index=True)
+    actor_tg_id = Column(BigInteger, nullable=False)
+    revision = Column(Integer, nullable=False)
+    kind = Column(String(32), nullable=False)
+    payload_json = Column(Text, nullable=False)
+    preview_json = Column(Text, nullable=False)
+    reason = Column(Text, nullable=True)
+    status = Column(String(12), default="pending", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class FranchiseDraftConfirmation(Base):

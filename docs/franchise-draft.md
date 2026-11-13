@@ -1,4 +1,8 @@
-# Franchise season draft
+# CMU Franchise Draft 2.0
+
+The upgrade extends this existing draft engine, models, player pool, ledger and
+season workflow. Start with the [Draft 2.0 operator guide](franchise-draft-2.md)
+for configuration previews, retention, seconds-based timers and audited recovery.
 
 The dedicated Franchise bot supports a fixed-price draft alongside auctions.
 Use **/auction → New draft**, or **Existing leagues → Draft** to continue a
@@ -31,7 +35,7 @@ name in `/dadminadd` is for the directory. `/dadmins` lists the appointments;
 buttons. Role changes are checked again on each command, button and form reply.
 A Draft Admin cannot pick or skip for a team unless they also own or co-own it.
 
-`/draftcommands` sends **all 39 draft commands and aliases together**, with
+`/draftcommands` sends **all 48 draft commands and aliases together**, with
 examples and role requirements. `/dcommands`, `/dcmds` and `/dhelp` open the
 same complete reference. Its button sends every section even when Telegram
 needs two messages. All draft commands are also registered in the slash-command
@@ -118,7 +122,8 @@ Ben Stokes:24cr
 
 Custom updates preserve other custom prices. Use an exact player name or the
 pool's `#ID` if multiple cards share a name. Existing signings keep their
-agreed price when tables change. Pause before editing a live draft's prices.
+agreed price when tables change. After launch, pause and use `/dcorrect` with a
+reason; ordinary price edits stay locked even while paused or after undo.
 The CSV's auction base prices do not set draft signing prices.
 
 ## Rounds and order
@@ -137,7 +142,8 @@ Each team gets one signing per round. The squad size equals the round count.
 Use `/drounds 15` to set the total or `/daddrounds 2` to add rounds. Rounds
 can be added during setup, while paused, or after completion before publishing.
 After the first pick, the team order is locked and rounds can only increase.
-Adding rounds to a completed draft reopens it paused; review and `/dresume`.
+After launch, round changes require a reasoned `/dcorrect rounds` preview.
+Adding rounds to a completed draft reopens it paused; review and confirm `/dresume`.
 
 ## Pick time, skips and catch-up rounds
 
@@ -153,9 +159,11 @@ the deadline. An expired confirmation cannot charge the purse.
 
 The current team's owner or co-owner may use `/dskip` or **Skip my turn**.
 The turn advances immediately without signing a player or spending purse.
-When the pick deadline passes, the bot performs the same skip automatically
-and tags the next team. Managers and spectators cannot skip for a franchise
-unless they also own that team.
+On expiry, the bot follows the explicitly approved `/dclock` policy. New drafts
+pause by default; automatic skipping and automatic selection need administrator
+approval. Duration-only `/dtimer` changes preserve the approved policy. Managers
+and spectators cannot use an owner's skip control; administrator resolution is
+an explicitly reasoned correction with a preview.
 
 All skipped picks are saved in the order they occurred. After the scheduled
 rounds, a **Skipped-pick round** plays that queue. For example, if Team 3,

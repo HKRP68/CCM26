@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 async def drain_events(bot, session, season, *, limit=5):
     """Deliver committed draft events in order; retry failed sends next tick."""
     from services import auction_scheduler as S, auction_service as A
+    from handlers.franchise_draft_v2 import public_keyboard
 
     if not season.chat_id:
         return 0
@@ -34,7 +35,7 @@ async def drain_events(bot, session, season, *, limit=5):
             blocks = detail.get('blocks') if isinstance(detail, dict) else None
             if not isinstance(blocks, list) or not blocks:
                 blocks = blocks_for_html(text)
-            sent = await S._send_rich(bot, season.chat_id, blocks, text)
+            sent = await S._send_rich(bot, season.chat_id, blocks, text,reply_markup=public_keyboard(season))
             if sent is None:
                 break
             spoken += 1
@@ -49,6 +50,7 @@ async def refresh_board(bot, session, season, *, force=False):
     """Edit the saved board, replacing it if deleted or no longer editable."""
     from services import auction_scheduler as S, auction_rich as AR
     from services import franchise_draft as D
+    from handlers.franchise_draft_v2 import public_keyboard
 
     draft = D.get_draft(session, season)
     if draft is None or not season.chat_id:
@@ -63,11 +65,11 @@ async def refresh_board(bot, session, season, *, force=False):
         # Rich and HTML edits share the same content. "Not modified" is a
         # successful retry in both paths.
         ok = await AR.edit(bot, season.chat_id, previous_id, blocks,
-                           html_text=text)
+                           html_text=text,reply_markup=public_keyboard(season))
         if ok:
             season.board_rendered_bid_count = revision
             return previous_id
-    sent = await S._send_rich(bot, season.chat_id, blocks, text)
+    sent = await S._send_rich(bot, season.chat_id, blocks, text,reply_markup=public_keyboard(season))
     if sent is None:
         return None
     season.board_message_id = sent.message_id

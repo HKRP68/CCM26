@@ -6430,6 +6430,8 @@ def publish_to_league(session, season, *, league_name=None):
             owed, over = role_shortfall(session, season, team)
             if owed or over or RR.shortfalls(rating_rules(season), squad_ratings(session, team.id), 0):
                 raise AuctionError(f"{team.name}'s squad must meet its role and rating rules before publishing.")
+        from services.franchise_draft_admin import validate_final
+        validate_final(session,season)
     bought = (session.query(AuctionLot)
               .filter(AuctionLot.season_id == season.id,
                       AuctionLot.status == LOT_SOLD,

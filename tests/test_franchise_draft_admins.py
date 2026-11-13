@@ -11,6 +11,16 @@ DRAFT_ADMIN = 884050
 AUCTION_ADMIN = 884051
 
 
+def execute_confirmed(room,actor,chat,sid,command,raw=''):
+    packet=room.H.execute(room.db,actor,chat,sid,command,raw)
+    room.db.commit()
+    markup=packet.get('markup')
+    if markup and markup.inline_keyboard[0][0].callback_data.startswith('fd_c_'):
+        room.H.execute_callback(room.db,actor,chat,sid,markup.inline_keyboard[0][0].callback_data)
+        room.db.commit()
+    return packet
+
+
 def appoint(room):
     room.D.add_draft_admin(room.db,DRAFT_ADMIN,name='Draft organiser',by_tg_id=ADMIN)
     room.db.commit()
@@ -86,10 +96,10 @@ def test_draft_admin_can_see_and_manage_drafts_without_owning_a_team(room):
     assert data['admin'] and data['draft_admin'] and not data['auction_admin']
     assert 'draft_admin' in data['roles'] and 'Draft Admin' in data['role_labels']
     assert data['my_team_ids']==[]
-    room.H.execute(room.db,DRAFT_ADMIN,CHAT,room.season.id,'dprices','96:20cr')
+    execute_confirmed(room,DRAFT_ADMIN,CHAT,room.season.id,'dprices','96:20cr')
     room.H.execute(room.db,DRAFT_ADMIN,CHAT,room.season.id,'dtimer','8')
     room.db.commit()
-    room.H.execute(room.db,DRAFT_ADMIN,CHAT,room.season.id,'dstart')
+    execute_confirmed(room,DRAFT_ADMIN,CHAT,room.season.id,'dstart')
     room.db.commit()
     for command in ('dpick','dskip'):
         with pytest.raises(room.A.AuctionError,match='owner or co-owner'):
@@ -124,16 +134,16 @@ def test_draft_admin_commands_complete_setup_through_publishing(room):
     season=room.db.get(AuctionSeason,sid)
     chat=CHAT-500
     room.H.execute(room.db,DRAFT_ADMIN,chat,sid,'dbind',str(sid))
-    room.H.execute(room.db,DRAFT_ADMIN,chat,sid,'drounds','1')
+    execute_confirmed(room,DRAFT_ADMIN,chat,sid,'drounds','1')
     room.H.execute(room.db,DRAFT_ADMIN,chat,sid,'dteam','North | 885001')
     room.H.execute(room.db,DRAFT_ADMIN,chat,sid,'dteam','South | 885002')
     room.H.execute(room.db,DRAFT_ADMIN,chat,sid,'dco','North | 885003,885004')
     room.H.execute(room.db,DRAFT_ADMIN,chat,sid,'downer','South | 885005')
-    room.H.execute(room.db,DRAFT_ADMIN,chat,sid,'dpurse','North | 5cr')
+    execute_confirmed(room,DRAFT_ADMIN,chat,sid,'dpurse','North | 5cr')
     room.H.execute(room.db,DRAFT_ADMIN,chat,sid,'drolemin','BAT=1')
     room.H.execute(room.db,DRAFT_ADMIN,chat,sid,'drolemax','BAT=1')
     room.H.execute(room.db,DRAFT_ADMIN,chat,sid,'dratingrule','85=1')
-    room.H.execute(room.db,DRAFT_ADMIN,chat,sid,'dprices','85:1cr')
+    execute_confirmed(room,DRAFT_ADMIN,chat,sid,'dprices','85:1cr')
     rows=parse_csv(b'name,rating,role,country\nDraft Admin One,85,BAT,India\nDraft Admin Two,85,BAT,India\n')
     imported=import_players(room.db,season,rows,actor_tg_id=DRAFT_ADMIN)
     assert imported['added']==2
@@ -142,7 +152,7 @@ def test_draft_admin_commands_complete_setup_through_publishing(room):
     assert room.A.co_owner_ids(teams[0])==[885003,885004]
     assert teams[1].owner_tg_id==885005
     assert teams[0].purse_remaining_lakh==500
-    room.H.execute(room.db,DRAFT_ADMIN,chat,sid,'dstart');room.db.commit()
+    execute_confirmed(room,DRAFT_ADMIN,chat,sid,'dstart');room.db.commit()
     for name in ('Draft Admin One','Draft Admin Two'):
         team=room.D.turn(room.db,season)
         room.H.execute(room.db,team.owner_tg_id,chat,sid,'dpick',name);room.db.commit()
@@ -158,7 +168,7 @@ def test_pool_range_command_adds_catalogue_without_auction_admin_rights(room):
     other=room.A.create_season(room.db,'Pool draft')
     room.D.enable(room.db,other,rounds=1,by_tg_id=DRAFT_ADMIN)
     room.A.bind_chat(room.db,other,CHAT-600);room.db.commit()
-    packet=room.H.execute(room.db,DRAFT_ADMIN,CHAT-600,other.id,'dpooladd','96-96')
+    packet=execute_confirmed(room,DRAFT_ADMIN,CHAT-600,other.id,'dpooladd','96-96')
     room.db.commit()
     assert '6 players added' in packet['text']
     assert len(room.A.lots(room.db,other.id))==6
