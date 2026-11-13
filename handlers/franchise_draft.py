@@ -6,7 +6,6 @@ their initiating owner and carry their quoted turn and price in the database.
 from __future__ import annotations
 
 import html
-import json
 import logging
 import re
 
@@ -16,6 +15,7 @@ from database import get_session
 from models import AuctionFranchise, AuctionLot
 from services import auction_service as A, auction_webapp as W
 from services import franchise_draft as D, rich_message as R
+from services import franchise_draft_rich as DR
 from services.auction_async import run_session, AuctionWorkerBusy, BUSY_MESSAGE
 
 logger = logging.getLogger(__name__)
@@ -100,24 +100,6 @@ def _keyboard(db, season, actor, *, page=None, skip_page=None):
     return InlineKeyboardMarkup(rows)
 
 
-def _rules(db, season):
-    config = D.get_draft(db, season)
-    lines = [f'📜 <b>{_e(season.name)} · Draft rules</b>',
-             f'Rounds / maximum squad: <b>{config.rounds}</b>',
-             'Each round moves its first team to the end of the order.',
-             'Only the current team’s owner or co-owner may pick.',
-             'Every signing requires confirmation at the displayed price.',
-             D.clock_text(db, season),
-             'Voluntary skips and timeouts enter a catch-up round in skip order after scheduled rounds. Skipping again moves the pick to the back.',
-             '<b>Overseas players:</b> No limit.',
-             '<b>Role minimums:</b> ' + _e(', '.join(f'{role}: {n}' for role, n in A.role_minimums(season).items()) or 'None'),
-             '<b>Role maximums:</b> ' + _e(', '.join(f'{role}: {n}' for role, n in A.role_maximums(season).items()) or 'None'),
-             '<b>Rating rules:</b> ' + _e(A.rating_rule_line(season)),
-             'Custom player prices override rating prices. A missing rating price blocks that signing.',
-             '\nManagers: /dteam adds a new franchise during setup; /dtimer sets whole minutes. Use /settings for purse, role and rating rules; /dprices, /dcustom, /drounds and /dorder for draft setup.']
-    return '\n'.join(lines)
-
-
 def _help():
     from handlers.franchise_commands import draft_commands_html
     return draft_commands_html()
@@ -138,16 +120,20 @@ def _admin_panel(db, actor, chat_id, selected_sid=None):
             '<code>/draftcommands</code> sends every draft command together.\n'
             '<code>/dadmins</code> lists appointed Draft Admins.\n')
     if season is not None:
-        text += '\n' + D.render_board(db,season)
+        blocks = DR.blocks_for_html(text) or []
+        board_blocks,board_text = DR.board(db,season)
+        text += '\n\n' + board_text
+        blocks += board_blocks
         rows = [list(row) for row in _keyboard(db,season,actor).inline_keyboard]
     else:
         rows = [[InlineKeyboardButton('📋 Create draft',callback_data=f'fa:{actor}:0:f:newdraft')]]
         text += '\nCreate a draft with <code>/dnew Season name</code>, then open <code>/dadmin</code> for its controls.'
+        blocks = DR.blocks_for_html(text)
     from services.admin_ids import is_bot_admin
     if is_bot_admin(actor):
         rows.append([InlineKeyboardButton('Appoint Draft Admin',callback_data=f'fa:{actor}:{season.id if season else 0}:f:adddraftmanager'),
                      InlineKeyboardButton('Remove Draft Admin',callback_data=f'fa:{actor}:{season.id if season else 0}:f:deldraftmanager')])
-    return dict(text=text,markup=InlineKeyboardMarkup(rows),sid=season.id if season else selected_sid)
+    return dict(text=text,blocks=blocks,markup=InlineKeyboardMarkup(rows),sid=season.id if season else selected_sid)
 
 
 def _team(db, season, raw, actor):
@@ -171,62 +157,49 @@ def parse_order(db, season, raw):
 
 
 def build_blocks(text):
-    from services.franchise_draft_delivery import blocks_for_html
-    return blocks_for_html(text)
+    return DR.blocks_for_html(text)
 
 
 def _teams_view(db, season, actor):
     rows = []
     for team in A.franchises(db, season.id):
         rows.append([InlineKeyboardButton(team.name, callback_data=_cb(actor, season.id, 'squad', str(team.id)))])
-    return (f'👥 <b>{_e(season.name)} · Squads</b>\nChoose a franchise to see its players, purse and rules progress.',
-            InlineKeyboardMarkup(rows + list(_keyboard(db, season, actor).inline_keyboard)))
+    blocks,text=DR.team_directory(db,season)
+    return dict(text=text,blocks=blocks,sid=season.id,
+                markup=InlineKeyboardMarkup(rows + list(_keyboard(db, season, actor).inline_keyboard)))
 
 
 def _render_view(db, season, actor, view, argument='0'):
+    markup = _keyboard(db,season,actor)
     if view == 'board':
-        text = D.render_board(db, season)
+        blocks,text = DR.board(db, season)
     elif view == 'pool':
         page = max(1, _whole(argument, 'Page'))
-        return D.render_pool(db, season, page=page), _keyboard(db, season, actor, page=page)
+        blocks,text = DR.pool(db,season,page=page)
+        markup = _keyboard(db,season,actor,page=page)
     elif view == 'order':
-        text = D.render_order(db, season)
+        blocks,text = DR.order(db, season)
     elif view == 'skips':
         page = max(1, _whole(argument, 'Page'))
-        return D.render_skips(db, season, page=page), _keyboard(db, season, actor, skip_page=page)
+        blocks,text = DR.skips(db,season,page=page)
+        markup = _keyboard(db,season,actor,skip_page=page)
     elif view == 'rules':
-        text = _rules(db, season)
+        blocks,text = DR.rules(db, season)
     elif view in ('help','commands'):
         text = _help()
+        blocks = build_blocks(text)
     elif view == 'admin':
-        packet = _admin_panel(db,actor,season.chat_id or actor,season.id)
-        return packet['text'],packet['markup']
+        return _admin_panel(db,actor,season.chat_id or actor,season.id)
     elif view == 'teams':
         return _teams_view(db, season, actor)
     elif view == 'squad':
         team = _team(db, season, argument, actor)
         if team is None:
             return _teams_view(db, season, actor)
-        text = D.render_squad(db, season, team)
+        blocks,text = DR.squad(db, season, team)
     else:
         raise A.AuctionError('Open /draft for a fresh menu.')
-    return text, _keyboard(db, season, actor)
-
-
-def _price_list(db, season, *, custom=False):
-    config = D.get_draft(db, season)
-    prices = json.loads((config.custom_prices_json if custom else config.rating_prices_json) or '{}')
-    title = 'Custom player prices' if custom else 'Rating prices'
-    lines = [f'💰 <b>{title}</b>']
-    lot_names = {str(lot.id): lot.name for lot in A.lots(db, season.id)} if custom else {}
-    for key, value in sorted(prices.items(), key=lambda item: item[0], reverse=not custom):
-        label = lot_names.get(str(key), key)
-        lines.append(f'{_e(label)}: <b>{A.render_money(value, season.currency_label)}</b>')
-    if not prices:
-        lines.append('No prices configured yet.')
-    command = '/dcustom\nJoe Root:25.5cr' if custom else '/dprices\n96:23cr\n95:21cr'
-    lines.append('\nUpdate using <code>' + command + '</code>. Pause a live draft before changing prices.')
-    return '\n'.join(lines)
+    return dict(text=text,blocks=blocks,markup=markup,sid=season.id)
 
 
 def execute(db, actor, chat_id, selected_sid, command, raw=''):
@@ -238,12 +211,8 @@ def execute(db, actor, chat_id, selected_sid, command, raw=''):
     if command in ('dadminadd','dadminremove','dadmins'):
         if command == 'dadmins':
             D.require_draft_admin(db,actor)
-            lines=['🛡 <b>Draft Admins</b>']
-            for row in D.draft_admins(db):
-                lines.append(f'• <code>{row.tg_id}</code>' + (' · '+_e(row.name) if row.name else ''))
-            if len(lines)==1:lines.append('No appointed Draft Admins yet.')
-            lines.append('Bot Owners and Bot Admins also have draft administration.\nAppoint: <code>/dadminadd TelegramID</code>')
-            text='\n'.join(lines)
+            blocks,text=DR.admin_directory(db)
+            return dict(text=text,blocks=blocks,markup=None,sid=selected_sid)
         else:
             from services.admin_ids import is_bot_admin
             if not is_bot_admin(actor):raise A.AuctionError('Only Bot Owners and Bot Admins can appoint or remove Draft Admins.')
@@ -288,10 +257,10 @@ def execute(db, actor, chat_id, selected_sid, command, raw=''):
         if view == 'squad':
             team = _team(db, season, raw, actor)
             view, argument = ('squad', str(team.id)) if team else ('teams', '0')
-        text, markup = _render_view(db, season, actor, view, argument)
-        return dict(text=text, markup=markup, sid=season.id)
+        return _render_view(db, season, actor, view, argument)
     elif command == 'dpurse' and not raw:
-        return dict(text=A.render_purses(db,season),markup=_keyboard(db,season,actor),sid=season.id)
+        blocks,text=DR.purses(db,season)
+        return dict(text=text,blocks=blocks,markup=_keyboard(db,season,actor),sid=season.id)
     elif command == 'dskip':
         if chat_id >= 0 or season.chat_id != chat_id:
             raise A.AuctionError('Skip your turn publicly in the group bound to this draft.')
@@ -305,19 +274,11 @@ def execute(db, actor, chat_id, selected_sid, command, raw=''):
         quote = D.preview_pick(db, season, actor, raw)
         lot = db.get(AuctionLot, quote.lot_id)
         team = db.get(AuctionFranchise, quote.franchise_id)
-        money = lambda price: A.render_money(price, season.currency_label)
-        text = (f'✍️ <b>Sign {_e(lot.name)}?</b>\n'
-                f'Team: <b>{_e(team.name)}</b>\n'
-                f'{_e(lot.category)} · Rating <b>{lot.rating}</b>\n'
-                f'Price: <b>{money(quote.price_lakh)}</b>\n'
-                f'Purse after signing: <b>{money(team.purse_remaining_lakh - quote.price_lakh)}</b>\n'
-                f'Squad after signing: <b>{team.squad_size + 1}/{D.get_draft(db, season).rounds}</b>\n\n'
-                f'{D.clock_text(db, season)}\n'
-                'Confirm this signing or cancel to choose another player.')
+        blocks,text = DR.confirmation(db,season,quote,lot,team)
         markup = InlineKeyboardMarkup([[
             InlineKeyboardButton('✅ Sign', callback_data=f'fd_y_{quote.token}'),
             InlineKeyboardButton('❌ Cancel', callback_data=f'fd_n_{quote.token}')]])
-        return dict(text=text, markup=markup, sid=season.id)
+        return dict(text=text,blocks=blocks, markup=markup, sid=season.id)
     else:
         D.require_draft_admin(db, actor)
         if command in ('downer','dco'):
@@ -330,7 +291,9 @@ def execute(db, actor, chat_id, selected_sid, command, raw=''):
                 D.update_team_roles(db,season,team,co_owners=ids,by_tg_id=actor)
             text=f'🏷 <b>{_e(team.name)}</b> ownership updated.'
         elif command == 'dpurse':
-            if '|' not in raw: return dict(text=A.render_purses(db,season),markup=_keyboard(db,season,actor),sid=season.id)
+            if '|' not in raw:
+                blocks,text=DR.purses(db,season)
+                return dict(text=text,blocks=blocks,markup=_keyboard(db,season,actor),sid=season.id)
             name,price=[part.strip() for part in raw.split('|',1)]
             team=_team(db,season,name,actor)
             from services import auction_management as M
@@ -344,7 +307,7 @@ def execute(db, actor, chat_id, selected_sid, command, raw=''):
             try:value=({} if command!='dratingrule' else []) if raw.casefold()=='clear' else parse_value(key,raw)
             except (ValueError,KeyError,TypeError):raise A.AuctionError('Use BAT=4,BOWL=4,AR=2,WK=1 for roles; 83=4 for rating rules; or clear.') from None
             D.update_squad_rules(db,season,**{{'drolemin':'minimums','drolemax':'maximums','dratingrule':'ratings'}[command]:value},by_tg_id=actor)
-            text=_rules(db,season)
+            return _render_view(db,season,actor,'rules')
         elif command == 'dpooladd':
             match=re.fullmatch(r'(\d{1,3})\s*[-| ]\s*(\d{1,3})',raw)
             if not match:raise A.AuctionError('Use /dpooladd 80-96 to add a catalogue rating range; /importplayers imports CSV.')
@@ -379,11 +342,13 @@ def execute(db, actor, chat_id, selected_sid, command, raw=''):
         elif command == 'dprices':
             if raw:
                 D.set_rating_prices(db, season, raw, by_tg_id=actor)
-            text = _price_list(db, season)
+            blocks,text=DR.prices(db,season)
+            return dict(text=text,blocks=blocks,markup=_keyboard(db,season,actor),sid=season.id)
         elif command == 'dcustom':
             if raw:
                 D.set_custom_prices(db, season, raw, by_tg_id=actor)
-            text = _price_list(db, season, custom=True)
+            blocks,text=DR.prices(db,season,custom=True)
+            return dict(text=text,blocks=blocks,markup=_keyboard(db,season,actor),sid=season.id)
         elif command in ('drounds', 'daddrounds'):
             if raw:
                 rounds = _whole(raw, 'Rounds')
@@ -398,10 +363,10 @@ def execute(db, actor, chat_id, selected_sid, command, raw=''):
                 D.set_order(db, season, randomize=True, by_tg_id=actor)
             else:
                 D.set_order(db, season, parse_order(db, season, raw), by_tg_id=actor)
-            text = D.render_order(db, season)
+            return _render_view(db,season,actor,'order')
         elif command in ('dstart', 'dresume'):
             D.start(db, season, by_tg_id=actor)
-            text = D.render_board(db, season)
+            return _render_view(db,season,actor,'board')
         elif command == 'dpause':
             D.pause(db, season, by_tg_id=actor)
             text = '⏸ <b>Draft paused.</b> Picks are locked until /dresume.'
@@ -414,7 +379,7 @@ def execute(db, actor, chat_id, selected_sid, command, raw=''):
 
 
 async def _send(update, packet, *, edit=False):
-    blocks = build_blocks(packet['text'])
+    blocks = packet.get('blocks') or build_blocks(packet['text'])
     if edit and len(R.html_parts(packet['text']))>1:
         return await R.reply_rich(update.callback_query.message,blocks,packet['text'],reply_markup=packet.get('markup'))
     if edit:
@@ -426,7 +391,8 @@ async def _error(update, text, *, callback=False):
     if callback:
         await update.callback_query.answer(str(text)[:180], show_alert=True)
     else:
-        await _send(update, dict(text='⚠️ ' + _e(text)))
+        blocks,fallback=DR.Card('⚠️ Draft action unavailable').text(str(text)).footer('Review /draft or /draftcommands for the current options.').pair()
+        await _send(update, dict(text=fallback,blocks=blocks))
 
 
 async def command_handler(update, context):
@@ -466,8 +432,7 @@ def execute_callback(db, actor, chat_id, selected_sid, data):
         else:
             D.require_draft_admin(db, actor)
             D.set_timer(db, season, _whole(parts[4], 'Minutes'), by_tg_id=actor)
-        text, markup = _render_view(db, season, actor, 'board')
-        return dict(text=text, markup=markup, sid=season.id)
+        return _render_view(db, season, actor, 'board')
     if data.startswith(('fd_y_', 'fd_n_')):
         operation, token = data[3], data[5:]
         if not re.fullmatch(r'[0-9a-f]{16,64}', token):
@@ -480,11 +445,15 @@ def execute_callback(db, actor, chat_id, selected_sid, data):
             raise A.AuctionError('Confirm the pick in the draft’s bound group.')
         if operation == 'y':
             lot = D.confirm_pick(db, season, token, actor)
-            text = f'✅ <b>{_e(lot.name)} signed.</b> The squad and purse have been updated.'
+            team = db.get(AuctionFranchise, quote.franchise_id)
+            blocks,text = DR.receipt(db,season,lot,team)
         else:
             D.cancel_pick(db, season, token, actor)
-            text = '❌ <b>Signing cancelled.</b> Your team can choose another player with /dpick.'
-        return dict(text=text, markup=_keyboard(db, season, actor), sid=season.id)
+            footer='No purse deducted.'
+            if D.get_draft(db,season).pick_minutes:
+                footer+=' The pick timer keeps running.'
+            blocks,text = DR.Card('❌ Signing cancelled').text('Your team can choose another player with /dpick.').footer(footer).pair()
+        return dict(text=text,blocks=blocks, markup=_keyboard(db, season, actor), sid=season.id)
     parts = data.split('_', 5)
     if len(parts) < 5 or parts[0] != 'fd' or parts[1] not in ('v', 'a'):
         raise A.AuctionError('Open /draft for a fresh menu.')
@@ -500,10 +469,8 @@ def execute_callback(db, actor, chat_id, selected_sid, data):
             D.pause(db, season, by_tg_id=actor)
         else:
             raise A.AuctionError('Open /draft for current controls.')
-        text, markup = _render_view(db, season, actor, 'board')
-    else:
-        text, markup = _render_view(db, season, actor, parts[4], parts[5] if len(parts) > 5 else '0')
-    return dict(text=text, markup=markup, sid=season.id)
+        return _render_view(db, season, actor, 'board')
+    return _render_view(db, season, actor, parts[4], parts[5] if len(parts) > 5 else '0')
 
 
 async def callback_handler(update, context):

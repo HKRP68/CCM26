@@ -230,6 +230,18 @@ League Season tournament creation and previous-season statistics continue to
 work. Ordinary auction bidding, timers, simulated finishing, expansion picks,
 manual roster edits and pre-publication trades cannot change a draft's squads.
 
-All draft cards and announcements use rich messages with formatted HTML
-fallbacks for Telegram servers without rich-message support. `/dhelp` and
-`/commands draft` provide the in-bot reference.
+All draft messages use rich text. The live board highlights the team on the
+clock, tags its owner/co-owners and displays the UTC deadline. Native tables
+line up squad sizes, purses, player ratings and signing prices. Confirmations
+show the exact charge, purse after signing and resulting squad size; signing
+receipts show the next team. Round orders and long squads use collapsible
+sections. Admin panels, rules, price lists, player imports and the full command
+guide use the same headings and formatting.
+
+Every card also has an escaped HTML rendering for Telegram servers without
+rich-message support. Long lists and command guides split into consecutive
+messages with the buttons on the final message. The pinned board stays compact.
+Announcements save their display values with the turn, keeping the original
+purse, squad count and next-team mentions when delivery retries later. Button
+ownership and current-role checks apply in both formats. `/draftcommands` sends
+the full reference; `/commands draft` provides a searchable guide.

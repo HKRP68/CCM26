@@ -120,11 +120,18 @@ def read_workspace(db, actor, sid, chat_id, view='home', argument=''):
     from services import franchise_draft as D
     draft=D.get_draft(db,season)
     if draft:
+        from services import franchise_draft_rich as DR
+        board_blocks,board_text=DR.board(db,season)
         result['franchise_draft']={'rounds':draft.rounds,'cursor':draft.cursor,
             'signed':sum(int(t.squad_size or 0) for t in A.franchises(db,season.id)),
             'skipped':len(D.skipped_turns(db,season)),
-            'board':D.render_board(db,season),'order':D.render_order(db,season)}
-        if view=='pool':result['franchise_draft']['pool']=D.render_pool(db,season,page=max(1,int(argument or 1)))
+            'board':board_text,'board_blocks':board_blocks,'order':D.render_order(db,season)}
+        if view=='pool':
+            blocks,text=DR.pool(db,season,page=max(1,int(argument or 1)))
+            result['franchise_draft'].update(pool=text,pool_blocks=blocks)
+        elif view=='rules':
+            blocks,text=DR.rules(db,season)
+            result['franchise_draft'].update(rulebook=text,rulebook_blocks=blocks)
     if view in ('preseason','draft'):
         result['previous_league_id']=season.previous_league_id
     return result
@@ -375,7 +382,7 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
         team=next((t for t in data.get('teams',[]) if t['id']==tid),None)
         if not team:raise A.AuctionError('That franchise is no longer in this auction.')
         header+=['',f"<b>{_e(team['name'])}</b>",'Your team roles: '+_e(' · '.join(team.get('my_role_labels') or []) or 'Viewer'),
-                 f"Purse: <b>{_money(team['purse_lakh'],currency)}</b> · RTM {team.get('rtm_left',0)}"]
+                 f"Purse: <b>{_money(team['purse_lakh'],currency)}</b>"+('' if draft else f" · RTM {team.get('rtm_left',0)}")]
         squad=team.get('squad') or []
         for p in squad[(page-1)*8:page*8]:header+=[f"• {_e(p['name'],55)} · {p['rating']} · {_money(p.get('price_lakh'),currency)}"]
         if not squad:header+=['No players signed yet.']
@@ -403,16 +410,13 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
     elif view=='rules':
         rules=data.get('rules') or {}
         if draft:
-            header+=['','<b>Draft rulebook</b>',f"Purse {_money(rules.get('opening_lakh'),currency)} · {draft['rounds']} rounds / players per team",
-                'Each new round moves its first team to the end. No overseas limit.',
-                'Rating prices apply to every matching player; custom player prices take priority.',
-                'Only the current team owner or co-owner may confirm a pick. /drules shows role and rating requirements.']
+            header+=['',draft['rulebook']]
         else:header+=['','<b>Auction rulebook</b>',f"Purse {_money(rules.get('opening_lakh'),currency)} · squad {rules.get('min_squad')}–{rules.get('max_squad')}",
             f"Overseas {rules.get('min_overseas')}–{rules.get('max_overseas')} · opening clock {rules.get('bid_seconds')}s",
             f"Retention {rules.get('min_retentions')}–{rules.get('max_retentions')} · RTM {'on' if rules.get('rtm_enabled') else 'off'}",
             'The server enforces purse reserves, role/rating limits, turn order, stale bids and deadlines.','Use /arules in the auction group for the complete rule tables.']
     elif view in ('settings','fields'):
-        header+=['','<b>All auction settings</b>','Common values use guided replies. Money is whole lakh: 100 = 1 Cr.']
+        header+=['','<b>Draft settings</b>' if draft else '<b>All auction settings</b>','Common values use guided replies. Money is whole lakh: 100 = 1 Cr.']
         draft_keys={'name','currency_label','opening_purse_lakh','role_minimums','role_maximums','rating_rules'}
         if draft:header+=['Draft rounds, order and fixed prices are managed in Draft room. Overseas players have no limit.']
         if view=='settings':
@@ -470,7 +474,9 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
         # Current lot context is fetched fresh when opening a live operation.
         buttons+=_rows(actor,sid,[[('Sell current player','go:admin_sold'),('Mark unsold','go:admin_unsold')],[('Undo latest bid','go:admin_undo_bid')]])
     elif view=='finish':
-        header+=['','<b>Finish & next season</b>','Actions ask for the exact auction name. Existing clock, squad and trade safeguards remain active.']
+        header+=['','<b>Finish & next season</b>',
+                 'Publish completed squads or continue with another season. Actions ask for the exact draft name.' if draft
+                 else 'Actions ask for the exact auction name. Existing clock, squad and trade safeguards remain active.']
         if draft:buttons+=_rows(actor,sid,[[('Publish squads','f:publish'),('Existing leagues → next season','v:leagues:1')],[('Add rounds','f:draftrounds'),('Draft room','v:franchisedraft')],[('Cancel draft','f:cancelauction')]])
         else:buttons+=_rows(actor,sid,[[('Publish squads','f:publish'),('Clone next season','f:clone')],[('Simulate remainder','f:simulate'),('Restart auction','f:restart')],[('Cancel auction','f:cancelauction')]])
     elif view=='help':
@@ -488,17 +494,19 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
             'For a full season draft: New draft or Existing leagues → Draft. /dhelp explains prices, rotating rounds and /dpick confirmations.',
             'Auction Managers manage auctions; Draft Admins manage drafts. Owners and co-owners alone make draft picks and skips.']
     else:raise A.AuctionError('Open /auction for a fresh menu.')
-    if view not in ('home','roles'):buttons+=_rows(actor,sid,[[('🏠 Auction home','v:home')]])
+    if view not in ('home','roles'):buttons+=_rows(actor,sid,[[('🏠 Draft home' if draft else '🏠 Auction home','v:home')]])
     buttons+=_rows(actor,sid,[[('↻ Refresh',f'v:{view}'+(':'+str(argument) if argument else ''))]])
-    return _lines(header),InlineKeyboardMarkup(buttons)
+    return ('\n'.join(header) if draft else _lines(header)),InlineKeyboardMarkup(buttons)
 
 
-async def _send(update,text,markup=None):
+async def _send(update,text,markup=None,*,blocks=None):
     from services import rich_message as R
     from services.franchise_draft_delivery import blocks_for_html
-    blocks=blocks_for_html(text)
+    blocks=blocks or blocks_for_html(text)
     query=getattr(update,'callback_query',None)
     if query is not None and getattr(query,'message',None) is not None:
+        if len(R.html_parts(text))>1:
+            return await R.reply_rich(query.message,blocks,text,reply_markup=markup)
         if await R.edit_rich(query,blocks,text,reply_markup=markup):return
     await R.reply_rich(update.effective_message,blocks,text,reply_markup=markup)
 
@@ -520,7 +528,21 @@ async def _show(update,context,view='home',sid=None,argument=''):
     actual=(data.get('season') or {}).get('id')
     if actual:context.user_data['franchise_season_id']=actual
     text,markup=render_workspace(data,actor,actual or sid,view,argument,context,chat_id)
-    await _send(update,text,markup)
+    blocks=None
+    draft=data.get('franchise_draft') or {}
+    # Preserve the same surrounding role and setup text in both renderings.
+    # The main draft body uses native tables instead of reparsing them as lines.
+    for name in ('board','pool','rulebook'):
+        body=draft.get(name)
+        if body and body in text and draft.get(name+'_blocks'):
+            from services.franchise_draft_rich import blocks_for_html
+            before,after=text.split(body,1)
+            prefix=blocks_for_html(before) if before.strip() else []
+            suffix=blocks_for_html(after) if after.strip() else []
+            if prefix is not None and suffix is not None:
+                blocks=prefix+draft[name+'_blocks']+suffix
+            break
+    await _send(update,text,markup,blocks=blocks)
 
 
 async def menu_handler(update,context):
@@ -567,7 +589,8 @@ async def sample_handler(update,context):
     path=Path(__file__).resolve().parents[1]/'docs'/'franchise-players-example.csv'
     await update.effective_message.reply_document(document=io.BytesIO(path.read_bytes()),
         filename='franchise-players-example.csv',
-        caption='Example rows only: replace them with your competition’s player list. Then use /importplayers in the auction group and upload the edited CSV.')
+        caption='<b>📄 Player CSV template</b>\nExample rows only: replace them with your competition’s player list. Then use <code>/importplayers</code> in the bound auction or draft group and upload the edited CSV.',
+        parse_mode='HTML')
 
 
 async def _start_form(update,context,key,sid,team_id=None,role_key=None):
@@ -603,7 +626,8 @@ async def _start_form(update,context,key,sid,team_id=None,role_key=None):
         if key=='purse':payload['expected_purse_lakh']=team['purse_lakh']
     record=dict(kind='form',sid=sid,key=key,payload=payload,step=step)
     _prompt(context,update,record)
-    await _send(update,'✏️ '+_e(FORMS[key][1][step][1])+'\n\nSend /cancel to stop. Guided money values use whole lakh.')
+    hint='Prices accept cr/crore or L/lakh.' if key in ('draftprices','draftcustom') else 'Guided money values use whole lakh.'
+    await _send(update,'✏️ '+_e(FORMS[key][1][step][1])+'\n\nSend /cancel to stop. '+hint)
 
 
 async def new_handler(update,context):

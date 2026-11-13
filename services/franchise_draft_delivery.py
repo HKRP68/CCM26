@@ -5,59 +5,13 @@ advances only after a successful announcement, including the final pick when
 the season is already completed.
 """
 import html
-from html.parser import HTMLParser
 import json
 import logging
 
-from services import rich_message as R
+from services import franchise_draft_rich as DR
+from services.franchise_draft_rich import blocks_for_html
 
 logger = logging.getLogger(__name__)
-
-
-def blocks_for_html(text):
-    """Render the draft's HTML content as rich text, preserving user mentions.
-
-    Both paths consume the same escaped display text and links, so a price or
-    next-team mention cannot drift between rich messages and the HTML fallback.
-    Only the formatting emitted by the draft renderers is interpreted.
-    """
-    class RichParser(HTMLParser):
-        def __init__(self):
-            super().__init__(convert_charrefs=True)
-            self.root = []
-            self.stack = [(None, self.root)]
-
-        def handle_starttag(self, tag, attrs):
-            styles = {'b': 'bold', 'strong': 'bold', 'i': 'italic',
-                      'em': 'italic', 'u': 'underline', 's': 'strikethrough',
-                      'strike': 'strikethrough', 'del': 'strikethrough',
-                      'code': 'code', 'pre': 'code'}
-            if tag == 'br':
-                self.handle_data('\n')
-            elif tag in styles or tag == 'a':
-                children = []
-                if tag == 'a':
-                    url = dict(attrs).get('href')
-                    if not url:
-                        return
-                    node = R.link(children, url)
-                else:
-                    node = {'type': styles[tag], 'text': children}
-                self.stack[-1][1].append(node)
-                self.stack.append((tag, children))
-
-        def handle_endtag(self, tag):
-            if len(self.stack) > 1 and self.stack[-1][0] == tag:
-                self.stack.pop()
-
-        def handle_data(self, data):
-            if data:
-                self.stack[-1][1].append(data)
-
-    parser = RichParser()
-    parser.feed(str(text or ''))
-    parser.close()
-    return [R.paragraph(parser.root)] if parser.root else []
 
 
 async def drain_events(bot, session, season, *, limit=5):
@@ -77,8 +31,10 @@ async def drain_events(bot, session, season, *, limit=5):
                 detail = {}
             text = detail.get('html') if isinstance(detail, dict) else None
             text = text or html.escape(event.headline or 'Draft updated.')
-            sent = await S._send_rich(bot, season.chat_id,
-                                      blocks_for_html(text), text)
+            blocks = detail.get('blocks') if isinstance(detail, dict) else None
+            if not isinstance(blocks, list) or not blocks:
+                blocks = blocks_for_html(text)
+            sent = await S._send_rich(bot, season.chat_id, blocks, text)
             if sent is None:
                 break
             spoken += 1
@@ -101,8 +57,7 @@ async def refresh_board(bot, session, season, *, force=False):
     if (not force and season.board_message_id
             and int(season.board_rendered_bid_count or 0) == revision):
         return season.board_message_id
-    text = D.render_board(session, season)
-    blocks = blocks_for_html(text)
+    blocks, text = DR.board(session, season)
     previous_id = season.board_message_id
     if previous_id:
         # Rich and HTML edits share the same content. "Not modified" is a

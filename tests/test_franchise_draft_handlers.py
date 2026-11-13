@@ -177,7 +177,7 @@ def test_pick_command_only_quotes_then_confirm_debits_once(room):
     run(room.H.callback_handler(event, ctx))
     room.db.expire_all()
     assert room.db.get(room.models.AuctionFranchise, room.one.id).purse_remaining_lakh == 7700
-    assert 'signed' in event.effective_message.replies[-1][0]
+    assert 'signed' in event.effective_message.replies[-1][0].casefold()
     second = update(OWNER, callback=sign)
     run(room.H.callback_handler(second, ctx))
     assert second.callback_query.answers[-1][1].get('show_alert')

@@ -146,10 +146,11 @@ def command_button(actor, page=1, label='📋 Command guide'):
 
 def render_commands(actor, page=1, query=''):
     rows=command_catalogue(query)
+    draft_query=str(query).strip().lstrip('/').casefold() in ('draft',*_DRAFT_HELP)
     pages=max(1,(len(rows)+PAGE_SIZE-1)//PAGE_SIZE)
     page=max(1,min(int(page),pages))
-    text=['<b>📋 Franchise Auction command guide</b>',
-          'Retention → picks → bidding & RTM → trades → publish squads',
+    text=['<b>📋 Franchise Draft command guide</b>' if draft_query else '<b>📋 Franchise Auction command guide</b>',
+          'Teams → prices → rotating rounds → timed picks → publish squads' if draft_query else 'Retention → picks → bidding & RTM → trades → publish squads',
           f'Page {page}/{pages} · {len(rows)} command groups',
           'Search: <code>/commands retention</code>, <code>/commands trade</code> or any command name.']
     if query:text+=['Search: <b>'+html.escape(str(query)[:100])+'</b>']
@@ -158,13 +159,15 @@ def render_commands(actor, page=1, query=''):
         text+=['','<b>'+html.escape(aliases)+'</b> · '+html.escape(row['section']),
                '<code>'+html.escape(row['usage'][:180])+'</code>',html.escape(row['description'][:220])]
     if not rows:text+=['','No matching commands. Use /commands to see the full list.']
-    text+=['','Managers control rules and publishing. Team roles bid and answer RTM for their franchises.',
-           'Native guided money uses whole lakh: 100 = 1 Cr. /bid 1.5 means 1.5 Cr.']
+    text+=['','Draft Admins control setup and publishing. Only the current team’s owner/co-owner may pick or skip.' if draft_query
+           else 'Managers control rules and publishing. Team roles bid and answer RTM for their franchises.',
+           'No overseas limit. /draftcommands sends every draft command together.' if draft_query
+           else 'Native guided money uses whole lakh: 100 = 1 Cr. /bid 1.5 means 1.5 Cr.']
     nav=[]
     if page>1:nav.append(command_button(actor,page-1,'← Previous'))
     if page<pages:nav.append(command_button(actor,page+1,'Next →'))
     buttons=[nav] if nav else []
-    buttons.append([InlineKeyboardButton('🏠 Auction workspace',callback_data=f'fa:{int(actor)}:0:v:home')])
+    buttons.append([InlineKeyboardButton('🏠 Draft workspace' if draft_query else '🏠 Auction workspace',callback_data=f'fa:{int(actor)}:0:v:home')])
     return '\n'.join(text),InlineKeyboardMarkup(buttons)
 
 
@@ -174,7 +177,9 @@ async def commands_handler(update,context):
     key=f'{SEARCH_KEY}:{update.effective_chat.id}'
     context.user_data[key]=query
     text,markup=render_commands(actor,query=query)
-    await update.effective_message.reply_text(text,parse_mode='HTML',reply_markup=markup)
+    from services import rich_message as R
+    from services.franchise_draft_rich import blocks_for_html
+    await R.reply_rich(update.effective_message,blocks_for_html(text),text,reply_markup=markup)
 
 
 async def commands_callback(update,context):
@@ -191,11 +196,9 @@ async def commands_callback(update,context):
     await query.answer()
     search=context.user_data.get(f'{SEARCH_KEY}:{update.effective_chat.id}','')
     text,markup=render_commands(int(actor),page,search)
-    from telegram.error import BadRequest
-    try:
-        await query.edit_message_text(text,parse_mode='HTML',reply_markup=markup)
-    except BadRequest as exc:
-        if 'not modified' not in str(exc).lower():raise
+    from services import rich_message as R
+    from services.franchise_draft_rich import blocks_for_html
+    await R.edit_rich(query,blocks_for_html(text),text,reply_markup=markup)
 
 
 def register(application):

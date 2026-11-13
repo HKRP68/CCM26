@@ -56,6 +56,7 @@ player's name is.
 | what `/claim` leads to — retain, release, replace, and the 60s auto-decide | `handlers/claim.py` — the card's attributes as a `table` behind a `details`, replacing `<blockquote expandable>` |
 | `/stats` | the career record as a batting `table` and a bowling one; with rich messages on, the card image leads with the short caption and the record follows as its own message |
 | the scorecard of last resort, when every image fails | `services/scorecard_delivery.py` — batting, bowling and the result as native tables, the winner as a `pullquote` |
+| all Franchise season draft messages | `services/franchise_draft_rich.py` — purse, player and rule tables; the current team and confirmed player as `pullquote` blocks; round order and squad lists in `details`; command guides as grouped tables. Commands, owner-bound buttons, native setup forms, CSV imports and the pinned board share the styling. Event cards snapshot purse/squad/next-owner values before delivery. Long HTML fallbacks split without dropping rows. |
 
 Everything else in the bot still sends HTML, and nothing forces that to change:
 the two are ordinary sends to different endpoints. The `/claim`, `/gstats` and

@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from html import escape
 import json
+import logging
 import math
 import random
 import re
@@ -24,6 +25,7 @@ from sqlalchemy import func
 from services import auction_service as A
 
 AuctionError = A.AuctionError
+logger = logging.getLogger(__name__)
 MAX_ROUNDS = 100
 QUOTE_LIFETIME = timedelta(minutes=10)
 
@@ -572,7 +574,8 @@ def _skip_locked(session, season, *, actor=None, timeout=False, now=None):
     _advance_turn(session, season, info, skipped=True, now=now)
     _event(session, season, "fd_skipped", f"⏭ <b>{_e(team.name)} {'ran out of pick time' if timeout else 'skip their turn'}</b>\n"
            f"Round {info['round_no']} pick moved to the back of the skipped-pick queue. No purse deducted.\n\n"
-           + next_team_html(session, season), by_tg_id=actor, franchise=team)
+           + next_team_html(session, season), by_tg_id=actor, franchise=team,
+           metadata={'timeout': timeout, 'round_no': info['round_no'], 'catch_up': info['catch_up']})
     return team
 
 
@@ -888,7 +891,8 @@ def confirm_pick(session, season, token, actor_tg_id, *, now=None):
         f"{signed.rating} OVR · {_e(signed.category)} · {_money(season, signed.sold_price_lakh)}\n"
         f"💰 Purse left: <b>{_money(season, team.purse_remaining_lakh)}</b>\n"
         f"👥 Squad: <b>{team.squad_size}/{draft.rounds}</b>\n\n" + next_team_html(session, season),
-        by_tg_id=actor_tg_id, lot=signed, franchise=team)
+        by_tg_id=actor_tg_id, lot=signed, franchise=team,
+        metadata={'round_no': info['round_no'], 'catch_up': info['catch_up']})
     return signed
 
 
@@ -975,9 +979,20 @@ def undo_last(session, season, *, by_tg_id=None):
     return lot
 
 
-def _event(session, season, kind, html, *, by_tg_id=None, lot=None, franchise=None):
+def _event(session, season, kind, html, *, by_tg_id=None, lot=None, franchise=None, metadata=None):
+    # Snapshot display values with the committed turn. Delivery may retry after
+    # later picks, so rebuilding then would announce the wrong purse or owner.
+    detail = {'html': html, **(metadata or {})}
+    try:
+        from services import franchise_draft_rich as DR
+        blocks, rendered = DR.event_card(session, season, kind, html,
+            lot=lot, team=franchise, metadata=metadata)
+        detail.update(html=rendered, blocks=blocks)
+    except Exception:
+        # A presentation failure must never invalidate a signing or timeout.
+        logger.exception('Draft event presentation failed; preserving HTML')
     event = A.log_event(session, season, kind, re.sub(r"<[^>]+>", "", html).split("\n")[0],
-        detail={"html": html}, by_tg_id=by_tg_id, lot=lot, franchise=franchise)
+        detail=detail, by_tg_id=by_tg_id, lot=lot, franchise=franchise)
     session.flush()
     return event
 

@@ -19,7 +19,7 @@ def room(tmp_path, monkeypatch):
     from database import Base
     import models
     from services import auction_service as A, franchise_draft as D
-    from services import franchise_draft_delivery as DD
+    from services import franchise_draft_delivery as DD, franchise_draft_rich as DR
 
     engine = create_engine('sqlite:///' + str(tmp_path / 'delivery.db'))
     Base.metadata.create_all(engine)
@@ -30,7 +30,8 @@ def room(tmp_path, monkeypatch):
     draft = models.FranchiseDraft(season_id=season.id, rounds=1, cursor=0, revision=1)
     db.add(draft)
     db.commit()
-    monkeypatch.setattr(D, 'render_board', lambda *_args: '<b>Draft status</b>\nRemaining purse: ₹10 Cr')
+    text = '<b>Draft status</b>\nRemaining purse: ₹10 Cr'
+    monkeypatch.setattr(DR, 'board', lambda *_args: (DR.blocks_for_html(text), text))
     counter = iter(range(100, 1000))
 
     async def send(**_kwargs):
@@ -57,11 +58,11 @@ def test_rich_html_content_preserves_price_formatting_and_next_owner_link():
     from services.franchise_draft_delivery import blocks_for_html
     blocks = blocks_for_html('<b>Root &amp; Co.</b> · <code>₹25.5 Cr</code>\n'
                              '<a href="tg://user?id=123">Next owner</a>')
-    assert blocks[0]['type'] == 'paragraph'
+    assert blocks[0]['type'] == 'heading'
     nodes = blocks[0]['text']
-    assert {'type': 'bold', 'text': ['Root & Co.']} in nodes
-    assert {'type': 'code', 'text': ['₹25.5 Cr']} in nodes
-    assert {'type': 'url', 'text': ['Next owner'], 'url': 'tg://user?id=123'} in nodes
+    assert {'type': 'bold', 'text': 'Root & Co.'} in nodes
+    assert {'type': 'code', 'text': '₹25.5 Cr'} in nodes
+    assert {'type': 'url', 'text': 'Next owner', 'url': 'tg://user?id=123'} in blocks[1]['text']
     json.dumps(blocks)
 
 
