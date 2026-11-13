@@ -434,10 +434,43 @@ async def command_handler(update, context):
     try:
         actor = _actor(update)
         chat_id = update.effective_chat.id
+        selected_sid = context.user_data.get('franchise_season_id')
         source = (getattr(update.effective_message, 'text', '') or '').split(None, 1)[0]
         command = source.removeprefix('/').split('@', 1)[0].casefold()
-        packet = await run_session(get_session, lambda db: execute(
-            db, actor, chat_id, context.user_data.get('franchise_season_id'), command, _raw(update, context)), commit=True)
+        raw = _raw(update, context)
+        replied = getattr(update.effective_message, 'reply_to_message', None)
+        document = getattr(replied, 'document', None)
+        file_season_id = None
+        if command in ('dcustom', 'dcorrect') and document is not None:
+            # Check scope and current authority before fetching Telegram files.
+            def check_file_scope(db):
+                D.require_draft_admin(db, actor)
+                return _resolve(db, actor, chat_id, selected_sid).id
+            file_season_id = await run_session(get_session, check_file_scope)
+            size = getattr(document, 'file_size', None)
+            if not isinstance(size, int) or isinstance(size, bool) or not 0 < size <= 2_000_000:
+                raise A.AuctionError('Send a UTF-8 CSV/TSV document under 2 MB.')
+            file = await document.get_file()
+            content = bytes(await file.download_as_bytearray())
+            if len(content) > 2_000_000:
+                raise A.AuctionError('Custom price files must be under 2 MB.')
+            try:
+                text = content.decode('utf-8-sig')
+            except UnicodeDecodeError:
+                raise A.AuctionError('Save the price file as UTF-8 CSV or TSV.') from None
+            if command == 'dcorrect':
+                parts = raw.split('|')
+                if len(parts) not in (2, 3) or parts[0].strip() != 'custom' or not parts[1].strip():
+                    raise A.AuctionError('Reply to the file with /dcorrect custom | correction reason | while paused.')
+                raw = 'custom | ' + parts[1].strip() + ' | ' + text
+            else:
+                raw = text
+            selected_sid = file_season_id
+        def apply_command(db):
+            if file_season_id is not None:
+                _resolve(db, actor, chat_id, file_season_id, expected_sid=file_season_id)
+            return execute(db, actor, chat_id, selected_sid, command, raw)
+        packet = await run_session(get_session, apply_command, commit=True)
     except (A.AuctionError, W.AccessError) as exc:
         await _error(update, str(exc))
         return

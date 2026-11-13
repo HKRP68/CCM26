@@ -34,6 +34,30 @@ before applying. Owner signings and skips also require confirmation.
 Bot Owners, Bot Admins and website administrators can appoint or revoke Draft
 Admins from settings; delegated Draft Admins cannot appoint others.
 
+**Custom price files:** In **Draft Settings → Custom Prices / Remove Overrides**,
+choose a UTF-8 CSV or TSV file with these headers:
+
+```csv
+player_id,name,version,rating,category,price_lakh
+12,Joe Root,Base,96,Batsman,2550
+```
+
+Use catalogue `player_id` values already in this draft's pool. The other card
+details, when supplied, must match that exact version. `price_lakh` is a whole
+number: `2550` means 25.50 Cr; `0` is free. Files support up to 2,000 rows and
+2 MB. Review and confirm the preview before the overrides are saved.
+
+In Telegram, send the same file and reply to it with `/dcustom` (or
+`/dcustom@YourBotName`). A Draft Admin can do this in the bound group or after
+selecting the draft in DM. For a draft that has already started, pause it and
+reply with `/dcorrect custom | correction reason |`. Signed prices stay fixed.
+
+**Existing drafts in groups:** Add the dedicated franchise bot, then send
+`/start` or `/start@YourBotName`. A bound group opens its existing draft board.
+In an unbound group, Draft Admins see available drafts and their `/dbind ID`
+commands. Bind the intended draft, then use `/dstart` and confirm to launch it.
+Private-chat selections never override the current group's draft.
+
 New squads start at zero. Importing previous teams copies their identities and
 roles; prior spending and players do not transfer. The catalogue includes
 players held in previous seasons, and **Add All Active Catalogue Players** can

@@ -361,8 +361,9 @@ def prepare(db,season,actor,kind,payload,reason='',*,trusted_admin=False):
                     previous_price=old_prices.get(lot.id),price=D.price_for(db,season,lot)))
             if kind=='custom':
                 text=payload['text']
-                names=text[7:].splitlines() if text.casefold().startswith('remove ') else [name for name,_ in D._price_rows(text)]
-                requested_ids=[D.find_player(db,season,name.strip()).id for name in names]
+                names=text[7:].splitlines() if text.casefold().startswith('remove ') else [name for name,_ in D.custom_price_rows(db,season,text)]
+                pool=A.lots(db,season.id)
+                requested_ids=[D.find_player(db,season,name.strip(),_lots=pool).id for name in names]
     finally:
         transaction.rollback()
     db.expire_all()

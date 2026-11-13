@@ -50,7 +50,7 @@ _DRAFT_HELP = {
     'dnew': ('/dnew Season 2', 'Manager: create a new franchise draft season.'),
     'dsetup': ('/dsetup 15', 'Convert an empty auction to a draft. Requires both Draft Admin and Auction Manager authority; bot admins have both.'),
     'dprices': ('/dprices\n96:23cr\n95:21cr', 'Manager: set the fixed price for each player rating.'),
-    'dcustom': ('/dcustom\nJoe Root:25.5cr', 'Manager: override a player’s rating price.'),
+    'dcustom': ('/dcustom\nJoe Root:25.5cr', 'Manager: override a player’s rating price, or reply to a CSV/TSV file with /dcustom. Columns: player_id,name,version,rating,category,price_lakh (100 lakh = 1 Cr).'),
     'dorder': ('/dorder Team 1 | Team 2 | Team 3', 'Manager: set round 1 order; random generates it. Later rounds rotate the first team to last.'),
     'drounds': ('/drounds 15', 'Manager: set the round count and maximum squad size.'),
     'daddrounds': ('/daddrounds 2', 'Manager: add more rounds before squads are published.'),

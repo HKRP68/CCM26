@@ -126,7 +126,8 @@ def test_password_authenticated_admin_workspace_is_session_bound_and_cannot_impe
     assert team.owner_tg_id==777 and c.A.co_owner_ids(team)==[778] and c.A.team_manager_ids(team)==[779]
     assert request(page.client,request_type='action',action='draft_pick',player='#1').status_code==400
     with page.client.session_transaction() as state:state.clear()
-    assert request(page.client,part='settings').status_code==302
+    expired=request(page.client,part='settings')
+    assert expired.status_code==401 and 'session expired' in expired.json['message']
 
 
 def test_random_order_preview_freezes_the_actual_order_and_untrusted_flags_do_not_grant_admin(site):

@@ -8,6 +8,6 @@
 <div class="au-shell"><a href="{{ url_for('admin_franchise_drafts_list') }}">← Franchise Drafts</a><div id="admin-draft-workspace"></div></div>
 {% endblock %}
 {% block scripts %}
-<script src="{{ url_for('static',filename='js/franchise_draft.js',v='draft-controls-v2') }}"></script>
+<script src="{{ url_for('static',filename='js/franchise_draft.js',v='draft-controls-v3') }}"></script>
 <script>FranchiseDraftApp.open('admin-draft-workspace',{{ season.id }},{endpoint:'/api/admin/franchise-draft',csrf:{{ csrf_token()|tojson }}});</script>
 {% endblock %}

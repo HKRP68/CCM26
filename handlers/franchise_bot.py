@@ -109,6 +109,14 @@ def read_workspace(db, actor, sid, chat_id, view='home', argument=''):
     if chat_id>0 and view in ('seasons','auctionseasons','draftseasons'):
         sid=None
     season,rows=_resolve(db,actor,sid,chat_id)
+    if chat_id < 0 and season is None and view == 'home':
+        from services import franchise_draft as D
+        result = W.base_payload(db, None, actor, [])
+        if D.is_draft_admin(db, actor):
+            result['unbound_drafts'] = [dict(id=s.id, name=s.name)
+                for s in W.available_seasons(db, actor)
+                if D.get_draft(db, s) is not None and s.status in (A.STATUS_SETUP, A.STATUS_PAUSED)]
+        return result
     if view=='draftsources':
         from services import franchise_draft as D,franchise_team_import as I
         D.require_draft_admin(db,actor)
@@ -353,6 +361,10 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
                 else:buttons += _rows(actor,sid,[[('🎛 Control room','v:control'),('⚙️ All settings','v:settings')],[('🏷 Teams & roles','v:teamroles'),('🛡 Retention','v:preseason')],[('🆕 Expansion draft','v:draft'),('🤝 Trades','v:trades')]])
         else:
             header+=['','Use existing competitions or create the next season. No debut, coins or collecting-game account is required.']
+            if chat_id < 0:
+                header += ['','This group has no bound season. A Draft Admin can bring an existing draft here with <code>/dbind draftID</code>, then use /start and /dstart.']
+                for row in data.get('unbound_drafts', []):
+                    header += [f'{_e(row["name"])} · <code>/dbind {row["id"]}</code>']
             if manager:header+=['Choose an existing auction, or start from an existing league for retention.']
             else:header+=['Ask your organiser to assign your Telegram ID to a franchise. Open /auction in its group to watch.']
         create=[]
@@ -592,9 +604,11 @@ async def _show(update,context,view='home',sid=None,argument=''):
     data=await run_session(get_session,lambda db:read_workspace(db,actor,sid,chat_id,view,argument),commit=True)
     actual=(data.get('season') or {}).get('id')
     if actual:context.user_data['franchise_season_id']=actual
+    draft=data.get('franchise_draft') or {}
+    if chat_id < 0 and view == 'home' and draft:
+        view='franchisedraft'
     text,markup=render_workspace(data,actor,actual or sid,view,argument,context,chat_id)
     blocks=None
-    draft=data.get('franchise_draft') or {}
     # Preserve the same surrounding role and setup text in both renderings.
     # The main draft body uses native tables instead of reparsing them as lines.
     for name in ('board','pool','rulebook'):

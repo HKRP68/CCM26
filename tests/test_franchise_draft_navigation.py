@@ -76,6 +76,32 @@ def test_native_draft_deep_link_opens_the_existing_draft_board(room,monkeypatch)
     assert ctx.user_data['franchise_season_id']==room.season.id
 
 
+def test_group_start_shows_bound_draft_and_unbound_group_can_use_existing_draft(room,monkeypatch):
+    from handlers import franchise_bot as H
+    from test_franchise_bot_ui import context,update
+    from test_franchise_draft_handlers import CHAT
+    monkeypatch.setattr(H,'get_session',room.sessions)
+    ctx=context();ctx.user_data['franchise_season_id']=999999
+    event=update(actor=OWNER,chat=CHAT,text='/start@DraftTestBot')
+    asyncio.run(H.menu_handler(event,ctx))
+    assert 'CMU Franchise Draft 2.0' in event.effective_message.replies[-1][0]
+    new_chat=-100123450
+    event=update(actor=ADMIN,chat=new_chat,text='/start')
+    asyncio.run(H.menu_handler(event,ctx))
+    assert f'/dbind {room.season.id}' in event.effective_message.replies[-1][0]
+    packet=room.H.execute(room.db,ADMIN,new_chat,None,'dbind',str(room.season.id))
+    room.db.commit()
+    assert packet['sid']==room.season.id
+    event=update(actor=OWNER,chat=new_chat,text='/start')
+    asyncio.run(H.menu_handler(event,ctx))
+    assert 'CMU Franchise Draft 2.0' in event.effective_message.replies[-1][0]
+    packet=room.H.execute(room.db,ADMIN,new_chat,None,'dstart')
+    from services import franchise_draft_admin as M
+    quote=room.db.query(__import__('models').FranchiseDraftAction).filter_by(kind='start',status='pending').one()
+    M.answer(room.db,room.season,ADMIN,quote.token,accept=True)
+    assert room.season.status==room.A.STATUS_LIVE
+
+
 @pytest.mark.parametrize('username_setting',['FRANCHISE_AUCTION_BOT_USERNAME','FRANCHISE_BOT_USERNAME'])
 def test_authenticated_browser_draft_entry_reuses_pool_prices_and_denies_other_seasons(site,monkeypatch,username_setting):
     from services import franchise_draft as D

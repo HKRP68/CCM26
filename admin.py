@@ -139,6 +139,8 @@ try:
             f"CSRF error on {request.path}: {e.description}"
         )
         from flask import flash, redirect, url_for, session as _sess
+        if request.path == '/api/admin/franchise-draft':
+            return {'ok': False, 'message': 'Your admin session expired. Sign in again, then reopen Manage Draft.'}, 400
         # Clear stale session — they need a fresh one
         _sess.clear()
         flash("Your session expired. Please log in again.", "error")
@@ -455,6 +457,8 @@ def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         if not session.get("admin"):
+            if request.path == '/api/admin/franchise-draft':
+                return {'ok': False, 'message': 'Your admin session expired. Sign in again, then reopen Manage Draft.'}, 401
             return redirect(url_for("login"))
         # Idle timeout check: if last activity is older than the configured
         # lifetime, log out. Using session cookie expiry alone isn't enough
@@ -465,6 +469,8 @@ def login_required(f):
                 ts = datetime.fromisoformat(last_seen)
                 if (datetime.utcnow() - ts).total_seconds() > 86400:
                     session.clear()
+                    if request.path == '/api/admin/franchise-draft':
+                        return {'ok': False, 'message': 'Your admin session expired. Sign in again, then reopen Manage Draft.'}, 401
                     flash("Session expired. Please log in again.", "info")
                     return redirect(url_for("login"))
             except Exception:

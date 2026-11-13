@@ -388,11 +388,11 @@ def set_rating_prices(session, season, text, *, by_tg_id=None, correction_reason
     return prices
 
 
-def find_player(session, season, query, *, available_only=True):
+def find_player(session, season, query, *, available_only=True, _lots=None):
     raw = str(query or "").strip()
     if not raw:
         raise AuctionError("Choose a player: /dpick Joe Root. Use a pool #ID for duplicate names.")
-    rows = A.lots(session, season.id)
+    rows = A.lots(session, season.id) if _lots is None else _lots
     if raw.startswith("#") and raw[1:].isdigit():
         found = [lot for lot in rows if lot.id == int(raw[1:])]
     elif raw.lower().startswith('p') and raw[1:].isdigit():
@@ -412,14 +412,64 @@ def find_player(session, season, query, *, available_only=True):
     return lot
 
 
+def custom_price_rows(session, season, text):
+    """Read pasted overrides or a UTF-8 CSV/TSV of exact catalogue cards."""
+    import csv
+    import io
+    text = str(text or '').lstrip('\ufeff')
+    if len(text.encode('utf-8')) > 2_000_000:
+        raise AuctionError('Custom price files must be under 2 MB.')
+    first = text.splitlines()[0] if text.splitlines() else ''
+    delimiter = '\t' if '\t' in first else ','
+    try:
+        reader = csv.DictReader(io.StringIO(text), delimiter=delimiter, strict=True)
+        headers = [value.strip().lower() for value in (reader.fieldnames or [])]
+    except csv.Error as exc:
+        raise AuctionError('Invalid custom price CSV/TSV. Check quoting and columns.') from exc
+    if 'price_lakh' not in headers:
+        return _price_rows(text)
+    required = {'player_id', 'name', 'version', 'rating', 'category', 'price_lakh'}
+    if not required.issubset(headers) or len(headers) != len(set(headers)):
+        raise AuctionError('Use columns: player_id,name,version,rating,category,price_lakh.')
+    result = []
+    pool = A.lots(session, season.id)
+    try:
+        reader.fieldnames = headers
+        for number, row in enumerate(reader, 2):
+            if not any(str(value or '').strip() for value in row.values()):
+                continue
+            if None in row or any(value is None for value in row.values()):
+                raise AuctionError(f'Price row {number}: the number of columns does not match the header.')
+            row = {key: value.strip() for key, value in row.items()}
+            if not re.fullmatch(r'[0-9]{1,16}', row['player_id']):
+                raise AuctionError(f'Price row {number}: player_id must be a catalogue player ID.')
+            lot = find_player(session, season, 'p' + row['player_id'], _lots=pool)
+            expected = {'name': lot.name, 'version': lot.version or 'Base',
+                        'rating': str(lot.rating), 'category': lot.category}
+            for key, value in expected.items():
+                if row[key] and row[key].casefold() != str(value).casefold():
+                    raise AuctionError(f'Price row {number}: {key} does not match player ID {lot.player_id} ({lot.name}).')
+            if not re.fullmatch(r'[0-9]{1,10}', row['price_lakh']):
+                raise AuctionError(f'Price row {number}: price_lakh must be a non-negative whole number (100 = 1 Cr).')
+            result.append((f'#{lot.id}', parse_money(row['price_lakh'] + 'L')))
+            if len(result) > 2000:
+                raise AuctionError('Use at most 2,000 custom price rows.')
+    except csv.Error as exc:
+        raise AuctionError('Invalid custom price CSV/TSV. Check quoting and columns.') from exc
+    if not result:
+        raise AuctionError('The custom price file has no player rows.')
+    return result
+
+
 def set_custom_prices(session, season, text, *, by_tg_id=None, correction_reason=None):
     _manager(session, by_tg_id)
     draft = _price_editable(session, season, correction_reason)
     prices = dict(_loads(draft.custom_prices_json, {}))
     before_prices=dict(prices)
     seen = set()
-    for name, price in _price_rows(text):
-        lot = find_player(session, season, name)
+    pool = A.lots(session, season.id)
+    for name, price in custom_price_rows(session, season, text):
+        lot = find_player(session, season, name, _lots=pool)
         key = str(lot.id)
         if key in seen:
             raise AuctionError(f"{lot.name} appears more than once.")

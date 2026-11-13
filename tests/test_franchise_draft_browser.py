@@ -4,6 +4,7 @@ import shutil
 
 import pytest
 from test_franchise_website import site  # noqa: F401
+from test_franchise_draft_seasons_page import page, competition  # noqa: F401
 
 
 def test_draft_browser_navigation_pagination_and_stale_responses():
@@ -99,5 +100,59 @@ def test_management_forms_use_real_authenticated_backend_and_confirm_before_muta
             page.get_by_role('button',name='✅ Readiness Check',exact=True).click()
             page.locator('.fd-rich').wait_for(state='visible')
             assert page.get_by_role('button',name='▶ Start Draft',exact=True).is_disabled()
+        finally:
+            browser.close()
+
+
+def test_admin_manage_draft_settings_upload_with_csrf_and_expired_session(page, monkeypatch):
+    """Use the actual admin HTML, cookies, CSRF and fetch path in Chromium."""
+    from urllib.parse import urlsplit
+    from services import franchise_draft as D
+    import json
+    playwright=pytest.importorskip('playwright.sync_api')
+    executable=shutil.which('chromium') or shutil.which('google-chrome')
+    if not executable:pytest.skip('Chromium is required for this browser test')
+    c=page.c
+    season=c.A.create_season(c.db,'Admin browser draft')
+    D.enable(c.db,season,rounds=2)
+    player=c.db.query(__import__('models').Player).first()
+    c.A.add_players_to_pool(c.db,season,[player])
+    D.set_rating_prices(c.db,season,f'{player.rating}:1cr')
+    c.db.commit()
+    monkeypatch.setitem(page.client.application.config,'WTF_CSRF_ENABLED',True)
+    with playwright.sync_playwright() as engine:
+        browser=engine.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
+        try:
+            tab=browser.new_page(viewport={'width':1200,'height':950})
+            def serve(route):
+                req=route.request;path=urlsplit(req.url).path
+                headers={key:value for key,value in req.headers.items() if key in ('x-csrftoken','referer','content-type')}
+                response=page.client.open(path,method=req.method,data=req.post_data,headers=headers,base_url='https://localhost')
+                route.fulfill(status=response.status_code,content_type=response.content_type,body=response.data)
+            tab.route('**/*',serve)
+            tab.goto(f'https://localhost/franchise-drafts/{season.id}/workspace')
+            tab.get_by_role('button',name='⚙️ Draft Settings',exact=True).click()
+            form=tab.locator('[data-fd-form="custom"]')
+            form.locator('xpath=..').locator('summary').click()
+            import csv,io
+            sheet=io.StringIO();writer=csv.writer(sheet)
+            writer.writerow(['player_id','name','version','rating','category','price_lakh'])
+            writer.writerow([player.id,player.name,player.version or 'Base',player.rating,player.category,2550])
+            form.locator('input[type=file]').set_input_files({'name':'prices.csv','mimeType':'text/csv','buffer':sheet.getvalue().encode()})
+            tab.wait_for_function("document.querySelector('[data-fd-form=custom] textarea').value.includes('price_lakh')")
+            form.get_by_role('button',name='Preview change',exact=True).click()
+            tab.locator('[data-fd-dialog]').wait_for(state='visible')
+            assert '25.5 Cr' in tab.locator('[data-fd-dialog]').inner_text()
+            c.db.expire_all();assert json.loads(D.get_draft(c.db,season).custom_prices_json or '{}')=={}
+            tab.get_by_role('button',name='✅ Confirm',exact=True).click()
+            tab.locator('[data-fd-dialog]').wait_for(state='hidden')
+            c.db.expire_all();lot=c.A.lots(c.db,season.id)[0]
+            assert D.price_for(c.db,season,lot)==2550
+            # Missing CSRF returns a useful JSON error without destroying the session.
+            response=page.client.post('/api/admin/franchise-draft',json={'season_id':season.id},base_url='https://localhost')
+            assert response.status_code==400 and 'session expired' in response.json['message']
+            with page.client.session_transaction() as state:state.clear()
+            tab.get_by_role('button',name='↻ Refresh',exact=True).click()
+            tab.get_by_role('alert').filter(has_text='session expired').wait_for()
         finally:
             browser.close()
