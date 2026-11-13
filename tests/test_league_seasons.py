@@ -478,6 +478,36 @@ class ManualAndHandOverTests(LeagueCase):
 
 class StatsTests(LeagueCase):
 
+    def test_all_time_preserves_unknown_counters_across_live_and_saved_seasons(self):
+        from models import TournamentPlayerStats
+        from services import season_archive
+
+        tour2 = self._tournament(self.league, f"IPL 2026 {self.tag}")
+        self.LS.attach_season(self.session, self.series, tournament=tour2)
+        unknown = ("fifties", "hundreds", "ducks", "three_fers",
+                   "five_fers", "hattricks", "potm")
+        for tour in (self.tour, tour2):
+            rows = (self.session.query(TournamentPlayerStats)
+                    .filter_by(tournament_id=tour.id).all())
+            # Exercise both a known counter followed by unknown, and the reverse.
+            for row in rows:
+                missing = (row.name == self.players[0].name) == (tour == self.tour)
+                for field in unknown:
+                    setattr(row, field, None if missing else 1)
+        self.session.commit()
+        season_archive.delete_tournament(self.session, self.tour, keep_stats=True)
+        self.session.commit()
+
+        table = self.LS.all_time_table(self.session, self.series)
+        for player in self.players[:2]:
+            total = table[self.LS._key(player.name)]
+            history = self.LS.player_history(self.session, self.series, player.name)
+            for field in unknown:
+                self.assertIsNone(getattr(total, field))
+                self.assertIsNone(getattr(history["total"], field))
+            self.assertEqual(2, total.seasons)
+        self.assertEqual(200, table[self.LS._key(self.players[0].name)].bat_runs)
+
     def test_all_time_spans_live_and_archived_seasons(self):
         from services import season_archive
         LS = self.LS

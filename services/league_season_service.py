@@ -1426,21 +1426,16 @@ def season_top(session, season, limit=5):
 
 def all_time_table(session, series):
     """``{name key: CareerStats}`` summed over every season of the competition."""
-    from services.tournament_service import CareerStats, _better_figure
+    from services.tournament_service import CareerStats
     total = {}
     for season in seasons(session, series):
         for key, stats in _grouped(season_rows(session, season)).items():
             row = total.get(key)
             if row is None:
                 row = total[key] = CareerStats(stats.name)
-            for field in CareerStats._SUMMED:
-                setattr(row, field, getattr(row, field) + getattr(stats, field))
-            row.highest_score = max(row.highest_score, stats.highest_score)
-            if stats.best_bowl_runs >= 0 and _better_figure(
-                    stats.best_bowl_wickets, stats.best_bowl_runs,
-                    row.best_bowl_wickets, row.best_bowl_runs):
-                row.best_bowl_wickets = stats.best_bowl_wickets
-                row.best_bowl_runs = stats.best_bowl_runs
+            # Imported stats can contain unknown (None) counters. Use the same
+            # aggregation as player history to preserve them across seasons.
+            row.add(stats)
             row.seasons += 1
             row.team_name = stats.team_name or row.team_name
             row.name = stats.name or row.name

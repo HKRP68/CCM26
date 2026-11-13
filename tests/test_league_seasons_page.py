@@ -159,6 +159,27 @@ class PageCase(unittest.TestCase):
 
 class PagesTests(PageCase):
 
+    def test_competition_opens_with_unknown_imported_stats(self):
+        from models import TournamentPlayerStats, User
+
+        series = self.new_series()
+        user = User(telegram_id=900000 + self.tag, first_name="Stats owner")
+        self.session.add(user)
+        self.session.flush()
+        self.session.add(TournamentPlayerStats(
+            tournament_id=self.tour.id, user_id=user.id,
+            name=f"Rohit {self.tag}", team_name="Mumbai",
+            matches=1, bat_runs=75, bowl_wickets=2,
+            fifties=None, hundreds=None, ducks=None, three_fers=None,
+            five_fers=None, hattricks=None, potm=None))
+        self.session.commit()
+
+        response = self.client.get(f"/league-seasons/{series.id}")
+        self.assertEqual(200, response.status_code)
+        text = response.get_data(as_text=True)
+        self.assertIn(f"Rohit {self.tag}", text)
+        self.assertIn("75", text)
+
     def test_pages_render_and_the_sidebar_lights_the_right_link(self):
         series = self.new_series()
         self.assertEqual(1, len(self.seasons(series)))
