@@ -7,6 +7,17 @@ Play tournaments have independent switches; the default remains standard.
 You can also select **Spacial** in **Scorecard Designer** to use this original
 HTML summary globally, including matches outside tournaments.
 
+**Spacial Type 2** is a separate Scorecard theme and tournament graphics option.
+It uses `templates/graphics/CMU_S5_Match_Summary_Type2.html`, preserved unchanged
+from the supplied file, at its native **1536 × 1024** size. Type 2 displays
+**runs-wickets** (e.g. `186-6`), team-colour headers, scores and body panels,
+readable header text, and highlights actual Impact Players and the POTM in
+either team's batting or bowling rows. The footer includes recorded batting
+and bowling figures. Missing crests use initials rather than the sample logos.
+Long team and player names fit their original slots. The tournament's explicit
+design choice takes precedence over the global Scorecard theme. Changing
+between types invalidates cached tournament summaries for replay.
+
 The supplied file is preserved unchanged at
 `templates/graphics/CMU_S5_Match_Summary.html`, including its embedded stadium
 artwork, angled innings panels, gold result banner and slim POTM ticker.

@@ -196,6 +196,24 @@ class PreferredPitchAdminTests(unittest.TestCase):
         self.assertTrue(t.special_graphics_enabled)
         self.assertIn("Special tournament graphics", body)
 
+    def test_type2_can_be_selected_and_previewed_without_changing_type1(self):
+        import io
+        from PIL import Image
+        tour = self.create()
+        self.assertEqual(tour.special_graphics_type, 1)
+        self.detail(tour, {"action":"save_graphics", "special_graphics_enabled":"2"})
+        self.assertTrue(tour.special_graphics_enabled)
+        self.assertEqual(tour.special_graphics_type, 2)
+        response = self.client.get(f"/tournaments/{tour.id}/summary-preview.png")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Image.open(io.BytesIO(response.data)).size, (1536, 1024))
+        html = self.client.get(f"/tournaments/{tour.id}/summary-preview.html?variant=1").get_data(as_text=True)
+        self.assertIn('class="season-ribbon"', html)
+        self.session.expire_all()
+        self.assertEqual(tour.special_graphics_type, 2)
+        self.detail(tour, {"action":"save_graphics", "special_graphics_enabled":"1"})
+        self.assertEqual(tour.special_graphics_type, 1)
+
     def test_changing_graphics_invalidates_only_this_tournaments_summary_cache(self):
         from models import Match, MatchScorecardImage, TournamentMatch, User
         tour, other = self.create(), self.create()

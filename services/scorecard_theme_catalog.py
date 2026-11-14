@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 NORMAL = "normal"
 SPACIAL = "spacial"
+SPACIAL_TYPE2 = "spacial_type2"
+HTML_SUMMARY_THEMES = (SPACIAL, SPACIAL_TYPE2)
 DIWALI = "diwali"
 WINTER = "winter"
 CHRISTMAS = "christmas"
@@ -38,6 +40,9 @@ THEMES = (
                    ((8, 22, 39), (18, 40, 58)), "#0b2035"),
     ScorecardTheme(SPACIAL, "Spacial", "THE ORIGINAL HTML EDITION", "Your original CMU match summary, with team colours and readable text.",
                    "Spacial", (220, 174, 91), (252, 230, 183), (255, 255, 255),
+                   ((8, 22, 39), (18, 40, 58)), "#0b2035"),
+    ScorecardTheme(SPACIAL_TYPE2, "Spacial Type 2", "THE FRANCHISE EDITION", "Your Type 2 design with team-colour panels, adaptive contrast and Impact highlights.",
+                   "Spacial Type 2", (220, 174, 91), (252, 230, 183), (255, 255, 255),
                    ((8, 22, 39), (18, 40, 58)), "#0b2035"),
     ScorecardTheme(DIWALI, "Diwali", "FESTIVAL OF LIGHTS", "Glowing diyas, ornate lanterns, rangoli and a velvet night sky.",
                    "Happy Diwali", (255, 194, 66), (255, 230, 171), (255, 255, 255),

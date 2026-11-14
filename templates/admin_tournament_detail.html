@@ -98,7 +98,8 @@
         <label for="special-graphics">Summary design</label>
         <select name="special_graphics_enabled" id="special-graphics">
           <option value="0" {{ 'selected' if not t.special_graphics_enabled else '' }}>Standard graphics</option>
-          <option value="1" {{ 'selected' if t.special_graphics_enabled else '' }}>Special tournament graphics · Original HTML</option>
+          <option value="1" {{ 'selected' if t.special_graphics_enabled and t.special_graphics_type != 2 else '' }}>Special tournament graphics · Original HTML</option>
+          <option value="2" {{ 'selected' if t.special_graphics_enabled and t.special_graphics_type == 2 else '' }}>Spacial Type 2 · Team colours</option>
         </select>
       </div>
       <div style="align-self:end;"><button class="btn btn-primary" type="submit">Save graphics</button></div>
@@ -107,11 +108,27 @@
     <details>
       <summary style="cursor:pointer;">Preview special graphics with your teams</summary>
       <p style="color:var(--muted);font-size:.82rem;">Sample scores and players; previewing does not change your tournament.</p>
-      <iframe src="{{ url_for('admin_tournament_summary_preview_html', tournament_id=t.id) }}" loading="lazy" title="Original CMU HTML summary with sample scores" style="width:100%;aspect-ratio:16/9;border:0;display:block;"></iframe>
-      <a href="{{ url_for('admin_tournament_summary_preview_html', tournament_id=t.id) }}" target="_blank" rel="noopener">Open editable HTML preview</a>
-      · <a href="{{ url_for('admin_tournament_summary_preview', tournament_id=t.id) }}" target="_blank" rel="noopener">Open PNG preview</a>
+      {% if t.special_graphics_type == 2 %}<p style="color:var(--muted);font-size:.82rem;">Double-click text in the Type 2 HTML preview to edit its sample values.</p>{% endif %}
+      <iframe id="tournament-summary-preview" src="{{ url_for('admin_tournament_summary_preview_html', tournament_id=t.id) }}" loading="lazy" title="Original CMU HTML summary with sample scores" style="width:100%;aspect-ratio:{{ '3/2' if t.special_graphics_type == 2 else '16/9' }};border:0;display:block;"></iframe>
+      <a id="tournament-summary-html" href="{{ url_for('admin_tournament_summary_preview_html', tournament_id=t.id) }}" target="_blank" rel="noopener">Open editable HTML preview</a>
+      · <a id="tournament-summary-png" href="{{ url_for('admin_tournament_summary_preview', tournament_id=t.id) }}" target="_blank" rel="noopener">Open PNG preview</a>
     </details>
   </section>
+
+  <script>
+  (() => {
+    const select=document.getElementById('special-graphics');
+    select.addEventListener('change',()=>{
+      const variant=select.value==='2'?'2':'1';
+      for(const [id,attribute] of [['tournament-summary-preview','src'],['tournament-summary-html','href'],['tournament-summary-png','href']]) {
+        const element=document.getElementById(id),url=new URL(element.getAttribute(attribute),location.href);
+        url.searchParams.set('variant',variant);
+        element.setAttribute(attribute,url.pathname+url.search);
+      }
+      document.getElementById('tournament-summary-preview').style.aspectRatio=variant==='2'?'3/2':'16/9';
+    });
+  })();
+  </script>
 
   <!-- Settings -->
   <section class="tour-card">

@@ -1,0 +1,2 @@
+/* Preserve the supplied SVG geometry; colours and live data are bound separately. */
+.graphic text { user-select:text; }

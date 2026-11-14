@@ -8,6 +8,7 @@ to turn seasonal artwork off and use the standard broadcast design.
 | --- | --- |
 | Normal | Floodlit stadium, midnight navy, brushed gold, bright team tables and a framed Player of the Match showcase. |
 | Spacial | The supplied original CMU HTML match summary, with angled panels, team colours, gold result banner and slim POTM ticker. |
+| Spacial Type 2 | The supplied second HTML design, with team-colour panels, two-line team names, Impact/POTM row highlights and all-rounder figures. |
 | Diwali | Ornate lanterns, glowing oil lamps, marigolds, rangoli and gold trim. |
 | Winter | Alpine peaks, frosted pines, a snowy cricket ball, ice rims and icicles. |
 | Christmas | Garlands, warm fairy lights, ruby ribbons, presents and a snowy village. |

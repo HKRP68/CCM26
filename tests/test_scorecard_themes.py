@@ -9,7 +9,7 @@ import pytest
 from PIL import Image, ImageChops
 
 from services import match_summary_card as summary
-from services.scorecard_theme_catalog import THEMES, THEME_BY_KEY, NORMAL, SPACIAL, theme_from_config
+from services.scorecard_theme_catalog import THEMES, THEME_BY_KEY, NORMAL, SPACIAL, SPACIAL_TYPE2, HTML_SUMMARY_THEMES, theme_from_config
 
 
 def _summary_payload():
@@ -96,7 +96,7 @@ def test_spacial_renders_the_original_html_without_a_tournament_switch():
     assert image.size == (1536, 864)
 
 
-@pytest.mark.parametrize("theme", [t.key for t in THEMES if t.key not in (NORMAL, SPACIAL)])
+@pytest.mark.parametrize("theme", [t.key for t in THEMES if t.key != NORMAL and t.key not in HTML_SUMMARY_THEMES])
 def test_each_theme_preserves_live_table_values_and_has_its_own_art(theme, summary_images):
     payload, normal_png, _ = summary_images
     image = _image(summary.generate_match_summary(**payload, theme=theme))
@@ -381,7 +381,7 @@ const source = fs.readFileSync(process.argv[1], 'utf8').split('<script>')[1].spl
 const handlers = {}, elements = {
   scorecard_theme_state: {textContent:''}, color_inn1:{value:'#0065b3'}, color_inn2:{value:'#ed6500'}
 };
-const choices = [['normal','Normal'],['spacial','Spacial'],['diwali','Diwali'],['winter','Winter'],['christmas','Christmas'],
+const choices = [['normal','Normal'],['spacial','Spacial'],['spacial_type2','Spacial Type 2'],['diwali','Diwali'],['winter','Winter'],['christmas','Christmas'],
  ['new_year','New Year'],['makar_sankranti','Makar Sankranti'],['republic_day','Republic Day']];
 const radios = choices.map(([value,label])=>({value,checked:value==='normal',dataset:{themeLabel:label},
  addEventListener:(event, callback)=>handlers[event]=callback}));

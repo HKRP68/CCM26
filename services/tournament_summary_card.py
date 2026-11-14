@@ -18,6 +18,7 @@ WIDTH, HEIGHT = 1536, 864
 WHITE, BLACK = (255, 255, 255), (0, 0, 0)
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "templates/graphics/CMU_S5_Match_Summary.html"
+TEMPLATE_TYPE2 = ROOT / "templates/graphics/CMU_S5_Match_Summary_Type2.html"
 # One browser at a time, on its own thread even when a caller has an event loop.
 _RENDER_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="summary-html")
 
@@ -53,16 +54,19 @@ def header_palette(colour):
                 return _hex(stop)
             stop = tuple(round((a + b) / 2) for a, b in zip(stop, colour))
         return _hex(colour)
+    body = base._shade(colour, .16)
+    number = base._mix(colour, WHITE, .65)
     return {"team": _hex(colour), "light": _hex(base._mix(colour, WHITE, .45)),
+            "body": _hex(body), "number": _hex(number if contrast_ratio(number, body) >= 4.5 else WHITE),
             "header-top": shaded(.62), "header-mid": _hex(colour),
             "header-bottom": shaded(.45), "on-team": _hex(ink),
             "team-shadow": "0 2px 3px #000" if ink == WHITE else "none"}
 
 
-@lru_cache(maxsize=1)
-def original_html():
+@lru_cache(maxsize=2)
+def original_html(variant=1):
     """The attached HTML is stored byte-for-byte, including its embedded artwork."""
-    return TEMPLATE.read_text(encoding="utf-8")
+    return (TEMPLATE_TYPE2 if variant == 2 else TEMPLATE).read_text(encoding="utf-8")
 
 
 def _image_uri(blob):
@@ -87,7 +91,7 @@ def _rows(rows, potm_name, bowling=False):
     return output
 
 
-def _view_data(data):
+def _view_data(data, variant=1):
     innings = []
     for number, fallback in ((1, (0, 127, 75)), (2, (0, 207, 217))):
         prefix = f"inn{number}"
@@ -96,8 +100,9 @@ def _view_data(data):
         runs, wickets = data.get(f"{prefix}_runs"), data.get(f"{prefix}_wickets")
         innings.append(dict(
             team=str(team).upper(), overs=str(data.get(f"{prefix}_overs") or "0.0"),
-            score=data.get(f"{prefix}_score_text") or
-                  f"{wickets if wickets is not None else '—'}/{runs if runs is not None else '—'}",
+            score=data.get(f"{prefix}_score_text") or (
+                f"{runs if runs is not None else '—'}-{wickets if wickets is not None else '—'}" if variant == 2 else
+                f"{wickets if wickets is not None else '—'}/{runs if runs is not None else '—'}"),
             palette=header_palette(base._hex_to_rgb(data.get(f"{prefix}_color"), fallback)),
             logo=_image_uri(data.get(f"{prefix}_logo_png")), initials=base._initials(team),
             batters=_rows(details.get("batters"), data.get("potm_name")),
@@ -123,24 +128,31 @@ def _view_data(data):
                 overs_label="BALLS" if data.get("is_hundred") else "OVERS",
                 winner=str(data.get("winner_name") or "MATCH COMPLETE").upper(),
                 margin=margin.upper(), potm=str(data.get("potm_name") or "NOT AWARDED").upper(),
-                figures=figures)
+                figures=figures, metrics=metrics)
 
 
-def build_tournament_summary_html(data=None, *, editable=False):
+def build_tournament_summary_html(data=None, *, editable=False, variant=1):
     """Bind match values to the original DOM; no data returns the original file."""
-    source = original_html()
+    source = original_html(variant)
     if data is None:
         return source
-    payload = json.dumps(_view_data(data), ensure_ascii=True).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
-    script = (ROOT / "static/js/tournament-summary-bindings.js").read_text(encoding="utf-8")
-    style = (ROOT / "static/css/tournament-summary-bindings.css").read_text(encoding="utf-8")
+    view = _view_data(data, variant)
+    suffix = "-type2" if variant == 2 else ""
+    payload = json.dumps(view, ensure_ascii=True).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    if variant == 2:
+        # Remove sample match values before the supplied SVG binding script runs.
+        empty = json.dumps(dict(teamA=dict(batting=[]), teamB=dict(batting=[]), impact=""))
+        source = re.sub(r'(<script type="application/json" id="match-data">).*?(</script>)',
+                        lambda m: m[1] + empty + m[2], source, flags=re.S)
+    script = (ROOT / f"static/js/tournament-summary-bindings{suffix}.js").read_text(encoding="utf-8")
+    style = (ROOT / f"static/css/tournament-summary-bindings{suffix}.css").read_text(encoding="utf-8")
     injection = (f'<style>{style}</style><script type="application/json" id="cmu-match-data">'
                  f'{payload}</script><script>window.CMU_SUMMARY_EDITABLE={str(editable).lower()};'
                  f'{script}</script>')
     return source.replace("</body>", injection + "</body>")
 
 
-def _screenshot(html):
+def _screenshot(html, *, height=HEIGHT):
     from playwright.sync_api import sync_playwright
     executable = os.environ.get("SCORECARD_CHROMIUM_EXECUTABLE") or shutil.which("chromium") or shutil.which("google-chrome")
     with sync_playwright() as engine:
@@ -148,26 +160,50 @@ def _screenshot(html):
             executable_path=executable, headless=True, timeout=15000,
             args=["--no-sandbox", "--disable-dev-shm-usage"])
         try:
-            context = browser.new_context(viewport={"width": WIDTH, "height": HEIGHT},
+            context = browser.new_context(viewport={"width": WIDTH, "height": height},
                                           device_scale_factor=1, offline=True)
             page = context.new_page()
             page.set_default_timeout(15000)
             page.set_content(html, wait_until="load")
             page.evaluate("document.fonts.ready")
-            return page.locator("#viewport").screenshot(type="png", animations="disabled")
+            return page.locator("#viewport, svg.graphic").first.screenshot(type="png", animations="disabled")
         finally:
             browser.close()
 
 
-def generate_tournament_summary(data):
+def generate_tournament_summary(data, *, variant=1):
     """Export the actual HTML to PNG, including its original CSS and artwork."""
     try:
-        return _RENDER_POOL.submit(_screenshot, build_tournament_summary_html(data)).result(timeout=40)
+        return _RENDER_POOL.submit(_screenshot, build_tournament_summary_html(data, variant=variant),
+                                   height=1024 if variant == 2 else HEIGHT).result(timeout=40)
     except Exception:
         logger.exception("Original HTML summary export failed; install Chromium or set SCORECARD_CHROMIUM_EXECUTABLE")
         return None
-def preview_payload(teams=(), *, tournament_name="CMU · SEASON 5"):
+def preview_payload(teams=(), *, tournament_name="CMU · SEASON 5", variant=1):
     """Explicitly labelled sample data for the admin preview and design tools."""
+    if variant == 2:
+        raw = json.loads(re.search(r'id="match-data">(.*?)</script>', original_html(2), re.S)[1])
+        names = [teams[i].name if len(teams) > i else f"{raw[key]['nameTop']} {raw[key]['nameBottom']}"
+                 for i, key in enumerate(("teamA", "teamB"))]
+        p = dict(inn1_team=names[0], inn1_runs=186, inn1_wickets=6, inn1_overs="20.0",
+                 inn2_team=names[1], inn2_runs=172, inn2_wickets=8, inn2_overs="20.0",
+                 winner_name=names[0], win_margin_text="by 14 runs", overs_total=20,
+                 tournament_name=tournament_name, match_no=1, stadium=raw["stadium"],
+                 pitch_type=raw["pitch"], potm_name="BEN STOKES", potm_team=names[0],
+                 potm_stats="68 (42) · 2/35 (4 OVERS)", potm_runs=68, potm_balls=42,
+                 potm_wickets=2, potm_conceded=35, potm_overs="4", special_graphics=True,
+                 special_graphics_type=2, inn1_color="#650626", inn2_color="#007b76", top_per_team={})
+        for i, key in enumerate(("teamA", "teamB"), 1):
+            p["top_per_team"][f"inn{i}"] = dict(
+                batters=[dict(name=n, runs=int(r), balls=int(b), out=True, impact=n==raw["impact"])
+                         for n,r,b in raw[key]["batting"]],
+                bowlers=[dict(name=n, wickets=int(v.split('-')[0]), runs=int(v.split('-')[1]), overs=o)
+                         for n,v,o in raw[key]["bowling"]])
+        if not teams:
+            images = re.findall(r'<image href="data:image/[^;]+;base64,([^"]+)"', original_html(2))
+            for i, encoded in enumerate(images[-2:], 1):
+                p[f"inn{i}_logo_png"] = base64.b64decode(encoded)
+        return p
     a = teams[0].name if teams else "Melbourne Stars"
     b = teams[1].name if len(teams) > 1 else "Brisbane Heat"
     def batter(name, runs, balls, out=True, **extra):

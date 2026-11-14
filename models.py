@@ -2836,6 +2836,7 @@ class Tournament(Base):
     # Optional broadcast summary; resolved live for results and archived cards.
     special_graphics_enabled = Column(Boolean, default=False, server_default=text("false"),
                                       nullable=False)
+    special_graphics_type = Column(Integer, default=1, server_default=text("1"), nullable=False)
 
     # League-stage structure (the new driver; legacy ``format`` is kept untouched).
     #   single_rr  – one round-robin across all teams

@@ -17662,15 +17662,18 @@ def admin_tournament_detail(tournament_id):
                     flash("✅ Saved tournament settings.", "success")
                 elif action == "save_graphics":
                     choice = request.form.get("special_graphics_enabled")
-                    if choice not in ("0", "1"):
+                    if choice not in ("0", "1", "2"):
                         raise ValueError("Choose standard or special tournament graphics.")
-                    enabled = choice == "1"
-                    if bool(t.special_graphics_enabled) != enabled:
+                    enabled = choice != "0"
+                    variant = 2 if choice == "2" else 1
+                    if (bool(t.special_graphics_enabled) != enabled or
+                            (enabled and t.special_graphics_type != variant)):
                         from services.scorecard_delivery import invalidate_tournament_summary_cache
                         invalidate_tournament_summary_cache(db, t.id)
                     t.special_graphics_enabled = enabled
+                    t.special_graphics_type = variant
                     log_admin(db, "tournament_graphics", "tournament", t.id,
-                              "special" if t.special_graphics_enabled else "standard")
+                              f"special type {variant}" if enabled else "standard")
                     flash("Tournament match-summary graphics saved.", "success")
                 elif action == "save_fixture_release":
                     from services import league_schedule_service as _release
@@ -18467,7 +18470,9 @@ def admin_tournament_summary_preview(tournament_id, as_html=False):
             abort(404)
         teams = (db.query(TournamentTeam).filter_by(tournament_id=tour.id)
                  .order_by(TournamentTeam.sort_order, TournamentTeam.id).limit(2).all())
-        payload = preview_payload(teams, tournament_name=tour.name)
+        variant = (2 if request.args.get("variant") == "2" else 1
+                   if request.args.get("variant") == "1" else tour.special_graphics_type)
+        payload = preview_payload(teams, tournament_name=tour.name, variant=variant)
         payload.update(summary_visuals(
             db, inn1_team=payload["inn1_team"], inn2_team=payload["inn2_team"],
             tournament_id=tour.id,
@@ -18476,9 +18481,9 @@ def admin_tournament_summary_preview(tournament_id, as_html=False):
             include_style=False, special_graphics=True))
         payload["preview"] = True
         if as_html:
-            return Response(build_tournament_summary_html(payload, editable=True),
+            return Response(build_tournament_summary_html(payload, editable=True, variant=variant),
                             mimetype="text/html", headers={"Cache-Control": "no-store"})
-        png = generate_tournament_summary(payload)
+        png = generate_tournament_summary(payload, variant=variant)
         if not png:
             abort(503)
         return Response(png, mimetype="image/png", headers={"Cache-Control": "no-store"})
