@@ -104,7 +104,7 @@ def _keyboard(db, season, actor, *, page=None, skip_page=None):
             controls.append(InlineKeyboardButton('⏸ Pause draft', callback_data=f'fd_a_{actor}_{sid}_pause'))
         if controls:
             rows.append(controls)
-        if season.status in (A.STATUS_SETUP, A.STATUS_PAUSED):
+        if season.status in (A.STATUS_SETUP, A.STATUS_LIVE, A.STATUS_PAUSED):
             rows.append([InlineKeyboardButton(f'⏱ {minutes} min', callback_data=f'fd_m_{actor}_{sid}_{minutes}')
                          for minutes in (5, 10, 15)])
     return InlineKeyboardMarkup(rows)
@@ -309,7 +309,11 @@ def execute(db, actor, chat_id, selected_sid, command, raw=''):
             raise A.AuctionError('Make picks publicly in the group bound to this draft.')
         if not raw:
             raise A.AuctionError('Use /dpick Player name, or a player lot ID from /dpool.')
-        quote = D.preview_pick(db, season, actor, raw)
+        try:
+            quote = D.preview_pick(db, season, actor, raw)
+        except D.AmbiguousDraftPlayer as exc:
+            from handlers.franchise_draft_v2 import choice_packet
+            return choice_packet(db,season,actor,exc.players)
         lot = db.get(AuctionLot, quote.lot_id)
         team = db.get(AuctionFranchise, quote.franchise_id)
         blocks,text = DR.confirmation(db,season,quote,lot,team)
@@ -376,7 +380,7 @@ def execute(db, actor, chat_id, selected_sid, command, raw=''):
         elif command == 'dtimer':
             if raw:
                 D.set_timer(db, season, _whole(raw, 'Minutes'), by_tg_id=actor)
-            text = D.clock_text(db, season) + '\nSet with <code>/dtimer 10</code>. Pause before editing the timer; 0 disables it.'
+            text = D.clock_text(db, season) + '\nSet with <code>/dtimer 10</code>, including while live; 0 disables it. The current team gets a new full window.'
         elif command == 'dprices':
             if raw:
                 D.set_rating_prices(db, season, raw, by_tg_id=actor)

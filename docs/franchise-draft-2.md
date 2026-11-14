@@ -7,6 +7,14 @@ used by auctions and drafts. Auction workflows retain their existing behavior.
 
 ## Administrator picks, skips and pause
 
+Owners can use `/dpick Joe`, `/dpick Root` or `/dpick Joe Root`.
+Matching ignores capitalization and supports parts of first or last names.
+A unique available card opens the normal signing confirmation. Multiple cards
+show player/version buttons; no player is selected automatically. Exact pool
+`#ID` and catalogue `pID` selection remain available. Website picks use the same
+matching and player-choice rules. Custom price imports keep their stricter
+player-ID and version checks.
+
 Draft Admins can act for the franchise currently on the clock:
 
 ```
@@ -26,7 +34,9 @@ price, purse, category and rating checks and record the actual administrator.
 Use a pool `#ID` when player names have multiple versions.
 
 `/dpause` and its `/draftpause` alias freeze the clock and block signings.
-`/dresume` opens the normal resume preview. An administrator may skip a paused
+`/dresume` resumes immediately without another confirmation, while still checking
+administrator access and squad readiness. Initial launch keeps its preview.
+An administrator may skip a paused
 turn; the draft stays paused and the next team gets its full timer on resume.
 Skipped picks join the existing catch-up queue without a purse deduction.
 Owners continue to use `/dpick` and `/dskip` for their own active franchise.
@@ -236,7 +246,13 @@ completion receive their own announcements and reliable user-ID mentions.
 New drafts pause by default; automatic selection/skipping needs approval.
 Existing drafts preserve their prior behavior after upgrade. `0` disables the
 clock. Durations up to 24 hours are accepted. `/dtimer 10` remains available and
-changes duration without changing the policy. Pause preserves remaining time;
+changes duration without changing the policy, including during a live draft.
+The active team gets a fresh full countdown at the new duration; subsequent
+teams use the new duration too. Changing a paused timer preserves the pause
+and uses the new duration when resumed. `0` disables the clock immediately.
+`/dclock` and website timer previews also work while live without a correction
+reason; confirming a new automatic policy explicitly approves that behavior.
+Pause preserves remaining time;
 the next team gets a fresh full window. Restart recovery resolves one expired
 turn rather than skipping every team that would have timed out during downtime.
 Website refreshes also recover expired turns through this same approved policy

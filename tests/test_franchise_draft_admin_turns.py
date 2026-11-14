@@ -135,7 +135,7 @@ def test_admin_skip_keeps_pause_and_gives_next_team_full_window(room):
     assert room.one.purse_remaining_lakh==10000 and room.one.squad_size==0
     event=room.db.query(room.models.AuctionEvent).filter_by(kind='fd_skipped').one()
     assert event.by_tg_id==ADMIN and json.loads(event.detail_json)['reason']=='Owner unavailable'
-    accept(room,command(room,'dresume'))
+    command(room,'dresume')
     assert 295 < (draft.pick_deadline_at-datetime.utcnow()).total_seconds() <= 300
 
 

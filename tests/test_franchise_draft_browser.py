@@ -7,6 +7,47 @@ from test_franchise_website import site  # noqa: F401
 from test_franchise_draft_seasons_page import page, competition  # noqa: F401
 
 
+def test_website_resume_is_immediate_and_live_timer_form_does_not_need_a_reason():
+    playwright=pytest.importorskip('playwright.sync_api')
+    executable=shutil.which('chromium') or shutil.which('google-chrome')
+    if not executable:pytest.skip('Chromium is required for this browser test')
+    with playwright.sync_playwright() as engine:
+        browser=engine.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
+        try:
+            page=browser.new_page(viewport={'width':1200,'height':950})
+            page.set_content('<main id="draft"></main>')
+            page.add_script_tag(content="""
+                window.calls=[];window.statusValue='paused';
+                async function api(path,body){
+                  calls.push(body);
+                  if(body.action==='draft_resume'){statusValue='live';return {ok:true,data:{message:'Draft resumed.'}};}
+                  if(body.action==='draft_preview')return {ok:true,data:{confirmation:{type:'admin',token:'clock-quote',html:'<b>New pick timer: 480 seconds</b>'}}};
+                  return {ok:true,data:{ok:true,can_manage_draft:true,auctions:[{id:7,name:'Draft seven',mode:'draft'}],
+                    season:{id:7,name:'Draft seven',status:statusValue},teams:[{id:11,name:'North'}],
+                    draft:{rounds:2,min_squad_size:2,max_squad_size:2,status:statusValue,started:true,revision:4,seconds:300,policy:'pause',current_team:'North'},
+                    draft_html:'<b>Draft Board</b>',page:1,pages:1}};
+                }
+            """)
+            page.add_script_tag(path=str(Path(__file__).parents[1]/'static/js/franchise_draft.js'))
+            page.evaluate("FranchiseDraftApp.open('draft')")
+            button=page.get_by_role('button',name='▶ Resume Draft',exact=True)
+            assert button.is_enabled()
+            button.click()
+            page.get_by_role('button',name='⏸ Pause Draft',exact=True).wait_for(state='visible')
+            assert page.evaluate("calls.filter(c=>c.action).map(c=>c.action)")==['draft_resume']
+            assert page.locator('[data-fd-dialog]').is_hidden()
+            page.get_by_role('button',name='⚙️ Draft Settings',exact=True).click()
+            clock=page.locator('[data-fd-form="clock"]')
+            clock.locator('xpath=..').locator('summary').click()
+            clock.locator('[name="seconds"]').fill('480')
+            clock.get_by_role('button',name='Preview change',exact=True).click()
+            page.locator('[data-fd-dialog]').wait_for(state='visible')
+            assert page.evaluate("calls.at(-1).operation")=='clock'
+            assert page.evaluate("calls.at(-1).values.seconds")=='480'
+            assert page.evaluate("calls.at(-1).reason")==''
+        finally:browser.close()
+
+
 def test_draft_browser_navigation_pagination_and_stale_responses():
     playwright=pytest.importorskip('playwright.sync_api')
     executable=shutil.which('chromium') or shutil.which('google-chrome')

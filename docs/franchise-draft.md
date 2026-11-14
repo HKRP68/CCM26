@@ -143,7 +143,7 @@ Use `/drounds 15` to set the total or `/daddrounds 2` to add rounds. Rounds
 can be added during setup, while paused, or after completion before publishing.
 After the first pick, the team order is locked and rounds can only increase.
 After launch, round changes require a reasoned `/dcorrect rounds` preview.
-Adding rounds to a completed draft reopens it paused; review and confirm `/dresume`.
+Adding rounds to a completed draft reopens it paused; `/dresume` resumes immediately after validation.
 
 ## Pick time, skips and catch-up rounds
 

@@ -25,6 +25,14 @@ from sqlalchemy import func
 from services import auction_service as A
 
 AuctionError = A.AuctionError
+
+
+class AmbiguousDraftPlayer(AuctionError):
+    def __init__(self, message, players):
+        super().__init__(message)
+        self.players = players
+
+
 logger = logging.getLogger(__name__)
 MAX_ROUNDS = 100
 QUOTE_LIFETIME = timedelta(minutes=10)
@@ -402,7 +410,7 @@ def set_rating_prices(session, season, text, *, by_tg_id=None, correction_reason
     return prices
 
 
-def find_player(session, season, query, *, available_only=True, _lots=None):
+def find_player(session, season, query, *, available_only=True, _lots=None, partial=False):
     raw = str(query or "").strip()
     if not raw:
         raise AuctionError("Choose a player: /dpick Joe Root. Use a pool #ID for duplicate names.")
@@ -414,12 +422,24 @@ def find_player(session, season, query, *, available_only=True, _lots=None):
     else:
         found = [lot for lot in rows if lot.name.casefold() == raw.casefold()]
         if not found:
-            found = [lot for lot in rows if lot.name.casefold().startswith(raw.casefold())]
+            if partial:
+                tokens = re.findall(r'\w+', raw.casefold())
+                found = [lot for lot in rows if tokens and all(
+                    any(word.startswith(token) for word in re.findall(r'\w+', lot.name.casefold()))
+                    for token in tokens)]
+            else:
+                found = [lot for lot in rows if lot.name.casefold().startswith(raw.casefold())]
+    if partial and available_only:
+        available = [lot for lot in found if lot.status == A.LOT_QUEUED]
+        if available:
+            found = available
+        elif found:
+            raise AuctionError(f'{raw[:100]} is already signed or unavailable.')
     if not found:
         raise AuctionError(f"{raw[:100]} is not in this draft's player pool.")
     if len(found) > 1:
         choices = ", ".join(f"#{lot.id} {lot.name} ({lot.version or 'Base'}, {lot.rating} OVR, player ID {lot.player_id})" for lot in found[:5])
-        raise AuctionError("That name matches several player cards. Use its #ID: " + choices)
+        raise AmbiguousDraftPlayer("That name matches several player cards. Choose the player/version or use its #ID: " + choices, found)
     lot = found[0]
     if available_only and lot.status != A.LOT_QUEUED:
         raise AuctionError(f"{lot.name} is already signed or unavailable.")
@@ -606,23 +626,39 @@ def clock_text(session, season):
 
 
 def set_timer(session, season, minutes, *, by_tg_id=None, timeout_policy=None):
-    _manager(session, by_tg_id)
     if isinstance(minutes, bool) or not re.fullmatch(r"\d+", str(minutes).strip()) or not 0 <= int(minutes) <= 1440:
         raise AuctionError("Pick time must be whole minutes from 1 to 1440; use 0 to turn the timer off.")
-    draft = _editable(session, season)
-    draft = _claim(session, season, draft)
-    _editable(session, season)
-    draft.pick_minutes = int(minutes)
-    options = _loads(draft.settings_json, {})
+    return configure_clock(session, season, int(minutes)*60, by_tg_id=by_tg_id, timeout_policy=timeout_policy)
+
+
+def configure_clock(session, season, seconds, *, by_tg_id=None, timeout_policy=None, now=None):
+    """Change a running clock atomically; its current turn gets a full window."""
+    _manager(session, by_tg_id)
+    if isinstance(seconds,bool) or not re.fullmatch(r'\d+',str(seconds).strip()) or not 0<=int(seconds)<=86400:
+        raise AuctionError('Use 0–86400 whole seconds; 0 disables the timer.')
     if timeout_policy is not None and timeout_policy not in ('pause','skip','auto','admin'):
         raise AuctionError('Choose pause, skip, auto or admin for timeout handling.')
-    options.update(pick_seconds=int(minutes)*60)
-    options['timeout_policy']=timeout_policy or options.get('timeout_policy','skip')
+    draft = _draft(session, season)
+    def editable():
+        if season.league_id or season.published_at or season.status not in (A.STATUS_SETUP,A.STATUS_LIVE,A.STATUS_PAUSED):
+            raise AuctionError('Timer changes are available during setup, live or paused drafts before publication.')
+    editable()
+    draft = _claim(session, season, draft)
+    editable()
+    previous = timer_seconds(draft)
+    seconds = int(seconds)
+    draft.pick_minutes = (seconds+59)//60
+    options = _loads(draft.settings_json, {})
+    previous_policy = options.get('timeout_policy','skip')
+    options.update(pick_seconds=seconds)
+    options['timeout_policy']=timeout_policy or previous_policy
     draft.settings_json = _dump(options)
-    draft.pick_deadline_at = None
-    draft.paused_seconds_left = int(minutes) * 60 if season.status == A.STATUS_PAUSED and int(minutes) else None
-    _event(session, season, "fd_timer", "⏱ <b>Draft pick timer updated</b>\n" + clock_text(session, season),
-           by_tg_id=by_tg_id)
+    _start_clock(session, season, now=now)
+    draft.paused_seconds_left = seconds if season.status == A.STATUS_PAUSED and seconds else None
+    _event(session, season, "fd_timer", "⏱ <b>Draft pick timer updated</b>\n" + clock_text(session, season)
+           + ('\nThe current team receives the new full pick window.' if season.status==A.STATUS_LIVE else ''),
+           by_tg_id=by_tg_id, metadata={'previous_seconds':previous,'seconds':seconds,
+               'previous_policy':previous_policy,'policy':options['timeout_policy']})
     return draft
 
 
@@ -856,15 +892,16 @@ def _validate_distinct_names(session, season, draft, teams, available, *, signin
         raise AuctionError("Too many pool cards are versions of the same player. Add more different players to fill every squad.")
 
 
-def start(session, season, *, by_tg_id=None, now=None):
+def start(session, season, *, by_tg_id=None, now=None, resume_only=False, _audit_actor=None):
     _manager(session, by_tg_id)
     draft = _draft(session, season)
-    if season.status not in (A.STATUS_SETUP, A.STATUS_PAUSED):
+    allowed = (A.STATUS_PAUSED,) if resume_only else (A.STATUS_SETUP, A.STATUS_PAUSED)
+    if season.status not in allowed:
         raise AuctionError("Only a draft in setup or paused can start.")
     if not season.chat_id:
         raise AuctionError("Bind the draft to its Telegram group before starting.")
     draft = _claim(session, season, draft)
-    if season.status not in (A.STATUS_SETUP, A.STATUS_PAUSED):
+    if season.status not in allowed:
         raise AuctionError("The draft state changed. Open its latest board.")
     _invariants(season, draft)
     teams = _ordered_teams(session, season)
@@ -892,9 +929,10 @@ def start(session, season, *, by_tg_id=None, now=None):
         season.status=A.STATUS_COMPLETED
         _event(session,season,'fd_completed','🏆 <b>Draft squads completed through retained contracts</b>',by_tg_id=by_tg_id)
     else:
-        _event(session, season, "fd_started", "🏏 <b>Franchise Draft is live!</b>\n"
+        _event(session, season, 'fd_resumed' if resume_only else 'fd_started',
+               ('▶ <b>Franchise Draft resumed!</b>\n' if resume_only else '🏏 <b>Franchise Draft is live!</b>\n') +
                f"{draft.rounds} rounds · rotating order · no overseas limit.\n\n" + next_team_html(session, season),
-               by_tg_id=by_tg_id)
+               by_tg_id=_audit_actor if _audit_actor is not None else by_tg_id)
     return draft
 
 
@@ -1169,7 +1207,7 @@ def preview_pick(session, season, actor_tg_id, query, *, now=None, _admin_reason
     if team is not None:
         session.refresh(team)
     _pick_authority(session, team, actor_tg_id, _admin_reason, _trusted_admin)
-    lot = find_player(session, season, query)
+    lot = find_player(session, season, query, partial=True)
     price = price_for(session, season, lot)
     _validate_pick(session, season, team, lot, price)
     row = FranchiseDraftConfirmation(token=secrets.token_hex(12), season_id=season.id,

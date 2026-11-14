@@ -181,13 +181,13 @@ def test_timer_rejects_invalid_minutes(room, minutes):
         room.D.set_timer(room.db, room.season, minutes)
 
 
-def test_timer_can_be_disabled_or_changed_while_paused(room):
+def test_timer_can_be_disabled_or_changed_while_live_and_paused(room):
     launch(room, minutes=0)
     assert room.D.get_draft(room.db, room.season).pick_deadline_at is None
     assert room.D.resolve_timeout(room.db, room.season, now=NOW + timedelta(days=10)) is None
-    with pytest.raises(room.A.AuctionError, match='Pause'):
-        room.D.set_timer(room.db, room.season, 15)
-    room.db.rollback()
+    room.D.set_timer(room.db, room.season, 15)
+    assert room.D.timer_seconds(room.D.get_draft(room.db,room.season))==900
+    assert room.D.get_draft(room.db,room.season).pick_deadline_at is not None
     room.D.pause(room.db, room.season, now=NOW)
     room.D.set_timer(room.db, room.season, 15)
     room.D.start(room.db, room.season, now=NOW)

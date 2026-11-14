@@ -295,6 +295,21 @@ def confirmation(session,season,quote,lot,team):
     return card.pair()
 
 
+def player_choices(session,season,lots):
+    _,D=_services()
+    card=Card('🔎 Choose a player / version',season.name)
+    card.text(f'{len(lots)} available cards match that name. Choose the exact player below; nothing has been signed.')
+    rows=[]
+    for lot in lots[:12]:
+        try:price=_money(season,D.price_for(session,season,lot))
+        except D.AuctionError:price='Price required'
+        rows.append([f'#{lot.id} {lot.name}',lot.version or 'Base',str(lot.rating),lot.category,price])
+    card.table(['Player','Version','OVR','Category','Price'],rows)
+    if len(lots)>12:card.footer(f'Showing 12 of {len(lots)} matches. Type more of the name or use /dsearch to narrow the choice.')
+    card.footer('Only your active franchise owner or co-owner can select. A signing still requires confirmation.')
+    return card.pair()
+
+
 def receipt(session,season,lot,team,*,phase=None):
     _,D = _services()
     config = D.get_draft(session,season)
@@ -316,7 +331,7 @@ def event_card(session,season,kind,text,*,lot=None,team=None,metadata=None):
             if metadata.get('automatic'):phase+=' · Automatic selection (approved timeout policy)'
             if metadata.get('admin_override'):phase+=' · Administrator signing: '+str(metadata.get('reason',''))
             return receipt(session,season,lot,team,phase=phase)
-        if kind == 'fd_started':
+        if kind in ('fd_started','fd_resumed'):
             return board(session,season)
         if kind == 'fd_completed':
             card=Card('🏆 CMU Franchise Draft completed',season.name)
@@ -456,7 +471,7 @@ def preview_action(session,season,action):
         card.facts([('Franchise',team.name),('Administrator',str(action.actor_tg_id))])
         if action.kind=='adminpick':
             A,D=_services()
-            lot=D.find_player(session,season,payload['player'])
+            lot=D.find_player(session,season,payload['player'],partial=True)
             card.facts([('Player',f'{lot.name} · {lot.version or "Base"} · #{lot.id}'),
                         ('Overall / category',f'{lot.rating} · {lot.category}'),
                         ('Signing price',_money(season,D.price_for(session,season,lot)))])

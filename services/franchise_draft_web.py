@@ -156,6 +156,12 @@ def perform(db,season,actor,data,*,trusted_admin=False):
     """The authenticated HTTP boundary owns the transaction and admin-session identity."""
     from services.auction_webapp import integer,boolean,AccessError
     action=data.get('action')
+    if action=='draft_resume' or (action=='draft_preview' and data.get('operation')=='start'
+                                and season is not None and season.status==A.STATUS_PAUSED):
+        _admin(db,actor,trusted_admin)
+        if season is None or D.get_draft(db,season) is None:raise A.AuctionError('Select a Franchise Draft season.')
+        M.resume(db,season,actor,trusted_admin=trusted_admin)
+        return dict(message='Draft resumed. The current franchise is on the clock.')
     if action=='draft_create':
         _admin(db,actor,trusted_admin)
         from models import LeagueSeason,ChallengeLeague
@@ -197,7 +203,10 @@ def perform(db,season,actor,data,*,trusted_admin=False):
     if trusted_admin:raise AccessError('Owner picks require the owner’s or co-owner’s verified Telegram sign-in.')
     if action=='draft_pick':
         query=str(data.get('player','')).strip()
-        row=D.preview_pick(db,season,actor,query)
+        try:row=D.preview_pick(db,season,actor,query)
+        except D.AmbiguousDraftPlayer as exc:
+            _,text=R.player_choices(db,season,exc.players)
+            return dict(selection=dict(html=text,players=[dict(id=p.id,name=p.name,version=p.version or 'Base') for p in exc.players[:12]]))
         from models import AuctionLot,AuctionFranchise
         _,text=R.confirmation(db,season,row,db.get(AuctionLot,row.lot_id),db.get(AuctionFranchise,row.franchise_id))
         return dict(confirmation=dict(type='pick',token=row.token,html=text))

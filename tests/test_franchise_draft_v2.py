@@ -93,7 +93,7 @@ def test_audited_price_reduction_refreshes_the_shared_signing_reserve(room):
     assert room.season.min_base_price_lakh==2300
     room.D.pause(room.db,room.season,by_tg_id=ADMIN);room.db.commit()
     accept(room,command(room,'dcorrect','prices | Free remaining cards per season rules | 96:0cr'))
-    accept(room,command(room,'dresume'))
+    command(room,'dresume')
     quote=command(room,'dpick',f'#{lot.id}',actor=OWNER)
     accept(room,quote,actor=OWNER)
     assert room.one.purse_remaining_lakh==0 and room.one.squad_size==1

@@ -21,6 +21,14 @@ def require_admin(db,actor,trusted_admin=False):
     else:D.require_draft_admin(db,actor)
 
 
+def resume(db,season,actor,*,trusted_admin=False):
+    """Operational resume is immediate; initial launch keeps its preview."""
+    require_admin(db,actor,trusted_admin)
+    if season.status!=A.STATUS_PAUSED:
+        raise A.AuctionError('Only a paused draft can be resumed. Use Start Draft for its initial launch.')
+    D.start(db,season,by_tg_id=None if trusted_admin else actor,resume_only=True,_audit_actor=actor)
+
+
 def fingerprint(db,season):
     draft=D.get_draft(db,season)
     state=dict(season=[season.id,season.name,season.chat_id,season.currency_label,season.previous_league_id,season.league_id,season.published_at,season.status],
@@ -182,6 +190,7 @@ def perform(db,season,actor,kind,payload,reason,*,trusted_admin=False):
     elif kind=='finish':D.finish(db,season,by_tg_id=actor)
     elif kind=='undo':D.undo_last(db,season,by_tg_id=actor)
     elif kind=='pause':D.pause(db,season,by_tg_id=actor)
+    elif kind=='clock':D.configure_clock(db,season,payload.get('seconds'),by_tg_id=actor,timeout_policy=payload.get('policy'))
     elif kind=='rules':
         from services.franchise_bot_settings import parse_value
         values={key:parse_value(field,payload[key]) if str(payload.get(key,'')).strip().casefold()!='clear' else ([] if key=='ratings' else {})
@@ -256,16 +265,6 @@ def perform(db,season,actor,kind,payload,reason,*,trusted_admin=False):
                 raise A.AuctionError('Pause first. Administrator resolution supports an explicitly approved skip.')
             D._skip_locked(db,season,actor=actor)
             draft.paused_seconds_left=D.timer_seconds(draft) or None
-        elif kind=='clock':
-            seconds=int(payload['seconds']);policy=payload['policy']
-            if not 0<=seconds<=86400 or policy not in ('pause','skip','auto','admin'):
-                raise A.AuctionError('Use 0–86400 seconds and pause, skip, auto or admin.')
-            options=D._loads(draft.settings_json,{})
-            options.update(pick_seconds=seconds,timeout_policy=policy)
-            draft.settings_json=D._dump(options)
-            draft.pick_minutes=(seconds+59)//60
-            draft.pick_deadline_at=None
-            draft.paused_seconds_left=seconds if season.status==A.STATUS_PAUSED and seconds else None
         elif kind=='bind':
             from services.auction_webapp import integer
             A.bind_chat(db,season,integer(payload['chat_id'],'Telegram group ID',-(2**63),-1))
@@ -352,7 +351,7 @@ def prepare(db,season,actor,kind,payload,reason='',*,trusted_admin=False):
     require_admin(db,actor,trusted_admin)
     reason=str(reason).strip()
     if len(reason)>300:raise A.AuctionError('Use a correction reason of at most 300 characters.')
-    if D.started(db,season) and kind not in ('start','pause','finish','publish','continue','draftadmin_add','draftadmin_remove') and not reason:
+    if D.started(db,season) and kind not in ('start','pause','clock','finish','publish','continue','draftadmin_add','draftadmin_remove') and not reason:
         raise A.AuctionError('A live-season correction needs a reason. Pause first, then use /dcorrect kind | reason | value.')
     team_import=None
     if kind=='order' and str(payload.get('text','')).strip().casefold()=='random':

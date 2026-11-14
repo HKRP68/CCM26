@@ -249,6 +249,10 @@ def execute_action(db, actor, sid, chat_id, action, values):
         from services import franchise_draft as D
         if not D.is_draft_admin(db,actor):raise W.AccessError('Only Draft Admins can manage a draft.')
         operation=action.removeprefix('native_fd_')
+        if operation=='resume' or (operation=='start' and season.status==A.STATUS_PAUSED):
+            from services import franchise_draft_admin as M
+            M.resume(db,season,actor)
+            return dict(message='Draft resumed. The current franchise is on the clock.')
         if operation in ('clock','retention','retain','unretain','pooladd','poolremove','correction'):
             from handlers.franchise_draft_v2 import route
             command={'clock':'dclock','retention':'dretention','retain':'dretain','unretain':'dunretain','pooladd':'dpooladd','poolremove':'dpoolremove','correction':'dcorrect'}[operation]
@@ -704,7 +708,7 @@ async def _start_form(update,context,key,sid,team_id=None,role_key=None):
     if key not in FORMS:raise A.AuctionError('Choose a form from /auction.')
     payload={}
     step=0
-    corrections={'draftprices':'prices','draftcustom':'custom','draftrounds':'rounds','draftpool':'pooladd','draftwithdraw':'poolremove','draftclockpolicy':'clock'}
+    corrections={'draftprices':'prices','draftcustom':'custom','draftrounds':'rounds','draftpool':'pooladd','draftwithdraw':'poolremove'}
     if key in corrections and data.get('franchise_draft') and (data.get('season') or {}).get('status')!='setup':
         payload['kind']=corrections[key];key='draftcorrection';step=1
     if key in ('fromleague','fromleaguedraft') and team_id:
@@ -792,8 +796,9 @@ async def callback_handler(update,context):
                 await _start_form(update,context,'draftundo',sid);return
             if operation=='start':
                 result=await run_session(get_session,lambda db:execute_action(db,_actor(update),sid,update.effective_chat.id,'native_fd_start',{}),commit=True)
-                packet=result['draft_packet']
-                await _send(update,packet['text'],packet.get('markup'),blocks=packet.get('blocks'))
+                packet=result.get('draft_packet')
+                if packet:await _send(update,packet['text'],packet.get('markup'),blocks=packet.get('blocks'))
+                else:await _show(update,context,'franchisedraft',sid)
                 return
             key=_store_action(context,update.effective_chat.id,sid,'native_fd_'+operation,{})
             await _send(update,'Confirm '+_e(operation)+' for this draft?',InlineKeyboardMarkup(_rows(_actor(update),sid,[[('Confirm','op:'+key),('Back','v:franchisedraft')]])))

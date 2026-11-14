@@ -185,7 +185,8 @@ def test_website_csv_budget_timer_skip_corrections_and_undo_share_the_ledger(sit
     assert root.status==site.A.LOT_QUEUED
     assert api(site.client,token,sid,action='draft_preview',operation='prices',values={'text':'85:11cr\n95:20cr\n90:15cr\n88:12cr'}).status_code==400
     apply(site.client,token,sid,'prices',{'text':'85:11cr\n95:20cr\n90:15cr\n88:12cr'},reason='Approved published price correction')
-    apply(site.client,token,sid,'start')
+    resumed=api(site.client,token,sid,action='draft_resume')
+    assert resumed.status_code==200 and 'confirmation' not in resumed.json
     site.db.expire_all();assert D.turn(site.db,season).id==north.id
     assert D.price_for(site.db,season,root)==1100
 

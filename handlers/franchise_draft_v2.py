@@ -74,7 +74,10 @@ def route(db,season,actor,command,raw):
         count=H._whole(raw,'Rounds')+(D.get_draft(db,season).rounds if command=='daddrounds' else 0)
         return action_packet(db,season,actor,'rounds',{'rounds':count},reason)
     if command=='dfinish':return action_packet(db,season,actor,'finish',{},raw or reason)
-    if command in ('dstart','dresume','dundo'):
+    if command=='dresume' or (command=='dstart' and season.status==A.STATUS_PAUSED):
+        M.resume(db,season,actor)
+        return H._render_view(db,season,actor,'board')
+    if command in ('dstart','dundo'):
         return action_packet(db,season,actor,'undo' if command=='dundo' else 'start',{},reason or (raw if command=='dundo' else ''))
     if command=='dclock':
         pieces=[p.strip().lower() for p in raw.split('|')]
@@ -102,6 +105,13 @@ def route(db,season,actor,command,raw):
         team=H._team(db,season,parts[0],actor)
         return action_packet(db,season,actor,'unretain',{'team_id':team.id,'player':parts[1]},reason)
     return None
+
+
+def choice_packet(db,season,actor,lots):
+    from handlers import franchise_draft as H
+    blocks,text=R.player_choices(db,season,lots)
+    return dict(text=text,blocks=blocks,sid=season.id,
+        markup=InlineKeyboardMarkup(pick_buttons(db,season,actor,lots[:12])+list(H._keyboard(db,season,actor).inline_keyboard)))
 
 
 def pick_buttons(db,season,actor,lots):
