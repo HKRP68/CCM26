@@ -23,7 +23,9 @@ behind a button. Both take the surface's existing HTML as the fallback, and
 both split an over-long fallback rather than letting Telegram refuse it.
 """
 
+import asyncio
 import logging
+import time
 
 from telegram import Message
 from telegram.error import InvalidToken, TelegramError
@@ -36,6 +38,9 @@ logger = logging.getLogger(__name__)
 # at an older Bot API server pays for exactly one refused call per process
 # instead of one per rendered XI.
 _unsupported = False
+_retry_after = 0.0
+NATIVE_TIMEOUT_SECONDS = 2.0
+NATIVE_COOLDOWN_SECONDS = 60.0
 
 # Descriptions Telegram uses when the endpoint itself is missing, as opposed to
 # a payload it did not like.
@@ -69,8 +74,20 @@ def _note_failure(endpoint: str, exc: BaseException) -> None:
 
 def reset_support_latch() -> None:
     """Re-arm rich sends after a ``_unsupported`` latch. For tests."""
-    global _unsupported
+    global _unsupported, _retry_after
     _unsupported = False
+    _retry_after = 0.0
+
+
+async def _native_post(post, endpoint, payload):
+    """Keep optional native formatting from holding up the HTML response."""
+    global _retry_after
+    try:
+        return await asyncio.wait_for(post(endpoint, payload), NATIVE_TIMEOUT_SECONDS)
+    except (asyncio.TimeoutError, TelegramError) as exc:
+        if 'not modified' not in str(exc).lower():
+            _retry_after = time.monotonic() + NATIVE_COOLDOWN_SECONDS
+        raise
 
 
 # ── Rich text nodes ──────────────────────────────────────────────────
@@ -272,7 +289,7 @@ async def _post_rich(bot, chat_id, blocks, reply_markup, reply_to_message_id):
     the accounting when Telegram says no, live in exactly one place.
     """
     post = getattr(bot, "_post", None)
-    if not (rich_text_enabled() and blocks and post):
+    if not (rich_text_enabled() and blocks and post) or time.monotonic() < _retry_after:
         return None
     payload = {"chat_id": chat_id, "rich_message": {"blocks": blocks}}
     if reply_markup is not None:
@@ -280,8 +297,11 @@ async def _post_rich(bot, chat_id, blocks, reply_markup, reply_to_message_id):
     if reply_to_message_id is not None:
         payload["reply_parameters"] = {"message_id": reply_to_message_id}
     try:
-        result = await post("sendRichMessage", payload)
+        result = await _native_post(post, "sendRichMessage", payload)
         return Message.de_json(result, bot)
+    except asyncio.TimeoutError:
+        logger.warning("Native rich send timed out — falling back to HTML")
+        return None
     except TelegramError as exc:
         _note_failure("sendRichMessage", exc)
         return None
@@ -323,14 +343,14 @@ async def edit_rich_message(bot, chat_id, message_id, blocks, *,
     so this reports failure instead of raising.
     """
     post = getattr(bot, "_post", None)
-    if not (rich_text_enabled() and blocks and post):
+    if not (rich_text_enabled() and blocks and post) or time.monotonic() < _retry_after:
         return False
     payload = {"chat_id": chat_id, "message_id": message_id,
                "rich_message": {"blocks": blocks}}
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
     try:
-        await post("editMessageText", payload)
+        await _native_post(post, "editMessageText", payload)
         return True
     except Exception as exc:
         if "not modified" in str(exc).lower():
@@ -338,7 +358,9 @@ async def edit_rich_message(bot, chat_id, message_id, blocks, *,
             # failed — reporting this as a refusal would send the HTML twin
             # over a message that already shows the right thing.
             return True
-        if isinstance(exc, TelegramError):
+        if isinstance(exc, asyncio.TimeoutError):
+            logger.warning("Native rich edit timed out — falling back to HTML")
+        elif isinstance(exc, TelegramError):
             _note_failure("editMessageText", exc)
         else:
             logger.warning("editMessageText failed locally — falling back to "

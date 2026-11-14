@@ -134,8 +134,29 @@ def perform(db,season,actor,kind,payload,reason,*,trusted_admin=False):
     require_admin(db,actor,trusted_admin)
     from services.admin_ids import is_bot_admin
     global_admin=trusted_admin or is_bot_admin(actor)
+    audit_actor=actor
     actor=None if trusted_admin else actor
-    if kind in ('draftadmin_add','draftadmin_remove'):
+    if kind in ('adminpick','adminskip'):
+        from services.auction_webapp import integer
+        target=integer(payload.get('team_id'),'Franchise ID',1)
+        if not reason.strip():raise A.AuctionError('Record a reason for acting on behalf of a franchise.')
+        if season.published_at or season.league_id:raise A.AuctionError('Published squads are locked.')
+        if season.status not in (A.STATUS_LIVE,A.STATUS_PAUSED):raise A.AuctionError('Start the draft before acting for a team.')
+        D._claim(db,season)
+        if season.published_at or season.league_id or season.status not in (A.STATUS_LIVE,A.STATUS_PAUSED):
+            raise A.AuctionError('The draft changed. Review its current status before acting.')
+        current=D.turn(db,season)
+        if current is None or current.id!=target:
+            raise A.AuctionError('That franchise is not on the clock. Review /draft for the current team.')
+        if kind=='adminpick':
+            # Quotes are created and consumed inside this transaction. Only the
+            # outer, actor-bound administrator action is ever exposed to clients.
+            quote=D.preview_pick(db,season,audit_actor,str(payload.get('player','')).strip(),_admin_reason=reason,_trusted_admin=trusted_admin)
+            D.confirm_pick(db,season,quote.token,audit_actor,_admin_reason=reason,_trusted_admin=trusted_admin)
+        else:
+            D._skip_locked(db,season,actor=audit_actor,admin_reason=reason)
+            if season.status==A.STATUS_PAUSED:draft.paused_seconds_left=D.timer_seconds(draft) or None
+    elif kind in ('draftadmin_add','draftadmin_remove'):
         if not global_admin:raise A.AuctionError('Only Bot Owners, Bot Admins or website administrators can appoint Draft Admins.')
         from services.auction_webapp import integer
         target=integer(payload.get('telegram_id'),'Draft Admin Telegram ID',1,10**16)

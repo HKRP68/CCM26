@@ -127,12 +127,17 @@ def season_row(season, mode=None):
 
 
 def available_seasons(db, tg_id, *, check_member=None, origin_chat_id=None):
+    from models import FranchiseDraft
+    from services.franchise_draft import is_draft_admin
     rows = db.query(AuctionSeason).order_by(AuctionSeason.id.desc()).all()
+    auction_admin = A.is_auction_admin(db, tg_id)
+    draft_admin = is_draft_admin(db, tg_id)
+    draft_ids = {sid for sid, in db.query(FranchiseDraft.season_id).all()} if auction_admin != draft_admin else set()
     owned = {f.season_id for f in db.query(AuctionFranchise).all()
              if A.may_bid_for(f, tg_id)}
     # A chat hint never grants access. Spectators require an affirmative
     # membership check; owners and admins do not depend on the Telegram API.
-    return [s for s in rows if admin_for(db, tg_id, s) or s.id in owned or
+    return [s for s in rows if (draft_admin if s.id in draft_ids else auction_admin) or s.id in owned or
             (origin_chat_id and s.chat_id == origin_chat_id and check_member
              and check_member(s.chat_id, tg_id))]
 

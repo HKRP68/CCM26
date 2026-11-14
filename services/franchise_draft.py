@@ -523,8 +523,11 @@ def round_order(session, season, round_no):
 
 
 def schedule(session, season):
-    return [team for number in range(1, _draft(session, season).rounds + 1)
-            for team in round_order(session, season, number)]
+    teams = _ordered_teams(session, season)
+    if not teams:
+        return []
+    return [team for number in range(_draft(session, season).rounds)
+            for team in teams[number % len(teams):] + teams[:number % len(teams)]]
 
 
 def skipped_turns(session, season):
@@ -667,7 +670,7 @@ def _advance_turn(session, season, info, *, skipped=False, now=None):
     _start_clock(session, season, now=now)
 
 
-def _skip_locked(session, season, *, actor=None, timeout=False, now=None):
+def _skip_locked(session, season, *, actor=None, timeout=False, now=None, admin_reason=None):
     draft = _draft(session, season)
     info = turn_info(session, season)
     team = info['team']
@@ -678,7 +681,8 @@ def _skip_locked(session, season, *, actor=None, timeout=False, now=None):
     _event(session, season, "fd_skipped", f"⏭ <b>{_e(team.name)} {'ran out of pick time' if timeout else 'skip their turn'}</b>\n"
            f"Round {info['round_no']} pick moved to the back of the skipped-pick queue. No purse deducted.\n\n"
            + next_team_html(session, season), by_tg_id=actor, franchise=team,
-           metadata={'timeout': timeout, 'round_no': info['round_no'], 'catch_up': info['catch_up']})
+           metadata={'timeout': timeout, 'round_no': info['round_no'], 'catch_up': info['catch_up'],
+                     'admin_override': bool(admin_reason), 'reason': admin_reason})
     return team
 
 
@@ -961,27 +965,36 @@ def _validate_pick(session, season, team, lot, price):
     A.check_role_rules(session, season, team, lot)
     slots_after = _required_slots(session, season, team, signing_lot=lot)
     remaining = [p for p in available if p.id != lot.id]
-    _validate_distinct_names(session, season, draft, A.franchises(session, season.id), remaining,
+    teams = A.franchises(session, season.id)
+    _validate_distinct_names(session, season, draft, teams, remaining,
                              signing_team=team, signing_lot=lot)
-    counts = A.role_counts(session, team.id)
+    # Read the room's composition once; querying every team separately for
+    # every category and rating ceiling adds network round trips to each pick.
+    team_counts = {other.id: Counter() for other in teams}
+    team_ratings = {other.id: [] for other in teams}
+    for fid, category, rating in session.query(AuctionLot.sold_to_id, AuctionLot.category, AuctionLot.rating).filter(
+            AuctionLot.season_id == season.id, AuctionLot.status == A.LOT_SOLD).all():
+        if fid in team_counts:
+            team_counts[fid][category] += 1
+            if rating is not None:team_ratings[fid].append(int(rating))
+    counts = team_counts[team.id].copy()
     counts[lot.category] = counts.get(lot.category, 0) + 1
     for role, minimum in A.role_minimums(season).items():
         needed = max(0, minimum - counts.get(role, 0))
         if needed > sum(p.category == role for p in remaining):
             raise AuctionError(f"This pick leaves too few {role} players available to meet the squad minimum.")
-    ratings = A.squad_ratings(session, team.id) + [int(lot.rating)]
+    ratings = team_ratings[team.id] + [int(lot.rating)]
     for rule in A.rating_rules(season):
         needed = max(0, rule["min_players"] - sum(r <= rule["max_rating"] for r in ratings))
         if needed > sum(int(p.rating) <= rule["max_rating"] for p in remaining):
             raise AuctionError(f"This pick leaves too few players rated ≤{rule['max_rating']} for the rating minimum.")
     # Protect the room's remaining obligations too. A team that already has
     # its keeper must not consume the only keeper another team still needs.
-    teams = A.franchises(session, season.id)
     role_pool = Counter(p.category for p in remaining)
     for role, minimum in A.role_minimums(season).items():
         total_needed = 0
         for other in teams:
-            have = A.role_counts(session, other.id).get(role, 0)
+            have = team_counts[other.id].get(role, 0)
             if other.id == team.id and lot.category == role:
                 have += 1
             total_needed += max(0, minimum - have)
@@ -991,7 +1004,7 @@ def _validate_pick(session, season, team, lot, price):
         cap = rule["max_rating"]
         total_needed = 0
         for other in teams:
-            have = sum(r <= cap for r in A.squad_ratings(session, other.id))
+            have = sum(r <= cap for r in team_ratings[other.id])
             if other.id == team.id and int(lot.rating) <= cap:
                 have += 1
             total_needed += max(0, rule["min_players"] - have)
@@ -1135,7 +1148,19 @@ def _completion_flow(pool,slots,counts,owed,highs,rules,needs,price,*,distinct_n
     return int(cost)
 
 
-def preview_pick(session, season, actor_tg_id, query, *, now=None):
+def _pick_authority(session, team, actor, admin_reason, trusted_admin):
+    if admin_reason is None:
+        _require_owner(team, actor)
+    else:
+        from services.franchise_draft_admin import require_admin
+        require_admin(session, actor, trusted_admin)
+        if not str(admin_reason).strip() or len(str(admin_reason)) > 300:
+            raise AuctionError('An administrator pick needs a reason of 1–300 characters.')
+        if team is None:
+            raise AuctionError('Every draft turn is complete.')
+
+
+def preview_pick(session, season, actor_tg_id, query, *, now=None, _admin_reason=None, _trusted_admin=False):
     draft = _draft(session, season)
     if season.status != A.STATUS_LIVE:
         raise AuctionError("The draft is not live. Ask the organiser to start or resume it.")
@@ -1143,7 +1168,7 @@ def preview_pick(session, season, actor_tg_id, query, *, now=None):
     team = turn(session, season)
     if team is not None:
         session.refresh(team)
-    _require_owner(team, actor_tg_id)
+    _pick_authority(session, team, actor_tg_id, _admin_reason, _trusted_admin)
     lot = find_player(session, season, query)
     price = price_for(session, season, lot)
     _validate_pick(session, season, team, lot, price)
@@ -1168,7 +1193,7 @@ def _confirmation(session, season, token, actor_tg_id, *, now=None):
     return row
 
 
-def confirm_pick(session, season, token, actor_tg_id, *, now=None, automatic=False):
+def confirm_pick(session, season, token, actor_tg_id, *, now=None, automatic=False, _admin_reason=None, _trusted_admin=False):
     row = _confirmation(session, season, token, actor_tg_id, now=now)
     draft = _draft(session, season)
     if season.status != A.STATUS_LIVE or int(row.revision) != int(draft.revision):
@@ -1183,7 +1208,7 @@ def confirm_pick(session, season, token, actor_tg_id, *, now=None, automatic=Fal
     team = info['team']
     if team is not None:
         session.refresh(team)
-    _require_owner(team, actor_tg_id)
+    _pick_authority(session, team, actor_tg_id, _admin_reason, _trusted_admin)
     if team.id != row.franchise_id:
         raise AuctionError("It is another team's turn. Use /dpick again when your team is called.")
     lot = session.get(AuctionLot, row.lot_id)
@@ -1206,7 +1231,7 @@ def confirm_pick(session, season, token, actor_tg_id, *, now=None, automatic=Fal
     # only the catalogue id because a missing lot was refused above.
     signed = A._sign_before_auction(session, season, team, SimpleNamespace(id=lot.player_id), row.price_lakh,
         kind=A.ACQ_DRAFTED, counter="draft_picks_used", ledger_kind=A.LEDGER_DRAFT,
-        verb="draft", note=f"Franchise draft pick {number}: {lot.name}",
+        verb="draft", note=(f"Franchise draft pick {number}: {lot.name}" + (f" · Admin: {_admin_reason}" if _admin_reason else ''))[:200],
         event_kind="fd_picked", mark="🏏", word="draft", by_tg_id=None if automatic else actor_tg_id, quiet=True, now=now)
     draft = _draft(session, season)
     row.status = "confirmed"
@@ -1222,7 +1247,8 @@ def confirm_pick(session, season, token, actor_tg_id, *, now=None, automatic=Fal
         f"💰 Purse left: <b>{_money(season, team.purse_remaining_lakh)}</b>\n"
         f"👥 Squad: <b>{team.squad_size}/{draft.rounds}</b>\n\n" + next_team_html(session, season),
         by_tg_id=None if automatic else actor_tg_id, lot=signed, franchise=team,
-        metadata={'round_no': info['round_no'], 'catch_up': info['catch_up'], 'automatic': automatic})
+        metadata={'round_no': info['round_no'], 'catch_up': info['catch_up'], 'automatic': automatic,
+                  'admin_override': bool(_admin_reason), 'reason': _admin_reason})
     if season.status == A.STATUS_COMPLETED:
         from services.franchise_draft_admin import validate_final
         validate_final(session, season)

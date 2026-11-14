@@ -150,9 +150,15 @@ def read_workspace(db, actor, sid, chat_id, view='home', argument=''):
     request={'view':api_view}
     if api_view=='pool':request['page']=(max(1,int(argument or 1))-1)//4+1
     if api_view=='preseason' and argument:request['team_id']=int(argument)
-    result=W.payload(db,season,actor,rows,request)
     from services import franchise_draft as D
     draft=D.get_draft(db,season)
+    if draft and view in ('home','live','franchisedraft','control','roles','help'):
+        result=W.base_payload(db,season,actor,rows)
+        result['teams']=[dict(id=t.id,name=t.name,purse_lakh=t.purse_remaining_lakh,size=t.squad_size)
+                         for t in A.franchises(db,season.id)]
+        result['counts']=A.pool_counts(db,season.id)
+    else:
+        result=W.payload(db,season,actor,rows,request)
     if draft:
         from services import franchise_draft_rich as DR
         board_blocks,board_text=DR.board(db,season)

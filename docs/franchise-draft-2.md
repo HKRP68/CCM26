@@ -5,6 +5,45 @@ engine or player inventory. The same `AuctionSeason`, `AuctionFranchise`,
 `AuctionLot`, catalogue IDs, ownership, ledger and League Season publication are
 used by auctions and drafts. Auction workflows retain their existing behavior.
 
+## Administrator picks, skips and pause
+
+Draft Admins can act for the franchise currently on the clock:
+
+```
+/dapick Team One | Joe Root | Owner unavailable
+/dapick Team One | #123 | Correct player version requested
+/daskip Team One | Owner unavailable
+/dpause
+/draftpause
+/dresume
+```
+
+`/dapick` and `/daskip` open a rich confirmation with a recorded reason.
+Nothing is charged or advanced before confirmation. Only the requesting,
+currently authorized Draft Admin can confirm; changed turns and expired or
+replayed buttons are rejected. Administrator signings use the normal timer,
+price, purse, category and rating checks and record the actual administrator.
+Use a pool `#ID` when player names have multiple versions.
+
+`/dpause` and its `/draftpause` alias freeze the clock and block signings.
+`/dresume` opens the normal resume preview. An administrator may skip a paused
+turn; the draft stays paused and the next team gets its full timer on resume.
+Skipped picks join the existing catch-up queue without a purse deduction.
+Owners continue to use `/dpick` and `/dskip` for their own active franchise.
+
+The website and Mini App provide the same controls under **Draft Settings**,
+with a **Pick / Skip for Team** shortcut on live and paused boards. Record the
+reason above the form, preview the signing or skip, then confirm.
+
+Draft boards load the team order once for all rounds and count available
+players in the database. Telegram draft home screens avoid building auction
+bid/overseas statistics. Pick validation batches squad-composition reads across
+franchises while enforcing the existing category and rating checks.
+Optional native rich sends have a two-second attempt
+budget and a sixty-second cooldown after a refusal or timeout; formatted HTML
+remains available during that cooldown. Callback buttons acknowledge receipt
+before waiting for the database worker.
+
 ## Prepare and launch
 
 **Franchise Draft** is available beside **Franchise Auction** in the Tournament

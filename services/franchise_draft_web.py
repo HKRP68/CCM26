@@ -7,7 +7,7 @@ from datetime import datetime,timedelta
 
 from services import auction_service as A, franchise_draft as D, franchise_draft_rich as R,franchise_draft_admin as M
 
-ADMIN_ACTIONS={'prices','custom','rounds','order','rules','team','removeteam','bind','clock','opening','purse','pooladd','poolremove','csv','importteams','retention','retain','unretain','start','pause','finish','undo','resolve','publish','continue','cancel','draftadmin_add','draftadmin_remove'}
+ADMIN_ACTIONS={'prices','custom','rounds','order','rules','team','removeteam','bind','clock','opening','purse','pooladd','poolremove','csv','importteams','retention','retain','unretain','start','pause','finish','undo','resolve','publish','continue','cancel','draftadmin_add','draftadmin_remove','adminpick','adminskip'}
 
 
 def _admin(db,actor,trusted):

@@ -190,6 +190,34 @@ def test_website_csv_budget_timer_skip_corrections_and_undo_share_the_ledger(sit
     assert D.price_for(site.db,season,root)==1100
 
 
+def test_website_admin_pick_skip_and_pause_recheck_real_authority(site):
+    from services import franchise_draft as D
+    from models import Player,FranchiseDraftPick
+    season=site.season
+    D.enable(site.db,season,rounds=1,by_tg_id=ADMIN)
+    player=Player(name='Second Player',rating=85,category='Batsman',country='India',version='Base',
+                  bat_rating=85,bowl_rating=50,bat_hand='Right',bowl_hand='Right',bowl_style='Medium Pacer',is_active=True)
+    site.db.add(player);site.db.flush();site.A.add_players_to_pool(site.db,season,[player])
+    D.set_rating_prices(site.db,season,'85:10cr',by_tg_id=ADMIN)
+    D.set_order(site.db,season,[site.owner.id,site.other.id],by_tg_id=ADMIN)
+    D.start(site.db,season,by_tg_id=ADMIN);site.db.commit()
+    token=login(site,ADMIN)
+    values={'team_id':site.owner.id,'player':'Website Player'}
+    quote=stage(site.client,token,season.id,'adminpick',values,'Owner unavailable')
+    owner,owner_token=identity(site,OWNER)
+    assert api(owner,owner_token,season.id,action='draft_answer',token=quote,accept=True,trusted_admin=True).status_code==403
+    assert api(owner,owner_token,season.id,action='draft_preview',operation='adminskip',values={'team_id':site.owner.id},reason='Forbidden',trusted_admin=True).status_code==403
+    site.db.expire_all();assert site.owner.squad_size==0
+    approve(site.client,token,season.id,quote)
+    site.db.expire_all();assert site.owner.squad_size==1
+    assert site.db.query(FranchiseDraftPick).one().actor_tg_id==ADMIN
+    apply(site.client,token,season.id,'pause')
+    apply(site.client,token,season.id,'adminskip',{'team_id':site.other.id},'Owner unavailable')
+    site.db.expire_all()
+    assert season.status==site.A.STATUS_PAUSED
+    assert D.skipped_turns(site.db,season)[0]['franchise_id']==site.other.id
+
+
 def test_only_global_admins_can_appoint_draft_admins_from_the_website(site):
     from services import franchise_draft as D
     season=site.A.create_season(site.db,'Appointments');D.enable(site.db,season,rounds=1);site.db.commit()

@@ -6,10 +6,12 @@ their initiating owner and carry their quoted turn and price in the database.
 from __future__ import annotations
 
 import html
+import asyncio
 import logging
 import re
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import TelegramError
 
 from database import get_session
 from models import AuctionFranchise, AuctionLot
@@ -235,6 +237,7 @@ def _render_view(db, season, actor, view, argument='0'):
 
 def execute(db, actor, chat_id, selected_sid, command, raw=''):
     """Run a command in one caller-owned transaction; return detached display data."""
+    if command=='draftpause':command='dpause'
     if command in ('dhelp','draftcommands','dcommands','dcmds'):
         return dict(text=_help(), markup=None, sid=selected_sid)
     if command == 'dadmin':
@@ -515,7 +518,8 @@ def execute_callback(db, actor, chat_id, selected_sid, data):
         season=_resolve(db,actor,chat_id,selected_sid,expected_sid=action.season_id)
         M.answer(db,season,actor,parts[3],accept=parts[2]=='y')
         packet=_render_view(db,season,actor,'board')
-        blocks,text=DR.Card('✅ Configuration applied' if parts[2]=='y' else '❌ Configuration cancelled').text(
+        subject={'adminpick':'Administrator signing','adminskip':'Administrator skip'}.get(action.kind,'Configuration')
+        blocks,text=DR.Card('✅ '+subject+' confirmed' if parts[2]=='y' else '❌ '+subject+' cancelled').text(
             'The change was validated and recorded in the audit log.' if parts[2]=='y' else 'No configuration, squad or purse was changed.').pair()
         packet['blocks']=blocks+packet['blocks'];packet['text']=text+'\n\n'+packet['text']
         return packet
@@ -573,6 +577,11 @@ def execute_callback(db, actor, chat_id, selected_sid, data):
 
 
 async def callback_handler(update, context):
+    # Stop the client's spinner before waiting for the database worker.
+    try:
+        await asyncio.wait_for(update.callback_query.answer(),2)
+    except (TelegramError,asyncio.TimeoutError):
+        pass
     try:
         actor = _actor(update)
         packet = await run_session(get_session, lambda db: execute_callback(
@@ -588,5 +597,4 @@ async def callback_handler(update, context):
         await _error(update, 'The draft could not be updated. Reopen /draft.', callback=True)
         return
     context.user_data['franchise_season_id'] = packet['sid']
-    await update.callback_query.answer()
     await _send(update, packet, edit=True)

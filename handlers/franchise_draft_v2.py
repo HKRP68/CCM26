@@ -4,20 +4,30 @@ from telegram import InlineKeyboardButton,InlineKeyboardMarkup
 from services import auction_service as A,franchise_draft as D,franchise_draft_rich as R
 from services import franchise_draft_admin as M
 
-COMMANDS=('dpreview','dsearch','dhistory','dclock','dcorrect','dpoolremove','dretention','dretain','dunretain','dimportteams')
+COMMANDS=('dpreview','dsearch','dhistory','dclock','dcorrect','dpoolremove','dretention','dretain','dunretain','dimportteams','dapick','daskip')
 
 
 def action_packet(db,season,actor,kind,payload,reason=''):
     action=M.prepare(db,season,actor,kind,payload,reason)
     blocks,text=R.preview_action(db,season,action)
+    label={'adminpick':'✅ Confirm Signing','adminskip':'⏭ Confirm Team Skip'}.get(kind,'✅ Apply configuration')
     markup=InlineKeyboardMarkup([[
-        InlineKeyboardButton('✅ Apply configuration',callback_data=f'fd_c_y_{action.token}'),
+        InlineKeyboardButton(label,callback_data=f'fd_c_y_{action.token}'),
         InlineKeyboardButton('❌ Cancel',callback_data=f'fd_c_n_{action.token}')]])
     return dict(text=text,blocks=blocks,markup=markup,sid=season.id)
 
 
 def route(db,season,actor,command,raw):
     from handlers import franchise_draft as H
+    if command in ('dapick','daskip'):
+        D.require_draft_admin(db,actor)
+        parts=[p.strip() for p in raw.split('|')]
+        if len(parts)!=(3 if command=='dapick' else 2) or not all(parts):
+            raise A.AuctionError('Use /dapick Team | Player name or #poolID | reason.' if command=='dapick' else 'Use /daskip Team | reason.')
+        team=H._team(db,season,parts[0],actor)
+        payload={'team_id':team.id}
+        if command=='dapick':payload['player']=parts[1]
+        return action_packet(db,season,actor,'adminpick' if command=='dapick' else 'adminskip',payload,parts[-1])
     if command=='dimportteams':
         D.require_draft_admin(db,actor)
         if not raw.strip():

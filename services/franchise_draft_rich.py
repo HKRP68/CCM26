@@ -257,7 +257,7 @@ def board(session,season):
                 ('Retained contracts',str(sum(int(t.retained_count or 0) for t in teams))),
                 ('Pick / scheduled turns',f'{min(config.cursor+1,total)}/{total}'),
                 ('Pending squad places',str(max(0,total-signed))),
-                ('Available players',str(len(D._available(session,season)))),
+                ('Available players',str(session.query(__import__('models').AuctionLot).filter_by(season_id=season.id,status=A.LOT_QUEUED).count())),
                 ('Franchises',str(len(teams))),('Next franchise',upcoming.name[:45] if upcoming else '—'),
                 ('Deferred picks',str(len(queue)))])
     card.text([R.code('▰'*filled+'▱'*(10-filled)),f'  {signed} players signed'])
@@ -314,6 +314,7 @@ def event_card(session,season,kind,text,*,lot=None,team=None,metadata=None):
         if kind == 'fd_picked' and lot is not None and team is not None:
             phase = 'Skipped-pick round' if metadata.get('catch_up') else f'Round {metadata.get("round_no", "")}'
             if metadata.get('automatic'):phase+=' · Automatic selection (approved timeout policy)'
+            if metadata.get('admin_override'):phase+=' · Administrator signing: '+str(metadata.get('reason',''))
             return receipt(session,season,lot,team,phase=phase)
         if kind == 'fd_started':
             return board(session,season)
@@ -333,6 +334,7 @@ def event_card(session,season,kind,text,*,lot=None,team=None,metadata=None):
                         ('Purse deducted',_money(season,0)),
                         ('Deferred picks',str(len(D.skipped_turns(session,season))))])
             card.text('Your pick joins the back of the skipped-pick queue. No player is signed.')
+            if metadata.get('admin_override'):card.text('🛡 Administrator skip · '+str(metadata.get('reason','')))
             card.append(next_turn(session,season))
             return card.pair()
     except Exception:
@@ -437,7 +439,8 @@ def order(session,season,page=None):
 def preview_action(session,season,action):
     data=json.loads(action.preview_json)
     before,after=data['before'],data['after']
-    card=Card('🛡 Confirm draft configuration',f'{season.name} · {action.kind}')
+    title={'adminpick':'🛡 Confirm administrator signing','adminskip':'⏭ Confirm administrator skip'}.get(action.kind,'🛡 Confirm draft configuration')
+    card=Card(title,f'{season.name} · {action.kind}')
     card.text('Nothing has been applied. This preview expires after ten minutes and checks your current role again.')
     card.facts([('Rounds',f'{before["rounds"]} → {after["rounds"]}'),
                 ('Minimum squad',f'{before.get("min_squad_size",before["rounds"])} → {after.get("min_squad_size",after["rounds"])}'),
@@ -446,6 +449,18 @@ def preview_action(session,season,action):
                 ('Eligible players',f'{before["eligible"]} → {after["eligible"]}'),
                 ('Reason',action.reason or 'Setup configuration')])
     if action.kind=='finish':card.text('Every franchise meets its minimum squad size and final rules. Confirm to close all remaining optional picks; squads and purses stay unchanged.')
+    if action.kind in ('adminpick','adminskip'):
+        payload=json.loads(action.payload_json)
+        team=session.get(__import__('models').AuctionFranchise,int(payload['team_id']))
+        card.section('🛡 Administrator signing' if action.kind=='adminpick' else '⏭ Administrator skip')
+        card.facts([('Franchise',team.name),('Administrator',str(action.actor_tg_id))])
+        if action.kind=='adminpick':
+            A,D=_services()
+            lot=D.find_player(session,season,payload['player'])
+            card.facts([('Player',f'{lot.name} · {lot.version or "Base"} · #{lot.id}'),
+                        ('Overall / category',f'{lot.rating} · {lot.category}'),
+                        ('Signing price',_money(season,D.price_for(session,season,lot)))])
+        else:card.text('This turn moves to the back of the catch-up queue. No purse is deducted. A paused draft stays paused.')
     if action.kind=='start':card.facts([('Opening franchise',after['current'] or 'All squad places occupied'),
         ('Pick time','Timer off' if not after['timer_seconds'] else str(after['timer_seconds'])+' seconds'),
         ('On expiry',after['settings'].get('timeout_policy','skip'))])

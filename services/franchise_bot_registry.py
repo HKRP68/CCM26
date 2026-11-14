@@ -19,7 +19,7 @@ DOT_ALIASES = frozenset({
 # surface can be reviewed without importing the main cricket application.
 COMMANDS = (
     ('draft', ('dcall', 'dcallteams'), 'dcall_handler'),
-    ('draft', ('dpreview','dsearch','dhistory','dclock','dcorrect','dpoolremove','dretention','dretain','dunretain','dimportteams'), 'command_handler'),
+    ('draft', ('dpreview','dsearch','dhistory','dclock','dcorrect','dpoolremove','dretention','dretain','dunretain','dimportteams','dapick','daskip','draftpause'), 'command_handler'),
     ('draft', ('draft', 'dboard', 'dnew', 'dsetup', 'dprices', 'dcustom',
                'dorder', 'drounds', 'daddrounds', 'dstart', 'dpause', 'dresume', 'dfinish',
                'dundo', 'dpick', 'dpool', 'dsquad', 'drules', 'dhelp',
