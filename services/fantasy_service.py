@@ -3,6 +3,7 @@
 import logging
 import os
 from datetime import datetime
+from html import escape
 
 logger = logging.getLogger(__name__)
 
@@ -417,7 +418,7 @@ def lock_league(session, league_id):
                      BotChat.chat_type.in_(["group", "supergroup"]))
              .all())
     chat_ids = [c.chat_id for c in chats]
-    return chat_ids, f"🔒 Fantasy squads for **{league.name}** are now LOCKED! No further changes allowed. Good luck! 🍀"
+    return chat_ids, f"🔒 Fantasy squads for <b>{escape(league.name)}</b> are now LOCKED! No further changes allowed. Good luck! 🍀"
 
 
 def score_league(session, league_id):

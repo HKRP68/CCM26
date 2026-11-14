@@ -531,6 +531,35 @@ def register_button_owner(chat_id: int, message_id: int, owner_user_id: int) -> 
     _prune_owner_cache()
 
 
+def register_rich_message_owner(message: dict, payload: dict) -> None:
+    """Keep the personal-button guard when native sends bypass send_message."""
+    owner = _current_button_owner.get()
+    if owner is None or payload.get("ephemeral_message_parameters"):
+        return
+    callbacks = []
+
+    def visit(node):
+        if hasattr(node, "to_dict"):
+            node = node.to_dict()
+        if isinstance(node, dict):
+            if isinstance(node.get("callback_data"), str):
+                callbacks.append(node["callback_data"])
+            for value in node.values():
+                visit(value)
+        elif isinstance(node, (list, tuple)):
+            for value in node:
+                visit(value)
+
+    visit(payload.get("reply_markup"))
+    visit(payload.get("rich_message", {}).get("blocks"))
+    if not any(not is_shared_callback_data(data) for data in callbacks):
+        return
+    chat_id = message.get("chat", {}).get("id")
+    message_id = message.get("message_id")
+    if chat_id is not None and message_id is not None:
+        register_button_owner(chat_id, message_id, owner)
+
+
 def _prune_owner_cache() -> None:
     if len(_OWNER_BY_MESSAGE) < 4096:
         return

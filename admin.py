@@ -3215,9 +3215,9 @@ def admin_message_user(user_id):
 
         import requests
         try:
-            resp = requests.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={
+            from services.telegram_rich_http import post_message
+            resp = post_message(
+                token, {
                     "chat_id": user.telegram_id,
                     "text": text,
                     "parse_mode": "HTML",
@@ -10457,6 +10457,9 @@ def _tg_call(method, json_body=None, params=None, timeout=8):
         import requests as _rq
         if params is not None:
             resp = _rq.get(url, params=params, timeout=timeout)
+        elif method == 'sendMessage':
+            from services.telegram_rich_http import post_message
+            resp = post_message(token, json_body or {}, timeout=timeout)
         else:
             resp = _rq.post(url, json=json_body or {}, timeout=timeout)
         try:
@@ -11724,7 +11727,8 @@ def _send_completed_match_cards(chat_id, images, fallback_text, reply_markup):
                    "parse_mode": "HTML", "disable_web_page_preview": True}
         if reply_markup and not single_card:
             payload["reply_markup"] = _json.dumps(reply_markup)
-        resp = _rq.post(f"{base}/sendMessage", json=payload, timeout=12)
+        from services.telegram_rich_http import post_message
+        resp = post_message(token, payload, timeout=12)
         if resp.ok:
             sent_any = True
         else:
@@ -20011,6 +20015,8 @@ def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None, button=None
     import time
     import logging as _lg
     log = _lg.getLogger("broadcast")
+    from services.rich_message_defaults import install_rich_defaults
+    install_rich_defaults()
     sent = 0
     failed = 0
 
@@ -22836,9 +22842,9 @@ def _tg_send(telegram_id, text):
         return False, "BOT_TOKEN not configured"
     import requests
     try:
-        resp = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": telegram_id, "text": text, "parse_mode": "HTML",
+        from services.telegram_rich_http import post_message
+        resp = post_message(
+            token, {"chat_id": telegram_id, "text": text, "parse_mode": "HTML",
                   "disable_web_page_preview": True},
             timeout=10,
         )

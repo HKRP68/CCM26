@@ -2,7 +2,8 @@
 
 A rich message is not a ``parse_mode``. The text is a tree of typed blocks —
 headings, native tables, collapsible ``details`` — posted to its own endpoint,
-so a surface that wants one needs a second renderer alongside its HTML one.
+and existing HTML can also be sent natively. Specialized surfaces add block
+renderers; rich_message_defaults covers ordinary text sends across the bot.
 The installed SDK predates these methods, so their payloads go through
 ``Bot._post``: the same authenticated transport every PTB method
 uses, which keeps the rate limiter, the base URL and the error parsing.
@@ -24,6 +25,8 @@ both split an over-long fallback rather than letting Telegram refuse it.
 
 import asyncio
 from collections import OrderedDict
+from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 import logging
 import time
@@ -45,6 +48,7 @@ logger = logging.getLogger(__name__)
 # operation for a limited time, so one old server cannot disable another bot.
 _unsupported = False
 _capabilities = OrderedDict()
+_legacy_delivery = ContextVar("cmu_rich_legacy_delivery", default=False)
 NATIVE_TIMEOUT_SECONDS = 8.0
 NATIVE_COOLDOWN_SECONDS = 5.0
 UNSUPPORTED_RETRY_SECONDS = 300.0
@@ -60,6 +64,20 @@ _MISSING_METHOD_HINTS = (
 # Telegram refuses a text message over 4,096 characters outright. The HTML
 # fallbacks are cut under that rather than lost.
 CHUNK_LIMIT = 3800
+
+
+def legacy_delivery_active():
+    return _legacy_delivery.get()
+
+
+@contextmanager
+def legacy_delivery():
+    """Avoid promoting an already attempted rich helper's fallback a second time."""
+    token = _legacy_delivery.set(True)
+    try:
+        yield
+    finally:
+        _legacy_delivery.reset(token)
 
 
 def _state(bot, endpoint):
@@ -425,9 +443,9 @@ def _native_keyboard(blocks, markup):
 
 
 async def _request_rich(
-    bot, endpoint, payload, *, fallback_text=None, fallback_markup=None
+    bot, endpoint, payload, *, fallback_text=None, fallback_markup=None, post=None
 ):
-    post = getattr(bot, "_post", None)
+    post = post or getattr(bot, "_post", None)
     if not post or not rich_text_enabled(bot, endpoint):
         return None
     try:
@@ -468,6 +486,10 @@ async def _request_rich(
         return None
     state = _state(bot, endpoint)
     state["retry_after"] = state["unsupported_until"] = 0.0
+    if endpoint == "sendRichMessage" and isinstance(result, dict):
+        from services.button_access import register_rich_message_owner
+
+        register_rich_message_owner(result, payload)
     return result
 
 
@@ -486,10 +508,10 @@ def _transport_failure(bot, endpoint, exc):
     _note_failure(endpoint, exc, bot)
 
 
-def _rich_content(blocks, reply_markup, fallback_text):
-    native_blocks, native_markup = _native_keyboard(
-        normalize_blocks(blocks or []), reply_markup
-    )
+def _rich_content(blocks, reply_markup, fallback_text, *, native_buttons=True):
+    native_blocks, native_markup = normalize_blocks(blocks or []), reply_markup
+    if native_buttons:
+        native_blocks, native_markup = _native_keyboard(native_blocks, reply_markup)
     if blocks:
         return {"blocks": native_blocks}, native_markup
     from services.rich_message_html import render
@@ -505,12 +527,15 @@ async def _post_rich(
     reply_to_message_id,
     *,
     fallback_text=None,
+    native_buttons=True,
     **options,
 ):
     if not (blocks or fallback_text) or not rich_text_enabled(bot):
         return None
     try:
-        content, native_markup = _rich_content(blocks, reply_markup, fallback_text)
+        content, native_markup = _rich_content(
+            blocks, reply_markup, fallback_text, native_buttons=native_buttons
+        )
     except Exception:
         logger.warning(
             "Unable to prepare native rich message; preserving formatted HTML",
@@ -546,6 +571,7 @@ async def send_rich_message(
     *,
     reply_markup=None,
     reply_to_message_id=None,
+    native_buttons=True,
     **kwargs,
 ):
     """Send ``blocks`` as a rich message, or ``fallback_text`` as HTML.
@@ -578,6 +604,7 @@ async def send_rich_message(
         reply_markup,
         reply_to_message_id,
         fallback_text=fallback_text,
+        native_buttons=native_buttons,
         **native_options,
     )
     if sent is not None:
@@ -599,7 +626,8 @@ async def send_rich_message(
             reply_markup=reply_markup if index == len(parts) - 1 else None,
             reply_to_message_id=reply_to_message_id if index == 0 else None,
         )
-        sent = await bot.send_message(chat_id, part, **options)
+        with legacy_delivery():
+            sent = await bot.send_message(chat_id, part, **options)
     return sent
 
 
@@ -712,12 +740,13 @@ async def reply_rich(message, blocks, fallback_text, *, reply_markup=None):
     sent = None
     for index, part in enumerate(parts):
         last = index == len(parts) - 1
-        sent = await message.reply_text(
-            part,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-            reply_markup=reply_markup if last else None,
-        )
+        with legacy_delivery():
+            sent = await message.reply_text(
+                part,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=reply_markup if last else None,
+            )
     return sent
 
 
@@ -750,12 +779,13 @@ async def edit_rich(query, blocks, fallback_text, *, reply_markup=None):
             return True
     text = parts[0]
     try:
-        await query.edit_message_text(
-            text,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-            reply_markup=reply_markup,
-        )
+        with legacy_delivery():
+            await query.edit_message_text(
+                text,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=reply_markup,
+            )
         return True
     except Exception as exc:
         if "not modified" in str(exc).lower():

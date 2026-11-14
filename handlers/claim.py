@@ -1,10 +1,8 @@
 """Handler for /claim — keeps session open through entire flow.
 
-The claim card itself is a photo with a caption, which is not something
-``sendRichMessage`` replaces. Everything the card *leads to* is an ordinary
-message, though, and those are what a manager reads afterwards: what joined the
-squad and what it is, what was released and for how much, what was swapped for
-what. Each of those now has a Bot API 10.1 block rendering beside its HTML one —
+The image leads with a short caption; the initial player details and decisions
+follow in a native rich card. Retain, release, replacement and timer outcomes
+also have Bot API 10.4 block renderings beside their HTML twins —
 the player's attributes as a real table behind a collapsible ``details``, rather
 than a ``<blockquote expandable>`` of ``key: value`` lines — and
 ``services/rich_message.py`` sends the HTML whenever the rich send is refused.
@@ -14,6 +12,7 @@ See ``docs/rich-text-messages.md``.
 import io
 import logging
 from datetime import datetime
+from html import escape
 from types import SimpleNamespace
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -59,19 +58,20 @@ def _build_card_text(p, coin_reward=0, mention=None):
     flag = get_flag(p["country"])
     buy = compact_value(get_buy_value(p["rating"]))
     sell = compact_value(get_sell_value(p["rating"]))
-    bat_hand = f"{p['bat_hand']} Hand Batsman" if p.get("bat_hand") else "—"
+    bat_hand = f"{escape(p['bat_hand'])} Hand Batsman" if p.get("bat_hand") else "—"
 
     lines = [
-        f"<blockquote>👤 <b>{p['name']}</b>  {flag}</blockquote>",
+        f"<blockquote>👤 <b>{escape(p['name'])}</b>  {flag}</blockquote>",
         f"⭐{p['rating']} 🏏{p['bat_rating']} 🎯{p['bowl_rating']}",
-        f"| {p['category']} | {bat_hand} | {p['bowl_style']}",
+        f"| {escape(p['category'] or '—')} | {bat_hand} | {escape(p['bowl_style'] or '—')}",
+        f"🎴 {escape(p.get('version') or 'Base')}",
         "",
         f"|💰 B:{buy} | S:{sell} 🪙",
     ]
     if coin_reward:
         lines.append(f"|💰 +{coin_reward:,} Coin Added")
     lines.append("")
-    who = mention or "You"
+    who = escape(mention or "You")
     lines.append(f"{who} Click 🟢 to retain or 🔴 to release")
     return "\n".join(lines)
 
@@ -93,6 +93,99 @@ def _card_details(rows, summary="📇 Card details"):
                      [R.table([[R.cell(R.bold(label)), R.cell(str(value))]
                                for label, value in rows],
                               bordered=True, compact=True)])
+
+
+def _claim_blocks(p, roster_count, coin_reward, mention_text, mention_tg_id):
+    """The initial claim decision, with all player facts and the real manager."""
+    rows = [
+        [
+            R.cell("⭐ Overall", header=True),
+            R.cell("🏏 Batting", header=True),
+            R.cell("🎯 Bowling", header=True),
+        ],
+        [
+            R.cell(R.bold(str(p["rating"])), align="center"),
+            R.cell(str(p["bat_rating"]), align="center"),
+            R.cell(str(p["bowl_rating"]), align="center"),
+        ],
+    ]
+    blocks = [
+        R.heading("🎴 PLAYER CLAIM", 2),
+        R.pullquote(
+            R.bold(p["name"]), caption=f"{get_flag(p['country'])} {p['country']}"
+        ),
+        R.table(rows, bordered=True, compact=True),
+        R.table(
+            [
+                [R.cell(label), R.cell(str(value or "—"))]
+                for label, value in (
+                    ("Role", p["category"]),
+                    ("Version", p.get("version")),
+                    ("Batting hand", p.get("bat_hand")),
+                    ("Bowling style", p.get("bowl_style")),
+                    ("Buy value", compact_value(get_buy_value(p["rating"]))),
+                    ("Sell value", compact_value(get_sell_value(p["rating"]))),
+                    ("Your squad", f"{roster_count}/{MAX_ROSTER}"),
+                )
+            ],
+            compact=True,
+            striped=True,
+        ),
+        R.paragraph(
+            [
+                R.mention(mention_text, mention_tg_id),
+                ", choose whether to retain or release this player.",
+            ]
+        ),
+    ]
+    if coin_reward:
+        blocks.append(
+            R.paragraph(["💰 ", R.bold(f"+{coin_reward:,}"), " coins added."])
+        )
+    if roster_count >= MAX_ROSTER:
+        blocks.append(
+            R.paragraph(
+                "Your squad is full. Choose Replace to make room for this player."
+            )
+        )
+    blocks.append(
+        R.footer(
+            f"⏱ Decide within {AUTO_TIMEOUT} seconds. A free slot auto-retains; a full squad auto-releases."
+        )
+    )
+    return blocks
+
+
+async def _send_claim_card(
+    *, bot, chat_id, player, p, text, blocks, keyboard, reply_to_message_id, session
+):
+    from services.card_sender import send_player_card
+
+    rich = R.rich_text_enabled()
+    image = await send_player_card(
+        bot=bot,
+        chat_id=chat_id,
+        player=player,
+        caption=(
+            f"🎴 <b>{escape(p['name'])}</b> · {p['rating']} OVR" if rich else text
+        ),
+        reply_markup=None if rich else keyboard,
+        reply_to_message_id=reply_to_message_id,
+        session=session,
+    )
+    if not rich:
+        return image
+    # Inline keyboard controls can be removed by the existing claim callbacks
+    # and timer. Embedded rich buttons cannot be removed using reply_markup.
+    return await R.send_rich_message(
+        bot,
+        chat_id,
+        blocks,
+        text,
+        reply_markup=keyboard,
+        native_buttons=False,
+        reply_to_message_id=getattr(image, "message_id", reply_to_message_id),
+    )
 
 
 def _retained_blocks(name, category, rating, bat_rating, bowl_rating,
@@ -362,14 +455,12 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         keyboard = InlineKeyboardMarkup(buttons)
 
-        # Send card image + text with buttons via card_sender
-        from services.card_sender import send_player_card
-        msg = await send_player_card(
+        blocks = _claim_blocks(p, roster_count, coin_reward, mention, tg_user.id)
+        msg = await _send_claim_card(
             bot=context.bot,
             chat_id=update.effective_chat.id,
             player=player_snapshot,
-            caption=text,
-            reply_markup=keyboard,
+            p=p, text=text, blocks=blocks, keyboard=keyboard,
             reply_to_message_id=update.message.message_id,
             session=session,
         )

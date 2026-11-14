@@ -31,6 +31,36 @@ or rich `markdown`. This bot normally sends typed blocks.
 Telegram aligns the columns, so the layout no longer depends on how long a
 player's name is.
 
+## Bot-wide delivery
+
+`services/rich_message_defaults.py` is installed by the main bot, the franchise
+bot, admin DMs and website broadcasts. It promotes ordinary `send_message`,
+`reply_text`, `reply_html`, callback edits and scheduled job messages through
+the shared native rich transport. This includes match setup, delivery/shot
+prompts, live over updates, claims, daily rewards, player searches, roster and
+shop pages, trades, tournaments, help, errors and administrator screens.
+
+Existing HTML becomes native rich HTML. Plain text becomes a native paragraph;
+names containing `<`, `>` or `&` remain literal text. Explicit Telegram entities
+preserve their formatting, including UTF-16 offsets. Specialized tables and
+scorecards keep their existing block builders. Legacy Markdown is preserved
+through its original formatter because its syntax differs from rich Markdown.
+
+The automatic path preserves inline keyboards, reply targets, forum topics,
+private parameters, content protection, the SDK rate limiter and caller timeouts.
+Inline keyboards remain removable by existing completion/timeout handlers.
+Personal native buttons register with the same owner guard; shared match
+controls remain available to both captains and retain their backend checks.
+An explicit rich helper's compatibility send is never promoted a second time.
+
+`services/rich_message_compat.py` bridges the installed SDK: rich message
+responses and incoming callback/webhook messages expose readable `text` and
+`text_html`, with mentions and formatting. It preserves the original native
+message without mutating Telegram updates. Existing photo/video/file delivery
+keeps its media and formatted captions. The initial `/claim` image is followed
+by a rich player-details card; its retain/release/replace keyboard and the
+60-second timer refer to that decision card.
+
 ## Where it is used
 
 | Surface | Rendering |
@@ -55,16 +85,21 @@ player's name is.
 | `/cltour` | `handlers/cl_tour._cl_tour_blocks` — the two sides as a table, the series scoreline as a `pullquote`, and each match's state as a row |
 | the Lets Play traits vote | `services/trait_vote_service.prompt_blocks` / `result_blocks` — the two XIs and who has answered as one table, the outcome rules as another, the verdict as a `pullquote` |
 | every `/letsplay` and `/lpbot` setup card — invitation, pitch, both Playing XIs, the toss, and what `/change` takes | `services/letsplay_rich.py` — the invitation's facts as a table, each XI as a numbered `table` with its rating in a right-aligned column of its own and its bench behind a `details`, and the Team Overall verdict as a `pullquote` when the gap is wide enough to cost both sides their career stats. The toss reveal goes through `_reveal_rich`, which raises on a refused edit so `reveal_toss_result`'s retry keeps meaning what it says |
-| what `/claim` leads to — retain, release, replace, and the 60s auto-decide | `handlers/claim.py` — the card's attributes as a `table` behind a `details`, replacing `<blockquote expandable>` |
+| `/claim` and its retain, release, replace and 60s auto-decide outcomes | `handlers/claim.py` — the initial decision has a rating table, player facts, version, manager mention and timer explanation. Its image leads with a compact caption. Outcomes show card attributes in expandable tables. Removable inline controls stay attached to the decision card. |
 | `/stats` | the career record as a batting `table` and a bowling one; with rich messages on, the card image leads with the short caption and the record follows as its own message |
 | the scorecard of last resort, when every image fails | `services/scorecard_delivery.py` — batting, bowling and the result as native tables, the winner as a `pullquote` |
 | all Franchise season draft messages | `services/franchise_draft_rich.py` — purse, player and rule tables; the current team and confirmed player as `pullquote` blocks; round order and squad lists in `details`; command guides as grouped tables. Native button rows reuse the existing authorized callbacks; deadlines use localized `date_time` nodes. API 10.4 private rich replies explain rejected button actions to the clicker. Event cards snapshot purse/squad/next-owner values before delivery. Long HTML fallbacks split without dropping rows. |
 
-Calls through the shared helpers also send native rich HTML when no block
-builder is available. Other direct HTML senders keep their existing formatting.
-The `/claim`, `/gstats` and scorecard cards are photos, and a caption is not
-something `sendRichMessage` replaces — for those the messages around the photo
-use rich text.
+The shared helpers send native rich HTML when no block builder is available;
+ordinary bot text sends receive the same native delivery automatically. Image
+cards keep their images and formatted captions, with native rich details where
+the flow provides a separate text card.
+
+Synchronous news, Mini App notifications and direct website sends share
+`services/telegram_rich_http.py`. It preserves HTML, keyboards and privacy,
+retries a rejected native format through the original styled message, and
+caches missing endpoints temporarily per token. Network failures and flood
+limits are returned to the worker without issuing a second message.
 
 ## Both renderers stay alive
 

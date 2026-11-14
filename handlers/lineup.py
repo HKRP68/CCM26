@@ -392,7 +392,10 @@ async def bench_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # A message sent as rich blocks has no HTML to append to, so rebuild the
         # whole XI in that case rather than replacing it with a bare bench.
-        on_screen = q.message.text_html
+        # The SDK compatibility projection includes collapsed details too.
+        # Rebuild a native XI rather than appending the bench a second time.
+        on_screen = (None if getattr(q.message, 'api_kwargs', {}).get('rich_message')
+                     else q.message.text_html)
         if on_screen:
             text = on_screen + "\n\n" + format_bench_text(roster)
         else:

@@ -27,6 +27,7 @@ from config import BOT_TOKEN
 from database import init_db
 from logger import setup_logging
 from services.reply_context import bind_reply_context, install_reply_defaults
+from services.rich_message_defaults import install_rich_defaults
 from services.telegram_user_service import sync_update_users
 from services.button_access import (
     bind_button_owner_context,
@@ -1066,6 +1067,7 @@ def _send_bot_dm_blocking(chat_id, text):
     try:
         import asyncio
         from telegram import Bot
+        install_rich_defaults()
         bot_instance = Bot(token=BOT_TOKEN)
 
         async def _send():
@@ -1098,6 +1100,7 @@ def main():
     setup_logging()
     install_reply_defaults()
     install_button_access_defaults()
+    install_rich_defaults()
     logger.info("=" * 50)
     logger.info("CRICKET BOT STARTING...")
     logger.info("=" * 50)
@@ -2922,7 +2925,7 @@ def main():
                         for cid in chat_ids:
                             try:
                                 await context.bot.send_message(
-                                    cid, msg, parse_mode="Markdown")
+                                    cid, msg, parse_mode="HTML")
                             except Exception:
                                 pass
                 except Exception:

@@ -27,7 +27,10 @@ def _post(method, data, files=None, timeout=12):
     try:
         import requests
         url = f"https://api.telegram.org/bot{token}/{method}"
-        if files:
+        if method == 'sendMessage' and not files:
+            from services.telegram_rich_http import post_message
+            resp = post_message(token, data, timeout=timeout)
+        elif files:
             resp = requests.post(url, data=data, files=files, timeout=timeout)
         else:
             resp = requests.post(url, json=data, timeout=timeout)

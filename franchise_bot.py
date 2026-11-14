@@ -198,6 +198,8 @@ def build_application(settings: Settings | None = None, *, register_extra=None):
     """Construct the auction application without initializing the DB or polling."""
     settings = settings or load_settings()
     configure_environment(settings)
+    from services.rich_message_defaults import install_rich_defaults
+    install_rich_defaults()
     from telegram.ext import ApplicationBuilder
     from services.franchise_bot_registry import register_auction_handlers
     application = (ApplicationBuilder().token(settings.token).concurrent_updates(16)

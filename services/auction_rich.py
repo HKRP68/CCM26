@@ -2388,11 +2388,12 @@ async def send(bot, chat_id, blocks, html_text, *, reply_markup=None,
         kwargs = {}
         if index == 0 and reply_to_message_id is not None:
             kwargs["reply_to_message_id"] = reply_to_message_id
-        sent = await bot.send_message(
-            chat_id=chat_id, text=part, parse_mode="HTML",
-            disable_web_page_preview=True,
-            reply_markup=reply_markup if index == len(parts) - 1 else None,
-            **kwargs)
+        with R.legacy_delivery():
+            sent = await bot.send_message(
+                chat_id=chat_id, text=part, parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=reply_markup if index == len(parts) - 1 else None,
+                **kwargs)
     return sent
 
 
@@ -2426,10 +2427,11 @@ async def edit(bot, chat_id, message_id, blocks, *, reply_markup=None,
         # Only the first part: an edit replaces one message, so a card driven by
         # buttons has to fit one. html_parts caps it rather than losing the tail
         # to Telegram's length limit.
-        await bot.edit_message_text(
-            chat_id=chat_id, message_id=message_id,
-            text=html_parts(html_text)[0], parse_mode="HTML",
-            disable_web_page_preview=True, reply_markup=reply_markup)
+        with R.legacy_delivery():
+            await bot.edit_message_text(
+                chat_id=chat_id, message_id=message_id,
+                text=html_parts(html_text)[0], parse_mode="HTML",
+                disable_web_page_preview=True, reply_markup=reply_markup)
         return True
     except Exception as exc:
         if "not modified" in str(exc).lower():
