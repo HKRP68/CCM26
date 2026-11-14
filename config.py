@@ -10,7 +10,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///cricket_bot.db")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
-# Bot API 10.1 rich messages (native tables, headings, collapsible blocks) for
+# Bot API 10.4 rich messages (native tables, headings, collapsible/button blocks) for
 # the surfaces that render them — see services/rich_message.py. Every rich send
 # falls back to the surface's HTML, so turning this off is always safe; set it
 # to 0 when running against a self-hosted Bot API server below 10.1 to skip the

@@ -1733,8 +1733,8 @@ class RichTests(FeatureCase):
                          R.pre("x", "text"))
         self.assertEqual(
             {"type": "list", "items": [
-                {"blocks": [{"type": "paragraph", "text": "a"}], "label": "1."},
-                {"blocks": [{"type": "paragraph", "text": "b"}], "label": "2."}]},
+                {"blocks": [{"type": "paragraph", "text": "a"}], "value": 1, "type": "1"},
+                {"blocks": [{"type": "paragraph", "text": "b"}], "value": 2, "type": "1"}]},
             R.list_block(["a", "b"], ordered=True))
         self.assertEqual(
             {"type": "list",

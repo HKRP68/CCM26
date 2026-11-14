@@ -270,13 +270,13 @@ class RichSendTests(unittest.TestCase):
         # so the logs keep naming it.
         self.assertTrue(rich_message.rich_text_enabled())
 
-    def test_missing_method_latches_off_after_one_attempt(self):
+    def test_missing_method_is_cached_for_this_bot_after_one_attempt(self):
         # PTB maps the 404 for an unknown method onto InvalidToken.
         from telegram.error import InvalidToken
         bot = _FakeBot(post_error=InvalidToken("Not Found: method not found"))
         with patch.object(config, "RICH_TEXT_ENABLED", True):
             self._send(bot)
-            self.assertFalse(rich_message.rich_text_enabled())
+            self.assertFalse(rich_message.rich_text_enabled(bot))
             self._send(bot)
         self.assertEqual(len(bot.posts), 1, "should not retry a missing method")
         self.assertEqual(bot.send_message.await_count, 2)
@@ -289,13 +289,14 @@ class RichSendTests(unittest.TestCase):
         self.assertEqual(payload["reply_markup"], "kb")
         self.assertEqual(payload["reply_parameters"], {"message_id": 7})
 
-    def test_empty_blocks_fall_back(self):
+    def test_empty_blocks_use_the_native_rich_html_representation(self):
         bot = _FakeBot()
         with patch.object(config, "RICH_TEXT_ENABLED", True):
             asyncio.run(rich_message.send_rich_message(
                 bot, 42, [], "<b>fallback</b>"))
-        self.assertEqual(bot.posts, [])
-        bot.send_message.assert_awaited_once()
+        self.assertEqual(bot.posts[0][0],'sendRichMessage')
+        self.assertEqual(bot.posts[0][1]['rich_message'],{'html':'<b>fallback</b>'})
+        bot.send_message.assert_not_awaited()
 
 
 class RichEditTests(unittest.TestCase):

@@ -1,4 +1,4 @@
-# Rich text messages (Bot API 10.1)
+# Rich text messages (Bot API 10.4)
 
 `/pxi` used to fake a table. Names, ratings and a flag went into one padded
 line inside a `<blockquote>`:
@@ -11,8 +11,10 @@ Telegram renders that in a proportional font, so the numbers only line up when
 every name happens to be the same width. They never are, and the bench had the
 same problem one `<blockquote expandable>` down.
 
-Bot API 10.1 added real tables. They are not a `parse_mode`: instead of an HTML
-string, `sendRichMessage` takes a tree of typed blocks.
+Telegram's current [Bot API](https://core.telegram.org/bots/api) supports real
+tables, expandable sections and native buttons. Rich messages are not a
+`parse_mode`: `sendRichMessage` accepts exactly one of `blocks`, rich `html`,
+or rich `markdown`. This bot normally sends typed blocks.
 
 ```python
 {"chat_id": 42, "rich_message": {"blocks": [
@@ -35,7 +37,7 @@ player's name is.
 | --- | --- |
 | `/pxi`, `/xi`, `/playingxi` | one `table` block — the four section names (batsmen, keeper, all-rounders, bowlers) are full-width header rows inside it |
 | the `📋 View Bench` button | a collapsed `details` block, replacing `<blockquote expandable>` |
-| the Franchise Auction's pinned board, `/aboard` | headings, a lot `table`, and the purses as a striped `table` — edited in place through `auction_rich.edit`, which treats "not modified" as success and latches rich board edits off for the process if Telegram refuses one |
+| the Franchise Auction's pinned board, `/aboard` | headings, a lot `table`, and the purses as a striped `table` — edited in place through `auction_rich.edit`, which treats "not modified" as success and shares the recoverable native transport |
 | `/asquad`, `/apurse`, `/asets`, `/anextset`, `/anextplayer`, `/asoldlist`, `/aunsoldlist`, `/ainfo` | tables, a numbered `list`, and one collapsed `details` per set |
 | `/adminhelp` | one `details` per section, each a two-column `table`, and a `pre` block of examples |
 | `/tournamentstats`, `/lptstats` | the board as a ranked `table` — rank, player, team and the value in its own named column (`RUNS`, `WKTS`, `ECON` …). Ten places open, ranks 11–25 in a collapsed `details`; MVP keeps its `footer` pointing at `/mvp` |
@@ -56,12 +58,13 @@ player's name is.
 | what `/claim` leads to — retain, release, replace, and the 60s auto-decide | `handlers/claim.py` — the card's attributes as a `table` behind a `details`, replacing `<blockquote expandable>` |
 | `/stats` | the career record as a batting `table` and a bowling one; with rich messages on, the card image leads with the short caption and the record follows as its own message |
 | the scorecard of last resort, when every image fails | `services/scorecard_delivery.py` — batting, bowling and the result as native tables, the winner as a `pullquote` |
-| all Franchise season draft messages | `services/franchise_draft_rich.py` — purse, player and rule tables; the current team and confirmed player as `pullquote` blocks; round order and squad lists in `details`; command guides as grouped tables. Commands, owner-bound buttons, native setup forms, CSV imports and the pinned board share the styling. Event cards snapshot purse/squad/next-owner values before delivery. Long HTML fallbacks split without dropping rows. |
+| all Franchise season draft messages | `services/franchise_draft_rich.py` — purse, player and rule tables; the current team and confirmed player as `pullquote` blocks; round order and squad lists in `details`; command guides as grouped tables. Native button rows reuse the existing authorized callbacks; deadlines use localized `date_time` nodes. API 10.4 private rich replies explain rejected button actions to the clicker. Event cards snapshot purse/squad/next-owner values before delivery. Long HTML fallbacks split without dropping rows. |
 
-Everything else in the bot still sends HTML, and nothing forces that to change:
-the two are ordinary sends to different endpoints. The `/claim`, `/gstats` and
-scorecard cards are photos, and a caption is not something `sendRichMessage`
-replaces — for those only the messages around the photo are rich.
+Calls through the shared helpers also send native rich HTML when no block
+builder is available. Other direct HTML senders keep their existing formatting.
+The `/claim`, `/gstats` and scorecard cards are photos, and a caption is not
+something `sendRichMessage` replaces — for those the messages around the photo
+use rich text.
 
 ## Both renderers stay alive
 
@@ -73,14 +76,21 @@ replaces — for those only the messages around the photo are rich.
   `send_rich_message`, so the payload goes through `Bot._post` — the same
   private hop every PTB method uses, which keeps the rate limiter, the base URL
   and the error parsing. There is no typed interface to migrate onto yet.
-* A self-hosted Bot API server below 10.1 has no such method at all. It answers
+* An older self-hosted Bot API server may have no such method. It can answer
   404, which PTB surfaces as `InvalidToken`.
 
-So `services/rich_message.py` takes the HTML as a `fallback_text` argument and
-sends it whenever the rich call is refused. A missing method latches rich sends
-off for the rest of the process, so an old server costs one refused call rather
-than one per `/pxi`. A refused *payload* does not latch — that would be this
-bot's own bug, and it should keep showing up in the logs.
+`services/rich_message.py` takes the existing HTML as `fallback_text`. A rejected
+block payload first retries native rich HTML, generated safely by
+`services/rich_message_html.py`, preserving tables, details and button rows.
+Only if native rendering is unavailable does it use the formatted `sendMessage`
+or `editMessageText` path. User names and callback attributes remain escaped.
+
+Missing-method responses are cached for five minutes per bot and operation,
+then retried automatically. A failed edit cannot disable rich sends, and one
+bot cannot disable another. Network failures have a five-second backoff;
+native attempts have an eight-second ceiling. Payload validation failures do
+not switch off later rich cards. A private ephemeral reply never retries as a
+public group message: old servers instead use the existing private popup.
 
 Because both renderers are live, they must agree on anything a user acts on.
 They share `_xi_sections` for the category split, and
@@ -120,10 +130,11 @@ render when pointing at an older Bot API server.
 `services/rich_message.py` now also has `pre`, `pullquote`, `list_block`,
 `strikethrough` and `mention` (a `url` node pointing at `tg://user?id=…`),
 first used by the Franchise Auction, plus `blockquote`, `checklist` and
-`footnote`, added for the surfaces in the table above. The auction's module is
-`services/auction_rich.py`; its `send` is wider than `send_rich_message` in one
-way — any failure of the rich attempt, not only a `TelegramError`, falls through
-to HTML — because an auction announcement must never be lost to a renderer bug.
+`footnote`, added for the surfaces in the table above. The current contract uses
+`credit` for quotations, a separate `expandable_blockquote`, checkbox flags on
+individual list items, and reference/link pairs for notes. Saved event blocks
+are normalized on delivery without changing the audit snapshot. Both auction
+and draft senders use the same transport and recovery.
 
 ## Two conveniences the later surfaces are built on
 
@@ -135,18 +146,20 @@ wrappers, and a surface normally calls one of them rather than the raw senders:
 * `reply_rich(message, blocks, fallback_text, reply_markup=…)` — answers a
   command. An HTML fallback too long for one send goes out in parts, buttons on
   the last, which is why `blocks=None` is a legitimate call: a long list is now
-  split rather than refused even where there is no block rendering.
+    split rather than refused even where there is no block rendering. Without
+    blocks, the helper first attempts the existing HTML through `sendRichMessage`.
 * `edit_rich(query, blocks, fallback_text, reply_markup=…)` — redraws a card
   behind a button, and reads Telegram's "not modified" as *already drawn*
   rather than as a failure. Tapping the tab you are already on is the common
-  case for every hub card here.
+  case for every hub card here. A long card gets a native edit first; an older
+  server receives all fallback parts as replies, rather than a truncated list.
 
 ## What a builder does when it cannot build
 
 Every builder added for these surfaces returns `None` rather than raising —
 `match_rich._safe`, `cl_tournament_rich.render_blocks`, the `try/except` in each
-`claim` builder. `None` means "send the HTML", which the senders already do for
-empty blocks. The rule is the same one behind the fallback itself: a bug in a
+`claim` builder. `None` means "send the HTML", preferably as native rich HTML.
+The rule is the same one behind the fallback itself: a bug in a
 renderer may cost the *rendering*, never the message. A live match must not
 stall because a chemistry badge raised.
 

@@ -30,7 +30,7 @@ def flatten(value):
     if isinstance(value, list):
         return ' '.join(flatten(child) for child in value)
     if isinstance(value, dict):
-        return ' '.join(flatten(value.get(key, '')) for key in ('text','summary','caption','cells','blocks'))
+        return ' '.join(flatten(value.get(key, '')) for key in ('text','summary','caption','credit','cells','blocks'))
     return ''
 
 
@@ -82,7 +82,10 @@ def test_live_board_highlights_turn_deadline_and_both_authorized_owners(room):
     blocks,text=DR.board(room.db,room.season)
     rich,html=assert_card((blocks,text))
     assert 'On the clock' in rich and '10 minutes' in rich
-    assert 'Deadline (UTC)' in rich
+    assert 'Deadline' in rich and 'UTC' in html
+    timestamp=next(node for node in nodes(blocks) if node.get('type')=='date_time')
+    from datetime import timezone
+    assert timestamp['unix_time']==int(room.D.get_draft(room.db,room.season).pick_deadline_at.replace(tzinfo=timezone.utc).timestamp())
     assert any(node.get('type')=='pullquote' and node.get('text')=='Team One' for node in nodes(blocks))
     for identity in (OWNER,COOWNER):
         assert any(node.get('url')==f'tg://user?id={identity}' for node in nodes(blocks))
@@ -215,8 +218,10 @@ def test_command_send_attempts_native_rich_with_the_same_permission_buttons(room
     asyncio.run(room.H._send(event,packet))
     endpoint,payload=rich_bot._post.call_args.args
     assert endpoint=='sendRichMessage'
-    assert payload['rich_message']['blocks']==packet['blocks']
-    assert payload['reply_markup']==packet['markup']
+    assert payload['rich_message']['blocks'][:len(packet['blocks'])]==packet['blocks']
+    assert [n['callback_data'] for n in nodes(payload['rich_message']['blocks']) if 'callback_data' in n]==[
+        b.callback_data for row in packet['markup'].inline_keyboard for b in row]
+    assert 'reply_markup' not in payload
     assert not event.effective_message.replies
 
 
@@ -241,7 +246,21 @@ def test_button_redraw_uses_native_table_card_and_preserves_navigation(room,rich
     endpoint,payload=rich_bot._post.call_args.args
     assert endpoint=='editMessageText'
     assert any(node.get('type')=='table' for node in nodes(payload['rich_message']['blocks']))
-    assert payload['reply_markup']==packet['markup']
+    assert [n['callback_data'] for n in nodes(payload['rich_message']['blocks']) if 'callback_data' in n]==[
+        b.callback_data for row in packet['markup'].inline_keyboard for b in row]
+
+
+def test_callback_rejection_is_a_private_rich_card(room,rich_bot):
+    event=update(OTHER,callback=room.H._cb(OWNER,room.season.id,'pool','1'))
+    event.callback_query.get_bot=lambda:rich_bot
+    event.callback_query.id='denied-callback'
+    asyncio.run(room.H._error(event,'Only <Team One> can pick.',callback=True))
+    endpoint,payload=rich_bot._post.call_args.args
+    assert endpoint=='sendRichMessage'
+    assert payload['ephemeral_message_parameters']=={'callback_query_id':'denied-callback'}
+    assert 'Only <Team One> can pick.' in flatten(payload['rich_message']['blocks'])
+    assert not event.effective_message.replies
+    rich_bot.send_message.assert_not_awaited()
 
 
 def test_event_delivery_uses_saved_card_instead_of_current_team_state(room,rich_bot):
@@ -254,7 +273,7 @@ def test_event_delivery_uses_saved_card_instead_of_current_team_state(room,rich_
     room.season.announced_event_id=event.id-1
     room.db.commit()
     assert asyncio.run(DD.drain_events(rich_bot,room.db,room.season))==1
-    assert rich_bot._post.call_args.args[1]['rich_message']['blocks']==detail['blocks']
+    assert rich_bot._post.call_args.args[1]['rich_message']['blocks'][:len(detail['blocks'])]==detail['blocks']
     assert room.season.announced_event_id==event.id
 
 

@@ -22,9 +22,11 @@ def test_stalled_native_request_is_cancelled_and_backed_off(monkeypatch,edit):
     async def scenario():
         if edit:
             assert not await R.edit_rich_message(bot,42,7,[R.paragraph('Hello')])
+            assert not await R.edit_rich_message(bot,42,7,[R.paragraph('Again')])
+            await bot.send_message(42,'<b>Again</b>',parse_mode='HTML')
         else:
             assert await R.send_rich_message(bot,42,[R.paragraph('Hello')],'<b>Hello</b>')=='html'
-        assert await R.send_rich_message(bot,42,[R.paragraph('Again')],'<b>Again</b>')=='html'
+            assert await R.send_rich_message(bot,42,[R.paragraph('Again')],'<b>Again</b>')=='html'
     try:
         asyncio.run(asyncio.wait_for(scenario(),1))
         assert cancelled==[True]

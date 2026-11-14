@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from html import escape
 from html.parser import HTMLParser
+from datetime import timezone
 import json
 import logging
 
@@ -203,7 +204,11 @@ def _clock_rows(config,season):
     rows = [('Pick time',f'{seconds//60} minutes' if seconds and seconds%60==0 else f'{seconds} seconds' if seconds else 'Timer off'),
             ('On timeout',D.timeout_policy_for(config))]
     if config.pick_deadline_at:
-        rows.append(('Deadline (UTC)',config.pick_deadline_at.strftime('%d %b · %H:%M:%S')))
+        deadline = config.pick_deadline_at
+        deadline = (deadline.replace(tzinfo=timezone.utc) if deadline.tzinfo is None
+                    else deadline.astimezone(timezone.utc))
+        rows.append(('Deadline', R.date_time(
+            deadline.strftime('%d %b · %H:%M:%S UTC'), int(deadline.timestamp()))))
     elif season.status == 'paused' and config.paused_seconds_left is not None:
         rows.append(('Time preserved',f'{config.paused_seconds_left // 60}m {config.paused_seconds_left % 60}s'))
     return rows

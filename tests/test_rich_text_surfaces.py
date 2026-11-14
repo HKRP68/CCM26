@@ -106,14 +106,16 @@ class RichVocabularyTests(unittest.TestCase, BlockTreeAssertions):
 
     def test_checklist_carries_its_own_ticks(self):
         block = R.checklist([(True, "1 Wicket Keeper"), (False, "5 Bowlers")])
-        self.assertTrue(block["is_checkbox"])
-        self.assertEqual([item["is_checked"] for item in block["items"]],
+        self.assertNotIn('is_checkbox',block)
+        self.assertTrue(all(item['has_checkbox'] for item in block['items']))
+        self.assertEqual([item.get("is_checked",False) for item in block["items"]],
                          [True, False])
 
     def test_blockquote_is_expandable_only_when_asked(self):
         self.assertNotIn("is_expandable", R.blockquote([R.paragraph("hi")]))
-        self.assertTrue(
-            R.blockquote([R.paragraph("hi")], expandable=True)["is_expandable"])
+        expanded=R.blockquote([R.paragraph('hi')],expandable=True)
+        self.assertEqual(expanded['type'],'expandable_blockquote')
+        self.assertEqual(expanded['text'],['hi'])
 
     def test_html_parts_leaves_a_short_message_whole(self):
         self.assertEqual(R.html_parts("<b>short</b>"), ["<b>short</b>"])

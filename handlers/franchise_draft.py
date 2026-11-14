@@ -429,8 +429,6 @@ async def _send(update, packet, *, edit=False):
         if len(allowed)!=len(rows):
             packet=dict(packet,markup=InlineKeyboardMarkup(allowed),text=packet['text']+'\n\n<i>Open the bound draft group to select and confirm a signing.</i>')
             blocks=(blocks or [])+[R.paragraph('Open the bound draft group to select and confirm a signing.')]
-    if edit and len(R.html_parts(packet['text']))>1:
-        return await R.reply_rich(update.callback_query.message,blocks,packet['text'],reply_markup=packet.get('markup'))
     if edit:
         return await R.edit_rich(update.callback_query, blocks, packet['text'], reply_markup=packet.get('markup'))
     return await R.reply_rich(update.effective_message, blocks, packet['text'], reply_markup=packet.get('markup'))
@@ -438,6 +436,9 @@ async def _send(update, packet, *, edit=False):
 
 async def _error(update, text, *, callback=False):
     if callback:
+        blocks,fallback=DR.Card('⚠️ Draft action unavailable').text(str(text)).footer('Open a fresh draft menu to continue.').pair()
+        if await R.answer_callback_rich(update.callback_query, blocks, fallback):
+            return
         await update.callback_query.answer(str(text)[:180], show_alert=True)
     else:
         blocks,fallback=DR.Card('⚠️ Draft action unavailable').text(str(text)).footer('Review /draft or /draftcommands for the current options.').pair()

@@ -109,7 +109,7 @@ def test_native_callback_or_html_fallback_keeps_an_actionable_button(monkeypatch
                      if refuse_rich else AsyncMock(return_value=payload))
     asyncio.run(cp._new_action_message(
         ctx, state, "Batting scorecard", [], blocks=cp._approach_card_blocks(state)))
-    endpoint, sent = ctx.bot._post.call_args.args
+    endpoint, sent = ctx.bot._post.call_args_list[0].args
     assert endpoint == "sendRichMessage"
     assert embedded_buttons(sent["rich_message"])[0]["callback_data"] == "lb_n_42"
     if refuse_rich:

@@ -37,7 +37,7 @@ def _text_of(node):
         return " ".join(_text_of(n) for n in node)
     if isinstance(node, dict):
         return " ".join(_text_of(v) for k, v in node.items()
-                        if k in ("text", "caption", "summary", "blocks",
+                        if k in ("text", "caption", "credit", "summary", "blocks",
                                  "cells", "items", "label"))
     return str(node)
 

@@ -2,7 +2,7 @@
 
 ``services/auction_service.py`` keeps the rules and the plain-HTML renderers
 (``render_board``, ``render_purses``, ``render_squad``). This module adds the
-Bot API 10.1 rich-message rendering of the same things — native tables,
+Bot API 10.4 rich-message rendering of the same things — native tables,
 collapsible sections, headings — and the richer HTML the announcements are
 sent in. It follows the recipe in ``docs/rich-text-messages.md``: every
 ``*_blocks`` builder here has an HTML rendering next to it, the two share the
@@ -2370,30 +2370,18 @@ async def send(bot, chat_id, blocks, html_text, *, reply_markup=None,
                reply_to_message_id=None):
     """A rich message, or the HTML when rich is off, refused or unavailable.
 
-    Wider than ``rich_message.send_rich_message`` in two ways: any failure of
-    the rich attempt — not only a ``TelegramError`` — falls through to HTML,
-    because an auction announcement must never be lost to a renderer bug; and
-    an HTML fallback too long for one message goes out in parts (the buttons
-    ride on the last, the quote on the first).
+    Uses the shared native transport and recovery. An HTML fallback too long
+    for one message goes out in parts (buttons on the last, quote on the first).
     """
-    post = getattr(bot, "_post", None)
-    if R.rich_text_enabled() and blocks and post:
-        payload = {"chat_id": chat_id, "rich_message": {"blocks": blocks}}
-        if reply_markup is not None:
-            payload["reply_markup"] = reply_markup
-        if reply_to_message_id is not None:
-            payload["reply_parameters"] = {"message_id": reply_to_message_id}
-        try:
-            from telegram import Message
-            result = await post("sendRichMessage", payload)
-            return Message.de_json(result, bot)
-        except Exception as exc:
-            from telegram.error import TelegramError
-            if isinstance(exc, TelegramError):
-                R._note_failure("sendRichMessage", exc)
-            else:
-                logger.warning("auction rich send failed; sending HTML",
-                               exc_info=True)
+    try:
+        sent = await R._post_rich(
+            bot, chat_id, blocks, reply_markup, reply_to_message_id,
+            fallback_text=html_text)
+        if sent is not None:
+            return sent
+    except Exception:
+        logger.warning('Auction rich rendering failed; preserving formatted HTML',
+                       exc_info=True)
     parts = html_parts(html_text)
     sent = None
     for index, part in enumerate(parts):
@@ -2422,27 +2410,18 @@ async def edit(bot, chat_id, message_id, blocks, *, reply_markup=None,
     leaves it out on purpose: it has its own HTML edit path and re-renders on the
     next tick anyway.
     """
-    post = getattr(bot, "_post", None)
-    if R.rich_text_enabled() and blocks and post:
-        payload = {"chat_id": chat_id, "message_id": message_id,
-                   "rich_message": {"blocks": blocks}}
-        if reply_markup is not None:
-            payload["reply_markup"] = reply_markup
-        try:
-            await post("editMessageText", payload)
+    attempted = bool(R.rich_text_enabled(bot, 'editMessageText') and blocks
+                     and getattr(bot, '_post', None))
+    try:
+        if await R.edit_rich_message(
+                bot, chat_id, message_id, blocks, reply_markup=reply_markup,
+                fallback_text=html_text):
             return True
-        except Exception as exc:
-            if "not modified" in str(exc).lower():
-                return True
-            from telegram.error import TelegramError
-            if isinstance(exc, TelegramError):
-                R._note_failure("editMessageText", exc)
-            else:
-                logger.warning("auction rich edit failed: %s", exc)
-            if html_text is None:
-                return False
+    except Exception:
+        logger.warning('Auction rich edit failed; preserving formatted HTML',
+                       exc_info=True)
     if html_text is None:
-        return None
+        return False if attempted else None
     try:
         # Only the first part: an edit replaces one message, so a card driven by
         # buttons has to fit one. html_parts caps it rather than losing the tail

@@ -5,6 +5,22 @@ engine or player inventory. The same `AuctionSeason`, `AuctionFranchise`,
 `AuctionLot`, catalogue IDs, ownership, ledger and League Season publication are
 used by auctions and drafts. Auction workflows retain their existing behavior.
 
+## Telegram rich presentation
+
+Draft menus, setup forms, previews, player searches, signing confirmations,
+announcements, errors and the live board use the shared Bot API 10.4 rich
+message helpers. Tables and expandable squad/order sections remain native;
+compact button rows keep their exact existing callbacks and server-side access
+checks. Deadlines carry Telegram timestamps for local display. Rejected button
+actions use a private rich response where supported, with a private popup on
+older servers. Nothing private falls back to a public group message.
+
+If Telegram rejects a block payload, the bot tries native rich HTML before
+using its escaped, formatted HTML compatibility path. Missing-method detection
+is temporary and scoped to one bot and operation. A single failure cannot
+permanently flatten every subsequent message. Long compatibility messages keep
+all rows and their controls. See [rich-text messages](rich-text-messages.md).
+
 ## Auto draft all remaining squad slots
 
 Draft Admins can use **`/dautofill`** or **`/autodraft`**, or choose **Auto Draft
