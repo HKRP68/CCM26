@@ -261,7 +261,7 @@ def execute_action(db, actor, sid, chat_id, action, values):
                  f'{values.get("team", "")} | {values.get("player", "")}' if operation=='unretain' else
                  f'{values.get("kind", "")} | {values.get("reason", "")} | {values.get("value") or ""}' if operation=='correction' else values.get('text',''))
             return dict(message='Review the draft preview.',draft_packet=route(db,season,actor,command,raw))
-        if operation in ('prices','custom','rounds','start','undo'):
+        if operation in ('prices','custom','rounds','start','undo','autofill'):
             from handlers.franchise_draft_v2 import action_packet
             payload={'text':values.get('text','')} if operation in ('prices','custom') else {'rounds':whole(values.get('rounds'))} if operation=='rounds' else {}
             return dict(message='Review and confirm the draft configuration.',draft_packet=action_packet(db,season,actor,operation,payload,values.get('reason','')))
@@ -435,6 +435,7 @@ def render_workspace(data, actor, sid, view, argument, context, chat_id):
             if season.get('status')=='setup':buttons+=_rows(actor,sid,[[('🏟 Import previous teams & owners','v:draftsources:1')]])
             if season.get('status') in ('setup','paused'):buttons+=_rows(actor,sid,[[('Start / resume','dgo:start')]])
             elif season.get('status')=='live':buttons+=_rows(actor,sid,[[('Pause','dgo:pause')]])
+            if season.get('status') in ('setup','live','paused'):buttons+=_rows(actor,sid,[[('🤖 Auto Draft Remaining Slots','dgo:autofill')]])
     elif view=='live':
         lot=data.get('lot')
         if lot:
@@ -789,13 +790,13 @@ async def callback_handler(update,context):
             return
         if kind=='dgo':
             operation=parts[1]
-            if operation not in ('start','pause','undo'):raise A.AuctionError('Choose a draft control.')
+            if operation not in ('start','pause','undo','autofill'):raise A.AuctionError('Choose a draft control.')
             data=await run_session(get_session,lambda db:read_workspace(db,_actor(update),sid,update.effective_chat.id,'control'))
             if not data.get('admin'):raise W.AccessError('Only Draft Admins can manage drafts.')
             if operation=='undo':
                 await _start_form(update,context,'draftundo',sid);return
-            if operation=='start':
-                result=await run_session(get_session,lambda db:execute_action(db,_actor(update),sid,update.effective_chat.id,'native_fd_start',{}),commit=True)
+            if operation in ('start','autofill'):
+                result=await run_session(get_session,lambda db:execute_action(db,_actor(update),sid,update.effective_chat.id,'native_fd_'+operation,{}),commit=True)
                 packet=result.get('draft_packet')
                 if packet:await _send(update,packet['text'],packet.get('markup'),blocks=packet.get('blocks'))
                 else:await _show(update,context,'franchisedraft',sid)

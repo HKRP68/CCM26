@@ -28,6 +28,7 @@ _MODULE_NAMES = ('database', 'models', 'config', 'services.player_service',
                  # Restore their mapped classes and AuctionError together when
                  # leaving this suite's temporary database, in either test order.
                  'services.franchise_draft', 'services.franchise_draft_admin',
+                 'services.franchise_draft_autofill',
                  'services.franchise_draft_rich', 'services.franchise_draft_web',
                  'services.franchise_team_import', 'services.franchise_player_import',
                  'services.league_season_service', 'services.tournament_service', 'handlers.franchise_draft',

@@ -7,7 +7,7 @@ from datetime import datetime,timedelta
 
 from services import auction_service as A, franchise_draft as D, franchise_draft_rich as R,franchise_draft_admin as M
 
-ADMIN_ACTIONS={'prices','custom','rounds','order','rules','team','removeteam','bind','clock','opening','purse','pooladd','poolremove','csv','importteams','retention','retain','unretain','start','pause','finish','undo','resolve','publish','continue','cancel','draftadmin_add','draftadmin_remove','adminpick','adminskip'}
+ADMIN_ACTIONS={'prices','custom','rounds','order','rules','team','removeteam','bind','clock','opening','purse','pooladd','poolremove','csv','importteams','retention','retain','unretain','start','pause','finish','undo','resolve','publish','continue','cancel','draftadmin_add','draftadmin_remove','adminpick','adminskip','autofill'}
 
 
 def _admin(db,actor,trusted):
@@ -194,7 +194,7 @@ def perform(db,season,actor,data,*,trusted_admin=False):
         values=data.get('values')
         if not isinstance(values,dict):raise A.AuctionError('Enter the action settings.')
         row=M.prepare(db,season,actor,kind,values,str(data.get('reason','')),trusted_admin=trusted_admin)
-        _,text=R.preview_action(db,season,row)
+        _,text=R.preview_action(db,season,row,full=True)
         return dict(confirmation=dict(type='admin',token=row.token,html=text))
     if action=='draft_answer':
         _admin(db,actor,trusted_admin)

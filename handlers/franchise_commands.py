@@ -35,6 +35,8 @@ _TRADE_HELP = {
 }
 
 _DRAFT_HELP = {
+    'dautofill':('/dautofill','Draft Admin: preview filling every remaining slot for all franchises. Respects draft order, prices, purses, category/rating rules and player versions. One confirmation applies the complete plan atomically; nothing is signed if completion is impossible.'),
+    'autodraft':('/autodraft','Alias for /dautofill. Review the complete allocation and final purses before confirming.'),
     'dremoveteam':('/dremoveteam Team One | Franchise withdrawn','Draft Admin: preview removal during setup, live or paused drafts. Releases its players and divides its remaining purse equally among surviving teams. Confirmed removals form an undo boundary.'),
     'dapick':('/dapick Team One | Joe Root | Owner unavailable','Draft Admin: preview and confirm a signing for the team on the clock. All purse, timer and squad checks apply; the administrator and reason are recorded.'),
     'daskip':('/daskip Team One | Owner unavailable','Draft Admin: preview skipping the current team to the catch-up queue. Works live or paused; no purse deduction.'),
@@ -106,7 +108,7 @@ def draft_commands_html():
         ('🛡 Appointments & help', ('dadmin','dadminadd','dadminremove','dadmins','draftcommands','dcommands','dcmds','dhelp')),
         ('🏗 Setup & teams', ('dnew','dsetup','dbind','dteam','dremoveteam','downer','dco','dpooladd','dpurse')),
         ('💰 Prices, order & squad rules', ('dprices','dcustom','dorder','drounds','daddrounds','drolemin','drolemax','dratingrule')),
-        ('⏱ Live draft & recovery', ('dcall','dcallteams','dtimer','dstart','dpause','draftpause','dresume','dpick','dskip','dapick','daskip','dfinish','dundo','dcancel','dpublish')),
+        ('⏱ Live draft & recovery', ('dcall','dcallteams','dtimer','dstart','dpause','draftpause','dresume','dpick','dskip','dapick','daskip','dautofill','autodraft','dfinish','dundo','dcancel','dpublish')),
         ('👀 Views', ('draft','dboard','dpool','dsquad','dskips','drules')),
         ('🛡 Draft 2.0 previews & contracts',('dpreview','dsearch','dhistory','dclock','dcorrect','dpoolremove','dretention','dretain','dunretain','dimportteams')),
     )

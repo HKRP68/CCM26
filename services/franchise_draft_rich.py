@@ -451,10 +451,27 @@ def order(session,season,page=None):
     return card.pair()
 
 
-def preview_action(session,season,action):
+def autofill_plan(session,season,action,page=1):
+    payload=json.loads(action.payload_json)
+    picks=payload['picks']
+    pages=max(1,(len(picks)+14)//15)
+    page=max(1,min(int(page),pages))
+    names={t['id']:t['name'] for t in json.loads(action.preview_json)['after']['teams']}
+    card=Card('📋 Auto Draft · planned selections',f'{season.name} · Page {page}/{pages}')
+    rows=[]
+    for number,pick in enumerate(picks[(page-1)*15:page*15],(page-1)*15+1):
+        phase='Catch-up' if pick['catch_up'] else f'Round {pick["round_no"]}'
+        rows.append([f'{number} · {phase}',names[pick['team_id']],f'#{pick["lot_id"]} {pick["name"]} · {pick["version"]}',
+                     f'{pick["rating"]} · {pick["category"]}',_money(season,pick['price_lakh'])])
+    card.table(['Selection','Franchise','Player / version','OVR / role','Price'],rows)
+    card.footer('Nothing is signed until the requesting Draft Admin confirms the entire batch. A changed draft requires a new preview.')
+    return (*card.pair(),page,pages)
+
+
+def preview_action(session,season,action,*,full=False):
     data=json.loads(action.preview_json)
     before,after=data['before'],data['after']
-    title={'adminpick':'🛡 Confirm administrator signing','adminskip':'⏭ Confirm administrator skip','removeteam':'🚪 Confirm franchise removal'}.get(action.kind,'🛡 Confirm draft configuration')
+    title={'adminpick':'🛡 Confirm administrator signing','adminskip':'⏭ Confirm administrator skip','removeteam':'🚪 Confirm franchise removal','autofill':'🤖 Confirm Auto Draft · all remaining slots'}.get(action.kind,'🛡 Confirm draft configuration')
     card=Card(title,f'{season.name} · {action.kind}')
     card.text('Nothing has been applied. This preview expires after ten minutes and checks your current role again.')
     card.facts([('Rounds',f'{before["rounds"]} → {after["rounds"]}'),
@@ -464,6 +481,19 @@ def preview_action(session,season,action):
                 ('Eligible players',f'{before["eligible"]} → {after["eligible"]}'),
                 ('Reason',action.reason or 'Setup configuration')])
     if action.kind=='finish':card.text('Every franchise meets its minimum squad size and final rules. Confirm to close all remaining optional picks; squads and purses stay unchanged.')
+    if action.kind=='autofill':
+        payload=json.loads(action.payload_json)
+        names={t['id']:t['name'] for t in after['teams']}
+        picks=payload['picks']
+        card.facts([('Remaining slots to fill',str(len(picks))),('Total signing cost',_money(season,payload['total_lakh'])),
+                    ('Target squad size',str(after['rounds'])),('Application','Entire batch in one transaction')])
+        card.text(payload['strategy'])
+        shown=picks if full else picks[:12]
+        card.table(['Franchise','Player / version','OVR / category','Signing price'],
+            [[names[p['team_id']],f'#{p["lot_id"]} {p["name"]} · {p["version"]}',f'{p["rating"]} · {p["category"]}',
+              _money(season,p['price_lakh'])] for p in shown])
+        if len(shown)<len(picks):card.footer(f'{len(picks)-len(shown)} more planned selections · use View All Planned Picks to review every signing.')
+        card.text('Existing squad players stay signed. All normal purse, category, rating and player-version checks are enforced again. No partial batch is saved if any signing fails. Individual picks stay in history; the group receives completion summaries.')
     if action.kind in ('adminpick','adminskip'):
         payload=json.loads(action.payload_json)
         team=session.get(__import__('models').AuctionFranchise,int(payload['team_id']))

@@ -48,6 +48,44 @@ def test_website_resume_is_immediate_and_live_timer_form_does_not_need_a_reason(
         finally:browser.close()
 
 
+def test_auto_draft_button_previews_and_requires_confirmation_before_completion():
+    playwright=pytest.importorskip('playwright.sync_api')
+    executable=shutil.which('chromium') or shutil.which('google-chrome')
+    if not executable:pytest.skip('Chromium is required for this browser test')
+    with playwright.sync_playwright() as engine:
+        browser=engine.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
+        try:
+            page=browser.new_page(viewport={'width':1200,'height':950})
+            page.set_content('<main id="draft"></main>')
+            page.add_script_tag(content="""
+                window.calls=[];window.statusValue='live';
+                async function api(path,body){
+                  calls.push(body);
+                  if(body.action==='draft_preview')return {ok:true,data:{confirmation:{type:'admin',token:'auto-quote',html:'<b>Complete Auto Draft Plan</b><p>Joe Root · 25.5 Cr · North</p>'}}};
+                  if(body.action==='draft_answer'){if(body.accept)statusValue='completed';return {ok:true,data:{message:body.accept?'Auto draft complete.':'Cancelled.'}};}
+                  return {ok:true,data:{ok:true,can_manage_draft:true,auctions:[{id:7,name:'Draft seven',mode:'draft'}],
+                    season:{id:7,name:'Draft seven',status:statusValue},teams:[{id:11,name:'North'}],
+                    draft:{rounds:2,min_squad_size:2,max_squad_size:2,status:statusValue,started:true,revision:4,seconds:300,policy:'skip',current_team:'North'},
+                    draft_html:'<b>Draft Board</b>',page:1,pages:1}};
+                }
+            """)
+            page.add_script_tag(path=str(Path(__file__).parents[1]/'static/js/franchise_draft.js'))
+            page.evaluate("FranchiseDraftApp.open('draft')")
+            page.get_by_role('button',name='🤖 Auto Draft Remaining Slots',exact=True).click()
+            page.locator('[data-fd-dialog]').wait_for(state='visible')
+            assert page.evaluate('calls.at(-1).operation')=='autofill'
+            assert page.evaluate('statusValue')=='live'
+            page.get_by_role('button',name='❌ Cancel',exact=True).click()
+            page.locator('[data-fd-dialog]').wait_for(state='hidden')
+            assert page.evaluate('statusValue')=='live'
+            page.get_by_role('button',name='🤖 Auto Draft Remaining Slots',exact=True).click()
+            page.locator('[data-fd-dialog]').wait_for(state='visible')
+            page.get_by_role('button',name='✅ Confirm',exact=True).click()
+            page.get_by_role('button',name='🏆 Finalize & Publish Squads',exact=True).wait_for(state='visible')
+            assert page.evaluate('statusValue')=='completed'
+        finally:browser.close()
+
+
 def test_draft_browser_navigation_pagination_and_stale_responses():
     playwright=pytest.importorskip('playwright.sync_api')
     executable=shutil.which('chromium') or shutil.which('google-chrome')

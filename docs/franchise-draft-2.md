@@ -5,6 +5,41 @@ engine or player inventory. The same `AuctionSeason`, `AuctionFranchise`,
 `AuctionLot`, catalogue IDs, ownership, ledger and League Season publication are
 used by auctions and drafts. Auction workflows retain their existing behavior.
 
+## Auto draft all remaining squad slots
+
+Draft Admins can use **`/dautofill`** or **`/autodraft`**, or choose **Auto Draft
+Remaining Slots** on the Telegram draft board, native controls, website or Mini
+App. An optional reason may follow the command.
+
+The preview plans every remaining place up to each team's maximum squad size,
+including skipped-pick recovery turns. Existing signings and retained contracts
+stay in the squad. It uses the current rotating order, pool database IDs,
+rating/custom prices, remaining purses, category minima/maxima and rating rules.
+There is no overseas limit. Higher-rated feasible players are preferred, with
+lower prices and stable pool IDs breaking ties. The planner can backtrack to
+protect another team's budget or scarce required players.
+
+Before confirming, review the players, versions, costs and final team purses.
+Telegram's **View All Planned Picks** button paginates the full reviewed plan;
+the website shows every planned signing. One administrator confirmation applies
+the complete batch in a single transaction through the normal draft signing
+engine. Individual signings, the confirming administrator, ledger entries and
+turn records are retained. The group receives completion summaries and an
+updated board rather than one announcement per batch player.
+
+No player or purse changes while preparing or cancelling the preview. The
+preview is bound to its administrator, current draft revision and financial
+snapshot, expires after ten minutes and checks current permissions again.
+Changed turns, rules, pool cards, ownership or purses require a fresh preview.
+Pause a busy live draft first if owners are making picks while you review.
+
+If the available players, unique names, budgets or rules cannot fill all slots,
+the bot explains the shortage and signs nobody. Planning has bounded search
+time; a search-limit message asks you to improve the pool, purses or overlapping
+rules and retry. A failed signing rolls back the entire batch. Optional slots
+are filled to the **maximum**, even where the configured squad minimum is lower.
+The completed squads can continue through the existing publish/season workflow.
+
 ## Removing a franchise during the draft
 
 Draft Admins can use `/dremoveteam Team One | Franchise withdrew` while the

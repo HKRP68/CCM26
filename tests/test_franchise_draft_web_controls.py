@@ -304,3 +304,30 @@ def test_running_draft_removal_from_website_releases_signed_players_and_revokes_
     assert site.other.purse_remaining_lakh==other_purse+pot
     assert site.A.ledger_total(site.db,site.other.id)==site.other.purse_remaining_lakh
     assert api(owner,owner_token,season.id,action='draft_pick',player='Website').status_code==403
+
+
+def test_website_autofill_confirms_all_remaining_slots_and_can_publish_the_same_squads(site):
+    from models import Player,FranchiseDraftPick
+    from services import franchise_draft as D
+    season=site.season
+    D.enable(site.db,season,rounds=1,by_tg_id=ADMIN)
+    second=Player(name='Auto Draft Player',rating=90,category='Bowler',country='England',version='Legend',
+                  is_active=True,bat_hand='Right',bowl_hand='Right',bowl_style='Medium Pacer',bat_rating=80,bowl_rating=90)
+    site.db.add(second);site.db.flush();site.A.add_players_to_pool(site.db,season,[second])
+    D.set_rating_prices(site.db,season,'85:10cr\n90:20cr',by_tg_id=ADMIN);site.db.commit()
+    owner,owner_token=identity(site,OWNER)
+    assert api(owner,owner_token,season.id,action='draft_preview',operation='autofill',values={},trusted_admin=True).status_code==403
+    token=login(site,ADMIN)
+    quote=stage(site.client,token,season.id,'autofill')
+    site.db.expire_all()
+    assert site.owner.squad_size==site.other.squad_size==0
+    assert api(owner,owner_token,season.id,action='draft_answer',token=quote,accept=True).status_code==403
+    approve(site.client,token,season.id,quote)
+    site.db.expire_all()
+    assert season.status==site.A.STATUS_COMPLETED
+    assert site.owner.squad_size==site.other.squad_size==1
+    assert site.db.query(FranchiseDraftPick).count()==2
+    assert all(site.A.ledger_total(site.db,t.id)==t.purse_remaining_lakh for t in (site.owner,site.other))
+    assert api(site.client,token,season.id,action='draft_answer',token=quote,accept=True).status_code==400
+    apply(site.client,token,season.id,'publish')
+    site.db.expire_all();assert season.league_id and season.published_at

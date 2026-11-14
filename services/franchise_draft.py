@@ -1263,7 +1263,9 @@ def _confirmation(session, season, token, actor_tg_id, *, now=None):
     return row
 
 
-def confirm_pick(session, season, token, actor_tg_id, *, now=None, automatic=False, _admin_reason=None, _trusted_admin=False):
+def confirm_pick(session, season, token, actor_tg_id, *, now=None, automatic=False, _admin_reason=None, _trusted_admin=False, _bulk_action=None):
+    if _bulk_action and not _admin_reason:
+        raise AuctionError('Batch signings require an authorized administrator action.')
     row = _confirmation(session, season, token, actor_tg_id, now=now)
     draft = _draft(session, season)
     if season.status != A.STATUS_LIVE or int(row.revision) != int(draft.revision):
@@ -1318,7 +1320,8 @@ def confirm_pick(session, season, token, actor_tg_id, *, now=None, automatic=Fal
         f"👥 Squad: <b>{team.squad_size}/{draft.rounds}</b>\n\n" + next_team_html(session, season),
         by_tg_id=None if automatic else actor_tg_id, lot=signed, franchise=team,
         metadata={'round_no': info['round_no'], 'catch_up': info['catch_up'], 'automatic': automatic,
-                  'admin_override': bool(_admin_reason), 'reason': _admin_reason})
+                  'admin_override': bool(_admin_reason), 'reason': _admin_reason,
+                  'batch_id': _bulk_action, 'silent': bool(_bulk_action)})
     if season.status == A.STATUS_COMPLETED:
         from services.franchise_draft_admin import validate_final
         validate_final(session, season)

@@ -4,21 +4,25 @@ from telegram import InlineKeyboardButton,InlineKeyboardMarkup
 from services import auction_service as A,franchise_draft as D,franchise_draft_rich as R
 from services import franchise_draft_admin as M
 
-COMMANDS=('dpreview','dsearch','dhistory','dclock','dcorrect','dpoolremove','dretention','dretain','dunretain','dimportteams','dapick','daskip','dremoveteam')
+COMMANDS=('dpreview','dsearch','dhistory','dclock','dcorrect','dpoolremove','dretention','dretain','dunretain','dimportteams','dapick','daskip','dremoveteam','dautofill','autodraft')
 
 
 def action_packet(db,season,actor,kind,payload,reason=''):
     action=M.prepare(db,season,actor,kind,payload,reason)
     blocks,text=R.preview_action(db,season,action)
-    label={'adminpick':'✅ Confirm Signing','adminskip':'⏭ Confirm Team Skip','removeteam':'🚪 Confirm Team Removal'}.get(kind,'✅ Apply configuration')
-    markup=InlineKeyboardMarkup([[
+    label={'adminpick':'✅ Confirm Signing','adminskip':'⏭ Confirm Team Skip','removeteam':'🚪 Confirm Team Removal','autofill':'🤖 Confirm Auto Draft'}.get(kind,'✅ Apply configuration')
+    rows=[[
         InlineKeyboardButton(label,callback_data=f'fd_c_y_{action.token}'),
-        InlineKeyboardButton('❌ Cancel',callback_data=f'fd_c_n_{action.token}')]])
+        InlineKeyboardButton('❌ Cancel',callback_data=f'fd_c_n_{action.token}')]]
+    if kind=='autofill':rows.append([InlineKeyboardButton('📋 View All Planned Picks',callback_data=f'fd_f_{action.token}_1')])
+    markup=InlineKeyboardMarkup(rows)
     return dict(text=text,blocks=blocks,markup=markup,sid=season.id)
 
 
 def route(db,season,actor,command,raw):
     from handlers import franchise_draft as H
+    if command in ('dautofill','autodraft'):
+        return action_packet(db,season,actor,'autofill',{},raw.strip())
     if command=='dremoveteam':
         D.require_draft_admin(db,actor)
         parts=[p.strip() for p in raw.split('|',1)]

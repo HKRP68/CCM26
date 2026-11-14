@@ -22,6 +22,7 @@ async def drain_events(bot, session, season, *, limit=5):
     if not season.chat_id:
         return 0
     spoken = 0
+    silent_progress = False
     for event in A.pending_events(session, season, limit=max(1, limit) * 20):
         if str(event.kind or '').startswith('fd_'):
             if spoken >= limit:
@@ -30,6 +31,12 @@ async def drain_events(bot, session, season, *, limit=5):
                 detail = json.loads(event.detail_json or '{}')
             except (ValueError, TypeError):
                 detail = {}
+            if isinstance(detail,dict) and detail.get('silent'):
+                # Batch picks remain individual audit events; the durable
+                # completion summary announces the batch once to the group.
+                season.announced_event_id=event.id
+                silent_progress=True
+                continue
             text = detail.get('html') if isinstance(detail, dict) else None
             text = text or html.escape(event.headline or 'Draft updated.')
             blocks = detail.get('blocks') if isinstance(detail, dict) else None
@@ -43,6 +50,8 @@ async def drain_events(bot, session, season, *, limit=5):
         # replayed as auction announcements in a draft room.
         season.announced_event_id = event.id
         session.commit()
+        silent_progress=False
+    if silent_progress:session.commit()
     return spoken
 
 

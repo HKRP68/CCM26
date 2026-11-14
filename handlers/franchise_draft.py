@@ -105,6 +105,7 @@ def _keyboard(db, season, actor, *, page=None, skip_page=None):
         if controls:
             rows.append(controls)
         if season.status in (A.STATUS_SETUP, A.STATUS_LIVE, A.STATUS_PAUSED):
+            rows.append([InlineKeyboardButton('🤖 Auto Draft Remaining Slots',callback_data=f'fd_a_{actor}_{sid}_autofill')])
             rows.append([InlineKeyboardButton(f'⏱ {minutes} min', callback_data=f'fd_m_{actor}_{sid}_{minutes}')
                          for minutes in (5, 10, 15)])
     return InlineKeyboardMarkup(rows)
@@ -501,6 +502,23 @@ async def command_handler(update, context):
 
 def execute_callback(db, actor, chat_id, selected_sid, data):
     from models import FranchiseDraftConfirmation
+    if data.startswith('fd_f_'):
+        from datetime import datetime,timedelta
+        from models import FranchiseDraftAction
+        D.require_draft_admin(db,actor)
+        parts=data.split('_')
+        if len(parts)!=4 or not re.fullmatch(r'[0-9a-f]{24}',parts[2]):raise A.AuctionError('Open a fresh /dautofill preview.')
+        action=db.get(FranchiseDraftAction,parts[2])
+        if action is None or action.kind!='autofill' or action.actor_tg_id!=actor or action.status!='pending' or datetime.utcnow()-action.created_at>timedelta(minutes=10):
+            raise A.AuctionError('This auto draft preview expired or belongs to another administrator.')
+        season=_resolve(db,actor,chat_id,selected_sid,expected_sid=action.season_id)
+        if D.get_draft(db,season).revision!=action.revision:raise A.AuctionError('The draft changed. Generate a new /dautofill preview.')
+        blocks,text,page,pages=DR.autofill_plan(db,season,action,_whole(parts[3],'Page'))
+        rows=[[InlineKeyboardButton('◀ Previous',callback_data=f'fd_f_{action.token}_{max(1,page-1)}'),
+               InlineKeyboardButton('Next ▶',callback_data=f'fd_f_{action.token}_{min(pages,page+1)}')],
+              [InlineKeyboardButton('🤖 Confirm Auto Draft',callback_data=f'fd_c_y_{action.token}'),
+               InlineKeyboardButton('❌ Cancel',callback_data=f'fd_c_n_{action.token}')]]
+        return dict(text=text,blocks=blocks,sid=season.id,markup=InlineKeyboardMarkup(rows))
     if data.startswith('fd_b_'):
         _,_,sid,view=data.split('_',3)
         season=_resolve(db,actor,chat_id,selected_sid,expected_sid=_whole(sid))
@@ -522,7 +540,7 @@ def execute_callback(db, actor, chat_id, selected_sid, data):
         season=_resolve(db,actor,chat_id,selected_sid,expected_sid=action.season_id)
         M.answer(db,season,actor,parts[3],accept=parts[2]=='y')
         packet=_render_view(db,season,actor,'board')
-        subject={'adminpick':'Administrator signing','adminskip':'Administrator skip','removeteam':'Team removal'}.get(action.kind,'Configuration')
+        subject={'adminpick':'Administrator signing','adminskip':'Administrator skip','removeteam':'Team removal','autofill':'Auto Draft'}.get(action.kind,'Configuration')
         blocks,text=DR.Card('✅ '+subject+' confirmed' if parts[2]=='y' else '❌ '+subject+' cancelled').text(
             'The change was validated and recorded in the audit log.' if parts[2]=='y' else 'No configuration, squad or purse was changed.').pair()
         packet['blocks']=blocks+packet['blocks'];packet['text']=text+'\n\n'+packet['text']
@@ -572,6 +590,8 @@ def execute_callback(db, actor, chat_id, selected_sid, data):
         D.require_draft_admin(db, actor)
         if parts[4] == 'start':
             return execute(db,actor,chat_id,season.id,'dstart')
+        elif parts[4] == 'autofill':
+            return execute(db,actor,chat_id,season.id,'dautofill')
         elif parts[4] == 'pause':
             D.pause(db, season, by_tg_id=actor)
         else:

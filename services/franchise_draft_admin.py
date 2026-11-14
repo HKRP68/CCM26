@@ -144,7 +144,10 @@ def perform(db,season,actor,kind,payload,reason,*,trusted_admin=False):
     global_admin=trusted_admin or is_bot_admin(actor)
     audit_actor=actor
     actor=None if trusted_admin else actor
-    if kind in ('adminpick','adminskip'):
+    if kind=='autofill':
+        from services import franchise_draft_autofill as F
+        F.apply(db,season,audit_actor,payload,reason,trusted_admin=trusted_admin)
+    elif kind in ('adminpick','adminskip'):
         from services.auction_webapp import integer
         target=integer(payload.get('team_id'),'Franchise ID',1)
         if not reason.strip():raise A.AuctionError('Record a reason for acting on behalf of a franchise.')
@@ -348,9 +351,13 @@ def prepare(db,season,actor,kind,payload,reason='',*,trusted_admin=False):
     require_admin(db,actor,trusted_admin)
     reason=str(reason).strip()
     if len(reason)>300:raise A.AuctionError('Use a correction reason of at most 300 characters.')
-    if D.started(db,season) and kind not in ('start','pause','clock','finish','publish','continue','draftadmin_add','draftadmin_remove') and not reason:
+    if D.started(db,season) and kind not in ('start','pause','clock','autofill','finish','publish','continue','draftadmin_add','draftadmin_remove') and not reason:
         raise A.AuctionError('A live-season correction needs a reason. Pause first, then use /dcorrect kind | reason | value.')
     team_import=None
+    if kind=='autofill':
+        from services import franchise_draft_autofill as F
+        payload=F.plan(db,season)
+        reason=reason or 'Auto draft all remaining squad slots'
     if kind=='order' and str(payload.get('text','')).strip().casefold()=='random':
         order=[t.id for t in A.franchises(db,season.id)]
         secrets.SystemRandom().shuffle(order)
@@ -395,7 +402,7 @@ def prepare(db,season,actor,kind,payload,reason='',*,trusted_admin=False):
         transaction.rollback()
     db.expire_all()
     preview=dict(before=before,after=after,prices=prices,requested_ids=requested_ids,fingerprint=stamp,team_import=team_import,removal=removal)
-    row=FranchiseDraftAction(token=secrets.token_hex(12),season_id=season.id,actor_tg_id=actor,
+    row=FranchiseDraftAction(token=payload['batch_id'] if kind=='autofill' else secrets.token_hex(12),season_id=season.id,actor_tg_id=actor,
         revision=D.get_draft(db,season).revision,kind=kind,payload_json=D._dump(payload),
         preview_json=D._dump(preview),reason=reason,status='pending')
     db.add(row);db.flush()

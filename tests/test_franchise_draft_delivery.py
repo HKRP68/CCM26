@@ -78,6 +78,18 @@ def test_announcements_are_ordered_and_non_draft_setup_is_silent(room):
     assert room.bot.send_message.call_count == 2
 
 
+def test_bulk_pick_audits_are_silent_and_completion_summary_is_delivered(room):
+    for i in range(4):
+        room.A.log_event(room.db,room.season,'fd_picked',f'Batch player {i}',detail={'html':f'<b>Player {i}</b>','silent':True})
+    summary=room.A.log_event(room.db,room.season,'fd_autofill_completed','Auto draft completed',detail={'html':'<b>All squads complete</b>'})
+    room.db.commit()
+    assert run(room.DD.drain_events(room.bot,room.db,room.season))==1
+    assert room.bot.send_message.call_count==1
+    assert room.season.announced_event_id==summary.id
+    assert room.bot.send_message.call_args.kwargs['text']=='<b>All squads complete</b>'
+    assert run(room.DD.drain_events(room.bot,room.db,room.season))==0
+
+
 def test_failed_send_retains_cursor_and_retries_without_losing_next_pick(room):
     row = event(room)
     room.bot.send_message.side_effect = Forbidden('Bot temporarily cannot send')
