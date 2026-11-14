@@ -159,11 +159,15 @@ the deadline. An expired confirmation cannot charge the purse.
 
 The current team's owner or co-owner may use `/dskip` or **Skip my turn**.
 The turn advances immediately without signing a player or spending purse.
-On expiry, the bot follows the explicitly approved `/dclock` policy. New drafts
-pause by default; automatic skipping and automatic selection need administrator
-approval. Duration-only `/dtimer` changes preserve the approved policy. Managers
+On expiry, new drafts skip to the next team by default. The former implicit
+pause default also becomes skip. An administrator can explicitly choose another
+`/dclock` policy; automatic player selection requires choosing `auto`.
+Duration-only `/dtimer` changes preserve the effective policy. Managers
 and spectators cannot use an owner's skip control; administrator resolution is
 an explicitly reasoned correction with a preview.
+
+If an expired paused turn has zero seconds left, `/dresume` defers that missed
+pick and starts a fresh countdown for the next team instead of pausing again.
 
 All skipped picks are saved in the order they occurred. After the scheduled
 rounds, a **Skipped-pick round** plays that queue. For example, if Team 3,

@@ -20,7 +20,7 @@ def _state(db,season,actor,manage):
     draft=D.get_draft(db,season)
     current=D.turn(db,season)
     result=dict(revision=draft.revision,rounds=draft.rounds,min_squad_size=season.min_squad_size,max_squad_size=draft.rounds,started=D.started(db,season),
-                status=season.status,seconds=D.timer_seconds(draft),policy=D._loads(draft.settings_json,{}).get('timeout_policy','skip'),
+                status=season.status,seconds=D.timer_seconds(draft),policy=D.timeout_policy_for(draft),
                 deadline=season and draft.pick_deadline_at.isoformat()+'Z' if draft.pick_deadline_at else None,
                 can_pick=bool(current and season.status==A.STATUS_LIVE and actor in D.owner_ids(current)),
                 current_team=current.name if current else None,

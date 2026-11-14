@@ -522,7 +522,7 @@ def execute_callback(db, actor, chat_id, selected_sid, data):
         season=_resolve(db,actor,chat_id,selected_sid,expected_sid=action.season_id)
         M.answer(db,season,actor,parts[3],accept=parts[2]=='y')
         packet=_render_view(db,season,actor,'board')
-        subject={'adminpick':'Administrator signing','adminskip':'Administrator skip'}.get(action.kind,'Configuration')
+        subject={'adminpick':'Administrator signing','adminskip':'Administrator skip','removeteam':'Team removal'}.get(action.kind,'Configuration')
         blocks,text=DR.Card('✅ '+subject+' confirmed' if parts[2]=='y' else '❌ '+subject+' cancelled').text(
             'The change was validated and recorded in the audit log.' if parts[2]=='y' else 'No configuration, squad or purse was changed.').pair()
         packet['blocks']=blocks+packet['blocks'];packet['text']=text+'\n\n'+packet['text']

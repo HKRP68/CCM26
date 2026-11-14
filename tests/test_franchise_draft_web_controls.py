@@ -273,3 +273,34 @@ def test_website_recovers_an_expired_approved_timer_once_without_the_bot_worker(
     assert one.purse_remaining_lakh==two.purse_remaining_lakh==10000
     assert api(owner,token,season.id).status_code==200
     site.db.expire_all();assert len(D.skipped_turns(site.db,season))==1
+
+
+def test_running_draft_removal_from_website_releases_signed_players_and_revokes_owner(site):
+    from models import Player,AuctionFranchise
+    from services import franchise_draft as D
+    season=site.season
+    D.enable(site.db,season,rounds=1,by_tg_id=ADMIN)
+    second=Player(name='Available second',rating=85,category='Batsman',country='India',version='Base',
+                  is_active=True,bat_hand='Right',bowl_hand='Right',bowl_style='Medium Pacer',bat_rating=85,bowl_rating=50)
+    site.db.add(second);site.db.flush();site.A.add_players_to_pool(site.db,season,[second])
+    D.set_rating_prices(site.db,season,'85:10cr',by_tg_id=ADMIN)
+    D.set_order(site.db,season,[site.owner.id,site.other.id],by_tg_id=ADMIN)
+    D.start(site.db,season,by_tg_id=ADMIN);site.db.commit()
+    owner,owner_token=identity(site,OWNER)
+    signing=api(owner,owner_token,season.id,action='draft_pick',player='Website').json['confirmation']['token']
+    assert api(owner,owner_token,season.id,action='draft_pick_answer',token=signing,accept=True).status_code==200
+    site.db.expire_all()
+    departing_id=site.owner.id
+    pot=site.owner.purse_remaining_lakh
+    other_purse=site.other.purse_remaining_lakh
+    token=login(site,ADMIN)
+    removal=stage(site.client,token,season.id,'removeteam',{'team_id':departing_id,'name':site.owner.name},'Franchise withdrew')
+    assert api(owner,owner_token,season.id,action='draft_answer',token=removal,accept=True).status_code==403
+    approve(site.client,token,season.id,removal)
+    site.db.expire_all()
+    assert site.db.get(AuctionFranchise,departing_id) is None
+    released=D.find_player(site.db,season,'Website Player')
+    assert released.status==site.A.LOT_QUEUED
+    assert site.other.purse_remaining_lakh==other_purse+pot
+    assert site.A.ledger_total(site.db,site.other.id)==site.other.purse_remaining_lakh
+    assert api(owner,owner_token,season.id,action='draft_pick',player='Website').status_code==403

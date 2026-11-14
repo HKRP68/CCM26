@@ -175,3 +175,59 @@ def test_website_short_name_choices_and_immediate_resume_use_shared_rules(room):
     assert room.season.status==room.A.STATUS_LIVE and 'confirmation' not in result
     event=room.db.query(room.models.AuctionEvent).filter_by(kind='fd_resumed').one()
     assert event.by_tg_id==-999
+
+
+def test_former_implicit_pause_policy_skips_without_stopping_the_draft(room):
+    live(room)
+    draft=room.D.get_draft(room.db,room.season)
+    settings=room.D._loads(draft.settings_json,{})
+    settings.update(timeout_policy='pause')
+    settings.pop('timeout_policy_explicit',None)
+    draft.settings_json=room.D._dump(settings);room.db.commit()
+    expired=draft.pick_deadline_at+timedelta(seconds=1)
+    room.D.resolve_timeout(room.db,room.season,now=expired);room.db.commit()
+    assert room.season.status==room.A.STATUS_LIVE
+    assert room.D.turn(room.db,room.season).id==room.two.id
+    assert len(room.D.skipped_turns(room.db,room.season))==1
+    assert draft.pick_deadline_at==expired+timedelta(seconds=room.D.timer_seconds(draft))
+    assert room.one.squad_size==0 and room.one.purse_remaining_lakh==10000
+
+
+@pytest.mark.parametrize('legacy_deadline',[False,True])
+def test_expired_paused_turn_resumes_by_skipping_once_with_fresh_next_clock(room,legacy_deadline):
+    room.D.set_timer(room.db,room.season,5,by_tg_id=ADMIN)
+    live(room)
+    command(room,'dpause')
+    draft=room.D.get_draft(room.db,room.season)
+    draft.paused_seconds_left=0 if not legacy_deadline else None
+    if legacy_deadline:draft.pick_deadline_at=datetime.utcnow()-timedelta(minutes=1)
+    room.db.commit()
+    command(room,'dresume')
+    assert room.season.status==room.A.STATUS_LIVE
+    assert room.D.turn(room.db,room.season).id==room.two.id
+    assert len(room.D.skipped_turns(room.db,room.season))==1
+    assert 290<(draft.pick_deadline_at-datetime.utcnow()).total_seconds()<=300
+    assert room.D.timeout_policy_for(draft)=='skip'
+    assert room.D.resolve_timeout(room.db,room.season,now=datetime.utcnow()) is None
+    assert room.season.status==room.A.STATUS_LIVE
+
+
+def test_manual_pause_with_time_remaining_is_not_automatically_resumed(room):
+    live(room);command(room,'dpause')
+    room.D.resolve_timeout(room.db,room.season,now=datetime.utcnow()+timedelta(days=1))
+    assert room.season.status==room.A.STATUS_PAUSED
+    assert room.D.turn(room.db,room.season).id==room.one.id
+
+
+def test_automatic_selection_without_a_legal_player_skips_instead_of_pausing(room,monkeypatch):
+    room.D.set_timer(room.db,room.season,1,timeout_policy='auto',by_tg_id=ADMIN)
+    live(room)
+    draft=room.D.get_draft(room.db,room.season)
+    def invalid(*args,**kwargs):raise room.A.AuctionError('No player satisfies the configured rules')
+    monkeypatch.setattr(room.D,'_validate_pick',invalid)
+    room.D.resolve_timeout(room.db,room.season,now=draft.pick_deadline_at+timedelta(seconds=1))
+    room.db.commit()
+    assert room.season.status==room.A.STATUS_LIVE
+    assert room.D.turn(room.db,room.season).id==room.two.id
+    assert len(room.D.skipped_turns(room.db,room.season))==1
+    assert room.one.purse_remaining_lakh==10000 and room.one.squad_size==0

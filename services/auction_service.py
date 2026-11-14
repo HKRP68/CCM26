@@ -7092,6 +7092,12 @@ def removal_preview(session, season, franchise):
 
 
 def remove_franchise(session, season, franchise, *, by_tg_id=None):
+    """Remove an auction franchise using its existing opening-purse rules."""
+    _draft_field_editable(session, season)
+    return _remove_franchise(session, season, franchise, by_tg_id=by_tg_id)
+
+
+def _remove_franchise(session, season, franchise, *, by_tg_id=None, pot_lakh=None):
     """Take a franchise out of the auction, mid-way or before it starts.
 
     * Every player it holds — bought, retained, matched or picked — goes back
@@ -7114,7 +7120,6 @@ def remove_franchise(session, season, franchise, *, by_tg_id=None):
     it, once squads are published, and for the last franchise standing.
     Returns ``(released lots, {franchise: share})``.
     """
-    _draft_field_editable(session, season)
     if season.status == STATUS_CANCELLED:
         raise AuctionError("This auction was cancelled.")
     if season.published_at is not None:
@@ -7187,7 +7192,7 @@ def remove_franchise(session, season, franchise, *, by_tg_id=None):
 
     # The purse, shared out. One conditional-free UPDATE per franchise: these
     # only ever ADD money, so there is no floor for a race to break.
-    pot = int(franchise.purse_total_lakh or 0)
+    pot = int(franchise.purse_total_lakh or 0) if pot_lakh is None else int(pot_lakh)
     share, odd = divmod(pot, len(others))
     shares = {}
     for index, other in enumerate(others):

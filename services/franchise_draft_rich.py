@@ -201,7 +201,7 @@ def _clock_rows(config,season):
     _,D=_services()
     seconds=D.timer_seconds(config)
     rows = [('Pick time',f'{seconds//60} minutes' if seconds and seconds%60==0 else f'{seconds} seconds' if seconds else 'Timer off'),
-            ('On timeout',D._loads(config.settings_json,{}).get('timeout_policy','skip'))]
+            ('On timeout',D.timeout_policy_for(config))]
     if config.pick_deadline_at:
         rows.append(('Deadline (UTC)',config.pick_deadline_at.strftime('%d %b · %H:%M:%S')))
     elif season.status == 'paused' and config.paused_seconds_left is not None:
@@ -454,7 +454,7 @@ def order(session,season,page=None):
 def preview_action(session,season,action):
     data=json.loads(action.preview_json)
     before,after=data['before'],data['after']
-    title={'adminpick':'🛡 Confirm administrator signing','adminskip':'⏭ Confirm administrator skip'}.get(action.kind,'🛡 Confirm draft configuration')
+    title={'adminpick':'🛡 Confirm administrator signing','adminskip':'⏭ Confirm administrator skip','removeteam':'🚪 Confirm franchise removal'}.get(action.kind,'🛡 Confirm draft configuration')
     card=Card(title,f'{season.name} · {action.kind}')
     card.text('Nothing has been applied. This preview expires after ten minutes and checks your current role again.')
     card.facts([('Rounds',f'{before["rounds"]} → {after["rounds"]}'),
@@ -482,7 +482,20 @@ def preview_action(session,season,action):
     if action.kind in ('team','removeteam'):
         card.table(['Franchise','Owner / ID','Co-owners','Managers'],[[t['name'],f'{t["owner_name"] or "Owner"} · {t["owner"] or "Missing"}',
              ', '.join(map(str,t['co_owners'])) or 'None',', '.join(map(str,t['managers'])) or 'None'] for t in after['teams']])
-        if action.kind=='removeteam':card.text('The existing franchise-removal rules redistribute its opening purse. Review every remaining purse below before confirming.')
+        if action.kind=='removeteam':
+            removal=data.get('removal') or {}
+            players=removal.get('players',[])
+            card.facts([('Removing franchise',removal.get('name','—')),('Players released',str(len(players))),
+                        ('Remaining purse to share',_money(season,removal.get('remaining_purse',0))),
+                        ('On the clock before',before['current'] or '—'),('On the clock after',after['current'] or 'Complete')])
+            card.text('The unspent purse is divided equally among the remaining franchises. Any odd lakh are allocated one each in franchise display order. Player prices and custom overrides remain in place.')
+            if players:card.table(['Released player / pool ID','Version','OVR'],
+                [[f'#{p["id"]} {p["name"]}',p['version'],str(p['rating'])] for p in players[:15]])
+            if len(players)>15:card.footer(f'{len(players)-15} more players will also return to the pool.')
+            old_purses={t['id']:t['purse'] for t in before['teams']}
+            card.table(['Remaining franchise','Purse added','Purse after'],
+                [[t['name'],_money(season,t['purse']-old_purses[t['id']]),_money(season,t['purse'])] for t in after['teams']])
+            card.text('Surviving teams keep their pending selection order and skipped-pick queue. All pending pick confirmations expire. A live draft continues; a paused draft stays paused unless every remaining squad is complete. Undo cannot cross this removal; later picks can still be undone normally.')
     if action.kind=='order':card.text('Initial order after confirmation: '+' → '.join(after['order']))
     if action.kind=='rules':
         card.table(['Role','Minimum','Maximum'],[[role,str(after['minimums'].get(role,0)),str(after['maximums'].get(role,'No cap'))] for role in _services()[0].SQUAD_ROLES])

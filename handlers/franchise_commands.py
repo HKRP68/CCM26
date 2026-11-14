@@ -35,6 +35,7 @@ _TRADE_HELP = {
 }
 
 _DRAFT_HELP = {
+    'dremoveteam':('/dremoveteam Team One | Franchise withdrawn','Draft Admin: preview removal during setup, live or paused drafts. Releases its players and divides its remaining purse equally among surviving teams. Confirmed removals form an undo boundary.'),
     'dapick':('/dapick Team One | Joe Root | Owner unavailable','Draft Admin: preview and confirm a signing for the team on the clock. All purse, timer and squad checks apply; the administrator and reason are recorded.'),
     'daskip':('/daskip Team One | Owner unavailable','Draft Admin: preview skipping the current team to the catch-up queue. Works live or paused; no purse deduction.'),
     'draftpause':('/draftpause','Draft Admin: alias for /dpause. Freezes the pick clock and locks signings until /dresume.'),
@@ -103,7 +104,7 @@ def draft_commands_html():
     """One complete reference, sent in consecutive rich messages if needed."""
     groups = (
         ('🛡 Appointments & help', ('dadmin','dadminadd','dadminremove','dadmins','draftcommands','dcommands','dcmds','dhelp')),
-        ('🏗 Setup & teams', ('dnew','dsetup','dbind','dteam','downer','dco','dpooladd','dpurse')),
+        ('🏗 Setup & teams', ('dnew','dsetup','dbind','dteam','dremoveteam','downer','dco','dpooladd','dpurse')),
         ('💰 Prices, order & squad rules', ('dprices','dcustom','dorder','drounds','daddrounds','drolemin','drolemax','dratingrule')),
         ('⏱ Live draft & recovery', ('dcall','dcallteams','dtimer','dstart','dpause','draftpause','dresume','dpick','dskip','dapick','daskip','dfinish','dundo','dcancel','dpublish')),
         ('👀 Views', ('draft','dboard','dpool','dsquad','dskips','drules')),

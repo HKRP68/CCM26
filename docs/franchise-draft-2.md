@@ -5,6 +5,39 @@ engine or player inventory. The same `AuctionSeason`, `AuctionFranchise`,
 `AuctionLot`, catalogue IDs, ownership, ledger and League Season publication are
 used by auctions and drafts. Auction workflows retain their existing behavior.
 
+## Removing a franchise during the draft
+
+Draft Admins can use `/dremoveteam Team One | Franchise withdrew` while the
+draft is live or paused, or during setup. On the website, open **Franchises &
+Owners → Remove a Franchise**, select the team, enter its exact name and a
+reason, then review and confirm the removal.
+
+The preview lists its released players, unspent purse, each surviving team's
+share and new balance, and the next franchise on the clock. No changes apply
+until the requesting administrator confirms. All its squad players return to
+the same draft pool with their original database IDs and configured prices;
+custom price overrides remain in place. Their previous signing payments are
+preserved in the audit archive; only the **remaining purse** is divided.
+
+For example, a departing team with ₹77 Cr left gives ₹38.5 Cr to each of two
+remaining teams. Whole-lakh arithmetic preserves the exact total; any odd lakh
+go one each in franchise display order. Recipient balances receive matching
+ledger entries. Other teams keep their existing squads.
+
+The original rotation is filtered to remove the departing team's seats, so
+surviving teams keep the same pending order and one selection per round. Only
+that team's skipped picks disappear from the recovery queue. A live draft
+continues; a paused draft stays paused. If the departing team was on the clock,
+the next team receives a full window. Otherwise its current deadline is kept.
+If all surviving squads are complete, the draft completes automatically.
+
+Pending player/configuration confirmations expire after removal. Historical
+players, payments, picks, ownership and the removal reason are archived in the
+season audit log. Undo can reverse later picks/skips but cannot cross a team
+removal and restore an obsolete order. Published/completed drafts and the last
+remaining franchise cannot be removed through this action. A single surviving
+franchise in an already running draft may resume and finish its remaining picks.
+
 ## Administrator picks, skips and pause
 
 Owners can use `/dpick Joe`, `/dpick Root` or `/dpick Joe Root`.
@@ -243,8 +276,13 @@ completion receive their own announcements and reliable user-ID mentions.
 | `skip` | Defer the place to the existing FIFO catch-up queue |
 | `auto` | Sign the highest-rated eligible, affordable player; stable pool-ID order breaks ties |
 
-New drafts pause by default; automatic selection/skipping needs approval.
-Existing drafts preserve their prior behavior after upgrade. `0` disables the
+New drafts skip a missed deadline automatically and tag the next franchise.
+The missed place joins the FIFO catch-up queue; the next team gets a full timer.
+Older drafts that used the former implicit pause default adopt this skip policy.
+Administrators can still explicitly approve another policy using `/dclock`;
+automatic player selection requires choosing `auto`. A paused draft whose saved
+time is already zero resumes by skipping the expired team and starting a fresh
+timer for the next team, rather than entering another pause loop. `0` disables the
 clock. Durations up to 24 hours are accepted. `/dtimer 10` remains available and
 changes duration without changing the policy, including during a live draft.
 The active team gets a fresh full countdown at the new duration; subsequent

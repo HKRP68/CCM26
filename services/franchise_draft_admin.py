@@ -64,7 +64,7 @@ def summary(db,season):
         order=[t.name for t in D._ordered_teams(db,season)],
         minimums=A.role_minimums(season),maximums=A.role_maximums(season),rating_rules=A.rating_rules(season),
         timer_seconds=D.timer_seconds(draft),current=current.name if current is not None else None,
-        settings=D._loads(draft.settings_json,{}),
+        settings=dict(D._loads(draft.settings_json,{}),timeout_policy=D.timeout_policy_for(draft)),
         rating_prices=D._loads(draft.rating_prices_json,{}),
         custom_prices=D._loads(draft.custom_prices_json,{}),
         teams=[dict(id=t.id,name=t.name,owner=t.owner_tg_id,owner_name=t.owner_name,co_owners=A.co_owner_ids(t),managers=A.team_manager_ids(t),short_name=t.short_name,city=t.city,logo_url=t.logo_url,squad=t.squad_size,retained=t.retained_count or 0,
@@ -87,7 +87,7 @@ def _readiness(db,season):
     errors=[]
     teams=A.franchises(db,season.id)
     if not season.chat_id:errors.append('Bind a Telegram draft group.')
-    if len(teams)<2:errors.append('Add at least two franchises.')
+    if len(teams)<2 and not (draft.started_at and len(teams)==1):errors.append('Add at least two franchises.')
     for team in teams:
         if not team.owner_tg_id or not 0<int(team.owner_tg_id)<10**16:errors.append(f'{team.name}: assign a valid owner.')
         if team.purse_remaining_lakh<0:errors.append(f'{team.name}: negative purse.')
@@ -241,14 +241,11 @@ def perform(db,season,actor,kind,payload,reason,*,trusted_admin=False):
                 setattr(team,key,value[:limit] or None)
         A.set_team_managers(db,team,ids(payload.get('managers')))
     elif kind=='removeteam':
-        if D.started(db,season):raise A.AuctionError('Remove franchises before draft launch.')
-        D._editable(db,season);D._claim(db,season)
-        team=db.get(AuctionFranchise,int(payload['team_id']))
+        from services.auction_webapp import integer
+        team=db.get(AuctionFranchise,integer(payload.get('team_id'),'Franchise ID',1))
         if team is None or team.season_id!=season.id:raise A.AuctionError('Choose a franchise from this draft.')
         if payload.get('name')!=team.name:raise A.AuctionError('Type the franchise name to confirm removal.')
-        order=[t.id for t in D._ordered_teams(db,season) if t.id!=team.id]
-        A.remove_franchise(db,season,team,by_tg_id=actor)
-        draft.order_json=D._dump(order)
+        D.remove_team(db,season,team.id,reason=reason,by_tg_id=actor,_audit_actor=audit_actor)
     elif kind=='importteams':
         from services import franchise_team_import as I
         I.apply(db,season,payload['source_kind'],payload['source_id'],fingerprint=payload['fingerprint'],actor=actor)
@@ -363,6 +360,14 @@ def prepare(db,season,actor,kind,payload,reason='',*,trusted_admin=False):
         team_import=I.preview(db,season,payload['source_kind'],payload['source_id'])
         payload=dict(payload,fingerprint=team_import['fingerprint'])
     before=summary(db,season)
+    removal=None
+    if kind=='removeteam':
+        from services.auction_webapp import integer
+        target=db.get(AuctionFranchise,integer(payload.get('team_id'),'Franchise ID',1))
+        if target is not None and target.season_id==season.id:
+            removal=dict(name=target.name,remaining_purse=target.purse_remaining_lakh,
+                players=[dict(id=p.id,player_id=p.player_id,name=p.name,version=p.version or 'Base',
+                              rating=p.rating,previous_price=p.sold_price_lakh) for p in A.squad(db,target.id)])
     old_prices={}
     for lot in D._available(db,season):
         try:old_prices[lot.id]=D.price_for(db,season,lot)
@@ -389,7 +394,7 @@ def prepare(db,season,actor,kind,payload,reason='',*,trusted_admin=False):
     finally:
         transaction.rollback()
     db.expire_all()
-    preview=dict(before=before,after=after,prices=prices,requested_ids=requested_ids,fingerprint=stamp,team_import=team_import)
+    preview=dict(before=before,after=after,prices=prices,requested_ids=requested_ids,fingerprint=stamp,team_import=team_import,removal=removal)
     row=FranchiseDraftAction(token=secrets.token_hex(12),season_id=season.id,actor_tg_id=actor,
         revision=D.get_draft(db,season).revision,kind=kind,payload_json=D._dump(payload),
         preview_json=D._dump(preview),reason=reason,status='pending')

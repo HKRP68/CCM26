@@ -106,6 +106,16 @@ def timer_seconds(draft):
     return int(_loads(draft.settings_json, {}).get('pick_seconds', int(draft.pick_minutes or 0)*60))
 
 
+def timeout_policy_for(draft):
+    options=_loads(draft.settings_json,{})
+    policy=options.get('timeout_policy','skip')
+    # Earlier versions silently defaulted to pause. Adopt the requested skip
+    # behavior for those drafts; a newly confirmed explicit policy still wins.
+    if policy in ('pause','admin') and not options.get('timeout_policy_explicit'):
+        return 'skip'
+    return policy if policy in ('pause','admin','skip','auto') else 'skip'
+
+
 def _price_editable(session, season, reason=None):
     draft = _editable(session, season)
     if started(session, season) and not str(reason or '').strip():
@@ -240,7 +250,7 @@ def enable(session, season, rounds=15, *, min_squad_size=None, by_tg_id=None):
             or any(int(f.squad_size or 0) for f in A.franchises(session, season.id))):
         raise AuctionError("Choose draft mode before any players are signed or bid on.")
     row = FranchiseDraft(season_id=season.id, rounds=count, cursor=0, revision=0,
-                         settings_json=_dump({'timeout_policy': 'pause', **({'min_squad_size': minimum} if min_squad_size is not None else {})}))
+                         settings_json=_dump({'timeout_policy': 'skip', **({'min_squad_size': minimum} if min_squad_size is not None else {})}))
     session.add(row)
     _invariants(season, row)
     # A setup may have been prepared as a dynamic-retention auction before
@@ -352,6 +362,9 @@ def set_order(session, season, team_ids=None, *, randomize=False, by_tg_id=None)
     if draft.cursor:
         raise AuctionError("Set the draft order before the first pick.")
     draft.order_json = _dump(ids)
+    settings = _loads(draft.settings_json,{})
+    settings.pop('rotation_seed',None)
+    draft.settings_json = _dump(settings)
     session.flush()
     _event(session, season, "fd_order", "📋 <b>Draft order saved</b>\n" + render_order(session, season),
            by_tg_id=by_tg_id)
@@ -538,16 +551,21 @@ def round_order(session, season, round_no):
     teams = _ordered_teams(session, season)
     if not teams:
         return []
-    shift = (int(round_no) - 1) % len(teams)
-    return teams[shift:] + teams[:shift]
+    by_id = {t.id:t for t in teams}
+    seed = _loads(_draft(session,season).settings_json,{}).get('rotation_seed',list(by_id))
+    shift = (int(round_no) - 1) % len(seed)
+    return [by_id[fid] for fid in seed[shift:]+seed[:shift] if fid in by_id]
 
 
 def schedule(session, season):
     teams = _ordered_teams(session, season)
     if not teams:
         return []
-    return [team for number in range(_draft(session, season).rounds)
-            for team in teams[number % len(teams):] + teams[:number % len(teams)]]
+    draft = _draft(session,season)
+    by_id = {t.id:t for t in teams}
+    seed = _loads(draft.settings_json,{}).get('rotation_seed',list(by_id))
+    return [by_id[fid] for number in range(draft.rounds)
+            for fid in seed[number % len(seed):] + seed[:number % len(seed)] if fid in by_id]
 
 
 def skipped_turns(session, season):
@@ -583,7 +601,10 @@ def _turn_state(draft):
 
 
 def _next_number(session, model, column, season):
-    return int(session.query(func.max(column)).filter(model.season_id == season.id).scalar() or 0) + 1
+    current=int(session.query(func.max(column)).filter(model.season_id == season.id).scalar() or 0)
+    key='pick_sequence_floor' if model is FranchiseDraftPick else 'turn_sequence_floor'
+    floor=int(_loads(_draft(session,season).settings_json,{}).get(key,0))
+    return max(current,floor)+1
 
 
 def _record_turn(session, season, team, kind, before, *, pick_no=None, actor=None, now=None):
@@ -649,9 +670,10 @@ def configure_clock(session, season, seconds, *, by_tg_id=None, timeout_policy=N
     seconds = int(seconds)
     draft.pick_minutes = (seconds+59)//60
     options = _loads(draft.settings_json, {})
-    previous_policy = options.get('timeout_policy','skip')
+    previous_policy = timeout_policy_for(draft)
     options.update(pick_seconds=seconds)
     options['timeout_policy']=timeout_policy or previous_policy
+    if timeout_policy is not None:options['timeout_policy_explicit']=True
     draft.settings_json = _dump(options)
     _start_clock(session, season, now=now)
     draft.paused_seconds_left = seconds if season.status == A.STATUS_PAUSED and seconds else None
@@ -756,7 +778,7 @@ def resolve_timeout(session, season, *, now=None):
     draft = _claim(session, season, draft)
     if season.status != A.STATUS_LIVE or draft.pick_deadline_at is None or draft.pick_deadline_at > now:
         return None
-    policy = _loads(draft.settings_json, {}).get('timeout_policy', 'skip')
+    policy = timeout_policy_for(draft)
     if policy == 'skip':
         return _skip_locked(session, season, timeout=True, now=now)
     if policy == 'auto':
@@ -781,8 +803,9 @@ def resolve_timeout(session, season, *, now=None):
             actor = owner_ids(turn(session, season))[0]
             quote = preview_pick(session, season, actor, '#'+str(lot.id), now=now)
             return confirm_pick(session, season, quote.token, actor, now=now, automatic=True)
-    # Waiting for an admin and the pause policy both stop the clock without
-    # spending a slot. If no automatic pick is legal, pause for intervention.
+        # An unavailable automatic pick must not stall the whole room.
+        return _skip_locked(session,season,timeout=True,now=now)
+    # Only an explicitly confirmed pause/admin policy stops the draft.
     pause(session, season, now=now)
     _event(session, season, 'fd_timeout_paused', '⏱ <b>Pick time expired — draft paused</b>\nNo legal automatic selection, or the configured policy requires intervention. No player or purse changed.')
     return None
@@ -905,7 +928,7 @@ def start(session, season, *, by_tg_id=None, now=None, resume_only=False, _audit
         raise AuctionError("The draft state changed. Open its latest board.")
     _invariants(season, draft)
     teams = _ordered_teams(session, season)
-    if len(teams) < 2:
+    if len(teams) < 2 and not (draft.started_at and len(teams)==1):
         raise AuctionError("Add at least two franchises before starting the draft.")
     if any(not team.owner_tg_id or int(team.owner_tg_id)<=0 for team in teams):
         raise AuctionError("Assign a valid owner to every team before starting.")
@@ -918,10 +941,19 @@ def start(session, season, *, by_tg_id=None, now=None, resume_only=False, _audit
     for team in teams:
         team.draft_picks_total = draft.rounds - int(team.retained_count or 0)
     remaining = draft.paused_seconds_left
+    resumed_expired = season.status==A.STATUS_PAUSED and timer_seconds(draft) and (
+        (remaining is not None and remaining<=0) or
+        (draft.pick_deadline_at is not None and draft.pick_deadline_at<=(now or datetime.utcnow())))
     draft.started_at = draft.started_at or now or datetime.utcnow()
     season.status = A.STATUS_LIVE
     _pass_full_teams(session, season)
-    _start_clock(session, season, now=now, seconds=remaining)
+    if resumed_expired:
+        options=_loads(draft.settings_json,{})
+        options.update(timeout_policy='skip',timeout_policy_explicit=True)
+        draft.settings_json=_dump(options)
+        _skip_locked(session,season,actor=_audit_actor if _audit_actor is not None else by_tg_id,timeout=True,now=now)
+    else:
+        _start_clock(session, season, now=now, seconds=remaining)
     session.flush()
     if turn(session,season) is None:
         from services.franchise_draft_admin import validate_final
@@ -1321,6 +1353,109 @@ def cancel_pick(session, season, token, actor_tg_id):
     return row
 
 
+def remove_team(session, season, franchise_id, *, reason='', by_tg_id=None, _audit_actor=None):
+    """Release a departing team's squad and transfer its unspent purse atomically.
+
+    Keep the original rotation seed so deleting a seat never reorders the
+    surviving teams' pending selections. The removal journal is an undo barrier.
+    """
+    _manager(session,by_tg_id)
+    actor=_audit_actor if _audit_actor is not None else by_tg_id
+    draft=_draft(session,season)
+    def editable():
+        if season.league_id or season.published_at or season.status not in (A.STATUS_SETUP,A.STATUS_LIVE,A.STATUS_PAUSED):
+            raise AuctionError('Remove teams only during setup, live or paused drafts before publication.')
+    editable()
+    draft=_claim(session,season,draft)
+    editable()
+    if started(session,season) and not str(reason).strip():
+        raise AuctionError('Record a reason for removing a team from a running draft.')
+    if len(str(reason))>300:raise AuctionError('Use a removal reason of at most 300 characters.')
+    teams=_ordered_teams(session,season)
+    team=next((t for t in teams if t.id==int(franchise_id)),None)
+    if team is None:raise AuctionError('Choose a franchise from this draft.')
+    if len(teams)<2:raise AuctionError('The last franchise cannot be removed. Cancel the draft instead.')
+    session.refresh(team)
+    held=A.squad(session,team.id)
+    pot=int(team.purse_remaining_lakh or 0)
+    if pot<0 or A.ledger_total(session,team.id)!=pot or len(held)!=int(team.squad_size or 0):
+        raise AuctionError('Repair this franchise’s purse or squad ledger before removing it.')
+    import models
+    def snapshot(row):
+        return {column.key:(getattr(row,column.key).isoformat() if isinstance(getattr(row,column.key),datetime)
+                            else getattr(row,column.key)) for column in row.__table__.columns}
+    fid=team.id
+    name=team.name
+    old_info=turn_info(session,season)
+    old_current=old_info['team'].id if old_info['team'] is not None else None
+    old_deadline,old_paused=draft.pick_deadline_at,draft.paused_seconds_left
+    old_grid=[t.id for t in schedule(session,season)]
+    new_cursor=sum(other!=fid for other in old_grid[:int(draft.cursor)])
+    remaining_ids=[t.id for t in teams if t.id!=fid]
+    options=_loads(draft.settings_json,{})
+    if started(session,season):options.setdefault('rotation_seed',[t.id for t in teams])
+    options['pick_sequence_floor']=_next_number(session,FranchiseDraftPick,FranchiseDraftPick.overall_no,season)-1
+    options['turn_sequence_floor']=_next_number(session,FranchiseDraftTurn,FranchiseDraftTurn.number,season)-1
+    archive=dict(franchise=snapshot(team),players=[snapshot(p) for p in held],reason=str(reason).strip(),
+                 purse_basis='remaining',pot_lakh=pot,before_state=_turn_state(draft),
+                 before_order=[t.id for t in teams],after_order=remaining_ids)
+    # Foreign-key cascades are not consistently enabled in SQLite. Archive and
+    # remove the draft references explicitly before reusing the auction release.
+    for model in (FranchiseDraftConfirmation,FranchiseDraftPick,FranchiseDraftTurn,models.AuctionLedgerEntry,
+                  models.AuctionRetentionTalk,models.AuctionTradeBlock):
+        rows=session.query(model).filter_by(season_id=season.id,franchise_id=fid).all()
+        archive[model.__tablename__]=[snapshot(row) for row in rows]
+        if model is not models.AuctionLedgerEntry:
+            session.query(model).filter_by(season_id=season.id,franchise_id=fid).delete(synchronize_session=False)
+    trades=session.query(models.AuctionTrade).filter(models.AuctionTrade.season_id==season.id,
+        (models.AuctionTrade.team_a_id==fid)|(models.AuctionTrade.team_b_id==fid)).all()
+    archive['auction_trades']=[snapshot(row) for row in trades]
+    for trade in trades:session.delete(trade)
+    session.query(FranchiseDraftConfirmation).filter_by(season_id=season.id,status='pending').update(
+        {'status':'cancelled'},synchronize_session=False)
+    session.query(models.FranchiseDraftAction).filter_by(season_id=season.id,status='pending').update(
+        {'status':'cancelled'},synchronize_session=False)
+    session.query(AuctionLot).filter_by(season_id=season.id,rtm_matched_by_id=fid).update(
+        {'rtm_matched_by_id':None},synchronize_session=False)
+    draft.settings_json=_dump(options)
+    draft.cursor=new_cursor
+    draft.skipped_turns_json=_dump([entry for entry in skipped_turns(session,season) if entry['franchise_id']!=fid])
+    # The release helper uses the same lots, ledgers and deterministic odd-lakh
+    # distribution as Auction. Ordinary Auction removal keeps its opening purse.
+    released,shares=A._remove_franchise(session,season,team,by_tg_id=actor,pot_lakh=pot)
+    draft=_draft(session,season)
+    draft.order_json=_dump(remaining_ids)
+    for lot in released:lot.retention_slot=None
+    session.flush()
+    _pass_full_teams(session,season)
+    current=turn(session,season)
+    if current is None and season.status!=A.STATUS_SETUP:
+        from services.franchise_draft_admin import validate_final
+        validate_final(session,season)
+        season.status=A.STATUS_COMPLETED
+        _start_clock(session,season)
+    elif current is not None and current.id==old_current:
+        draft.pick_deadline_at=old_deadline
+        draft.paused_seconds_left=old_paused
+    else:
+        _start_clock(session,season)
+        if season.status==A.STATUS_PAUSED:draft.paused_seconds_left=timer_seconds(draft) or None
+    # A surviving team anchors the journal's non-null franchise foreign key.
+    anchor=session.get(AuctionFranchise,remaining_ids[0])
+    _record_turn(session,season,anchor,'remove',_turn_state(draft),actor=actor)
+    archive['shares']={str(key):value for key,value in shares.items()}
+    text=(f'🚪 <b>{_e(name)} removed from the draft</b>\n'
+          f'🏏 <b>{len(released)}</b> players returned to the available pool.\n'
+          f'💰 Remaining purse shared: <b>{_money(season,pot)}</b>\n'
+          f'Reason: {_e(reason or "Setup team removal")}\n\n')
+    for other in A.franchises(session,season.id):
+        text+=f'{_e(other.name)} · +{_money(season,shares.get(other.id,0))} · purse {_money(season,other.purse_remaining_lakh)}\n'
+    _event(session,season,'fd_team_removed',text+'\n'+next_team_html(session,season),by_tg_id=actor,metadata=archive)
+    if season.status==A.STATUS_COMPLETED:
+        _event(session,season,'fd_completed','🏆 <b>Franchise Draft completed</b>\nAll remaining franchise squads satisfy the final rules.')
+    return released,shares
+
+
 def undo_last(session, season, *, by_tg_id=None):
     _manager(session, by_tg_id)
     draft = _draft(session, season)
@@ -1338,6 +1473,8 @@ def undo_last(session, season, *, by_tg_id=None):
     history = (session.query(FranchiseDraftTurn).filter_by(season_id=season.id)
                .order_by(FranchiseDraftTurn.number.desc()).first())
     if history is not None:
+        if history.kind=='remove':
+            raise AuctionError('Team removal is an audit boundary. Undo may reverse picks or skips made after the removal, but cannot restore an old team field.')
         before = _loads(history.before_state_json, {})
         if history.kind in ("skip", "timeout", "finish"):
             team = session.get(AuctionFranchise, history.franchise_id)

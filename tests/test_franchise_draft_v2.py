@@ -158,13 +158,14 @@ def test_second_timers_follow_the_approved_policy_and_survive_restart(room,polic
         else:assert room.one.squad_size==0
 
 
-def test_new_drafts_do_not_enable_automatic_skipping_without_approval(room):
+def test_new_drafts_skip_expired_turns_by_default_per_requested_settings(room):
     live(room)
     draft=room.D.get_draft(room.db,room.season)
     room.D.resolve_timeout(room.db,room.season,now=draft.pick_deadline_at+timedelta(seconds=1))
     room.db.commit()
-    assert room.season.status==room.A.STATUS_PAUSED
-    assert not room.D.skipped_turns(room.db,room.season)
+    assert room.season.status==room.A.STATUS_LIVE
+    assert room.D.turn(room.db,room.season).id==room.two.id
+    assert len(room.D.skipped_turns(room.db,room.season))==1
 
 
 def test_pool_filters_removal_and_purse_updates_are_previewed(room):
