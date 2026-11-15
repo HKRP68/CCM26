@@ -168,3 +168,113 @@ class HistoryTests(pages.PageCase):
         data = player_comparison(self.session, self.series, self.season, 'Alpha', 'Beta')
         self.assertIsNone(data['left']['selected']['dot_percentage'])
         self.assertEqual(160, data['left']['selected']['runs'])
+
+    def test_comparison_accepts_unique_short_names_and_reports_real_ambiguity(self):
+        game = self.game(winner=self.a.id, duels=True)
+        lines = json.loads(game.scorecard_json)
+        lines[0]['name'] = 'Abhishek Sharma'
+        lines[1]['name'] = 'Sunil Narine'
+        lines[0]['player_duels'][0]['batter']['name'] = 'Abhishek Sharma'
+        lines[0]['player_duels'][0]['bowler']['name'] = 'Sunil Narine'
+        game.scorecard_json = json.dumps(lines)
+        self.session.commit()
+        response = self.client.get(self.base + '/compare?mode=player&left=Abhishek&right=Narine')
+        self.assertEqual(200, response.status_code)
+        self.assertEqual('Abhishek Sharma', response.json['left']['name'])
+        self.assertEqual(12, response.json['duels'][0]['runs'])
+        response = self.client.get(self.base + '/compare', query_string=dict(
+            mode='team', left=self.a.name[:3], right=self.b.name[:3]))
+        self.assertEqual(200, response.status_code)
+        lines.append(dict(lines[0], name='Abhishek Singh'))
+        game.scorecard_json = json.dumps(lines)
+        self.session.commit()
+        from services import cricket_portal_cache
+        cricket_portal_cache.invalidate()
+        response = self.client.get(self.base + '/compare?mode=player&left=Abhishek&right=Narine')
+        self.assertEqual(400, response.status_code)
+        self.assertIn('Abhishek Sharma', response.json['error'])
+        self.assertIn('Abhishek Singh', response.json['error'])
+        response = self.client.get(self.base + '/compare?mode=player&left=Abhishek%20Sharma&right=Narine')
+        self.assertEqual(200, response.status_code)
+
+    def test_saved_encounter_archive_is_visible_without_match_scorecards(self):
+        from models import LeagueSeason, StatsSeason, StatsSeasonPlayer
+        game = self.game(winner=self.a.id, duels=True)
+        encounters = json.loads(game.scorecard_json)[0]['player_duels']
+        saved = StatsSeason(name='Saved duels', player_duels_json=json.dumps(encounters))
+        self.session.add(saved)
+        self.session.flush()
+        archive = LeagueSeason(series_id=self.series.id, season_no=2, stats_season_id=saved.id)
+        self.session.add(archive)
+        for name, team in [('Alpha', self.a.name), ('Beta', self.b.name)]:
+            self.session.add(StatsSeasonPlayer(season_id=saved.id, name=name,
+                team_name=team, matches=1, bat_runs=12, bat_balls=5))
+        self.session.commit()
+        response = self.client.get(self.base + '/compare', query_string=dict(
+            mode='player', left='Alpha', right='Beta', season=archive.id))
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(12, response.json['duels'][0]['runs'])
+        self.assertEqual(0, response.json['shared_matches'])
+        self.assertEqual((1, 1), (response.json['duel_seasons_covered'], response.json['duel_seasons_selected']))
+        response = self.client.get(self.base + '/compare?mode=player&left=Alpha&right=Beta&season=all')
+        self.assertEqual(24, response.json['duels'][0]['runs'])
+        # Having both an archive of scorecards and saved season totals must not
+        # count the same encounters twice.
+        from services import league_records as R, cricket_portal_cache
+        R.config(self.session, archive).archive_json = json.dumps([dict(
+            season_id=archive.id, season_no=2, season='Saved duels', fixture_id=500,
+            lines=json.loads(game.scorecard_json))])
+        self.session.commit()
+        cricket_portal_cache.invalidate()
+        response = self.client.get(self.base + '/compare?mode=player&left=Alpha&right=Beta&season=all')
+        self.assertEqual(24, response.json['duels'][0]['runs'])
+
+    def test_browser_comparison_shows_results_and_refreshes_scope(self):
+        import shutil
+        from urllib.parse import urlsplit
+        from playwright.sync_api import sync_playwright, expect
+        executable = shutil.which('chromium') or shutil.which('google-chrome')
+        if not executable:
+            self.skipTest('Chromium is required for the comparison browser test')
+        self.game(winner=self.a.id, duels=True)
+        with sync_playwright() as engine:
+            browser = engine.chromium.launch(executable_path=executable, headless=True,
+                                             args=['--no-sandbox', '--disable-dev-shm-usage'])
+            try:
+                page = browser.new_page()
+                errors = []
+                page.on('pageerror', lambda error: errors.append(str(error)))
+
+                def serve(route):
+                    if route.request.resource_type in ('image', 'font'):
+                        route.abort()
+                        return
+                    url = urlsplit(route.request.url)
+                    response = self.client.get(url.path + ('?' + url.query if url.query else ''))
+                    route.fulfill(status=response.status_code, body=response.data,
+                                  headers={'content-type': response.content_type})
+
+                page.route('**/*', serve)
+                page.goto(f'http://localhost/stats/{self.series.id}?season={self.season.id}',
+                          wait_until='domcontentloaded')
+                page.locator('#comparison-left').fill(self.a.name[:3])
+                page.locator('#comparison-right').fill(self.b.name[:3])
+                page.locator('#comparison-form button[type=submit]').click()
+                expect(page.locator('#comparison-status')).to_have_text('Comparison for the selected season.')
+                expect(page.locator('#comparison-result')).to_contain_text('Recent meetings')
+                page.locator('#comparison-all').check()
+                expect(page.locator('#comparison-status')).to_have_text('Comparison across every linked season.')
+                page.locator('#comparison-mode').select_option('player')
+                expect(page.locator('#comparison-result')).to_be_empty()
+                page.locator('#comparison-left').fill('Alp')
+                page.locator('#comparison-right').fill('Bet')
+                page.locator('#comparison-form button[type=submit]').click()
+                expect(page.locator('#comparison-left')).to_have_value('Alpha')
+                expect(page.locator('#comparison-result')).to_contain_text('Direct batter–bowler encounters')
+                expect(page.locator('#comparison-result')).to_contain_text('Saved encounters available in 1 of 1 selected seasons.')
+                page.locator('#comparison-swap').click()
+                expect(page.locator('#comparison-status')).to_have_text('Comparison across every linked season.')
+                expect(page.locator('#comparison-result')).to_contain_text('240.00')
+                self.assertEqual([], errors)
+            finally:
+                browser.close()

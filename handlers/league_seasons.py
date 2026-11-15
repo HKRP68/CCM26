@@ -18,7 +18,9 @@ whose stat formatters this reuses so a player's numbers read the same here as
 in ``/statstour``. The data is ``services/league_season_service.py``'s.
 """
 
+import asyncio
 import html
+import io
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -346,14 +348,18 @@ async def _send(update, blocks, text, markup=None):
     await R.reply_rich(update.effective_message, blocks, text, reply_markup=markup)
 
 
-async def seasons_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/seasons [competition] [| player]"""
-    message = update.effective_message
-    if message is None:
-        return
-    user = update.effective_user
-    opener = user.id if user else 0
-    raw = " ".join(context.args or []).strip()
+def _records_document(session, series, season):
+    from services.league_record_publications import holders_markdown
+    return dict(document=holders_markdown(session, series, season).encode('utf-8'),
+                filename=f"season-{season.id if season else 'all'}-records.md",
+                caption=f"{series.name} — current record holders")
+
+
+def _prepare_seasons(raw, opener):
+    """Build a plain response in a worker, owning the session for its lifetime.
+
+    No ORM objects or open transactions cross back to Telegram's event loop.
+    """
     export_records = raw.lower() in ('record', 'records') or raw.lower().startswith(('record ', 'records '))
     if export_records:
         raw = raw.partition(' ')[2].strip()
@@ -361,68 +367,128 @@ async def seasons_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         active = LS.series_list(session, active_only=True)
         if not active:
-            await message.reply_text(NO_SERIES)
-            return
+            return dict(text=NO_SERIES)
         left, bar, right = raw.partition("|")
-        series, query = None, ""
+        series, query, result = None, "", None
         if bar:
             series = LS.find_series(session, left)
             query = right.strip()
             if series is None:
-                await message.reply_text(
-                    f"❌ No competition called “{left.strip()}”. Try /seasons.")
-                return
+                return dict(text=f"❌ No competition called “{left.strip()}”. Try /seasons.")
         elif raw:
             series = LS.find_series(session, raw)
             if series is None:
                 query = raw
         if series is None and query:
-            hits = [(s, LS.player_history(session, s, query)) for s in active]
-            hits = [(s, r) for s, r in hits if r]
-            if not hits:
-                await message.reply_text(f"❌ No season stats for “{query}”.")
-                return
-            series = hits[0][0]
+            for candidate in active:
+                result = LS.player_history(session, candidate, query)
+                if result:
+                    series = candidate
+                    break
+            if series is None:
+                return dict(text=f"❌ No season stats for “{query}”.")
         if series is None:
             if len(active) == 1:
                 series = active[0]
             else:
-                await message.reply_text("🏆 Which competition?",
-                                         reply_markup=_picker_keyboard(active, opener, export_records))
-                return
+                return dict(text="🏆 Which competition?",
+                            markup=_picker_keyboard(active, opener, export_records))
         if LS.sync_series(session, series):
             session.commit()
+            result = None  # The sync may have attached a new tournament.
         if export_records:
-            from services.league_record_publications import holders_markdown
-            import io
             seasons = LS.overview(session, series)
-            season = seasons[0]['season'] if seasons else None
-            await message.reply_document(document=io.BytesIO(holders_markdown(session, series, season).encode('utf-8')),
-                filename=f"season-{season.id if season else 'all'}-records.md",
-                caption=f"{series.name} — current record holders")
-            return
+            return _records_document(session, series, seasons[0]['season'] if seasons else None)
         if query:
-            result = LS.player_history(session, series, query)
+            result = result or LS.player_history(session, series, query)
             if not result:
-                await message.reply_text(
-                    f"❌ No season stats for “{query}” in {series.name}.")
-                return
+                return dict(text=f"❌ No season stats for “{query}” in {series.name}.")
             if "choices" in result:
-                await message.reply_text(
-                    "🔎 Which one? " + ", ".join(result["choices"])
-                    + f"\nUse the full name: /seasons {series.name} | <player>")
-                return
+                return dict(text="🔎 Which one? " + ", ".join(result["choices"])
+                            + f"\nUse the full name: /seasons {series.name} | <player>")
             from services.league_record_insights import player_profile
             blocks, text = player_card(series, result, player_profile(session,series,result['name']))
-            await _send(update, blocks, text,
-                        _back_keyboard(series, opener))
-            return
+            return dict(blocks=blocks, text=text, markup=_back_keyboard(series, opener))
         blocks, text, rows = overview_card(session, series)
-        await _send(update, blocks, text, _overview_keyboard(series, rows, opener))
+        return dict(blocks=blocks, text=text, markup=_overview_keyboard(series, rows, opener))
     except Exception:
         session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+async def seasons_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/seasons [competition] [| player], without blocking live scoring."""
+    message = update.effective_message
+    if message is None:
+        return
+    opener = update.effective_user.id if update.effective_user else 0
+    try:
+        response = await asyncio.to_thread(_prepare_seasons, " ".join(context.args or []).strip(), opener)
+        if 'document' in response:
+            await message.reply_document(document=io.BytesIO(response['document']),
+                filename=response['filename'], caption=response['caption'])
+        elif 'blocks' in response:
+            await _send(update, response['blocks'], response['text'], response.get('markup'))
+        else:
+            await message.reply_text(response['text'], reply_markup=response.get('markup'))
+    except Exception:
         logger.exception("/seasons failed")
         await message.reply_text("⚠️ Could not load the seasons. Try again.")
+
+
+def _prepare_callback(view, series_id, arg, opener):
+    session = get_session()
+    try:
+        series = LS.get_series(session, series_id)
+        if series is None:
+            return dict(alert="That competition no longer exists.")
+        if view == "d":
+            if arg == "latest":
+                seasons = LS.overview(session, series)
+                season = seasons[0]['season'] if seasons else None
+            else:
+                season = LS.get_season(session, series, arg) if arg != '0' else None
+                if arg != '0' and season is None:
+                    return dict(alert="That season is gone.")
+            return _records_document(session, series, season)
+        media = None
+        if view == "s":
+            season = LS.get_season(session, series, arg)
+            if season is None:
+                return dict(alert="That season is gone.")
+            blocks, text = season_card(session, series, season)
+            markup = _back_keyboard(series, opener, extra=[
+                _btn("👑 Season records", "r", series.id, f"{season.id}-runs", opener)])
+        elif view in ("r", "h"):
+            from services import league_records as records
+            sid, category = arg.split("-", 1)
+            season = LS.get_season(session, series, sid) if sid != "0" else None
+            if sid != "0" and season is None:
+                return dict(alert="That season is gone.")
+            if category not in records.LABELS:
+                category = "runs"
+            data = records.boards(session, series, season)
+            board = next(b for b in data['boards'] if b['key'] == category)
+            blocks, text = record_card(series, season, board, data['config'])
+            markup = _records_keyboard(series, season, category, opener)
+            if view == "h" and board['holders']:
+                media = dict(player=", ".join(h['name'] for h in board['holders'][:8]),
+                             record=board['label'], value=board['holders'][0]['display'],
+                             season=LS.season_title(season) if season else "All-time",
+                             scope="season" if season else "all-time")
+        elif view == "a":
+            category = arg if arg in CATEGORY_LABELS else "runs"
+            blocks, text = alltime_card(session, series, category)
+            markup = _alltime_keyboard(series, category, opener)
+        else:
+            blocks, text, rows = overview_card(session, series)
+            markup = _overview_keyboard(series, rows, opener)
+        return dict(blocks=blocks, text=text, markup=markup, media=media)
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
 
@@ -442,72 +508,22 @@ async def seasons_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Only the person who opened this can use these "
                            "buttons — send /seasons for your own.", show_alert=True)
         return
+    await query.answer()
     if view == "c":
-        await query.answer()
         await query.message.delete()
         return
-    session = get_session()
     try:
-        series = LS.get_series(session, series_id)
-        if series is None:
-            await query.answer("That competition no longer exists.", show_alert=True)
-            return
-        if view == "d":
-            import io
-            from services.league_record_publications import holders_markdown
-            if arg == "latest":
-                seasons = LS.overview(session, series)
-                season = seasons[0]['season'] if seasons else None
-            else:
-                season = LS.get_season(session, series, arg) if arg != '0' else None
-                if arg != '0' and season is None:
-                    await query.answer("That season is gone.", show_alert=True)
-                    return
-            await query.answer()
-            await query.message.reply_document(document=io.BytesIO(holders_markdown(session, series, season).encode('utf-8')),
-                filename=f"season-{season.id if season else 'all'}-records.md", caption=f"{series.name} — current record holders")
-            return
-        if view == "s":
-            season = LS.get_season(session, series, arg)
-            if season is None:
-                await query.answer("That season is gone.", show_alert=True)
-                return
-            blocks, text = season_card(session, series, season)
-            markup = _back_keyboard(series, opener, extra=[
-                _btn("👑 Season records", "r", series.id, f"{season.id}-runs", opener)])
-        elif view in ("r", "h"):
-            from services import league_records as records
-            sid, category = arg.split("-", 1)
-            season = LS.get_season(session, series, sid) if sid != "0" else None
-            if sid != "0" and season is None:
-                await query.answer("That season is gone.", show_alert=True)
-                return
-            if category not in records.LABELS:
-                category = "runs"
-            data = records.boards(session, series, season)
-            board = next(b for b in data['boards'] if b['key'] == category)
-            blocks, text = record_card(series, season, board, data['config'])
-            markup = _records_keyboard(series, season, category, opener)
-            if view == "h" and board['holders']:
-                from services.event_media_service import fire_record_media
-                fields = dict(player=", ".join(h['name'] for h in board['holders'][:8]),
-                              record=board['label'], value=board['holders'][0]['display'],
-                              season=LS.season_title(season) if season else "All-time", scope="season" if season else "all-time")
-                await query.answer()
-                await fire_record_media(context, query.message.chat_id, "record_holder", fields=fields)
-                await R.edit_rich(query, blocks, text, reply_markup=markup)
-                return
-        elif view == "a":
-            category = arg if arg in CATEGORY_LABELS else "runs"
-            blocks, text = alltime_card(session, series, category)
-            markup = _alltime_keyboard(series, category, opener)
+        response = await asyncio.to_thread(_prepare_callback, view, series_id, arg, opener)
+        if 'alert' in response:
+            # The tap was already acknowledged before loading the data.
+            await query.message.reply_text(response['alert'])
+        elif 'document' in response:
+            await query.message.reply_document(document=io.BytesIO(response['document']),
+                filename=response['filename'], caption=response['caption'])
         else:
-            blocks, text, rows = overview_card(session, series)
-            markup = _overview_keyboard(series, rows, opener)
-        await query.answer()
-        await R.edit_rich(query, blocks, text, reply_markup=markup)
+            if response.get('media'):
+                from services.event_media_service import fire_record_media
+                await fire_record_media(context, query.message.chat_id, "record_holder", fields=response['media'])
+            await R.edit_rich(query, response['blocks'], response['text'], reply_markup=response['markup'])
     except Exception:
-        session.rollback()
         logger.exception("/seasons callback failed")
-    finally:
-        session.close()

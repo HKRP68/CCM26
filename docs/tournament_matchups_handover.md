@@ -7,7 +7,7 @@
 - `/frivalry [#tournamentID] Team A | Team B` or `/frh2h`: franchise rivalry across the same current and linked seasons. For example, `/frivalry MI | CSK` when those short names are configured and unique.
 - `/handover @manager` or `/transfermatch @manager`: offer control of your live tournament team. A Telegram user ID or a reply to the receiving manager's message also works.
 
-For example: `/svs Virat Kohli | Jasprit Bumrah`. When names are shared by teams, use `Virat Kohli @ Alpha`. A player's records for the same team merge across rebuilt seasonal rosters; records for different teams require choosing the team.
+For example: `/svs Virat Kohli | Jasprit Bumrah`. Use `Virat Kohli @ Alpha` to filter to one team. For `/svs`, the same full player name merges across rebuilt rosters and team changes, matching Total Season Stats. Add ` @ Team` to restrict either player's records to that team. `/tvs` still requires a team when roster identities share a name.
 
 Matchup figures use completed main innings only. Older scorecards and manual results do not contain delivery encounters. `/svs` reports how many selected seasons have encounter data; it does not reconstruct missing history. Deleting a tournament with **keep stats** now preserves recorded encounters alongside its player totals. Existing saved seasons without encounters remain unavailable for matchups.
 

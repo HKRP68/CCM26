@@ -131,12 +131,46 @@ class DuelTests(F.FourTeamCase):
         self.assertIn('Runs: <b>11</b>', text)
         self.assertIn('1/2 seasons', text)
 
-    def test_season_duplicate_names_still_require_team(self):
+    def test_season_player_follows_team_changes_with_optional_team_filter(self):
         from services.tournament_duels import compare
         rows = self.snapshot()['tournament_duels']
         other = json.loads(json.dumps(rows[0]))
         other['batter']['team'] = 'Charlie'
-        with self.assertRaises(ValueError):
-            compare(rows + [other], 'Kohli', 'Bumrah', across_seasons=True)
+        other['bowler'].update(team='Delta', roster_id=99)
+        original = json.dumps(rows + [other])
+        result = compare(rows + [other], 'Kohli', 'Bumrah', across_seasons=True)
+        self.assertEqual(result['runs'], 22)
+        self.assertEqual(result['batter']['team'], 'Alpha, Charlie')
+        self.assertEqual(result['bowler']['team'], 'Bravo, Delta')
+        self.assertEqual(json.dumps(rows + [other]), original)
         self.assertEqual(compare(rows + [other], 'Kohli @ Alpha', 'Bumrah',
                                  across_seasons=True)['runs'], 11)
+
+    def test_season_distinct_full_names_are_still_ambiguous(self):
+        from services.tournament_duels import compare
+        rows = self.snapshot()['tournament_duels']
+        other = json.loads(json.dumps(rows[0]))
+        other['batter'].update(name='Ravi Kohli', team='Charlie')
+        with self.assertRaisesRegex(ValueError, 'More than one batter'):
+            compare(rows + [other], 'Kohli', 'Bumrah', across_seasons=True)
+        self.assertEqual(compare(rows + [other], 'Virat Kohli', 'Bumrah',
+                                 across_seasons=True)['runs'], 11)
+
+    def test_svs_short_names_merge_the_same_players_on_different_teams(self):
+        from handlers import tournament_duels as H
+        rows = self.snapshot()['tournament_duels']
+        rows[0]['batter']['name'] = 'Abhishek Sharma'
+        rows[0]['bowler']['name'] = 'Sunil Narine'
+        other = json.loads(json.dumps(rows[0]))
+        other['batter'].update(team='ROYAL BANGLA TIGER', roster_id=222)
+        fixture = self.fixtures(1)[0]
+        fixture.status = 'completed'
+        fixture.scorecard_json = json.dumps([{'player_duels': rows + [other]}])
+        self.session.commit()
+        update = SimpleNamespace(message=SimpleNamespace(reply_text=AsyncMock()))
+        context = SimpleNamespace(args=[f'#{self.tour.id}', 'Abhishek', '|', 'Narine'])
+        asyncio.run(H.svs_handler(update, context))
+        text = update.message.reply_text.call_args.args[0]
+        self.assertIn('Runs: <b>22</b>', text)
+        self.assertIn('Abhishek Sharma', text)
+        self.assertIn('ROYAL BANGLA TIGER', text)

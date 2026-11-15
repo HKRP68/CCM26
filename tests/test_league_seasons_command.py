@@ -13,7 +13,7 @@ import os
 import sys
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -194,6 +194,41 @@ class SeasonsCommandTests(HandlerCase):
         from handlers import league_seasons as H
         self.call(H.seasons_handler, ALICE, args=self.players[0].name.split())
         self.assertIn(self.players[0].name, self.replies[-1])
+
+    def test_command_and_buttons_leave_the_event_loop_responsive(self):
+        import threading
+        from handlers import league_seasons as H
+        original = H.LS.overview
+        loop_thread = threading.get_ident()
+        for callback in (False, True):
+            with self.subTest(callback=callback):
+                entered, release = threading.Event(), threading.Event()
+                worker_threads = []
+
+                def slow_overview(*args, **kwargs):
+                    worker_threads.append(threading.get_ident())
+                    entered.set()
+                    if not release.wait(3):
+                        raise RuntimeError('Event loop did not release the statistics worker')
+                    return original(*args, **kwargs)
+
+                async def run():
+                    data = f'ls_o_{self.series.id}_0_{ALICE}' if callback else None
+                    update = self.update(ALICE, data=data)
+                    handler = H.seasons_callback if callback else H.seasons_handler
+                    task = asyncio.create_task(handler(update, SimpleNamespace(args=[])))
+                    try:
+                        self.assertTrue(await asyncio.to_thread(entered.wait, 5))
+                        self.assertFalse(task.done())
+                        self.assertNotEqual(loop_thread, worker_threads[0])
+                        if callback:
+                            self.assertIn(None, self.answers)  # button acknowledged before slow work
+                    finally:
+                        release.set()
+                        await task
+
+                with patch.object(H.LS, 'overview', side_effect=slow_overview):
+                    asyncio.run(run())
 
 
 if __name__ == "__main__":

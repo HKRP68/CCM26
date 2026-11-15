@@ -120,7 +120,11 @@ include actual meetings, wins, ties, no-results and per-season breakdowns.
 Player comparisons include batting/bowling figures, milestone counts, season
 breakdowns and direct batter/bowler encounters when saved deliveries exist.
 Unknown historical meetings and delivery data are not inferred from totals.
-Comparisons can be swapped and shared as URLs with their chosen scope.
+Comparisons accept full names or unique short names, can be swapped, and can
+be shared as URLs with their chosen scope. Changing the all-seasons checkbox
+refreshes the result. Saved season encounter totals remain available even
+when individual scorecards are absent; those totals do not establish a
+shared-match count.
 
 Player profiles show every retained season and the complete supported batting
 and bowling statistics. Missing historical milestone/dot/award data stays

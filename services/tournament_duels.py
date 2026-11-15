@@ -4,7 +4,6 @@ Only main-innings deliveries count. Old scorecards cannot reconstruct who faced
 whom, so they deliberately contribute no invented matchup statistics.
 """
 import json
-from copy import deepcopy
 
 COUNTERS = ('runs', 'balls', 'legal_balls', 'dots', 'fours', 'sixes', 'dismissals')
 
@@ -82,38 +81,54 @@ def season_duels(session, tour):
 
 
 def compare(rows, batter_query, bowler_query, *, across_seasons=False):
-    """Resolve unique player identities. ``Name @ Team`` disambiguates names."""
-    if across_seasons:
-        # A franchise's squad is rebuilt each season; roster ids may change.
-        # Keep teams distinct so names shared by different squads stay explicit.
-        rows = deepcopy(rows)
-        identities = {}
-        for row in rows:
-            for role in ('batter', 'bowler'):
-                p = row[role]
-                key = (p['name'].strip().casefold(), p['team'].strip().casefold())
-                row[role] = identities.setdefault(key, dict(
-                    name=p['name'], team=p['team'], roster_id=None))
+    """Season records follow a player across teams; ``Name @ Team`` filters.
+
+    Within one tournament, roster identities remain distinct. Different full
+    names must still be disambiguated even when a partial query matches both.
+    """
+    def norm(value):
+        return ' '.join(str(value or '').split()).casefold()
+
+    def identity(player):
+        if across_seasons:
+            return norm(player['name']), norm(player['team'])
+        return player['team'], player['roster_id'], player['name']
+
     def select(role, query):
-        name, _, team = query.partition(' @ ')
-        name, team = name.strip().casefold(), team.strip().casefold()
+        name, _, team = query.partition('@')
+        name, team = norm(name), norm(team)
         candidates = {}
         for row in rows:
             p = row[role]
-            if name in p['name'].casefold() and (not team or team == p['team'].casefold()):
-                key = (p['team'], p['roster_id'], p['name'])
-                candidates[key] = p
-        exact = {k: p for k, p in candidates.items() if p['name'].casefold() == name}
+            if name in norm(p['name']) and (not team or team == norm(p['team'])):
+                # Across seasons the full name is the player identity, as in
+                # Total Season Stats. Team/roster changes are not ambiguities.
+                key = norm(p['name']) if across_seasons else identity(p)
+                candidates.setdefault(key, {})[identity(p)] = p
+        exact = {k: group for k, group in candidates.items()
+                 if norm(next(iter(group.values()))['name']) == name}
         candidates = exact or candidates
         if len(candidates) > 1:
-            options = ', '.join(f"{p['name']} @ {p['team']}" for p in list(candidates.values())[:6])
+            options = ', '.join(f"{p['name']} @ {p['team']}"
+                                for group in list(candidates.values())[:6]
+                                for p in [next(iter(group.values()))])
             raise ValueError(f'More than one {role} matches. Use: {options}')
-        return next(iter(candidates.values()), None)
-    batter, bowler = select('batter', batter_query), select('bowler', bowler_query)
-    if not batter or not bowler:
+        return next(iter(candidates.values()), {})
+
+    batters, bowlers = select('batter', batter_query), select('bowler', bowler_query)
+    if not batters or not bowlers:
         return None
-    matched = [r for r in rows if r['batter'] == batter and r['bowler'] == bowler]
+    matched = [r for r in rows if identity(r['batter']) in batters
+               and identity(r['bowler']) in bowlers]
     if not matched:
         return None
-    return dict(batter=batter, bowler=bowler,
+
+    def display(players):
+        first = next(iter(players.values()))
+        if not across_seasons:
+            return first
+        teams = dict.fromkeys(p['team'].strip() for p in players.values())
+        return dict(name=first['name'].strip(), team=', '.join(teams), roster_id=None)
+
+    return dict(batter=display(batters), bowler=display(bowlers),
                 **{k: sum(r.get(k, 0) for r in matched) for k in COUNTERS})
