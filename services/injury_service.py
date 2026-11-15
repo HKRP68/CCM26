@@ -166,40 +166,57 @@ def unavailable_for_team(session, tour, challenge_team_id):
 
 
 def filter_impact_benches(session, state):
-    """Recheck snapshotted Challenge League benches against current injuries.
+    """Repair tournament benches by XI identity, then recheck injuries.
 
-    An admin can rule a player out after launch, and older saved matches may
-    still carry an injured substitute. Filter both sides before offering or
-    accepting a swap. Caller owns the session and match-state persistence.
+    Older saved matches may have empty benches, or substitutes from a namesake
+    in another league. The confirmed XI identifies the actual squad even after
+    an innings change. Caller owns the session and match-state persistence.
     """
     if not state.get("tournament_id"):
         return
     tour = session.get(Tournament, int(state["tournament_id"]))
+    from services import tournament_service
+    if tour is None or tournament_service.tournament_kind(tour) != tournament_service.KIND_CHALLENGE:
+        return
+    from models import ChallengePlayer
+    from services import cipl_match, impact_player
+    from services.challenge_squad import team_id_for_players
+
+    mapping = dict(state.get("tournament_team_by_user") or {})
+    benches = {}
     # A reserve temporarily filtered during a medical pause can become fit
     # again, or an admin can disable injuries. Keep recovery possible in both
     # cases without rebuilding or re-rolling the injury itself.
     medical = state.get("concussion_pending") or {}
     medical_pool = state.get("concussion_reserve_pool")
-    if isinstance(medical_pool, list):
-        for side in ("bat", "bowl"):
-            if str(medical.get("user_id")) == str(state.get(f"{side}_team_id")):
-                state[f"{side}_bench"] = [dict(p) for p in medical_pool]
-    if not enabled_for(tour):
-        return
-    mapping = state.get("tournament_team_by_user") or {}
-    benches = {}
     for side in ("bat", "bowl"):
         uid = state.get(f"{side}_team_id")
-        team_id = mapping.get(str(uid), mapping.get(uid))
-        if not team_id:
-            # A legacy state without team identity cannot establish eligibility.
+        # Include inactive replacements too: they must not rejoin the bench.
+        xi_ids = {int(p["roster_id"]) for p in state.get(f"{side}_xi") or []}
+        team_id = team_id_for_players(session, xi_ids, tour.league_id)
+        if team_id is None:
             benches[f"{side}_bench"] = []
             continue
+        mapping.pop(uid, None)
+        mapping[str(uid)] = team_id
+        squad = (session.query(ChallengePlayer)
+                 .filter(ChallengePlayer.team_id == team_id)
+                 .order_by(ChallengePlayer.sort_order, ChallengePlayer.id).all())
+        # Preserve snapshotted engine values for valid substitutes.
+        saved = {int(p["roster_id"]): p for p in state.get(f"{side}_bench") or []}
+        pool = [dict(saved[p.id]) if p.id in saved else cipl_match.cp_to_player_dict(p)
+                for p in squad if p.id not in xi_ids]
+        if (isinstance(medical_pool, list)
+                and str(medical.get("user_id")) == str(uid)):
+            squad_ids = {p.id for p in squad}
+            pool = [dict(p) for p in medical_pool
+                    if int(p["roster_id"]) in squad_ids and int(p["roster_id"]) not in xi_ids]
         hurt_ids, _rows = unavailable_for_team(session, tour, team_id)
-        benches[f"{side}_bench"] = [
-            p for p in state.get(f"{side}_bench") or []
-            if int(p.get("roster_id") or 0) not in hurt_ids]
+        candidate = dict(state, **{f"{side}_bench": pool})
+        benches[f"{side}_bench"] = [p for p in impact_player.cipl_bench_for(candidate, side)
+                                    if int(p["roster_id"]) not in hurt_ids]
     state.update(benches)
+    state["tournament_team_by_user"] = mapping
 
 
 def severity_label(key):

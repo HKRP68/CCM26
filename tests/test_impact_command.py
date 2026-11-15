@@ -197,7 +197,8 @@ class ButtonPlacementTests(unittest.TestCase):
                                if any("Impact" in b.text for b in r))
         self.assertTrue(any("View Match" in b.text for b in row_with_impact),
                         "Impact Player should share the View Match row")
-        self.assertEqual(len(rows), 1, "it should not add a second row")
+        # Manage batting has its own row; Impact must share View Match's row.
+        self.assertEqual(len(row_with_impact), 2)
 
     def test_every_prompt_carries_it(self):
         # _with_view_match is what _new_action_message and _edit_action_message
@@ -226,7 +227,7 @@ class ButtonPlacementTests(unittest.TestCase):
         # of its own, rather than vanishing with the View Match row.
         with patch.object(cp, "_miniapp_row", lambda s: None):
             labels = self._labels(cp._view_and_impact_rows(_state(), 7))
-        self.assertEqual(labels, ["🔄 Impact Player"])
+        self.assertEqual(labels.count("🔄 Impact Player"), 1)
 
 
 if __name__ == "__main__":

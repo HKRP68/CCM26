@@ -545,6 +545,155 @@ class ImpactBenchTests(InjuryCase):
 
     CHANCE = 0
 
+    def test_launch_bench_follows_selected_player_ids_not_a_team_name_lookup(self):
+        import handlers.cipl_play as cp
+        draft = {
+            "host_team": self.cteams[0].name, "league_key": "inj",
+            "xi_selections": {"host": {"player_ids": [
+                p.id for p in self.squad(0)[:11]]}},
+        }
+        # A stale/duplicate league key can resolve the name to another squad.
+        for resolved in (None, self.cteams[1].id):
+            with patch.object(cp, "_resolve_challenge_team_id", return_value=resolved):
+                bench = cp.build_bench_from_draft(self.session, draft, "host")
+            self.assertEqual([p["roster_id"] for p in bench],
+                             [p.id for p in self.squad(0)[11:]])
+
+    def test_saved_match_recovers_missing_benches_and_team_identity(self):
+        from services import impact_player
+        from services.match_state_store import A_PICK_CIPL_BOWLER
+        for injuries_enabled in (True, False):
+            self.tour.injuries_enabled = injuries_enabled
+            state = self._live_state()
+            state.pop("bat_bench")
+            state["bowl_bench"] = []
+            state["tournament_team_by_user"] = {}
+            self.inj.filter_impact_benches(self.session, state)
+            for idx, side in enumerate(("bat", "bowl")):
+                self.assertEqual([p["roster_id"] for p in state[f"{side}_bench"]],
+                                 [p.id for p in self.squad(idx)[11:]])
+                self.assertTrue(impact_player.cipl_options(
+                    state, self.users[idx].id, A_PICK_CIPL_BOWLER)["can_use"])
+
+    def test_saved_match_discards_another_squads_bench_and_mapping(self):
+        state = self._live_state()
+        state["bat_bench"], state["bowl_bench"] = state["bowl_bench"], state["bat_bench"]
+        state["tournament_team_by_user"] = {
+            str(self.users[0].id): self.cteams[1].id,
+            str(self.users[1].id): self.cteams[0].id}
+        victim = self.squad(0)[12]
+        self.inj.add_manual(self.session, self.tour.id, self.tteams[0].id,
+                            victim.id, matches=2, player_name=victim.name)
+        self.session.commit()
+        self.inj.filter_impact_benches(self.session, state)
+        for idx, side in enumerate(("bat", "bowl")):
+            self.assertEqual(state["tournament_team_by_user"][str(self.users[idx].id)],
+                             self.cteams[idx].id)
+            self.assertEqual([p["roster_id"] for p in state[f"{side}_bench"]],
+                             [p.id for p in self.squad(idx)[11:] if p.id != victim.id])
+
+    def test_command_and_shared_button_recover_each_captains_own_squad(self):
+        from services import cipl_match
+        from services.match_state_store import A_PICK_CIPL_BOWLER
+        import handlers.cipl_play as cp
+        for entry in ("command", "button"):
+            for innings in (1, 2):
+                state = self._live_state()
+                if innings == 2:
+                    cipl_match.end_first_innings(state)
+                state["bat_bench"], state["bowl_bench"] = [], []
+                state["tournament_team_by_user"] = {}
+                for idx, user in enumerate(self.users):
+                    query = SimpleNamespace(data="cipl_imp_999", answer=AsyncMock(),
+                                            from_user=SimpleNamespace(id=user.telegram_id))
+                    update = SimpleNamespace(
+                        callback_query=query, effective_user=query.from_user,
+                        effective_chat=SimpleNamespace(id=-100),
+                        effective_message=SimpleNamespace(reply_text=AsyncMock()))
+                    context = SimpleNamespace(bot_data={})
+                    with patch.object(cp, "_gs", AsyncMock(return_value=state)), \
+                         patch.object(cp, "_find_cipl_match_in_chat", AsyncMock(return_value=(999, state))), \
+                         patch.object(cp, "_get_next_action", AsyncMock(return_value=A_PICK_CIPL_BOWLER)), \
+                         patch.object(cp, "_send_impact_step1", AsyncMock()) as send:
+                        handler = cp.impact_handler if entry == "command" else cp.cipl_impact_callback
+                        asyncio.run(handler(update, context))
+                    send.assert_awaited_once()
+                    opts = send.call_args.args[-1]
+                    own_ids = {p.id for p in self.squad(idx)}
+                    self.assertTrue(opts["can_use"])
+                    self.assertTrue({p["roster_id"] for p in opts["replaceable_players"]} <= own_ids)
+                    self.assertEqual({p["roster_id"] for p in opts["incoming_options"]},
+                                     {p.id for p in self.squad(idx)[11:]})
+
+    def test_mixed_or_foreign_league_xi_never_recovers_an_unrelated_squad(self):
+        from services import cipl_match
+        state = self._live_state()
+        state["bat_xi"][0] = cipl_match.cp_to_player_dict(self.squad(1)[0])
+        self.inj.filter_impact_benches(self.session, state)
+        self.assertEqual(state["bat_bench"], [])
+        from models import ChallengeLeague
+        other = ChallengeLeague(mode_id=self.league.mode_id, name="Other League")
+        self.session.add(other)
+        self.session.flush()
+        self.tour.league_id = other.id
+        state = self._live_state()
+        self.inj.filter_impact_benches(self.session, state)
+        self.assertEqual(state["bat_bench"], [])
+        self.assertEqual(state["bowl_bench"], [])
+
+    def test_resume_restores_the_bench_before_rendering_the_impact_button(self):
+        import handlers.cipl_play as cp
+        from services.match_state_store import A_PICK_CIPL_BOWLER
+        state = self._live_state()
+        state["bat_bench"], state["bowl_bench"] = [], []
+        context = SimpleNamespace(bot_data={})
+
+        async def prompt(*args, **kwargs):
+            self.assertIsNotNone(cp._impact_button(state, 999))
+
+        with patch.object(cp, "_gs", AsyncMock(return_value=state)), \
+             patch.object(cp, "_get_next_action", AsyncMock(return_value=A_PICK_CIPL_BOWLER)), \
+             patch.object(cp, "_flush_dirty_locked", AsyncMock()), \
+             patch.object(cp, "_prompt_bowler", AsyncMock(side_effect=prompt)) as render:
+            self.assertTrue(asyncio.run(cp._resume_locked(context, 999)))
+        render.assert_awaited_once()
+
+    def test_repair_preserves_progress_and_valid_substitute_snapshots(self):
+        from copy import deepcopy
+        state = self._live_state()
+        state["current_over"] = 8
+        state["total_runs"] = 72
+        state["bat_bench"][0]["bat_rating"] = 93
+        before = deepcopy(state)
+        self.inj.filter_impact_benches(self.session, state)
+        self.assertEqual(state, before)
+
+    def test_letsplay_tournaments_keep_their_own_roster_benches(self):
+        from copy import deepcopy
+        self.tour.kind = "letsplay"
+        state = self._live_state()
+        before = deepcopy(state)
+        self.inj.filter_impact_benches(self.session, state)
+        self.assertEqual(state, before)
+
+    def test_repair_after_an_innings_change_does_not_refill_a_used_swap(self):
+        from services import cipl_match, impact_player
+        from services.match_state_store import A_PICK_CIPL_BOWLER
+        state = self._live_state()
+        incoming, outgoing = self.squad(1)[11].id, self.squad(1)[0].id
+        self.assertTrue(impact_player.cipl_use(
+            state, self.users[1].id, incoming, outgoing, A_PICK_CIPL_BOWLER)[0])
+        cipl_match.end_first_innings(state)
+        state["bat_bench"] = []
+        self.inj.filter_impact_benches(self.session, state)
+        opts = impact_player.cipl_options(state, self.users[1].id, A_PICK_CIPL_BOWLER)
+        self.assertTrue(opts["used"])
+        self.assertFalse(opts["can_use"])
+        ids = [p["roster_id"] for p in state["bat_bench"]]
+        self.assertNotIn(incoming, ids)
+        self.assertNotIn(outgoing, ids)
+        self.assertEqual(ids, [p.id for p in self.squad(1)[12:]])
+
     def _bench(self, *, is_tournament=True):
         from unittest import mock
         import handlers.cipl_play as cipl_play

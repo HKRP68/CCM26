@@ -7,6 +7,28 @@ from services import squad_ratings as ratings
 from services.auction_squad_report import grouped
 
 
+def team_id_for_players(session, player_ids, league_id=None):
+    """Resolve a confirmed XI by roster identity, never by a reused team name.
+
+    Missing or mixed-squad ids cannot establish a team. A tournament can also
+    pin its league, including when that league is no longer active.
+    """
+    from models import ChallengePlayer, ChallengeTeam
+    ids = {int(pid) for pid in player_ids}
+    if not ids:
+        return None
+    query = (session.query(ChallengePlayer.id, ChallengePlayer.team_id)
+             .join(ChallengeTeam, ChallengeTeam.id == ChallengePlayer.team_id)
+             .filter(ChallengePlayer.id.in_(ids)))
+    if league_id is not None:
+        query = query.filter(ChallengeTeam.league_id == int(league_id))
+    rows = query.all()
+    teams = {row.team_id for row in rows}
+    if len(rows) != len(ids) or len(teams) != 1:
+        return None
+    return teams.pop()
+
+
 def league_rows(session):
     from models import ChallengeLeague, ChallengeMode
     return (session.query(ChallengeLeague).join(ChallengeMode)

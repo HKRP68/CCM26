@@ -769,10 +769,8 @@ def build_bench_from_draft(session, draft, side):
         rows = inline_squad_cards(draft, side)
         team_id = None
         if rows is None:
-            team_name = draft.get("host_team" if side == "host" else "target_team")
-            from handlers.challenge import _side_league_key
-            team_id = _resolve_challenge_team_id(
-                team_name, _side_league_key(draft, side), session)
+            from services.challenge_squad import team_id_for_players
+            team_id = team_id_for_players(session, selected_ids)
             if team_id is None:
                 return []
             from models import ChallengePlayer
@@ -1900,13 +1898,21 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         tournament_id = None
         if draft.get("is_tournament") and draft.get("tournament_id"):
             tid = draft.get("tournament_id")
-            host_cid = _resolve_challenge_team_id(host_team, league_key, session)
-            target_cid = _resolve_challenge_team_id(target_team, league_key, session)
+            from services.challenge_squad import team_id_for_players
+            from handlers.challenge import _challenge_xi_selection
+            from models import Tournament as _Tourn
+            _tour = session.get(_Tourn, int(tid))
+            host_cid, target_cid = [team_id_for_players(
+                session, _challenge_xi_selection(draft, side).get("player_ids", []),
+                _tour.league_id if _tour else None)
+                for side in ("host", "target")]
+            if host_cid is None or target_cid is None:
+                await _fail("Playing XI no longer matches the tournament squads — restart the challenge.")
+                return
             # The XI was picked against the injury list as it stood then. If a
             # knock landed since (the team finished another fixture in the
             # meantime), the injured player must not walk out — checked here,
             # before the fixture is reserved, so a refusal leaves nothing held.
-            from handlers.challenge import _challenge_xi_selection
             for _side, _cid in (("host", host_cid), ("target", target_cid)):
                 _hurt = _injured_ids_for_draft(session, draft, _cid)
                 _picked = {int(pid) for pid in
@@ -1921,9 +1927,7 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
             # For a fixture-gated tournament, atomically reserve this pair's open
             # fixture (scheduled → live) so a concurrent draft in another chat can't
             # play the same fixture. find_open_fixture later fills the 'live' row.
-            from models import Tournament as _Tourn
             from services import league_schedule_service as _lss
-            _tour = session.get(_Tourn, int(tid))
             draft["mid_match_injury_chance"] = medical.chance_for(_tour)
             if _tour and (_tour.schedule_generated or _tour.knockout_generated):
                 _fx = _lss.reserve_fixture_by_names(session, tid, host_team, target_team)
@@ -2944,6 +2948,10 @@ async def _resume_locked(context, mid, only_if_stalled=False):
             return await _resume_finished_innings(context, mid, state)
         except StaleMatchState:
             return False  # a newer snapshot is saved; its resume is scheduled
+    # Saved matches from before the bench fix need their substitutes restored
+    # before the resumed prompt decides whether to show the Impact button.
+    if not await _refresh_tournament_impact_benches(state):
+        return False
     try:
         # Re-render the outstanding pick. Keep action_msg_id so an approach
         # resume edits the existing prompt IN PLACE (no duplicate), and a
