@@ -11,6 +11,7 @@ Follows the throwaway-sqlite pattern from
 """
 
 import io
+import json
 import os
 import sys
 import tempfile
@@ -172,6 +173,129 @@ class ChallengeDataImportTests(unittest.TestCase):
         self.assertIn("Gold", reason)
 
     # ── team file import ──────────────────────────────────────────────────
+    def test_json_import_accepts_each_missing_field(self):
+        from models import ChallengeTeam
+        for missing in ("team_name", "short_name", "logo_url", "primary_color", "secondary_color"):
+            with self.subTest(missing=missing):
+                name = f"Optional {missing} XI"
+                row = {"team_name": name, "short_name": f"JSON-{missing}",
+                       "logo_url": "https://example.com/logo.png",
+                       "primary_color": "ABC", "secondary_color": "#12AB34"}
+                row.pop(missing)
+                response = self.client.post(f"/challenge-data/leagues/{IDS['league']}", data={
+                    "action": "import_team_details",
+                    "team_details_file": (io.BytesIO(json.dumps([row]).encode()), "teams.json"),
+                }, follow_redirects=True)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("Created 1 team(s)", response.get_data(as_text=True))
+                expected_name = row.get("team_name", row.get("short_name"))
+                team = self.session.query(ChallengeTeam).filter_by(
+                    league_id=IDS["league"], name=expected_name).one()
+                self.assertEqual(team.short_name, row.get("short_name"))
+                self.assertEqual(team.logo_url, row.get("logo_url"))
+                self.assertEqual(team.primary_color, None if missing == "primary_color" else "#aabbcc")
+                self.assertEqual(team.secondary_color, None if missing == "secondary_color" else "#12ab34")
+
+    def test_json_partial_update_preserves_details_and_squad_in_this_league_only(self):
+        from models import ChallengeLeague, ChallengePlayer, ChallengeTeam
+        league = self.session.get(ChallengeLeague, IDS["league"])
+        other_league = ChallengeLeague(mode_id=league.mode_id, name="JSON Other League")
+        self.session.add(other_league)
+        self.session.flush()
+        team = ChallengeTeam(league_id=league.id, name="JSON Preserve XI", short_name="JP",
+                             logo_url="/static/logo.png", primary_color="#123456",
+                             secondary_color="#654321", is_active=False, sort_order=12)
+        other = ChallengeTeam(league_id=other_league.id, name=team.name, primary_color="#111111")
+        self.session.add_all([team, other])
+        self.session.flush()
+        self.session.add(ChallengePlayer(team_id=team.id, name="Existing Player"))
+        self.session.commit()
+        response = self.client.post(f"/challenge-data/leagues/{league.id}", data={
+            "action": "import_team_details", "team_details_json": json.dumps({
+                "Team Name": "json preserve xi", "Short Name": "", "Logo / Image": None,
+                "Primary colour code": "#abc"})}, follow_redirects=True)
+        self.assertIn("updated 1 team(s)", response.get_data(as_text=True))
+        self.session.refresh(team)
+        self.session.refresh(other)
+        self.assertEqual((team.name, team.short_name, team.logo_url, team.primary_color,
+                          team.secondary_color, team.sort_order, team.is_active),
+                         ("JSON Preserve XI", "JP", "/static/logo.png", "#aabbcc", "#654321", 12, False))
+        self.assertEqual([player.name for player in team.players], ["Existing Player"])
+        self.assertEqual(other.primary_color, "#111111")
+        # A short-name-only patch can also find an existing team.
+        self.client.post(f"/challenge-data/leagues/{league.id}", data={
+            "action": "import_team_details",
+            "team_details_json": '{"short_name":"JP","secondary_colour":"fff"}'})
+        self.session.refresh(team)
+        self.assertEqual(team.secondary_color, "#ffffff")
+
+    def test_json_export_can_be_imported_into_another_league(self):
+        from models import ChallengeLeague, ChallengeTeam
+        league = self.session.get(ChallengeLeague, IDS["league"])
+        target = ChallengeLeague(mode_id=league.mode_id, name="JSON Roundtrip League")
+        self.session.add(target)
+        self.session.commit()
+        response = self.client.get(f"/challenge-data/leagues/{league.id}/teams.json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "application/json")
+        self.assertIn("attachment;", response.headers["Content-Disposition"])
+        rows = response.get_json()
+        self.assertTrue(rows)
+        self.assertEqual(set(rows[0]), {"team_name", "short_name", "logo_url", "primary_color", "secondary_color"})
+        imported = self.client.post(f"/challenge-data/leagues/{target.id}", data={
+            "action": "import_team_details", "team_details_json": json.dumps(rows)}, follow_redirects=True)
+        self.assertNotIn("team(s) skipped", imported.get_data(as_text=True))
+        exported = self.client.get(f"/challenge-data/leagues/{target.id}/teams.json").get_json()
+        self.assertEqual(sorted(rows, key=lambda r: r["team_name"]),
+                         sorted(exported, key=lambda r: r["team_name"]))
+        # Re-importing named teams updates them rather than making duplicates.
+        self.client.post(f"/challenge-data/leagues/{target.id}", data={
+            "action": "import_team_details", "team_details_json": json.dumps(rows)})
+        self.assertEqual(self.session.query(ChallengeTeam).filter_by(league_id=target.id).count(), len(rows))
+
+    def test_json_import_skips_bad_rows_and_accepts_friendly_labels(self):
+        from models import ChallengeTeam
+        rows = [None, {}, {"team_name": "Bad Colour XI", "primary_color": "red"},
+                {"team_name": "Bad Logo XI", "logo_url": "javascript:alert(1)"},
+                {"team_name": ["Bad Type"]}, {"team_name": "x" * 121},
+                {"Team Name": "Friendly JSON XI", "Short Name": "FJ",
+                 "Logo / Image": "/static/teams/fj.png", "Primary colour code": "123",
+                 "Secondary colour code": "ABCDEF"}]
+        response = self.client.post(f"/challenge-data/leagues/{IDS['league']}", data={
+            "action": "import_team_details", "team_details_json": json.dumps({"teams": rows})},
+            follow_redirects=True)
+        page = response.get_data(as_text=True)
+        self.assertIn("6 team(s) skipped", page)
+        self.assertIn("Created 1 team(s)", page)
+        team = self.session.query(ChallengeTeam).filter_by(name="Friendly JSON XI").one()
+        self.assertEqual((team.short_name, team.logo_url, team.primary_color, team.secondary_color),
+                         ("FJ", "/static/teams/fj.png", "#112233", "#abcdef"))
+        self.assertIsNone(self.session.query(ChallengeTeam).filter_by(name="Bad Colour XI").first())
+
+    def test_json_missing_name_and_short_name_gets_an_automatic_name(self):
+        from models import ChallengeTeam
+        response = self.client.post(f"/challenge-data/leagues/{IDS['league']}", data={
+            "action": "import_team_details", "team_details_json": '[{"primary_color":"#123456"}]'},
+            follow_redirects=True)
+        self.assertIn("Created 1 team(s)", response.get_data(as_text=True))
+        team = self.session.query(ChallengeTeam).filter_by(league_id=IDS["league"], name="Team 1").one()
+        self.assertEqual(team.primary_color, "#123456")
+
+    def test_json_invalid_documents_leave_teams_unchanged(self):
+        from models import ChallengeTeam
+        before = self.session.query(ChallengeTeam).count()
+        for text in ("", "{broken", '"teams"', '{"teams":{}}'):
+            with self.subTest(text=text):
+                response = self.client.post(f"/challenge-data/leagues/{IDS['league']}", data={
+                    "action": "import_team_details", "team_details_json": text}, follow_redirects=True)
+                self.assertIn("Error:", response.get_data(as_text=True))
+        self.assertEqual(self.session.query(ChallengeTeam).count(), before)
+
+    def test_json_export_requires_login(self):
+        response = self.admin.app.test_client().get(f"/challenge-data/leagues/{IDS['league']}/teams.json")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("login", response.headers["Location"])
+
     def test_import_creates_teams_and_squads_from_a_csv(self):
         csv_bytes = (b"Team Name,Player Name,Version\n"
                      b"Mumbai Indians,Rohit Sharma,Base\n"

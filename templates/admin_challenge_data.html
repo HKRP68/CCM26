@@ -212,7 +212,39 @@
   </section>
 
   <section class="cm-card">
-    <h3 style="margin-top:0;">📄 Import Teams from File</h3>
+    <div class="challenge-head">
+      <h3 style="margin-top:0;">Team details · JSON</h3>
+      <a class="btn btn-ghost" href="{{ url_for('admin_challenge_teams_export', league_id=league.id) }}">Export JSON</a>
+    </div>
+    <p style="color:var(--muted);margin-top:0;">Import team names, short names, logos and colours into <strong>{{ league.name }}</strong>. Upload a file or paste JSON below.</p>
+    <p style="color:var(--muted);">Every field is optional. Missing, blank or null fields keep existing values. Teams with the same name are updated; new teams are added. Without a team name, we use the short name or assign a name such as “Team 1”. Logos use an image URL or an existing local image path.</p>
+    <form method="POST" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="import_team_details">
+      <label for="team-details-file">JSON file</label>
+      <input id="team-details-file" type="file" name="team_details_file" accept=".json,application/json">
+      <label for="team-details-json" style="display:block;margin-top:.6rem;">Or paste JSON</label>
+      <textarea id="team-details-json" name="team_details_json" rows="9" spellcheck="false" placeholder='[{&#10;  "team_name": "Mumbai Indians",&#10;  "short_name": "MI",&#10;  "logo_url": "https://example.com/mi.png",&#10;  "primary_color": "#004BA0",&#10;  "secondary_color": "#D1AB3E"&#10;}]' style="width:100%;margin-top:.3rem;padding:.7rem;background:var(--input-bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:monospace;resize:vertical;"></textarea>
+      <button class="btn btn-primary" type="submit" style="margin-top:.6rem;">Import JSON</button>
+    </form>
+    <details style="margin-top:.8rem;">
+      <summary>Example JSON</summary>
+      <pre style="overflow-x:auto;">[
+  {
+    "team_name": "Mumbai Indians",
+    "short_name": "MI",
+    "logo_url": "https://example.com/mi.png",
+    "primary_color": "#004BA0",
+    "secondary_color": "#D1AB3E"
+  },
+  { "team_name": "Chennai Super Kings", "short_name": "CSK" }
+]</pre>
+      <p style="color:var(--muted);">You can also use labels such as “Team Name”, “Short Name”, “Logo / Image”, “Primary colour code” and “Secondary colour code”.</p>
+    </details>
+  </section>
+
+  <section class="cm-card">
+    <h3 style="margin-top:0;">📄 Import Player Squads</h3>
     <p style="color:var(--muted);margin-top:-.4rem;">Upload an .xlsx or .csv with columns <code>TEAM NAME | PLAYER NAME | VERSION</code> (header row optional, version optional — blank picks the Base card). Missing teams are created in <strong>{{ league.name }}</strong>; existing teams get the players added. Duplicates are skipped.</p>
     <form method="POST" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

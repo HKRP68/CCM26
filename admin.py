@@ -16861,6 +16861,26 @@ def _team_colour_form(field):
     return colour
 
 
+@app.route("/challenge-data/leagues/<int:league_id>/teams.json")
+@login_required
+def admin_challenge_teams_export(league_id):
+    from services.challenge_team_io import export_teams
+    db = get_session()
+    try:
+        league = _get_league_or_404(db, league_id)
+        if not league:
+            return redirect(url_for("admin_challenge_data"))
+        teams = (db.query(ChallengeTeam).filter_by(league_id=league.id)
+                 .order_by(ChallengeTeam.sort_order, ChallengeTeam.name).all())
+        return Response(
+            json.dumps(export_teams(teams), ensure_ascii=False, indent=2),
+            mimetype="application/json",
+            headers={"Content-Disposition": f'attachment; filename="league-{league.id}-teams.json"'},
+        )
+    finally:
+        db.close()
+
+
 @app.route("/challenge-data/leagues/<int:league_id>", methods=["GET", "POST"])
 @login_required
 def admin_challenge_league_detail(league_id):
@@ -16913,6 +16933,29 @@ def admin_challenge_league_detail(league_id):
                         db.flush()
                         log_admin(db, "challenge_team_add", "challenge_team", team.id, team.name)
                         flash(f"✅ Added team {team.name}.", "success")
+                elif action == "import_team_details":
+                    from services.challenge_team_io import read_teams_json, import_teams
+                    upload = request.files.get("team_details_file")
+                    if upload and upload.filename:
+                        try:
+                            text = upload.read().decode("utf-8-sig")
+                        except UnicodeDecodeError as exc:
+                            raise ValueError("Save your JSON file as UTF-8 and try again.") from exc
+                    else:
+                        text = request.form.get("team_details_json") or ""
+                    if not text.strip():
+                        raise ValueError("Choose a JSON file or paste your team details.")
+                    made, updated, errors = import_teams(db, league, read_teams_json(text))
+                    log_admin(db, "challenge_team_details_import", "challenge_league", league.id,
+                              league.name, f"created={made} updated={updated} skipped={len(errors)}")
+                    if made or updated:
+                        flash(f"✅ Created {made} team(s); updated {updated} team(s).", "success")
+                    if errors:
+                        shown = "; ".join(errors[:8])
+                        more = f" …and {len(errors) - 8} more." if len(errors) > 8 else ""
+                        flash(f"⚠️ {len(errors)} team(s) skipped — {shown}{more}", "error")
+                    elif not made and not updated:
+                        flash("No teams to import.", "info")
                 elif action == "import_teams":
                     # One sheet → every team and its squad:
                     # TEAM NAME | PLAYER NAME | VERSION (version optional).
