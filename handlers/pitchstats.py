@@ -98,26 +98,19 @@ def _scope_line(mode, scope, matches, balls):
     mode_text = ("Lets Play + Challenge League" if mode == MODE_ALL
                  else pitch_stats.MODE_LABELS.get(mode, mode))
     scope_text = "tournament matches" if scope == SCOPE_TOUR else "all matches"
-    overs = balls / 6.0
     return (f"<i>{_esc(mode_text)} · {scope_text} · "
             f"{matches:,} match{'es' if matches != 1 else ''}, "
-            f"{overs:,.0f} overs</i>")
+            f"{balls:,} legal balls</i>")
 
 
 def _empty_text(mode, scope):
     return (
-        "🏟 <b>PITCH STATS</b>\n"
-        "━━━━━━━━━━━━━━━━━━━\n\n"
-        "<b>Nothing recorded yet for this filter.</b>\n\n"
-        "These stats are built from finished matches, and only from the two "
-        "modes that play the full Approach game between two people:\n"
-        "• <b>/letsplay</b> (and Lets Play Tournament fixtures)\n"
-        "• <b>Challenge League</b> — /cipl and /c&lt;league&gt;, tournaments included\n\n"
-        "<i>Practice matches against the AI captain are unranked and are not "
-        "counted. A match that was abandoned or force-ended never counts either."
-        "</i>\n\n"
-        "Play a few and check back. <b>/matchhelp pitches</b> has what each "
-        "surface is <i>designed</i> to do in the meantime."
+        "🏟 <b>PITCH STATS</b>\n\n"
+        "No completed matches for this filter yet.\n"
+        "Switch modes or select All matches below.\n\n"
+        "Counts completed human-vs-human Lets Play and Challenge League matches. "
+        "Practice, abandoned and force-ended matches are excluded.\n\n"
+        "/matchhelp pitches explains each surface."
     )
 
 
@@ -133,9 +126,7 @@ def _home_text(session, mode, scope):
         return _empty_text(mode, scope)
 
     matches, balls = pitch_stats.totals(session, real_mode, tour_only)
-    out = ["🏟 <b>PITCH STATS</b> — what the surfaces actually did",
-           _scope_line(mode, scope, matches, balls),
-           "━━━━━━━━━━━━━━━━━━━"]
+    out = ["🏟 <b>PITCH STATS</b>", _scope_line(mode, scope, matches, balls)]
     for row in rows:
         pitch = row["pitch"]
         band = row["par_band"]
@@ -145,19 +136,15 @@ def _home_text(session, mode, scope):
         out.append(
             f"\n{_icon(pitch)} <b>{_esc(pitch)}</b> · "
             f"{row['matches']} match{'es' if row['matches'] != 1 else ''}"
-            f"\n   <b>{_num(row['rpo'])}</b> runs/over · "
-            f"<b>{_num(row['wpo'])}</b> wkts/over"
-            f"\n   1st inns avg <b>{avg_text}</b>{band_text} "
-            f"{_verdict_tag(row['par_verdict'])}"
-            f"\n   Bat 1st <b>{_pct(row['bat_first_win_pct'])}</b> · "
-            f"Bat 2nd <b>{_pct(row['bat_second_win_pct'])}</b>"
+            f"\nRPO <b>{_num(row['rpo'])}</b> · WPO <b>{_num(row['wpo'])}</b> · "
+            f"1st avg <b>{avg_text}</b>{band_text}"
+            f"\nBat first <b>{_pct(row['bat_first_win_pct'])}</b> · "
+            f"Chasing <b>{_pct(row['bat_second_win_pct'])}</b>"
             + (f" <i>({row['ties']} tie{'s' if row['ties'] != 1 else ''})</i>"
                if row["ties"] else ""))
     out.append(
-        "\n━━━━━━━━━━━━━━━━━━━\n"
-        "<i>Every rate is per six balls, so a chase won in 17.2 counts for what "
-        "it was. Tap a surface for phase splits, the toss record and its "
-        "approach table.</i>")
+        "\n<i>RPO = runs per 6 legal balls; WPO = wickets per 6 legal balls. "
+        "Win percentages exclude ties. Tap a pitch for phases and toss stats.</i>")
     return "\n".join(out)
 
 
@@ -179,10 +166,9 @@ def _pitch_text(session, pitch, mode, scope):
         f"{_icon(pitch)} <b>{_esc(profile.name)}</b> — "
         f"<i>{_esc(profile.blurb)}</i>",
         f"<i>Designed par {band_text} · favours {profile.favours.lower()}</i>",
-        "━━━━━━━━━━━━━━━━━━━",
         f"\n📊 <b>{detail['matches']}</b> matches · "
         f"<b>{detail['innings']}</b> innings · "
-        f"{detail['balls'] / 6.0:,.0f} overs",
+        f"{detail['balls']:,} legal balls",
         f"Runs/over <b>{_num(detail['rpo'])}</b> · "
         f"Wickets/over <b>{_num(detail['wpo'])}</b>",
     ]
@@ -196,9 +182,9 @@ def _pitch_text(session, pitch, mode, scope):
         row = detail["phases"][phase]
         label = pitch_stats.PHASE_LABELS[phase]
         if not row["balls"]:
-            out.append(f"{label:<10} <i>no data</i>")
+            out.append(f"{label}: <i>no data</i>")
             continue
-        out.append(f"{label:<10} <b>{_num(row['rpo'])}</b> rpo · "
+        out.append(f"{label}: <b>{_num(row['rpo'])}</b> rpo · "
                    f"<b>{_num(row['wpo'])}</b> wkts/over")
 
     toss = detail["toss"]

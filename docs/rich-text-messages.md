@@ -33,33 +33,20 @@ player's name is.
 
 ## Bot-wide delivery
 
-`services/rich_message_defaults.py` is installed by the main bot, the franchise
-bot, admin DMs and website broadcasts. It promotes ordinary `send_message`,
-`reply_text`, `reply_html`, callback edits and scheduled job messages through
-the shared native rich transport. This includes match setup, delivery/shot
-prompts, claims, daily rewards, player searches, roster and
-shop pages, trades, tournaments, help, errors and administrator screens.
-Standalone end-of-over summaries deliberately retain the original formatted
-HTML through `sendMessage`, using the task-local `legacy_delivery()` bypass.
-Their controls and deletion tracking are preserved; other messages still use
-rich delivery. WSP autoplay summaries use the same exception.
-Final-over delivery reveals also bypass rich delivery. They show one score and
-target, the delivery result, the over timeline and the current requirement.
-Extras explain that no legal ball was used; terminal deliveries show the win,
-tie or successful defence. Per-delivery saves and message cleanup are unchanged.
+Ordinary `send_message`, `reply_text`, `reply_html`, callback edits and website
+notifications use Telegram's original text protocol. Their newlines, HTML,
+entities, topics, controls and privacy parameters pass through unchanged.
+Automatic paragraph/table conversion has been removed: a normal text message
+must not become a stack of rich paragraphs.
 
-Existing HTML becomes native rich HTML. Plain text becomes a native paragraph;
-names containing `<`, `>` or `&` remain literal text. Explicit Telegram entities
-preserve their formatting, including UTF-16 offsets. Specialized tables and
-scorecards keep their existing block builders. Legacy Markdown is preserved
-through its original formatter because its syntax differs from rich Markdown.
+Designed scorecards, pack cards, match announcements and expandable match tools
+still opt in through `services/rich_message.py`. Their explicit blocks and
+formatted fallbacks retain the existing callback ownership checks. Startup
+`install_rich_defaults()` now installs only rich-response compatibility for the
+SDK; it does not intercept outgoing ordinary messages.
 
-The automatic path preserves inline keyboards, reply targets, forum topics,
-private parameters, content protection, the SDK rate limiter and caller timeouts.
-Inline keyboards remain removable by existing completion/timeout handlers.
-Personal native buttons register with the same owner guard; shared match
-controls remain available to both captains and retain their backend checks.
-An explicit rich helper's compatibility send is never promoted a second time.
+Over summaries and final-over delivery reveals remain ordinary formatted text.
+Per-delivery saves, legal-ball counts and message cleanup are unchanged.
 
 `services/rich_message_compat.py` bridges the installed SDK: rich message
 responses and incoming callback/webhook messages expose readable `text` and
@@ -72,12 +59,9 @@ updated through their captions; a failed edit never sends a duplicate receipt.
 
 ## Alignment and match controls
 
-`services/rich_layout.py` turns consecutive label/value facts into native tables
-across ordinary replies, edits and website notifications. It preserves inline
-formatting and mentions, including expandable fact sections. Text labels stay
-left-aligned and numeric, currency, score and squad-count cells align right.
-Complex HTML and code retain their original rendering rather than being guessed
-into columns. Existing table builders share the same numeric-cell defaults.
+`services/rich_layout.py` remains an opt-in helper for designed rich cards.
+It is no longer applied automatically to ordinary replies or notifications.
+Explicit table builders preserve inline formatting, mentions and numeric alignment.
 
 `/sbo` uses explicit position/player/BAT/role columns and an expandable numbered
 bench. Over summaries keep the old timeline, score, batter/bowler figures,
@@ -105,7 +89,8 @@ image into a separate text receipt. See [Telegram rich media blocks](https://cor
 
 | Surface | Rendering |
 | --- | --- |
-| `/myprofile` and all five tabs | Overview and Career stats use native headings and fact tables. Activity shows five recent events with older entries in collapsed details. Results distinguish wins, losses, ties and unrecorded winners, with match-number links. Prize receipts preserve private access, statuses, balances and pagination. All tabs keep the same callback routes, a selected-tab marker and formatted HTML fallback. |
+| `/myprofile` and all five tabs | Compact formatted HTML preserves line breaks. Results show five one-line matches per page with inline result links and Older/Newer navigation. Activity retains its expandable older entries. Prize receipts preserve private access, statuses, balances and pagination. Tabs retain their callback routes and selected marker. |
+| `/matchhelp`, `/pitchstats` | Ordinary formatted HTML with compact instructions, named topics and clear rate/sample labels; no automatic rich paragraph conversion. |
 | `/buypack`, pack details and purchase receipts | `services/pack_messages.py` shares prices and contents between HTML and rich cards. Currency balances use tables, version filters are explicit, daily availability is visible, and receipts show the actual currency paid plus `/openpack`. |
 | `/openpack` inventory and results | The inventory uses its own numbered pack table. The final receipt separates main and bonus pulls with version, rating and actual roster placement for each card, then shows roster/unopened counts and the next command. Overflow is explicitly marked as not added. |
 | trade confirmation and completion | `services/trade_messages.py` keeps each captain’s offered/received card, fee and status visible until both confirm. Completion shows what each captain received, the fee paid and any traits returned. |

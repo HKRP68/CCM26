@@ -46,32 +46,22 @@ def _approach_lines(approaches, blurbs):
 def _batting_block():
     from engine.approach_modifiers import BATTING_APPROACHES
     return _approach_lines(BATTING_APPROACHES, {
-        "defensive": "block it out. Almost no wickets, almost no runs. A tool "
-                     "for seeing off a spell or protecting the last pair.",
-        "rotate": "ones and twos, no risks. The middle-overs workhorse — it "
-                  "keeps the board moving and the strike turning over.",
-        "balanced": "respect the good ball, punish the bad one. The honest "
-                    "contest, and never a mistake.",
-        "aggressive": "look for the boundary from ball one. Real runs, real "
-                      "risk.",
-        "ultra": "swing at everything. The most runs on the board and the most "
-                 "wickets in the book — a death-overs weapon that will cost you "
-                 "the match in the 11th.",
+        "defensive": "protect wickets; scoring slows down.",
+        "rotate": "work singles and twos; useful through the middle overs.",
+        "balanced": "mix safe scoring with boundary chances.",
+        "aggressive": "attack boundaries with more wicket risk.",
+        "ultra": "maximum attack and wicket risk; best saved for the death.",
     })
 
 
 def _bowling_block():
     from engine.approach_modifiers import BOWLING_APPROACHES
     return _approach_lines(BOWLING_APPROACHES, {
-        "defensive": "dry it up. Kills the boundary, hands over singles. "
-                     "Vulnerable to a batter happy to take those singles.",
-        "balanced": "line and length. No weakness, no edge.",
-        "mixed": "change it up ball to ball. Adds volatility and squeezes the "
-                 "six; a settled batter reads the pattern.",
-        "aggressive": "attack the stumps and the body. Buys wickets by offering "
-                      "pace — which is exactly what a slogger wants.",
-        "variation": "slower balls, cutters, wrong'uns. Punishes the swinger, "
-                     "wasted on someone content to nudge it around.",
+        "defensive": "limit boundaries while conceding singles.",
+        "balanced": "a steady line-and-length option.",
+        "mixed": "vary deliveries; more unpredictable outcomes.",
+        "aggressive": "hunt wickets while offering boundary chances.",
+        "variation": "cutters and slower balls to disrupt big hitters.",
     })
 
 
@@ -114,9 +104,8 @@ def _pitch_block():
         toss = "BOWL" if prof.toss == "bowl" else "BAT"
         rows.append(
             f"<b>{pitch}</b> — {par} · favours {prof.favours.lower()}\n"
-            f"{prof.blurb}\n"
             f"<i>2nd innings: {note}</i>\n"
-            f"<i>Toss (day): {toss} — {prof.toss_reason}</i>")
+            f"<i>Toss (day): {toss}</i>")
     return "\n\n".join(rows)
 
 
@@ -158,66 +147,36 @@ def _momentum_block():
 
 PAGES = [
     ("start", "🏁", "The two modes", lambda: (
-        "<b>/letsplay</b> (or <b>/lp</b>) — your own collected squad, traits and "
-        "all, against another player's.\n"
-        "<b>/cipl</b> — Challenge League. Drafted franchise squads; no traits, "
-        "so it is decided on ratings and captaincy alone.\n\n"
-        "<b>Practice against the AI</b>\n"
-        "<b>/lpbot</b> — LetsPlay vs the bot captain\n"
-        "<b>/ciplbot</b> — CIPL vs the bot captain\n"
-        "Bot matches are unranked. The bot's picks stay hidden, because a bot "
-        "whose plans are published is a bot you can write down and beat.\n\n"
-        "<b>Getting going</b>\n"
-        "1️⃣ Send the command (reply to someone to challenge them)\n"
-        "2️⃣ Pick overs and accept\n"
-        "3️⃣ Toss — the winner bats or bowls\n"
-        "4️⃣ Pick your XI and batting order\n"
-        "5️⃣ Play the over loop below\n\n"
-        "Stuck? <b>/rcl</b> resumes a Challenge League match, <b>/r</b> any other.\n\n"
-        "<b>Breaks and the Mini App</b>\n"
-        "⏸️ <b>/pause</b> saves the match exactly where it is — "
-        "<b>/continue</b> picks it up later, in any group (the other captain "
-        "taps ✅ Ready). <b>/saved</b> lists yours. A cleared match, and a "
-        "tournament match's first time-out, are saved the same way.\n"
-        "📱 <b>/playapp</b> moves the match to the Mini App: each captain picks "
-        "privately and neither plan is ever shown. <b>/playchat</b> moves it back.\n\n"
-        "📘 Every other match type and tournament: <b>/matchguide</b> "
-        "(the full guide as a file, or <b>/matchguide sim</b> for one topic)."
+        "<b>Choose a mode</b>\n"
+        "• /letsplay — use your collected squad and equipped traits.\n"
+        "• /cipl — play with Challenge League franchise squads.\n"
+        "• /lpbot or /ciplbot — unranked practice against the AI.\n\n"
+        "<b>Start playing</b>\n"
+        "Challenge someone, agree on the format, choose your XI and complete the toss. "
+        "Each over needs a bowler, a bowling plan and a batting intent.\n\n"
+        "<b>Useful commands</b>\n"
+        "/rcl or /r — resume a stuck match\n"
+        "/pause · /saved · /continue — save and return later\n"
+        "/playapp · /playchat — switch where you play\n"
+        "/matchguide — full guide as a file\n\n"
+        "Choose a topic below."
     )),
     ("over", "🔁", "How an over works", lambda: (
-        "Every over is a <b>simultaneous guess</b>. Neither captain sees the "
-        "other's pick until the over is bowled — that is the whole game.\n\n"
-        "1️⃣ The bowling captain picks a <b>bowler</b>\n"
-        "2️⃣ …then a <b>bowling plan</b>, hidden\n"
-        "3️⃣ The batting captain picks a <b>batting intent</b>, hidden\n"
-        "4️⃣ Both are revealed and the over is bowled ball by ball\n\n"
-        "The two picks together decide the shape of the over. Neither one alone "
-        "does — the same intent can be your best or worst choice depending on "
-        "what you were up against.\n\n"
-        "<b>Bowler limits:</b> 4 overs each in a T20, and nobody bowls two in a "
-        "row.\n\n"
-        "<b>If you go quiet</b> the bot picks a sensible default for you after a "
-        "few minutes, so a match never dies waiting."
+        "1. Bowling captain selects a <b>bowler</b>.\n"
+        "2. Bowling captain chooses a <b>bowling plan</b>.\n"
+        "3. Batting captain chooses a <b>batting intent</b>.\n"
+        "4. The engine resolves the over from both picks.\n\n"
+        "Plans stay hidden while captains choose. Mini App plans and the AI's picks remain private.\n\n"
+        "In a full T20, a bowler can bowl up to 4 overs and cannot bowl consecutive overs.\n"
+        "Open <b>Manage match</b> inside the live message for the scorecard, Impact Player and batting controls."
     )),
     ("batting", "🏏", "Batting intents", lambda: (
         _batting_block() + "\n\n"
-        "<b>Risk is genuinely priced.</b> Ultra scores the most and loses the "
-        "most. Measured through the engine, at the death Ultra is the best pick "
-        "on the board; in the middle overs it is the worst, because the wicket "
-        "it costs you is worth more than the runs it buys.\n\n"
-        "There is no approach that is right everywhere. If there were, there "
-        "would be no game."
+        "Higher attack trades more wickets for more scoring. Pick for the phase, pitch and chase."
     )),
     ("bowling", "🎯", "Bowling plans", lambda: (
         _bowling_block() + "\n\n"
-        "<b>Every plan has a weakness</b>, and that is the point:\n"
-        "• Defensive shuts the boundary but concedes the single\n"
-        "• Aggressive buys wickets by offering pace to hit\n"
-        "• Variation punishes the swinger, wasted on the nudger\n"
-        "• Mixed spikes on the surprise ball, readable if you settle\n"
-        "• Balanced has no weakness and no edge\n\n"
-        "Match the plan to the intent you think is coming — not to the one you "
-        "would pick yourself."
+        "Choose a plan for the intent you expect. Change it before repeated picks become predictable."
     )),
     ("duel", "⚔️", "Approach vs approach", lambda: (
         "<b>Read the game.</b> Each intent is built to beat particular plans. "
@@ -294,25 +253,13 @@ PAGES = [
         "matches are unranked and pay nothing."
     )),
     ("tips", "🧠", "Playing well", lambda: (
-        "<b>1. Vary.</b> The single biggest edge. Four overs of the same pick "
-        "and the opposition reads you; one different over resets it.\n\n"
-        "<b>2. Price the wicket, not the runs.</b> A wicket costs roughly 18 "
-        "runs of what is left. Ultra in the 11th over wins the over and loses "
-        "the innings.\n\n"
-        "<b>3. Pick for the phase.</b> Rotate through the middle, save Ultra "
-        "for the last four, and never bat Defensive at the death — it is "
-        "actively penalised.\n\n"
-        "<b>4. Read the pitch twice.</b> What it does in the first innings is "
-        "not what it does in the chase. A dry track is a lottery at the death; "
-        "a green one has flattened out by over 9.\n\n"
-        "<b>5. Bowl your best at the danger.</b> Bowlers get four overs and "
-        "cannot bowl consecutively — spend them on the batters who are set, not "
-        "on the ones who just walked in.\n\n"
-        "<b>6. Watch the momentum line.</b> It is on the over summary. A side "
-        "in flow is harder to bowl at; break it with a wicket or a maiden and "
-        "the whole innings turns.\n\n"
-        "<b>7. Read your own analysis file.</b> The duel grid tells you which "
-        "picks are actually earning."
+        "• <b>Vary your picks.</b> Repetition lets the opposition read you.\n"
+        "• <b>Respect the phase.</b> Protect the middle overs; plan your attack at the death.\n"
+        "• <b>Read the pitch.</b> Its behaviour can change in the chase.\n"
+        "• <b>Manage wicket risk.</b> Fast scoring means little if you run out of batters.\n"
+        "• <b>Save key bowlers.</b> Keep overs available for dangerous batters.\n"
+        "• <b>Watch momentum.</b> A wicket or quiet over can turn the game.\n"
+        "• <b>Review your analysis.</b> Check which intent worked against each plan."
     )),
 ]
 
@@ -322,6 +269,11 @@ ALIASES = {"approach": "duel", "approaches": "duel", "pitch": "pitches",
            "help": "start", "tip": "tips", "trait": "squad"}
 
 HEADER = "🏏 <b>MATCH GUIDE</b> — /letsplay &amp; /cipl"
+TOPIC_LABELS = {
+    "start": "Start here", "over": "Over flow", "batting": "Batting", "bowling": "Bowling",
+    "duel": "Match-ups", "repeat": "Repetition", "phases": "Phases", "pitches": "Pitches",
+    "momentum": "Momentum", "squad": "Squad & traits", "after": "After match", "tips": "Quick tips",
+}
 
 
 def _page_text(index):
@@ -331,7 +283,7 @@ def _page_text(index):
     return (f"{HEADER}\n"
             f"{emoji} <b>{html.escape(title)}</b>  "
             f"<i>({index + 1}/{len(PAGES)})</i>\n"
-            "━━━━━━━━━━━━━━━━━━━\n\n" + body())
+            "\n\n" + body())
 
 
 def _keyboard(index, owner_tg):
@@ -339,10 +291,10 @@ def _keyboard(index, owner_tg):
     through."""
     rows, row = [], []
     for i, (key, emoji, _title, _body) in enumerate(PAGES):
-        label = f"{emoji}{'•' if i == index else ''}"
+        label = f"{'✓ ' if i == index else ''}{emoji} {TOPIC_LABELS.get(key, _title)}"
         row.append(InlineKeyboardButton(
             label, callback_data=f"{CB}_go_{owner_tg}_{key}"))
-        if len(row) == 6:
+        if len(row) == 2:
             rows.append(row)
             row = []
     if row:

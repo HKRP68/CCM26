@@ -2,8 +2,8 @@
 
 A rich message is not a ``parse_mode``. The text is a tree of typed blocks —
 headings, native tables, collapsible ``details`` — posted to its own endpoint,
-and existing HTML can also be sent natively. Specialized surfaces add block
-renderers; rich_message_defaults covers ordinary text sends across the bot.
+and existing HTML can also be sent natively. Specialized surfaces opt in to
+block renderers; ordinary text keeps its standard Telegram formatting.
 The installed SDK predates these methods, so their payloads go through
 ``Bot._post``: the same authenticated transport every PTB method
 uses, which keeps the rate limiter, the base URL and the error parsing.

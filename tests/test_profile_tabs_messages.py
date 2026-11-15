@@ -41,9 +41,6 @@ def test_overview_has_safe_names_roster_balances_and_explained_xi_values(monkeyp
     assert "Manager: A &amp; B" in text and "@A &amp; B" not in text
     for fact in ("Roster: 12/", "12,345", "350", "/setcaptain", "first 11 roster positions", "85,000"):
         assert fact in text
-    blocks = P._profile_blocks(text)
-    assert blocks[0]["type"] == "heading"
-    assert any(block["type"] == "table" for block in blocks)
 
 
 def test_broken_streak_does_not_say_the_manager_has_never_won():
@@ -66,10 +63,7 @@ def test_activity_is_escaped_bounded_and_preserves_the_older_events():
     assert "&lt;&amp;&gt;" in text and "UTC" in text
     for i in range(15):
         assert f"Event {i} " in text
-    blocks = P._profile_blocks(text)
-    assert "10:01 UTC" in flatten(blocks)
-    assert not any(block["type"] == "table" for block in blocks)
-    assert any(block.get("summary") == "Earlier activity" for block in blocks)
+    assert "10:01 UTC" in text
 
 
 def test_results_distinguish_win_loss_tie_and_unrecorded_winner_and_keep_links():
@@ -84,12 +78,11 @@ def test_results_distinguish_win_loss_tie_and_unrecorded_winner_and_keep_links()
     db.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = rows
     db.get.return_value = owner(id=2, username="Other<Owner>")
     text, buttons = P._format_results(db, owner())
-    for fact in ("WIN · #1", "You won by 1 run", "LOSS · #2", "You lost by 6 wickets",
-                 "TIE · #3", "NO RESULT · #4", "Other&lt;Owner&gt;"):
+    for fact in ("#1", "won by 1 run", "#2", "lost by 6 wickets", "Tie", "No Result", "Other&lt;Owner&gt;"):
         assert fact in text
-    assert len(buttons) == 4
-    assert buttons[0][0].url == "https://t.me/c/123/31"
-    assert "#1" in buttons[0][0].text
+    assert buttons == []
+    assert 'href="https://t.me/c/123/31"' in text
+    assert len(text) < 700
 
 
 @pytest.mark.parametrize("native", [True, False])
@@ -109,15 +102,10 @@ def test_every_tab_keeps_navigation_and_uses_rich_or_html_delivery(monkeypatch, 
                             edit_message_text=AsyncMock())
     asyncio.run(P.myprofile_callback(SimpleNamespace(callback_query=query, effective_chat=SimpleNamespace(type="private")),
                                      SimpleNamespace()))
-    if native:
-        endpoint, payload, _ = delivery.calls[-1]
-        assert endpoint == "editMessageText"
-        assert title in flatten(payload["rich_message"]["blocks"])
-        markup = payload["reply_markup"]
-    else:
-        text = query.edit_message_text.call_args.args[0]
-        assert title in text
-        markup = query.edit_message_text.call_args.kwargs["reply_markup"]
+    assert not delivery.calls
+    text = query.edit_message_text.call_args.args[0]
+    assert title in text
+    markup = query.edit_message_text.call_args.kwargs["reply_markup"]
     selected = [b for row in markup.inline_keyboard for b in row if b.text.startswith("✓ ")]
     assert len(selected) == 1 and selected[0].callback_data == f"mp_{tab}_1"
     assert len(markup.inline_keyboard[0]) == 2
@@ -152,14 +140,13 @@ def test_receipt_navigation_preserves_the_owner_and_cursor(monkeypatch):
                                   "<b>#4 · Cup</b>\nCredited: 500 coins\n"
                                   "Balance after credit: 1,000 coins + 5 gems\n15 Nov 2026 10:00 UTC", 3))
     monkeypatch.setattr(tournament_payouts, "recipient_receipt_page", page)
-    edit = AsyncMock(return_value=True)
-    monkeypatch.setattr(R, "edit_rich", edit)
-    query = SimpleNamespace(data="mp_prizes_1_5", from_user=SimpleNamespace(id=11), answer=AsyncMock())
+    query = SimpleNamespace(data="mp_prizes_1_5", from_user=SimpleNamespace(id=11), answer=AsyncMock(),
+                            edit_message_text=AsyncMock())
     asyncio.run(P.myprofile_callback(SimpleNamespace(callback_query=query, effective_chat=SimpleNamespace(type="private")),
                                      SimpleNamespace()))
     assert page.call_args.kwargs["before_id"] == 5 and page.call_args.args[1] == 11
     retry.assert_called_once()
-    nav = edit.call_args.kwargs["reply_markup"].inline_keyboard[-1]
+    nav = query.edit_message_text.call_args.kwargs["reply_markup"].inline_keyboard[-1]
     assert [button.callback_data for button in nav] == ["mp_prizes_1", "mp_prizes_1_3"]
-    assert "10:00 UTC" in flatten(edit.call_args.args[1])
-    assert "Balance after credit: 1,000 coins + 5 gems" in edit.call_args.args[2]
+    assert "10:00 UTC" in query.edit_message_text.call_args.args[0]
+    assert "Balance after credit: 1,000 coins + 5 gems" in query.edit_message_text.call_args.args[0]

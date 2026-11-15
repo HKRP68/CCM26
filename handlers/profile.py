@@ -26,33 +26,6 @@ def _build_keyboard(active, user_id):
     return InlineKeyboardMarkup([buttons[:2], buttons[2:], [receipts]])
 
 
-def _profile_blocks(text):
-    """Use native headings and fact tables, preserving the HTML fallback."""
-    from services.rich_layout import aligned_blocks, lines_from_html, plain
-    if text.startswith(("📰", "🏏", "💰")):
-        # Narrative feeds contain clock times and free-form activity details.
-        # Keep those intact instead of guessing that every colon starts a fact.
-        visible, marker, folded = text.partition("<blockquote expandable>")
-        lines = [line for line in lines_from_html(visible) if line]
-        blocks = [R.heading(lines[0], 2)] + [R.paragraph(line) for line in lines[1:]]
-        if marker:
-            body, _, after = folded.partition("</blockquote>")
-            lines = [line for line in lines_from_html(body) if line]
-            if lines:
-                blocks.append(R.details(plain(lines[0]), [R.paragraph(line) for line in lines[1:]]))
-            blocks.extend(R.paragraph(line) for line in lines_from_html(after) if line)
-        return blocks
-    blocks = aligned_blocks(text)
-    if not blocks:
-        if "<blockquote" in text:
-            return None
-        lines = [line for line in lines_from_html(text) if line]
-        return [R.heading(lines[0], 2)] + [R.paragraph(line) for line in lines[1:]] if lines else None
-    if blocks and blocks[0].get("type") == "paragraph":
-        blocks[0] = R.heading(blocks[0]["text"], 2)
-    return blocks
-
-
 def _owner_name(user):
     return f"@{user.username}" if user.username else (user.first_name or "Manager")
 
@@ -212,18 +185,24 @@ def _format_news(session, user):
     return "\n".join(lines)
 
 
-def _format_results(session, user):
-    matches = (session.query(Match)
+def _format_results(session, user, page=0):
+    query = (session.query(Match)
                .filter(Match.status == "completed",
                        or_(Match.user1_id == user.id, Match.user2_id == user.id))
-               .order_by(desc(Match.completed_at)).limit(10).all())
+               .order_by(desc(Match.completed_at), desc(Match.id)))
+    if page:
+        query = query.offset(page * 5)
+    matches = query.limit(6).all()
+    has_older = len(matches) > 5
+    matches = matches[:5]
 
     if not matches:
         return ("🏏 <b>YOUR RECENT RESULTS</b>\n\n"
                 "No completed matches yet.\n"
-                "Start a match with /playmatch. Your latest 10 completed matches will appear here.", [])
+                "Start a match with /playmatch, then check back.",
+                [[InlineKeyboardButton("‹ Newest", callback_data=f"mp_results_{user.id}")]] if page else [])
 
-    lines = ["🏏 <b>YOUR RECENT RESULTS</b>", f"Matches shown: {len(matches)}", "Order: Newest first", ""]
+    lines = [f"🏏 <b>YOUR RECENT RESULTS</b> · Page {page + 1}", ""]
     jump_buttons = []
 
     for m in matches:
@@ -246,26 +225,22 @@ def _format_results(session, user):
             elif m.margin_type:
                 detail += f" · {m.margin_type.replace('_', ' ')}"
 
-        played = m.completed_at.strftime("%d %b %Y") if m.completed_at else "Date not recorded"
-        lines.extend([f"{emoji} <b>{outcome} · #{m.id} · vs {escape(opp_name)}</b>",
-                      f"{escape(detail)} · {m.overs} overs · {played}", ""])
+        short_name = opp_name if len(opp_name) <= 26 else opp_name[:25] + "…"
+        result = (detail.removeprefix("You ") if m.winner_id is not None else outcome.title())
+        reference = f"#{m.id}"
+        if m.result_message_id and str(m.chat_id).startswith("-100"):
+            reference = f'<a href="https://t.me/c/{str(m.chat_id)[4:]}/{m.result_message_id}">#{m.id}</a>'
+        lines.append(f"{emoji} {reference} · <b>{escape(short_name)}</b> · {escape(result)}")
 
-        # Build jump button if we have message_id
-        if m.result_message_id and m.chat_id:
-            # Supergroup result links retain Telegram's membership checks.
-            chat_id_str = str(m.chat_id)
-            if chat_id_str.startswith("-100"):
-                cid_short = chat_id_str[4:]
-                link = f"https://t.me/c/{cid_short}/{m.result_message_id}"
-            else:
-                link = None
-            if link:
-                jump_buttons.append([InlineKeyboardButton(
-                    f"🔗 #{m.id} · vs {opp_name}",
-                    url=link)])
-
-    lines.append("Open a match below to view its original result. Group access may be required." if jump_buttons
-                 else "New results appear here after a match finishes.")
+    navigation = []
+    if page:
+        newer = f"mp_results_{user.id}" + (f"_{page - 1}" if page > 1 else "")
+        navigation.append(InlineKeyboardButton("‹ Newer", callback_data=newer))
+    if has_older:
+        navigation.append(InlineKeyboardButton("Older ›", callback_data=f"mp_results_{user.id}_{page + 1}"))
+    if navigation:
+        jump_buttons.append(navigation)
+    lines.append("\nTap a match number to open its result.")
     return ("\n".join(lines), jump_buttons)
 
 
@@ -279,9 +254,9 @@ async def myprofile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         text = _format_info(session, user)
-        await R.reply_rich(
-            update.message, _profile_blocks(text), text,
-            reply_markup=_build_keyboard("info", user.id))
+        with R.legacy_delivery():
+            await update.message.reply_text(text, parse_mode="HTML",
+                                            reply_markup=_build_keyboard("info", user.id))
     except Exception:
         logger.exception("MyProfile err")
         await update.message.reply_text("⚠️ Could not load your profile. Try /myprofile again.")
@@ -297,7 +272,7 @@ async def myprofile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if tab not in {"info", "stats", "news", "results", "prizes"}:
             raise ValueError("Unknown profile page")
         before_id = int(parts[3]) if len(parts) > 3 else None
-        if before_id is not None and (tab != "prizes" or before_id <= 0):
+        if before_id is not None and (tab not in {"prizes", "results"} or before_id <= 0):
             raise ValueError("Invalid receipt page")
     except (AttributeError, IndexError, TypeError, ValueError):
         await q.answer("This profile page is unavailable. Open /myprofile again.", show_alert=True)
@@ -324,7 +299,7 @@ async def myprofile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         elif tab == "news":
             text = _format_news(session, user)
         elif tab == "results":
-            text, jump_btns = _format_results(session, user)
+            text, jump_btns = _format_results(session, user, page=before_id or 0)
             kb = InlineKeyboardMarkup(list(kb.inline_keyboard) + jump_btns)
         elif tab == "prizes":
             from services.tournament_payouts import recipient_receipt_page, retry_for_recipient
@@ -344,7 +319,9 @@ async def myprofile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 navigation.append(InlineKeyboardButton("Older receipts →", callback_data=f"mp_prizes_{user.id}_{older}"))
             if navigation:
                 kb = InlineKeyboardMarkup(list(kb.inline_keyboard) + [navigation])
-        await R.edit_rich(q, _profile_blocks(text), text, reply_markup=kb)
+        with R.legacy_delivery():
+            await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb,
+                                      disable_web_page_preview=True)
     except Exception:
         logger.exception("MyProfile cb err")
     finally:

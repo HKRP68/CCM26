@@ -1,4 +1,4 @@
-"""Real PTB send/reply/edit paths use native rich delivery throughout the bot."""
+"""Ordinary text preserves its format; explicitly designed cards remain rich."""
 
 import asyncio
 from copy import deepcopy
@@ -95,8 +95,9 @@ def test_direct_sends_keep_html_buttons_topics_and_reply_context(delivery, clien
         )
     )
     endpoint, data, options = delivery.calls[0]
-    assert endpoint == "sendRichMessage"
-    assert data["rich_message"] == {"html": "<b>Your squad</b>\n<b>Joe Root</b>"}
+    assert endpoint == "sendMessage"
+    assert data["text"] == "<b>Your squad</b>\n<b>Joe Root</b>"
+    assert data["parse_mode"] == "HTML"
     assert data["reply_markup"] == markup and data["reply_parameters"].message_id == 9
     assert (
         data["message_thread_id"] == 123
@@ -104,15 +105,15 @@ def test_direct_sends_keep_html_buttons_topics_and_reply_context(delivery, clien
         and data["disable_notification"]
     )
     assert options["read_timeout"] == 12
-    assert "parse_mode" not in data and "text" not in data
+    assert "rich_message" not in data
     assert message.message_id == 77
 
 
 def test_plain_text_never_interprets_player_names_as_html(delivery):
     asyncio.run(Bot(TOKEN).send_message(42, "Root <Captain> & Co"))
-    assert delivery.calls[0][1]["rich_message"] == {
-        "blocks": [R.paragraph("Root <Captain> & Co")]
-    }
+    assert delivery.calls[0][0] == "sendMessage"
+    assert delivery.calls[0][1]["text"] == "Root <Captain> & Co"
+    assert "rich_message" not in delivery.calls[0][1]
 
 
 def test_extbot_defaults_are_resolved_before_native_rendering(delivery):
@@ -121,7 +122,8 @@ def test_extbot_defaults_are_resolved_before_native_rendering(delivery):
             42, "<b>Daily reward</b>"
         )
     )
-    assert delivery.calls[0][1]["rich_message"] == {"html": "<b>Daily reward</b>"}
+    assert delivery.calls[0][1]["text"] == "<b>Daily reward</b>"
+    assert delivery.calls[0][1]["parse_mode"] == "HTML"
 
 
 def test_native_requests_still_use_sdk_rate_limiter(delivery):
@@ -144,7 +146,7 @@ def test_native_requests_still_use_sdk_rate_limiter(delivery):
 
     client = ExtBot(TOKEN, rate_limiter=Limiter())
     asyncio.run(client.send_message(42, "Next over", rate_limit_args={"priority": 1}))
-    assert seen == [("sendRichMessage", {"priority": 1})]
+    assert seen == [("sendMessage", {"priority": 1})]
     assert len(delivery.calls) == 1
 
 
@@ -160,7 +162,7 @@ def test_compatibility_bypass_is_local_to_one_async_task(delivery):
 
     async def native():
         await ready.wait()
-        await client.send_message(42, "Live match")
+        await R.send_rich_message(client, 42, [R.heading("Live match")], "Live match")
         sent.set()
 
     async def scenario():
@@ -181,7 +183,7 @@ def test_over_summary_keeps_old_html_and_moves_controls_inside_with_rich_enabled
     async def scenario():
         await cipl_play._post_tracked(SimpleNamespace(bot=client), state, text,
                                      keyboard=keyboard, legacy=True)
-        await client.send_message(42, "Next prompt")
+        await R.send_rich_message(client, 42, [R.heading("Next prompt")], "Next prompt")
 
     asyncio.run(scenario())
     assert [call[0] for call in delivery.calls] == ["sendMessage", "sendRichMessage"]
@@ -197,7 +199,8 @@ def test_explicit_entities_preserve_utf16_links_and_bold(delivery):
     asyncio.run(
         Bot(TOKEN).send_message(42, "🏏 Root", entities=[MessageEntity("bold", 3, 4)])
     )
-    assert delivery.calls[0][1]["rich_message"] == {"html": "🏏 <b>Root</b>"}
+    entity = delivery.calls[0][1]["entities"][0]
+    assert (entity.type, entity.offset, entity.length) == ("bold", 3, 4)
 
 
 def test_message_reply_and_callback_edit_use_the_same_delivery_layer(delivery):
@@ -214,18 +217,16 @@ def test_message_reply_and_callback_edit_use_the_same_delivery_layer(delivery):
         await query.edit_message_text("<b>Next over</b>", parse_mode="HTML")
 
     asyncio.run(scenario())
-    assert [call[0] for call in delivery.calls] == [
-        "sendRichMessage",
-        "editMessageText",
-    ]
-    assert delivery.calls[1][1]["rich_message"] == {"html": "<b>Next over</b>"}
+    assert [call[0] for call in delivery.calls] == ["sendMessage", "editMessageText"]
+    assert delivery.calls[1][1]["text"] == "<b>Next over</b>"
     assert delivery.calls[1][1]["message_id"] == 10
 
 
 def test_inline_message_edits_preserve_inline_id(delivery):
     asyncio.run(Bot(TOKEN).edit_message_text("Ready", inline_message_id="inline-123"))
     assert delivery.calls[0][1]["inline_message_id"] == "inline-123"
-    assert delivery.calls[0][1]["rich_message"] == {"blocks": [R.paragraph("Ready")]}
+    assert delivery.calls[0][1]["text"] == "Ready"
+    assert "rich_message" not in delivery.calls[0][1]
 
 
 def test_missing_endpoint_falls_back_once_and_keeps_private_parameters(delivery):
@@ -244,11 +245,7 @@ def test_missing_endpoint_falls_back_once_and_keeps_private_parameters(delivery)
             )
 
     asyncio.run(scenario())
-    assert [call[0] for call in delivery.calls] == [
-        "sendRichMessage",
-        "sendMessage",
-        "sendMessage",
-    ]
+    assert [call[0] for call in delivery.calls] == ["sendMessage", "sendMessage"]
     assert all(
         call[1]["ephemeral_message_parameters"] == {"callback_query_id": "secret"}
         for call in delivery.calls
