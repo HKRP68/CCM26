@@ -2588,8 +2588,10 @@ async def _announce(context, state, pitch_type):
     except Exception:
         kb = None
     try:
-        sent = await context.bot.send_message(
-            state["chat_id"], text, parse_mode="HTML",
+        from services.match_rich import match_start_blocks
+        start_state = dict(state, pitch_type=pitch_type)
+        sent = await R.send_rich_message(
+            context.bot, state["chat_id"], match_start_blocks(start_state, text), text,
             reply_markup=InlineKeyboardMarkup(kb) if kb else None)
     except Exception:
         logger.exception("letsplay announcement failed")

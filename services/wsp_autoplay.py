@@ -295,11 +295,13 @@ async def run_wsp_simulation(app, match_id, chat_id):
             if result["eoo"]:
                 over_num += 1
                 try:
-                    await app.bot.send_message(
-                        chat_id,
-                        _over_summary_text(state, over_num),
-                        parse_mode="HTML",
-                    )
+                    from services.rich_message import legacy_delivery
+                    with legacy_delivery():
+                        await app.bot.send_message(
+                            chat_id,
+                            _over_summary_text(state, over_num),
+                            parse_mode="HTML",
+                        )
                 except Exception:
                     logger.exception("wsp over summary failed")
                 over_just_ended = True

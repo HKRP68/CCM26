@@ -119,23 +119,3 @@ def test_milestone_card_keeps_admin_wording_and_uses_only_known_stats():
     )
     assert not any(row[0]["text"] == "Economy" for row in table["cells"])
     assert any(node.get("text") == "Special announcement" for node in walk(blocks))
-
-
-def test_over_summary_has_real_score_tables_and_preserves_private_plans():
-    from tests.test_cipl_card_rich import _state
-    from handlers import cipl_play as H
-    from services import cipl_match as C
-
-    state = _state()
-    state["current_bowler"] = C.eligible_bowlers(state)[0]
-    state["bowling_approach"] = "balanced"
-    state["batting_approach"] = "aggressive"
-    summary = C.simulate_over(state)
-    blocks = H._over_summary_blocks(state, summary)
-    assert blocks is not None and blocks[0]["type"] == "heading"
-    rows = blocks[2]["cells"]
-    assert rows[1][0]["text"]["text"] == str(summary["over_runs"])
-    assert any(
-        node.get("type") == "table" and node.get("caption") for node in walk(blocks)
-    )
-    assert "Bot's plan" not in str(blocks)

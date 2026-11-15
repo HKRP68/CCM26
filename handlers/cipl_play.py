@@ -908,10 +908,18 @@ async def _edit_action_message(context, state, text, keyboard, extras=True,
                               blocks=blocks)
 
 
-async def _post_tracked(context, state, text, keyboard=None, blocks=None):
+async def _post_tracked(context, state, text, keyboard=None, blocks=None, *, legacy=False):
     """Post an over message (e.g. the summary) tracked for deletion next over."""
-    sent = await R.send_rich_message(context.bot, state['chat_id'], blocks, text,
-        reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None)
+    markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+    if legacy:
+        # End-of-over reports keep their original HTML layout even when the
+        # bot-wide transport would otherwise promote send_message to rich text.
+        with R.legacy_delivery():
+            sent = await context.bot.send_message(state['chat_id'], text,
+                parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True)
+    else:
+        sent = await R.send_rich_message(context.bot, state['chat_id'], blocks, text,
+            reply_markup=markup)
     if sent and getattr(sent, "message_id", None):
         state.setdefault("over_msg_ids", []).append(sent.message_id)
     return sent
@@ -2324,8 +2332,9 @@ async def _cleanup_setup_and_announce(context, state, draft):
     from services.live_batting_help import with_manage_batting
     kb = with_manage_batting(state, _miniapp_row(state))
     try:
-        sent = await context.bot.send_message(
-            chat_id, text, parse_mode="HTML",
+        from services.match_rich import match_start_blocks
+        sent = await R.send_rich_message(
+            context.bot, chat_id, match_start_blocks(state, text), text,
             reply_markup=InlineKeyboardMarkup(kb) if kb else None)
     except Exception:
         logger.exception("cipl match-start announcement failed")
@@ -4327,7 +4336,7 @@ async def _run_over(context, mid, state):
             await _post_tracked(context, state,
                                 _render_over_summary(state, summary),
                                 keyboard=_between_overs_row(state, mid),
-                                blocks=_over_summary_blocks(state, summary))
+                                legacy=True)
             await _clear_final_ball(context, state)
         except Exception:
             logger.exception("cipl over summary post failed for match %s", mid)
@@ -4433,95 +4442,6 @@ def _drama_rows(state):
         head = "⚡ Verbal fight! " if sl.get("escalated") else "🗣️ "
         out.append(head + " / ".join(lines))
     return out
-
-
-def _over_summary_blocks(state, summary):
-    try:
-        blocks = [
-            R.heading(
-                f"🏏 END OF {_unit_word(state, cap=True).upper()} {summary['over_no']}",
-                2,
-            ),
-            R.table(
-                [
-                    [
-                        R.cell("Batting", header=True),
-                        R.cell("Score", header=True, align="right"),
-                        R.cell("Progress", header=True, align="right"),
-                    ],
-                    [
-                        R.cell(state["bat_team_name"]),
-                        R.cell(R.bold(cipl_match.format_score(state)), align="right"),
-                        R.cell(_progress(state), align="right"),
-                    ],
-                ],
-                bordered=True,
-                compact=True,
-            ),
-            R.table(
-                [
-                    [
-                        R.cell("Runs", header=True, align="right"),
-                        R.cell("Wickets", header=True, align="right"),
-                        R.cell("Bowler", header=True),
-                    ],
-                    [
-                        R.cell(R.bold(str(summary["over_runs"]))),
-                        R.cell(str(summary["over_wickets"])),
-                        R.cell(summary["bowler"]["name"]),
-                    ],
-                ],
-                striped=True,
-                compact=True,
-            ),
-            R.paragraph(
-                [
-                    "🎯 Timeline · ",
-                    R.code(
-                        " ".join(
-                            cipl_match._SYM.get(_sym_key(value), value)
-                            for value in summary["over_timeline"]
-                        )
-                        or "—"
-                    ),
-                ]
-            ),
-        ]
-        live = _approach_card_blocks(state) or []
-        # Reuse the same batter and bowler statistics as the live scorecard.
-        blocks.extend(
-            block
-            for block in live
-            if block.get("type") == "table" and block.get("caption")
-        )
-        chase = cipl_match.chase(state)
-        if chase and chase["runs_required"] > 0:
-            blocks.append(
-                R.pullquote(
-                    f"🎯 Need {chase['runs_required']} from {chase['balls_remaining']} balls"
-                )
-            )
-            blocks.append(
-                R.paragraph(
-                    f"Required rate {chase['rrr']:.2f} · Current rate {cipl_match.current_run_rate(state):.2f}"
-                )
-            )
-        from services.rich_layout import lines_from_html
-
-        blocks.append(
-            R.details(
-                "📋 Full over report · conditions, traits and match notes",
-                [
-                    R.paragraph(line)
-                    for line in lines_from_html(_render_over_summary(state, summary))
-                    if line
-                ],
-            )
-        )
-        return blocks
-    except Exception:
-        logger.exception("Could not render aligned over summary")
-        return None
 
 
 def _render_over_summary(state, summary):
@@ -5707,9 +5627,8 @@ async def _send_highlights(context, state, result):
                      f"{state.get('bat_team_name') or ''}")
         text = highlights.render_reel(state, title_teams=teams)
         if text:
-            await context.bot.send_message(state["chat_id"], text,
-                                           parse_mode="HTML",
-                                           disable_web_page_preview=True)
+            await R.send_rich_message(context.bot, state["chat_id"],
+                                      highlights.reel_blocks(state, title_teams=teams), text)
     except Exception:
         logger.exception("cipl highlights reel failed for match %s",
                          state.get("match_id"))

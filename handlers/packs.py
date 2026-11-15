@@ -6,7 +6,7 @@ Workflow per spec:
   Click a number
     → pack detail with Buy / Cancel / Back
   Click Buy
-    → "Opening pack..." → reveal main player card + bonus players
+    → purchase receipt → unopened inventory → /openpack to reveal players
   Click Cancel
     → close (remove buttons)
   Click Back
@@ -31,6 +31,7 @@ from services.pack_service import (
 from services.card_generator import generate_card
 from services.button_timeout import schedule_button_timeout
 from services.activity_service import log_activity
+from services import rich_message as R, pack_messages as pack_ui
 from utils.idempotency import claim_once, release
 
 logger = logging.getLogger(__name__)
@@ -41,14 +42,6 @@ PACK_BUTTON_TIMEOUT = 45  # seconds, per spec
 # ════════════════════════════════════════════════════════════════════
 # Helpers
 # ════════════════════════════════════════════════════════════════════
-
-def _format_cost(pack):
-    parts = []
-    if pack.cost_coins:    parts.append(f"<b>{pack.cost_coins:,}</b> 🪙")
-    if pack.cost_quest_points: parts.append(f"<b>{pack.cost_quest_points:,}</b> Quest Points")
-    if pack.cost_gems:     parts.append(f"<b>{pack.cost_gems}</b> 💎")
-    return " or ".join(parts) if parts else "FREE"
-
 
 def _can_afford(user, pack):
     """Returns True if user can afford the pack via any of its currencies."""
@@ -79,9 +72,12 @@ def _build_list_keyboard(packs, owner_tg):
     return InlineKeyboardMarkup(rows)
 
 
-def _build_detail_keyboard(owner_tg, pack, can_afford):
+def _build_detail_keyboard(owner_tg, pack, can_afford, bought_today=0):
     rows = []
-    if can_afford:
+    if pack.daily_limit and bought_today >= pack.daily_limit:
+        rows.append([InlineKeyboardButton(
+            "⏳ Daily limit reached", callback_data=f"pknoop_{owner_tg}")])
+    elif can_afford:
         rows.append([InlineKeyboardButton(
             f"💰 Buy", callback_data=f"pkb_{owner_tg}_{pack.slot_number}")])
     else:
@@ -95,88 +91,11 @@ def _build_detail_keyboard(owner_tg, pack, can_afford):
 
 
 def _list_message(packs, user):
-    lines = [
-        "📦 <b>PACK STORE</b>",
-        f"💰 <b>{user.total_coins:,}</b> 🪙 · "
-        f"💎 <b>{user.total_gems}</b> · "
-        f"🎯 <b>{user.quest_points or 0}</b> Quest Points",
-        "━━━━━━━━━━━━━━━━━━━",
-    ]
-    if not packs:
-        lines.append("\n<i>No packs available right now.</i>")
-        return "\n".join(lines)
-    for p in packs:
-        lines.append(
-            f"\n{p.emoji} <b>{p.slot_number}. {p.name}</b>"
-            f"  ·  {_format_cost(p)}\n"
-            f"   <i>Main: {p.main_count}× ({p.main_min_rating}-{p.main_max_rating})  ·  "
-            f"Bonus: {p.bonus_count}× ({p.bonus_min_rating}-{p.bonus_max_rating})</i>"
-        )
-    lines.append("\nTap a pack to see details.")
-    return "\n".join(lines)
+    return pack_ui.list_text(packs, user)
 
 
 def _detail_message(pack, user, bought_today):
-    lines = [
-        f"{pack.emoji} <b>{pack.name}</b>",
-        f"💸 Cost: {_format_cost(pack)}",
-        "━━━━━━━━━━━━━━━━━━━",
-    ]
-    if pack.description:
-        lines.append(f"<i>{pack.description}</i>\n")
-
-    # Build the "Main" content line based on filter mode
-    mode = (pack.main_filter_mode or "rating").lower()
-    versions_label = ""
-    if pack.main_versions_json:
-        try:
-            import json as _j
-            vlist = _j.loads(pack.main_versions_json)
-            if isinstance(vlist, list) and vlist:
-                versions_label = " / ".join(vlist)
-        except Exception:
-            pass
-
-    if mode == "version":
-        main_line = (
-            f"   • <b>{pack.main_count}× Main</b>: any "
-            f"<i>{versions_label or 'any'}</i> version (any rating)"
-        )
-    elif mode == "both":
-        main_line = (
-            f"   • <b>{pack.main_count}× Main</b>: "
-            f"<i>{versions_label or 'any'}</i> version, "
-            f"rated <b>{pack.main_min_rating}-{pack.main_max_rating}</b>"
-        )
-    else:  # rating
-        main_line = (
-            f"   • <b>{pack.main_count}× Main</b> player "
-            f"(<b>{pack.main_min_rating}-{pack.main_max_rating}</b> rated)"
-        )
-
-    lines.append(
-        f"🎁 <b>Contents:</b>\n"
-        f"{main_line}\n"
-        f"   • <b>{pack.bonus_count}× Bonus</b> player ({pack.bonus_min_rating}-{pack.bonus_max_rating} rated)"
-    )
-
-    # The per-rating odds are deliberately NOT shown. They are a tuning tool for
-    # the admin — see the odds tables on the pack form — and publishing them
-    # turns every pull into an argument about whether the roll was fair. The
-    # card, the rating band and the price are what a buyer decides on.
-
-    if pack.daily_limit:
-        remaining = max(0, pack.daily_limit - bought_today)
-        lines.append(f"\n⏳ Daily limit: <b>{bought_today}/{pack.daily_limit}</b> "
-                     f"(<b>{remaining}</b> remaining today)")
-
-    # Affordability
-    lines.append("\n━━━━━━━━━━━━━━━━━━━")
-    lines.append(f"💰 <b>{user.total_coins:,}</b> 🪙 · "
-                 f"💎 <b>{user.total_gems}</b> · "
-                 f"🎯 <b>{user.quest_points or 0}</b> QP")
-
-    return "\n".join(lines)
+    return pack_ui.detail_text(pack, user, bought_today)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -200,7 +119,7 @@ async def buypack_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         text = _list_message(packs, user)
         kb = _build_list_keyboard(packs, tg.id)
-        sent = await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+        sent = await R.reply_rich(update.message, pack_ui.list_blocks(packs, user), text, reply_markup=kb)
 
         try:
             schedule_button_timeout(context, sent.chat_id, sent.message_id,
@@ -249,10 +168,10 @@ async def pack_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         bought_today = get_user_pack_purchases_today(session, user.id, pack.id)
         text = _detail_message(pack, user, bought_today)
-        kb = _build_detail_keyboard(tg.id, pack, _can_afford(user, pack))
+        kb = _build_detail_keyboard(tg.id, pack, _can_afford(user, pack), bought_today)
 
         try:
-            await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+            await R.edit_rich(q, pack_ui.detail_blocks(pack, user, bought_today), text, reply_markup=kb)
             # Reset the 45s timer for the new screen
             try:
                 schedule_button_timeout(context, q.message.chat_id, q.message.message_id,
@@ -294,7 +213,7 @@ async def pack_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         text = _list_message(packs, user)
         kb = _build_list_keyboard(packs, tg.id)
         try:
-            await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+            await R.edit_rich(q, pack_ui.list_blocks(packs, user), text, reply_markup=kb)
             try:
                 schedule_button_timeout(context, q.message.chat_id, q.message.message_id,
                                         delay_seconds=PACK_BUTTON_TIMEOUT,
@@ -405,28 +324,10 @@ async def pack_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.rollback()
 
         inventory = list_user_inventory(session, user.id)
-        currency_label = {
-            "coins": "🪙 coins", "quest_points": "Quest Points",
-            "gems": "💎 gems", "free": "FREE",
-        }.get(result["currency"], "")
-        bal_lines = [f"💰 Balance: <b>{user.total_coins:,}</b> 🪙"]
-        if pack.cost_quest_points:
-            bal_lines.append(f"🎯 Quest Points: <b>{user.quest_points or 0:,}</b>")
-        if pack.cost_gems:
-            bal_lines.append(f"💎 Gems: <b>{user.total_gems}</b>")
-
-        text = (
-            f"✅ <b>{pack.emoji} {pack.name}</b> added to your inventory!\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"💸 Spent: <b>{result['cost_paid']:,}</b> {currency_label}\n"
-            + "\n".join(bal_lines) + "\n"
-            f"📦 Inventory: <b>{len(inventory)}/50</b> unopened packs\n\n"
-            f"<b>👉 Use /openpack to open it!</b>"
-        )
-        try:
-            await q.edit_message_text(text, parse_mode="HTML")
-        except Exception:
-            await context.bot.send_message(q.message.chat_id, text, parse_mode="HTML")
+        text = pack_ui.receipt_text(pack, user, result, len(inventory))
+        blocks = pack_ui.receipt_blocks(pack, user, result, len(inventory))
+        if not await R.edit_rich(q, blocks, text):
+            await R.send_rich_message(context.bot, q.message.chat_id, blocks, text)
 
     except Exception:
         # Keep the claim (may be post-commit) so a stale tap can't re-buy the pack.
@@ -444,7 +345,7 @@ async def pack_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def pack_noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """For sold-out / cannot-afford buttons."""
     q = update.callback_query
-    await q.answer("You don't have enough to buy this pack.", show_alert=True)
+    await q.answer("This pack is unavailable. Check your balance and daily limit.", show_alert=True)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -548,7 +449,7 @@ async def openpack_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         inventory = list_user_inventory(session, user.id)
         text = _openpack_list_text(inventory, user)
         kb = _build_openpack_list_kb(inventory, tg.id)
-        sent = await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+        sent = await R.reply_rich(update.message, pack_ui.list_blocks(packs, user), text, reply_markup=kb)
         try:
             schedule_button_timeout(context, sent.chat_id, sent.message_id,
                                     delay_seconds=PACK_BUTTON_TIMEOUT,

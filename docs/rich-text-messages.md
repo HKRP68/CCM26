@@ -37,8 +37,12 @@ player's name is.
 bot, admin DMs and website broadcasts. It promotes ordinary `send_message`,
 `reply_text`, `reply_html`, callback edits and scheduled job messages through
 the shared native rich transport. This includes match setup, delivery/shot
-prompts, live over updates, claims, daily rewards, player searches, roster and
+prompts, claims, daily rewards, player searches, roster and
 shop pages, trades, tournaments, help, errors and administrator screens.
+Standalone end-of-over summaries deliberately retain the original formatted
+HTML through `sendMessage`, using the task-local `legacy_delivery()` bypass.
+Their controls and deletion tracking are preserved; other messages still use
+rich delivery. WSP autoplay summaries use the same exception.
 
 Existing HTML becomes native rich HTML. Plain text becomes a native paragraph;
 names containing `<`, `>` or `&` remain literal text. Explicit Telegram entities
@@ -72,8 +76,8 @@ Complex HTML and code retain their original rendering rather than being guessed
 into columns. Existing table builders share the same numeric-cell defaults.
 
 `/sbo` uses explicit position/player/BAT/role columns and an expandable numbered
-bench. Over summaries show the actual over totals, live batter/bowler tables and
-chase, with the full conditions/traits report in expandable details. Milestone
+bench. Over summaries keep the old timeline, score, batter/bowler figures,
+momentum and match notes in one ordinary message. Milestone
 cards show known facts only and retain administrator wording in their full
 announcement. Configured milestone media can be embedded in the same rich card.
 
@@ -91,6 +95,9 @@ image into a separate text receipt. See [Telegram rich media blocks](https://cor
 
 | Surface | Rendering |
 | --- | --- |
+| `/buypack`, pack details and purchase receipts | `services/pack_messages.py` shares prices and contents between HTML and rich cards. Currency balances use tables, version filters are explicit, daily availability is visible, and receipts show the actual currency paid plus `/openpack`. |
+| pinned match-start announcements | `match_rich.match_start_blocks` shows teams, venue, format, pitch and batting first, keeps competition/conditions/chemistry notes and puts the command guide in collapsed details. View Match and Manage batting stay below the card. |
+| match highlights | `highlights.reel_blocks` features the moment of the match, followed by the same selected moments in match order; The Hundred uses set labels. |
 | `/pxi`, `/xi`, `/playingxi` | one `table` block — the four section names (batsmen, keeper, all-rounders, bowlers) are full-width header rows inside it |
 | the `📋 View Bench` button | a collapsed `details` block, replacing `<blockquote expandable>` |
 | the Franchise Auction's pinned board, `/aboard` | headings, a lot `table`, and the purses as a striped `table` — edited in place through `auction_rich.edit`, which treats "not modified" as success and shares the recoverable native transport |

@@ -44,6 +44,40 @@ def _safe(build, what):
         return None
 
 
+def match_start_blocks(state, fallback_text):
+    """Keep the match facts visible and put the longer command guide below."""
+    def build():
+        from services.live_batting_help import TITLE
+        from services.rich_layout import lines_from_html, plain
+
+        body, marker, guide = fallback_text.partition(f"<b>{TITLE}</b>")
+        lines = [line for line in lines_from_html(body) if plain(line).strip()]
+        bat = str(state.get("bat_team_name") or "Team A")
+        bowl = str(state.get("bowl_team_name") or "Team B")
+        blocks = [R.heading(lines[0] if lines else "🏏 MATCH START", 2),
+                  R.paragraph([R.bold(bat), " 🆚 ", R.bold(bowl)])]
+        format_label = ("The Hundred · 100 balls" if state.get("ball_format") == "The100"
+                        else f"{state.get('overs', 20)} overs")
+        blocks.append(R.table([
+            [R.cell("🏟️ Venue"), R.cell(str(state.get("stadium") or "Neutral Venue"))],
+            [R.cell("🏏 Format"), R.cell(format_label)],
+            [R.cell("🌱 Pitch"), R.cell(str(state.get("pitch_type") or "Hard"))],
+            [R.cell("Batting first"), R.cell(R.bold(bat))],
+        ], compact=True))
+        for line in lines[1:]:
+            text = plain(line).strip()
+            if (set(text) <= {"━", "─", " "} or text.startswith(("🏟️", "🌱 Pitch:"))
+                    or text == f"🏏 {bat} batting first"
+                    or (bat in text and bowl in text and ("🆚" in text or " vs " in text))):
+                continue
+            blocks.append(R.paragraph(line))
+        if marker:
+            blocks.append(R.details(TITLE, [R.paragraph(line) for line in lines_from_html(guide)
+                                            if plain(line).strip()]))
+        return blocks
+    return _safe(build, "match start")
+
+
 def _bat_stats(s, player):
     stats = s.get("bat_stats") or {}
     rid = player.get("roster_id")

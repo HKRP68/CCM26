@@ -3977,6 +3977,7 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
             s["bat_team_name"] = bt; s["bowl_team_name"] = bwt
             s["bat_username"] = bu.username; s["bowl_username"] = bwu.username
             s["pitch_type"] = m.pitch_type
+            s["stadium"] = m.stadium
             if context.bot_data.get(f"challenge_{mid}"):
                 s["wicket_limit"] = 2
                 s["is_challenge"] = True
@@ -3985,11 +3986,14 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
 
             await q.edit_message_text(f"✅ Bowler: {bowler['name']}\n\n⏳ Starting...", parse_mode="HTML")
             from services.live_batting_help import start_guide_html
-            await context.bot.send_message(cid,
-                f"🏏 <b>MATCH STARTING!</b>\n\n🏟️ {m.stadium}\n{bt} vs {bwt} | {m.overs} Overs\n"
-                f"🏏 {op1['name']} & {op2['name']}\n🎳 {bowler['name']}\n━━━━━━━━━━━━━━━━━━━"
-                + "\n\n" + start_guide_html(),
-                parse_mode="HTML")
+            start_text = (
+                f"🏏 <b>MATCH STARTING!</b>\n\n🏟️ {html.escape(str(m.stadium))}\n"
+                f"{html.escape(bt)} vs {html.escape(bwt)} | {m.overs} Overs\n"
+                f"🏏 {html.escape(op1['name'])} &amp; {html.escape(op2['name'])}\n"
+                f"🎳 {html.escape(bowler['name'])}\n━━━━━━━━━━━━━━━━━━━"
+                + "\n\n" + start_guide_html())
+            await rich_message.send_rich_message(
+                context.bot, cid, match_rich.match_start_blocks(s, start_text), start_text)
             # Send opener cards (in parallel — faster start)
             await _send_innings_cards(context, cid, (op1, op2), bowler,
                                       s["bat_team_id"], s["bowl_team_id"])

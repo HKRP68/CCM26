@@ -194,3 +194,25 @@ def render_reel(state, title_teams=None):
     lines.append("━━━━━━━━━━━━━━━")
     lines.append(f"⭐ <b>Moment of the match:</b> {html.escape(str(top.get('text', '')), quote=False)}")
     return "\n".join(lines)
+
+
+def reel_blocks(state, title_teams=None):
+    """Feature the decisive moment, followed by the same chronological reel."""
+    from services import rich_message as R
+    moments, top = build_reel(state)
+    if not moments:
+        return None
+    unit = "Set" if state.get("ball_format") == "The100" else "Over"
+    blocks = [R.heading("🎬 MATCH HIGHLIGHTS", 2)]
+    if title_teams:
+        blocks.append(R.paragraph(title_teams))
+    blocks.extend([R.heading("⭐ Moment of the match", 3),
+                   R.pullquote(str(top.get("text", ""))), R.divider(),
+                   R.heading("How it unfolded", 3)])
+    for moment in moments:
+        icon = _ICONS.get(moment.get("kind"), "•")
+        blocks.append(R.paragraph([
+            R.bold(f"{icon} Innings {moment['inn']} · {unit} {moment['over']}"),
+            " — ", str(moment.get("text", "")),
+        ]))
+    return blocks

@@ -170,6 +170,28 @@ def test_compatibility_bypass_is_local_to_one_async_task(delivery):
     assert [call[0] for call in delivery.calls] == ["sendRichMessage", "sendMessage"]
 
 
+def test_over_summary_keeps_old_html_keyboard_and_tracking_with_rich_enabled(delivery):
+    from handlers import cipl_play
+
+    client = Bot(TOKEN)
+    state = {"chat_id": 42}
+    text = "<b>End of Over 6</b> — Quick\nTimeline: 1 0 4 W 1 0\n🏏 Kings 49/1"
+    keyboard = [[InlineKeyboardButton("Impact Player", callback_data="impact_42")]]
+
+    async def scenario():
+        await cipl_play._post_tracked(SimpleNamespace(bot=client), state, text,
+                                     keyboard=keyboard, legacy=True)
+        await client.send_message(42, "Next prompt")
+
+    asyncio.run(scenario())
+    assert [call[0] for call in delivery.calls] == ["sendMessage", "sendRichMessage"]
+    payload = delivery.calls[0][1]
+    assert payload["text"] == text and payload["parse_mode"] == "HTML"
+    assert "rich_message" not in payload
+    assert payload["reply_markup"].inline_keyboard[0][0].callback_data == "impact_42"
+    assert state["over_msg_ids"] == [77]
+
+
 def test_explicit_entities_preserve_utf16_links_and_bold(delivery):
     asyncio.run(
         Bot(TOKEN).send_message(42, "🏏 Root", entities=[MessageEntity("bold", 3, 4)])
