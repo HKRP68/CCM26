@@ -68,6 +68,7 @@ async def send_player_card(
     *, bot, chat_id, player, caption=None, reply_markup=None,
     parse_mode="HTML", reply_to_message_id=None, session=None,
     allow_generated=True,
+    rich_blocks=None,
 ) -> Optional[object]:
     """Send a player's card to a chat. Prefers cached Telegram file_id.
 
@@ -104,6 +105,15 @@ async def send_player_card(
     if reply_to_message_id is not None:
         common_kwargs["reply_to_message_id"] = reply_to_message_id
 
+    async def send_photo(photo, **kwargs):
+        if rich_blocks:
+            from services import rich_media
+            sent = await rich_media.send(bot, chat_id, photo, rich_blocks,
+                reply_markup=reply_markup, reply_to_message_id=reply_to_message_id)
+            if sent is not None:
+                return sent
+        return await bot.send_photo(photo=photo, **kwargs)
+
     # ── Strategy 1: Cached file_id (custom image) ──
     # Check PlayerImage.tg_file_id first (admin-uploaded custom card).
     # If no session, open a short one just for the lookup.
@@ -123,7 +133,7 @@ async def send_player_card(
 
     if cached_file_id:
         try:
-            return await bot.send_photo(photo=cached_file_id, **common_kwargs)
+            return await send_photo(photo=cached_file_id, **common_kwargs)
         except Exception as e:
             # Custom-image file_id might be stale (channel deleted, file rotated).
             # Clear it and fall through to the bytes path.
@@ -148,7 +158,7 @@ async def send_player_card(
 
     if custom_bytes:
         try:
-            msg = await bot.send_photo(
+            msg = await send_photo(
                 photo=io.BytesIO(custom_bytes), **common_kwargs)
             # Capture the file_id Telegram returned for future use.
             try:
@@ -191,7 +201,7 @@ async def send_player_card(
     manual_file_id = getattr(player, "card_file_id", None)
     if manual_file_id:
         try:
-            return await bot.send_photo(photo=manual_file_id, **common_kwargs)
+            return await send_photo(photo=manual_file_id, **common_kwargs)
         except TelegramError as e:
             # Transient failure or a rotated id — render a fresh card for this
             # send without wiping the admin's pinned value.
@@ -206,7 +216,7 @@ async def send_player_card(
     gen_file_id = get_generated_card_file_id(player.id)
     if gen_file_id:
         try:
-            return await bot.send_photo(photo=gen_file_id, **common_kwargs)
+            return await send_photo(photo=gen_file_id, **common_kwargs)
         except TelegramError as e:
             logger.warning(f"generated file_id send failed ({e!r}), re-rendering")
             drop_generated_card_file_id(player.id)
@@ -220,7 +230,7 @@ async def send_player_card(
 
     if gen_bytes:
         try:
-            gen_msg = await bot.send_photo(
+            gen_msg = await send_photo(
                 photo=io.BytesIO(gen_bytes), **common_kwargs)
             # Cache the file_id in memory so future sends skip the re-upload.
             try:
@@ -237,7 +247,7 @@ async def send_player_card(
     # missing, oversized, or fails during rendering.
     try:
         basic_bytes = _basic_card_bytes(player)
-        return await bot.send_photo(photo=io.BytesIO(basic_bytes), **common_kwargs)
+        return await send_photo(photo=io.BytesIO(basic_bytes), **common_kwargs)
     except Exception:
         logger.warning("Basic card fallback failed, falling back to text")
 

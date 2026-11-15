@@ -262,6 +262,50 @@ def default_milestone_message(event_key, fields=None):
     return "\n".join(lines)
 
 
+def milestone_blocks(event_key, fields, caption):
+    """Keep configured wording, with aligned score/achievement facts up front."""
+    if event_key not in MILESTONE_MESSAGES:
+        return None
+    from services import rich_message as R
+    from services.rich_layout import lines_from_html
+
+    values = caption_values(event_key, fields)
+    title, achievement, closing = MILESTONE_MESSAGES[event_key]
+    blocks = [R.heading(title, 2)]
+    if values.get("player"):
+        blocks.append(R.pullquote(R.bold(str(values["player"]))))
+    labels = (
+        ("runs", "Runs"),
+        ("balls", "Balls"),
+        ("strike_rate", "Strike rate"),
+        ("fours", "Fours"),
+        ("sixes", "Sixes"),
+        ("figures", "Bowling"),
+        ("economy", "Economy"),
+        ("partnership", "Partnership"),
+        ("score", "Team score"),
+        ("overs", "Progress"),
+        ("manager", "Manager"),
+        ("opponent", "Opponent"),
+        ("value", "Record"),
+        ("previous", "Previous best"),
+    )
+    rows = [
+        [R.cell(label), R.cell(str(values[key]))]
+        for key, label in labels
+        if values.get(key) not in ("", None)
+    ]
+    if rows:
+        blocks.append(R.table(rows, compact=True, striped=True))
+    blocks.append(
+        R.details(
+            "📣 Full milestone announcement",
+            [R.paragraph(line) for line in lines_from_html(caption) if line],
+        )
+    )
+    return blocks
+
+
 def _send_kind(pick):
     """Which Telegram send method suits this row.
 
@@ -347,10 +391,16 @@ async def fire_event_media(context, chat_id, event_key, fields=None,
     if not show_message and not source:
         return True
 
+    blocks = milestone_blocks(event_key, fields, caption) if caption else None
+
     # A caption with no media is still worth sending.
     if not source:
         if caption:
             try:
+                if blocks:
+                    from services import rich_message as R
+                    if await R._post_rich(context.bot, chat_id, blocks, None, None, fallback_text=caption):
+                        return True
                 await send_html(context.bot, chat_id, caption)
                 return True
             except Exception:
@@ -371,6 +421,10 @@ async def fire_event_media(context, chat_id, event_key, fields=None,
 
     try:
         if source_type in ("url", "telegram"):
+            if blocks:
+                from services import rich_media
+                if await rich_media.send(context.bot, chat_id, source, blocks, kind=kind):
+                    return True
             # 'url'      -> Telegram fetches it directly
             # 'telegram' -> source IS a file_id from our storage channel
             await send(**{arg: source}, **kwargs)
@@ -388,6 +442,10 @@ async def fire_event_media(context, chat_id, event_key, fields=None,
                 logger.warning(f"Event media file missing: {full_path}")
                 return
             with open(full_path, "rb") as f:
+                if blocks:
+                    from services import rich_media
+                    if await rich_media.send(context.bot, chat_id, f, blocks, kind=kind):
+                        return True
                 await send(**{arg: f}, **kwargs)
             if long_caption:
                 await send_html(context.bot, chat_id, long_caption)

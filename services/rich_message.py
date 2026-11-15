@@ -29,6 +29,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 import hashlib
 import logging
+import re
 import time
 
 from telegram import Message
@@ -219,7 +220,7 @@ def cell(
     text=None,
     *,
     header: bool = False,
-    align: str = "left",
+    align: str = None,
     valign: str = "middle",
     colspan: int = None,
     rowspan: int = None,
@@ -228,6 +229,20 @@ def cell(
 
     ``align`` and ``valign`` are required by the API, so they are always sent.
     """
+    if align is None:
+
+        def plain(value):
+            if isinstance(value, dict):
+                return plain(value.get("text", ""))
+            if isinstance(value, list):
+                return "".join(plain(item) for item in value)
+            return str("" if value is None else value)
+
+        numeric = re.fullmatch(
+            r"[₹$€£+−-]?\s*\d[\d,./:%\s]*(?:Cr|cr|OVR|coins|lakh|%|[kKmM])?",
+            plain(text).strip(),
+        )
+        align = "right" if numeric and not header else "left"
     block = {"align": align, "valign": valign}
     if text is not None:
         block["text"] = text
@@ -443,7 +458,14 @@ def _native_keyboard(blocks, markup):
 
 
 async def _request_rich(
-    bot, endpoint, payload, *, fallback_text=None, fallback_markup=None, post=None
+    bot,
+    endpoint,
+    payload,
+    *,
+    fallback_text=None,
+    fallback_markup=None,
+    post=None,
+    retry_html=True,
 ):
     post = post or getattr(bot, "_post", None)
     if not post or not rich_text_enabled(bot, endpoint):
@@ -456,7 +478,7 @@ async def _request_rich(
         if any(hint in str(exc).lower() for hint in _MISSING_METHOD_HINTS):
             _note_failure(endpoint, exc, bot)
             return None
-        if "blocks" not in payload["rich_message"]:
+        if not retry_html or "blocks" not in payload["rich_message"]:
             _note_failure(endpoint, exc, bot)
             return None
         # A rejected block tree is not evidence that rich messages are missing.
@@ -508,12 +530,17 @@ def _transport_failure(bot, endpoint, exc):
     _note_failure(endpoint, exc, bot)
 
 
-def _rich_content(blocks, reply_markup, fallback_text, *, native_buttons=True):
+def _rich_content(blocks, reply_markup, fallback_text, *, native_buttons=False):
     native_blocks, native_markup = normalize_blocks(blocks or []), reply_markup
     if native_buttons:
         native_blocks, native_markup = _native_keyboard(native_blocks, reply_markup)
     if blocks:
         return {"blocks": native_blocks}, native_markup
+    from services.rich_layout import aligned_blocks
+
+    aligned = aligned_blocks(str(fallback_text or ""))
+    if aligned:
+        return {"blocks": aligned + native_blocks}, native_markup
     from services.rich_message_html import render
 
     return {"html": str(fallback_text or "") + render(native_blocks)}, native_markup
@@ -527,7 +554,7 @@ async def _post_rich(
     reply_to_message_id,
     *,
     fallback_text=None,
-    native_buttons=True,
+    native_buttons=False,
     **options,
 ):
     if not (blocks or fallback_text) or not rich_text_enabled(bot):
@@ -571,7 +598,7 @@ async def send_rich_message(
     *,
     reply_markup=None,
     reply_to_message_id=None,
-    native_buttons=True,
+    native_buttons=False,
     **kwargs,
 ):
     """Send ``blocks`` as a rich message, or ``fallback_text`` as HTML.
@@ -653,6 +680,10 @@ async def edit_rich_message(
         payload,
         fallback_text=fallback_text,
         fallback_markup=reply_markup,
+        retry_html=not any(
+            block.get("type") in ("photo", "animation", "video", "document", "audio")
+            for block in (blocks or [])
+        ),
     )
     return result is not None
 

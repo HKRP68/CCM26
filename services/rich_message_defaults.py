@@ -42,8 +42,17 @@ def content_for(data):
         return {"html": message.text_html}
     mode = data.get("parse_mode")
     if mode == "HTML":
-        return {"html": text}
+        from services.rich_layout import aligned_blocks
+
+        aligned = aligned_blocks(text)
+        return {"blocks": aligned} if aligned else {"html": text}
     if mode is None:
+        from html import escape
+        from services.rich_layout import aligned_blocks
+
+        aligned = aligned_blocks(escape(text))
+        if aligned:
+            return {"blocks": aligned}
         return {"blocks": [R.paragraph(text)]}
     # Legacy Markdown has different semantics from rich Markdown. Preserve its
     # original renderer rather than silently changing bold/code/link content.

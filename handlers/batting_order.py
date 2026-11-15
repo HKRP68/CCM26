@@ -39,6 +39,7 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import User
 from services import batting_order_service as bos
+from services import rich_message as R
 from services.activity_service import log_activity
 from services.bowling_service import is_spinner as _is_spin
 from services.roster_lock import match_lock_message
@@ -136,6 +137,78 @@ def format_order_card(pairs, user, custom: bool):
             "used everywhere.</i>\n")
     lines.append(USAGE)
     return "\n".join(lines)
+
+
+def order_blocks(pairs, user, custom, notice=None):
+    """Identical roster numbering in a table, regardless of name length."""
+    blocks = [R.heading("🏏 MY BATTING ORDER", 2)]
+    if notice:
+        blocks.append(R.paragraph(R.bold(notice)))
+    blocks.append(
+        R.paragraph(
+            "✍️ Custom order · used in every match"
+            if custom
+            else "🤖 Automatic · highest batting rating first"
+        )
+    )
+
+    def rows(group, start):
+        result = [
+            [
+                R.cell("#", header=True),
+                R.cell("Player", header=True),
+                R.cell("BAT", header=True, align="right"),
+                R.cell("Position", header=True),
+            ]
+        ]
+        for slot, (entry, player) in enumerate(group, start):
+            captain = " 👑" if entry.id == user.captain_roster_id else ""
+            result.append(
+                [
+                    R.cell(str(slot), align="center"),
+                    R.cell(f"{_role_tag(player)} {player.name}{captain}"),
+                    R.cell(str(player.bat_rating), align="right"),
+                    R.cell(_slot_label(slot) if slot <= XI_SIZE else "Bench"),
+                ]
+            )
+        return result
+
+    blocks.append(
+        R.table(rows(pairs[:XI_SIZE], 1), bordered=True, striped=True, compact=True)
+    )
+    if pairs[XI_SIZE:]:
+        blocks.append(
+            R.details(
+                f"🪑 Bench · {len(pairs[XI_SIZE:])} players",
+                [R.table(rows(pairs[XI_SIZE:], XI_SIZE + 1), compact=True)],
+            )
+        )
+    strength = sum(player.bat_rating or 0 for _, player in pairs[:6])
+    blocks.append(
+        R.table(
+            [[R.cell("Top-six batting strength"), R.cell(R.bold(str(strength)))]],
+            compact=True,
+        )
+    )
+    blocks.append(
+        R.details(
+            "✏️ How to change your order",
+            [
+                R.pre("/sbo 2 11\n/sbo 2 13\n/sbo 2 11 3 7\n/sbo auto"),
+                R.paragraph(
+                    "Use two numbers to swap slots, including bench slots. Send eleven numbers for a full reorder."
+                ),
+            ],
+        )
+    )
+    blocks.append(
+        R.footer(
+            "Slots 1 and 2 open. Every wicket brings in the next batter in this order."
+            if custom
+            else "Save a custom order to use it across every match mode."
+        )
+    )
+    return blocks
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -256,8 +329,7 @@ async def setbo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not tokens:
             text = format_order_card(pairs, user, has_custom_order(user))
             session.commit()
-            await msg.reply_text(text, parse_mode="HTML",
-                                 disable_web_page_preview=True)
+            await R.reply_rich(msg, order_blocks(pairs, user, has_custom_order(user)), text)
             return
 
         # Everything past this point CHANGES the order. Viewing it above is
@@ -275,9 +347,9 @@ async def setbo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                          "Batting order reset to auto (batting rating)")
             text = format_order_card(new_xi + bench_pairs, user, False)
             session.commit()
-            await msg.reply_text(
-                "🤖 <b>Batting order rebuilt by batting rating.</b>\n\n" + text,
-                parse_mode="HTML", disable_web_page_preview=True)
+            await R.reply_rich(msg, order_blocks(new_xi + bench_pairs, user, False,
+                '🤖 Batting order rebuilt by batting rating.'),
+                "🤖 <b>Batting order rebuilt by batting rating.</b>\n\n" + text)
             return
 
         if any(not t.isdigit() for t in tokens):
@@ -332,8 +404,8 @@ async def setbo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         text = format_order_card(new_xi + new_bench, user, True)
         session.commit()
-        await msg.reply_text(header + "\n\n" + text, parse_mode="HTML",
-                             disable_web_page_preview=True)
+        await R.reply_rich(msg, order_blocks(new_xi + new_bench, user, True,
+            '🔁 Batting order updated.'), header + "\n\n" + text)
     except Exception:
         session.rollback()
         logger.exception("/setbo failed")

@@ -138,8 +138,17 @@ def adapt_message(data):
         return data
     text = LegacyText()
     text.blocks(rich["blocks"])
+    photos = next(
+        (
+            block["photo"]
+            for block in rich["blocks"]
+            if block.get("type") == "photo" and isinstance(block.get("photo"), list)
+        ),
+        None,
+    )
     return {
         **data,
+        **({"photo": photos} if photos else {}),
         "text": "".join(text.parts),
         "entities": sorted(
             text.entities, key=lambda item: (item["offset"], -item["length"])

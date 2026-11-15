@@ -1,8 +1,8 @@
 """Handler for /claim — keeps session open through entire flow.
 
-The image leads with a short caption; the initial player details and decisions
-follow in a native rich card. Retain, release, replacement and timer outcomes
-also have Bot API 10.4 block renderings beside their HTML twins —
+The photo, player details and decisions share one native rich media card.
+Retain, release, replacement and timer outcomes edit that same message.
+Bot API 10.4 block renderings keep HTML twins for older servers —
 the player's attributes as a real table behind a collapsible ``details``, rather
 than a ``<blockquote expandable>`` of ``key: value`` lines — and
 ``services/rich_message.py`` sends the HTML whenever the rich send is refused.
@@ -161,31 +161,26 @@ async def _send_claim_card(
 ):
     from services.card_sender import send_player_card
 
-    rich = R.rich_text_enabled()
-    image = await send_player_card(
+    return await send_player_card(
         bot=bot,
         chat_id=chat_id,
         player=player,
-        caption=(
-            f"🎴 <b>{escape(p['name'])}</b> · {p['rating']} OVR" if rich else text
-        ),
-        reply_markup=None if rich else keyboard,
+        caption=text,
+        reply_markup=keyboard,
         reply_to_message_id=reply_to_message_id,
         session=session,
+        rich_blocks=blocks,
     )
-    if not rich:
-        return image
-    # Inline keyboard controls can be removed by the existing claim callbacks
-    # and timer. Embedded rich buttons cannot be removed using reply_markup.
-    return await R.send_rich_message(
-        bot,
-        chat_id,
-        blocks,
-        text,
-        reply_markup=keyboard,
-        native_buttons=False,
-        reply_to_message_id=getattr(image, "message_id", reply_to_message_id),
-    )
+
+
+async def _update_claim(context, chat_id, message_id, blocks, text, *, original=None,
+                        media=None, legacy_photo=False):
+    from services import rich_media
+    updated = await rich_media.edit(context.bot, chat_id, message_id, blocks, text,
+        original=original, media=media, legacy_photo=legacy_photo)
+    if not updated:
+        logger.warning('Claim outcome saved, but card %s could not be edited', message_id)
+    return updated
 
 
 def _retained_blocks(name, category, rating, bat_rating, bowl_rating,
@@ -364,14 +359,8 @@ async def _auto_decide(context: ContextTypes.DEFAULT_TYPE):
                 note=f"Your squad was already at {MAX_ROSTER}, so the card "
                      "was sold back.")
 
-        # Strip buttons + post outcome
-        try:
-            await context.bot.edit_message_reply_markup(
-                chat_id=d["chat_id"], message_id=d["message_id"], reply_markup=None)
-        except Exception:
-            pass
-        await R.send_rich_message(context.bot, d["chat_id"], action_blocks,
-                                  action_msg)
+        await _update_claim(context, d['chat_id'], d['message_id'], action_blocks,
+                            action_msg, media=d.get('media'), legacy_photo=d.get('legacy_photo', False))
     except Exception:
         session.rollback()
         logger.exception("_auto_decide error")
@@ -470,10 +459,13 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 _cancel_timer(context, user_id)
                 if context.job_queue:
+                    from services.rich_media import media_from_message
                     context.job_queue.run_once(
                         _auto_decide, AUTO_TIMEOUT, name=f"claim_{user_id}",
                         data={"player_id": p["id"], "user_id": user_id, "sell_val": sell_val,
-                              "chat_id": chat_id, "message_id": msg.message_id})
+                              "chat_id": chat_id, "message_id": msg.message_id,
+                              "media": media_from_message(msg),
+                              "legacy_photo": bool(getattr(msg, 'photo', None)) and not getattr(msg, 'api_kwargs', {}).get('rich_message')})
             except Exception:
                 logger.warning("Job queue unavailable — no auto-release timer")
 
@@ -518,20 +510,17 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             release(key)
             return
 
+        if user.roster_count >= MAX_ROSTER:
+            release(key)
+            await query.answer(f'Your squad is full ({MAX_ROSTER}/{MAX_ROSTER}). Use Replace.', show_alert=True)
+            return
+
         # Owner confirmed — now it's safe to consume the card UI + timer.
         try:
             await query.edit_message_reply_markup(reply_markup=None)
         except Exception:
             pass
         _cancel_timer(context, user_id)
-
-        if user.roster_count >= MAX_ROSTER:
-            release(key)
-            await context.bot.send_message(chat_id=chat_id,
-                text=(f"❌ Your squad is full ({MAX_ROSTER}/{MAX_ROSTER}).\n"
-                      "Use ⚪ Replace or /releasepl &lt;name&gt;"),
-                parse_mode="HTML")
-            return
 
         # Add to roster
         entry = UserRoster(user_id=user.id, player_id=player_id,
@@ -561,23 +550,23 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.commit()
 
         mention = f"@{tg_user.username}" if tg_user.username else (tg_user.first_name or "")
-        await R.send_rich_message(
-            context.bot, chat_id,
+        await _update_claim(
+            context, chat_id, query.message.message_id,
             _retained_blocks(name, category, rating, bat_rating, bowl_rating,
                              bat_hand, bowl_style, new_count,
                              mention or "you", tg_user.id),
-            (f"🏏 {name} has been added to your squad. {mention}\n"
+            (f"🏏 {escape(name)} has been added to your squad. {escape(mention)}\n"
              f"━━━━━━━━━━━━━━\n"
              f"<blockquote expandable>"
-             f"👤 Category: {category}\n"
+             f"👤 Category: {escape(str(category or '—'))}\n"
              f"⭐ Rating: {rating}\n"
              f"📊 Bat Rating: {bat_rating}\n"
              f"📊 Bowl Rating: {bowl_rating}\n"
-             f"🏏 Bat: {bat_hand}\n"
-             f"🎯 Bowl: {bowl_style}"
+             f"🏏 Bat: {escape(str(bat_hand or '—'))}\n"
+             f"🎯 Bowl: {escape(str(bowl_style or '—'))}"
              f"</blockquote>\n"
              f"━━━━━━━━━━━━━━\n"
-             f"✅ Your Squad Size: {new_count}/{MAX_ROSTER}"))
+             f"✅ Your Squad Size: {new_count}/{MAX_ROSTER}"), original=query.message)
 
         # Achievement check (post-commit so it sees fresh roster_count)
         try:
@@ -628,19 +617,19 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         player = session.get(Player, player_id)
         name = player.name if player else "Unknown"
         rating = player.rating if player else 0
-        username = tg_user.username or tg_user.first_name
+        mention = f'@{tg_user.username}' if tg_user.username else (tg_user.first_name or 'Owner')
 
         user.total_coins += sell_val
         log_activity(session, user.id, "release", f"Released {name} for {sell_val:,}",
                      coins_change=sell_val, player_name=name)
         session.commit()
 
-        await R.send_rich_message(
-            context.bot, chat_id,
-            _released_blocks(name, rating, f"@{username}", tg_user.id,
+        await _update_claim(
+            context, chat_id, query.message.message_id,
+            _released_blocks(name, rating, mention, tg_user.id,
                              coins=sell_val),
-            (f"🏏 {name} has been released by @{username}\n\n"
-             f"{name}, {rating} OVR"))
+            (f"🏏 {escape(name)} has been released by {escape(mention)}\n\n"
+             f"{escape(name)}, {rating} OVR\n💰 +{sell_val:,} coins"), original=query.message)
 
     except Exception:
         # Keep the claim (may be post-commit) so a stale tap can't re-credit.
@@ -713,28 +702,34 @@ async def replace_confirm_callback(update: Update, context: ContextTypes.DEFAULT
         return
     await query.answer()
 
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-    # Mark the originating claim consumed so its auto-decide timer won't also act.
-    _claim_done(f"claim_{user_id}_{new_player_id}")
-    _cancel_timer(context, user_id)
-
     session = get_session()
     try:
         user = session.get(User, user_id)
         if not user or user.telegram_id != tg_user.id:
+            release(key)
             return
 
         old_entry = session.query(UserRoster).filter(
             UserRoster.id == old_roster_id, UserRoster.user_id == user.id).first()
         if not old_entry:
-            await context.bot.send_message(chat_id=chat_id, text="❌ Player no longer in roster")
+            release(key)
+            await query.answer('Player no longer in roster.', show_alert=True)
             return
 
         old_player = session.get(Player, old_entry.player_id)
         new_player = session.get(Player, new_player_id)
+        if not new_player:
+            release(key)
+            return
+        if _claim_done(f'claim_{user_id}_{new_player_id}'):
+            release(key)
+            await query.answer('Already processed!', show_alert=True)
+            return
+        _cancel_timer(context, user_id)
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
         old_name = old_player.name if old_player else "Unknown"
         new_name = new_player.name if new_player else "Unknown"
         count = user.roster_count
@@ -759,13 +754,13 @@ async def replace_confirm_callback(update: Update, context: ContextTypes.DEFAULT
 
         traits_line = (f"\n💎 {traits_returned} trait(s) returned to inventory."
                        if traits_returned else "")
-        await R.send_rich_message(
-            context.bot, chat_id,
+        await _update_claim(
+            context, chat_id, query.message.message_id,
             _replaced_blocks(old_name, new_name, count, traits_returned),
             (f"🔁 <b>Player SUCCESSFULLY REPLACED!</b>\n\n"
-             f"⬅ Removed: {old_name}\n"
-             f"➡ Added: {new_name}\n\n"
-             f"✅ Squad Updated: {count}/{MAX_ROSTER}{traits_line}"))
+             f"⬅ Removed: {escape(old_name)}\n"
+             f"➡ Added: {escape(new_name)}\n\n"
+             f"✅ Squad Updated: {count}/{MAX_ROSTER}{traits_line}"), original=query.message)
 
     except Exception:
         session.rollback()

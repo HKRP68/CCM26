@@ -248,7 +248,7 @@ def live_scorecard_blocks(s):
 # ── The ball that was just bowled ────────────────────────────────────
 
 def ball_result_blocks(s, *, bowler_name, delivery, striker_name, shot,
-                       headline, commentary=None, trait_lines=()):
+                       headline, commentary=None, trait_lines=(), over_summary=None):
     """One delivery's result: what happened, then the board it happened on.
 
     ``headline`` is the plain-text form of the HTML renderer's ``rtxt`` — "SIX!",
@@ -263,6 +263,10 @@ def ball_result_blocks(s, *, bowler_name, delivery, striker_name, shot,
              R.cell(shot or "?", align="right")],
         ], compact=True)]
         blocks.append(R.pullquote(R.bold(headline or "")))
+        if over_summary:
+            blocks.append(R.heading(f"🏏 END OF OVER {over_summary['over']}", 3))
+            blocks.append(R.table([[R.cell('Runs this over'), R.cell(R.bold(str(over_summary['runs'])))],
+                                   [R.cell('Bowler'), R.cell(bowler_name or '?')]], compact=True, striped=True))
         if commentary:
             blocks.append(R.blockquote(
                 [R.paragraph(["💬 ", R.italic(commentary)])]))

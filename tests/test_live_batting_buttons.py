@@ -30,16 +30,14 @@ def context():
         pin_chat_message=AsyncMock()))
 
 
-def test_rich_entry_sits_in_partnership_paragraph_and_matches_keyboard():
+def test_batting_entry_stays_below_the_rich_scorecard():
     state = _state(bot_match=False)
     blocks = cp._approach_card_blocks(state)
-    paragraph = next(b for b in blocks if b["type"] == "paragraph" and embedded_buttons(b))
-    assert "Partnership" in str(paragraph)
-    embedded = embedded_buttons(paragraph)
-    assert len(embedded) == 1
+    assert any(b['type']=='paragraph' and 'Partnership' in str(b) for b in blocks)
+    assert not embedded_buttons(blocks)
     keyboard = ui.with_manage_batting(state, None)
-    assert embedded[0]["callback_data"] == keyboard[-1][0].callback_data == "lb_n_42"
-    assert embedded[0]["text"] == keyboard[-1][0].text == "🏏 Manage batting"
+    assert keyboard[-1][0].callback_data == "lb_n_42"
+    assert keyboard[-1][0].text == "🏏 Manage batting"
 
 
 @pytest.mark.parametrize("prompt", ["_prompt_bowler", "_prompt_bowl_approach", "_prompt_bat_approach"])
@@ -111,7 +109,8 @@ def test_native_callback_or_html_fallback_keeps_an_actionable_button(monkeypatch
         ctx, state, "Batting scorecard", [], blocks=cp._approach_card_blocks(state)))
     endpoint, sent = ctx.bot._post.call_args_list[0].args
     assert endpoint == "sendRichMessage"
-    assert embedded_buttons(sent["rich_message"])[0]["callback_data"] == "lb_n_42"
+    assert not embedded_buttons(sent['rich_message'])
+    assert sent['reply_markup'].inline_keyboard[-1][0].callback_data=='lb_n_42'
     if refuse_rich:
         ctx.bot.send_message.assert_awaited_once()
         markup = ctx.bot.send_message.call_args.kwargs["reply_markup"]
@@ -121,7 +120,7 @@ def test_native_callback_or_html_fallback_keeps_an_actionable_button(monkeypatch
         assert state["action_msg_id"] == 44
 
 
-def test_opposing_captain_cannot_open_the_embedded_batting_controls(monkeypatch):
+def test_opposing_captain_cannot_open_batting_controls(monkeypatch):
     state = _state(bot_match=False)
     _box, saved, ctx = _wire(monkeypatch, state)
     query = SimpleNamespace(data="lb_n_42", from_user=SimpleNamespace(id=8008),

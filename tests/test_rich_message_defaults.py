@@ -378,15 +378,8 @@ def test_initial_claim_has_rich_details_and_removable_controls(delivery, monkeyp
             session=None,
         )
     )
-    assert picture.call_args.kwargs["reply_markup"] is None
-    endpoint, payload, _ = delivery.calls[0]
-    assert (
-        endpoint == "sendRichMessage"
-        and payload["reply_parameters"]["message_id"] == 66
-    )
-    assert payload["reply_markup"] == markup and message.message_id == 77
-    assert any(block["type"] == "table" for block in payload["rich_message"]["blocks"])
-    assert not any(
-        block["type"] == "buttons" for block in payload["rich_message"]["blocks"]
-    )
-    assert "Prime" in message.text and "Joe <Root>" in message.text
+    assert picture.call_args.kwargs['reply_markup']==markup
+    assert picture.call_args.kwargs['rich_blocks']==blocks
+    assert picture.call_args.kwargs['caption']=='<b>Joe &lt;Root&gt;</b>'
+    assert message.message_id==66
+    assert not delivery.calls  # No second decision message after the image.

@@ -219,9 +219,8 @@ def test_command_send_attempts_native_rich_with_the_same_permission_buttons(room
     endpoint,payload=rich_bot._post.call_args.args
     assert endpoint=='sendRichMessage'
     assert payload['rich_message']['blocks'][:len(packet['blocks'])]==packet['blocks']
-    assert [n['callback_data'] for n in nodes(payload['rich_message']['blocks']) if 'callback_data' in n]==[
-        b.callback_data for row in packet['markup'].inline_keyboard for b in row]
-    assert 'reply_markup' not in payload
+    assert payload['reply_markup']==packet['markup']
+    assert not any(n.get('type')=='buttons' for n in nodes(payload['rich_message']['blocks']))
     assert not event.effective_message.replies
 
 
@@ -246,8 +245,8 @@ def test_button_redraw_uses_native_table_card_and_preserves_navigation(room,rich
     endpoint,payload=rich_bot._post.call_args.args
     assert endpoint=='editMessageText'
     assert any(node.get('type')=='table' for node in nodes(payload['rich_message']['blocks']))
-    assert [n['callback_data'] for n in nodes(payload['rich_message']['blocks']) if 'callback_data' in n]==[
-        b.callback_data for row in packet['markup'].inline_keyboard for b in row]
+    assert payload['reply_markup']==packet['markup']
+    assert not any(n.get('type')=='buttons' for n in nodes(payload['rich_message']['blocks']))
 
 
 def test_callback_rejection_is_a_private_rich_card(room,rich_bot):

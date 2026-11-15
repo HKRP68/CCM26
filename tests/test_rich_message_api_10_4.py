@@ -181,7 +181,7 @@ def test_current_cards_use_documented_block_shapes_and_exact_keyboard_callbacks(
         ]
     )
     result = asyncio.run(
-        R.send_rich_message(client, 42, sample(), "<b>Draft</b>", reply_markup=markup)
+            R.send_rich_message(client, 42, sample(), "<b>Draft</b>", reply_markup=markup, native_buttons=True)
     )
     assert result.message_id == 7
     payload = client._post.call_args.args[1]
@@ -243,7 +243,7 @@ def test_block_refusal_retries_native_rich_html_with_tables_buttons_and_escaped_
         [[InlineKeyboardButton("✅ Confirm", callback_data="pick:1")]]
     )
     asyncio.run(
-        R.send_rich_message(client, 42, sample(), "<b>Draft</b>", reply_markup=markup)
+        R.send_rich_message(client, 42, sample(), "<b>Draft</b>", reply_markup=markup, native_buttons=True)
     )
     body = client._post.call_args.args[1]["rich_message"]["html"]
     for fragment in (

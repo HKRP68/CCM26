@@ -457,11 +457,6 @@ def build_live_scorecard_blocks(state, waiting_for_mention=None):
         if len(rows) > 1:
             blocks.append(R.table(rows, bordered=True, compact=True,
                                   caption=R.bold("🪓 Batsmen")))
-        from services.live_batting_help import inline_manage_batting
-        manage = inline_manage_batting(state)
-        if manage:
-            blocks.append(R.paragraph(["🏏 Batting controls  ·  ", manage]))
-
         bowler = state.get("current_bowler") or {}
         if bowler:
             bws = state.get("bowl_stats", {}).get(bowler.get("roster_id"), {})

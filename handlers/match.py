@@ -4978,7 +4978,8 @@ async def _process_shot_core(context, mid, si, *, q=None):
                 s, bowler_name=bowler["name"], delivery=dl,
                 striker_name=striker["name"], shot=shot,
                 headline=html.unescape(_HTML_TAGS_RE.sub("", rtxt)).strip(),
-                commentary=commentary_line, trait_lines=trait_notes)
+                commentary=commentary_line, trait_lines=trait_notes,
+                over_summary={'over':pre_over, 'runs':over_runs_scored} if eoo else None)
 
             # Reset transient state
             s["current_delivery"] = None

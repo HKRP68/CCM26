@@ -10,7 +10,7 @@ used by auctions and drafts. Auction workflows retain their existing behavior.
 Draft menus, setup forms, previews, player searches, signing confirmations,
 announcements, errors and the live board use the shared Bot API 10.4 rich
 message helpers. Tables and expandable squad/order sections remain native;
-compact button rows keep their exact existing callbacks and server-side access
+inline controls below the card keep their exact callbacks and server-side access
 checks. Deadlines carry Telegram timestamps for local display. Rejected button
 actions use a private rich response where supported, with a private popup on
 older servers. Nothing private falls back to a public group message.

@@ -57,9 +57,35 @@ An explicit rich helper's compatibility send is never promoted a second time.
 responses and incoming callback/webhook messages expose readable `text` and
 `text_html`, with mentions and formatting. It preserves the original native
 message without mutating Telegram updates. Existing photo/video/file delivery
-keeps its media and formatted captions. The initial `/claim` image is followed
-by a rich player-details card; its retain/release/replace keyboard and the
-60-second timer refer to that decision card.
+keeps its media and formatted captions. `/claim` now embeds the photo and player
+details in one rich message. Retain, release, replacement and the 60-second
+auto-decision edit that message and preserve its photo. Older photo cards are
+updated through their captions; a failed edit never sends a duplicate receipt.
+
+## Alignment and match controls
+
+`services/rich_layout.py` turns consecutive label/value facts into native tables
+across ordinary replies, edits and website notifications. It preserves inline
+formatting and mentions, including expandable fact sections. Text labels stay
+left-aligned and numeric, currency, score and squad-count cells align right.
+Complex HTML and code retain their original rendering rather than being guessed
+into columns. Existing table builders share the same numeric-cell defaults.
+
+`/sbo` uses explicit position/player/BAT/role columns and an expandable numbered
+bench. Over summaries show the actual over totals, live batter/bowler tables and
+chase, with the full conditions/traits report in expandable details. Milestone
+cards show known facts only and retain administrator wording in their full
+announcement. Configured milestone media can be embedded in the same rich card.
+
+Approach choices and Manage Batting use the separate inline keyboard below the
+message. Shared send/edit helpers preserve that placement by default. Native
+embedded buttons remain an explicit opt-in for a surface that needs them.
+
+`services/rich_media.py` sends documented photo/animation/video blocks and real
+multipart attachments through PTB. Cached file IDs are reused on edits; newly
+returned rich photo IDs remain available to existing card caches. A refused
+native media format falls back to one legacy photo card, without dropping the
+image into a separate text receipt. See [Telegram rich media blocks](https://core.telegram.org/bots/api#inputrichblockphoto).
 
 ## Where it is used
 
@@ -78,17 +104,17 @@ by a rich player-details card; its retain/release/replace keyboard and the
 | `/lpt`, `/lptable`, `/lptfixtures`, `/lptteams` | the same shapes for the Lets Play tournament (`services/lp_tournament_rich.py`), with a Telegram id where the Challenge League has an owner |
 | the delivery and shot prompts, and the ball that follows | `services/match_rich.py` — the score as a `table`, the crease and the bowler's figures as tables, the headline (`SIX!`, `WICKET!`) as a `pullquote`, the commentary as a `blockquote`, the timeline still `code` so every ball keeps its width; the player whose turn it is is a real `tg://user` mention node |
 | the Challenge League / `/letsplay` over board — the bowler picker and both approach prompts | `handlers/cipl_play._approach_card_blocks` — both totals and the batters (R, B, 4s, 6s, SR) as tables, the chase as a `pullquote` with target/RRR/CRR on the line under it, the bowler's figures as a table captioned with the last over, CHEM and OVR as one match-up table, the last over's commentary behind a collapsed `details`, and the captain as a `tg://user` mention |
-| **Manage batting** on a live scorecard | Bot API 10.3 `RichTextButton` in the partnership paragraph, using the same `lb_n_<match id>` callback as the full-width keyboard entry. The keyboard entry remains available if rich sending falls back to HTML. It also appears on pinned chat-match start cards. Opening the menu keeps the plan picker and its deadline intact; command names in the start guide remain code text for manual entry. See [Telegram's button schema](https://core.telegram.org/bots/api#richtextbutton). |
+| **Manage batting** on a live scorecard | The full-width keyboard entry beneath the message uses `lb_n_<match id>` in native and fallback delivery. It also appears on pinned chat-match start cards. Opening the menu keeps the plan picker and its deadline intact. |
 | the Mini App's `MATCH READY` card and its live scorecard broadcast | `services/match_broadcast.py` — the match facts and both XIs as tables, the chase as a `pullquote` |
 | the Challenge League XI picker, and the XI it confirms | `handlers/challenge.py` — the selection rules as a real `checklist`, the confirmed XI through `match_rich.playing_xi_blocks` (a numbered `table`, bench behind a `details`) |
 | the Challenge League's team picker, pitch menu, pitch confirmation and "the battle is set" recap | `services/challenge_rich.py` — the two sides as one table so captains and franchises line up in columns, the surfaces as a table of what each does to a match, the Pitch Report as a `blockquote`, and a bot opponent's XI behind a `details` so the Select XI buttons stay on screen. The team picker usually lives in a league banner's caption, which `sendRichMessage` cannot replace, so only its text-only path is rich |
 | `/cltour` | `handlers/cl_tour._cl_tour_blocks` — the two sides as a table, the series scoreline as a `pullquote`, and each match's state as a row |
 | the Lets Play traits vote | `services/trait_vote_service.prompt_blocks` / `result_blocks` — the two XIs and who has answered as one table, the outcome rules as another, the verdict as a `pullquote` |
 | every `/letsplay` and `/lpbot` setup card — invitation, pitch, both Playing XIs, the toss, and what `/change` takes | `services/letsplay_rich.py` — the invitation's facts as a table, each XI as a numbered `table` with its rating in a right-aligned column of its own and its bench behind a `details`, and the Team Overall verdict as a `pullquote` when the gap is wide enough to cost both sides their career stats. The toss reveal goes through `_reveal_rich`, which raises on a refused edit so `reveal_toss_result`'s retry keeps meaning what it says |
-| `/claim` and its retain, release, replace and 60s auto-decide outcomes | `handlers/claim.py` — the initial decision has a rating table, player facts, version, manager mention and timer explanation. Its image leads with a compact caption. Outcomes show card attributes in expandable tables. Removable inline controls stay attached to the decision card. |
+| `/claim` and its retain, release, replace and 60s auto-decide outcomes | `handlers/claim.py` — one embedded-media message contains the photo, rating table, player facts, version, manager mention and timer explanation. Its outcomes edit the same message. Removable controls stay below the decision card. |
 | `/stats` | the career record as a batting `table` and a bowling one; with rich messages on, the card image leads with the short caption and the record follows as its own message |
 | the scorecard of last resort, when every image fails | `services/scorecard_delivery.py` — batting, bowling and the result as native tables, the winner as a `pullquote` |
-| all Franchise season draft messages | `services/franchise_draft_rich.py` — purse, player and rule tables; the current team and confirmed player as `pullquote` blocks; round order and squad lists in `details`; command guides as grouped tables. Native button rows reuse the existing authorized callbacks; deadlines use localized `date_time` nodes. API 10.4 private rich replies explain rejected button actions to the clicker. Event cards snapshot purse/squad/next-owner values before delivery. Long HTML fallbacks split without dropping rows. |
+| all Franchise season draft messages | `services/franchise_draft_rich.py` — purse, player and rule tables; the current team and confirmed player as `pullquote` blocks; round order and squad lists in `details`; command guides as grouped tables. Separate inline controls reuse the existing authorized callbacks; deadlines use localized `date_time` nodes. API 10.4 private rich replies explain rejected button actions to the clicker. Event cards snapshot purse/squad/next-owner values before delivery. Long HTML fallbacks split without dropping rows. |
 
 The shared helpers send native rich HTML when no block builder is available;
 ordinary bot text sends receive the same native delivery automatically. Image
