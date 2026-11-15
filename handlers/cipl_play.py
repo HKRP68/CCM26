@@ -806,28 +806,13 @@ async def _delete_prev_over(context, state):
     state["action_msg_id"] = None
 
 
-def _with_view_match(state, keyboard, extras=True):
-    """Append View Match, Impact Player and batting controls to over messages.
-
-    These controls live here as well as on the over summary because this runs for
-    the bowler prompt and both approach prompts too — which is exactly when a
-    captain wants the swap. It also means the button is never more than one
-    message away, even though the over summary carrying it is deleted when the
-    next over starts.
-    """
-    kb = list(keyboard or [])
-    if extras:
-        kb += _view_and_impact_rows(state)
-    return kb
+def _with_match_controls(state, text, blocks=None, rows=None):
+    from services.match_controls import attach
+    return attach(state, text, blocks, _view_and_impact_rows(state) if rows is None else rows)
 
 
 def _view_and_impact_rows(state, mid=None):
-    """View/Impact in one row, followed by a full-width Manage batting entry.
-
-    The Impact button sits beside View Match rather than on its own row. When
-    no Mini App host is configured _miniapp_row returns None, so it falls back
-    to a row of its own instead of disappearing with it.
-    """
+    """Collect available tools for the collapsed Manage match section."""
     rows = [list(r) for r in (_miniapp_row(state) or [])]
     # In a Mini App match the swap is made in the app, next to the picks.
     impact = None if _app_mode(state) else _impact_button(state, mid)
@@ -869,7 +854,9 @@ async def _new_action_message(context, state, text, keyboard, extras=True,
         except ValueError:
             pass
         state["action_msg_id"] = None
-    kb = _with_view_match(state, keyboard, extras=extras)
+    kb = list(keyboard or [])
+    if extras:
+        blocks, text = _with_match_controls(state, text, blocks)
     markup = InlineKeyboardMarkup(kb) if kb else None
     if blocks and R.rich_text_enabled():
         # ``text`` is the HTML twin: send_rich_message falls back to it.
@@ -888,12 +875,14 @@ async def _edit_action_message(context, state, text, keyboard, extras=True,
                                blocks=None):
     await _clear_action_reminder(context, state)
     mid_msg = state.get("action_msg_id")
-    kb = _with_view_match(state, keyboard, extras=extras)
+    kb = list(keyboard or [])
+    if extras:
+        blocks, text = _with_match_controls(state, text, blocks)
     markup = InlineKeyboardMarkup(kb) if kb else None
     if mid_msg:
         if blocks and await R.edit_rich_message(
                 context.bot, state["chat_id"], mid_msg, blocks,
-                reply_markup=markup):
+                reply_markup=markup, fallback_text=text):
             return
         try:
             await context.bot.edit_message_text(
@@ -908,6 +897,9 @@ async def _edit_action_message(context, state, text, keyboard, extras=True,
 
 async def _post_tracked(context, state, text, keyboard=None, blocks=None, *, legacy=False):
     """Post an over message (e.g. the summary) tracked for deletion next over."""
+    if legacy:
+        blocks, text = _with_match_controls(state, text, blocks, rows=keyboard or [])
+        keyboard = None
     markup = InlineKeyboardMarkup(keyboard) if keyboard else None
     if legacy:
         # End-of-over reports keep their original HTML layout even when the
@@ -982,7 +974,7 @@ def _impact_button(state, mid=None):
 
 
 def _between_overs_row(state, mid=None):
-    """View Match, Impact Player and batting controls between overs."""
+    """Tools for the over-summary and innings-break text."""
     return _view_and_impact_rows(state, mid) or None
 
 
@@ -2321,7 +2313,7 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
 
 async def _cleanup_setup_and_announce(context, state, draft):
     """Delete the challenge setup messages (all but the toss result) and post +
-    pin the 'Watch X vs Y' announcement with the Mini App Watch Match button."""
+    pin the match announcement with its collapsed management controls."""
     chat_id = state["chat_id"]
     keep = (draft or {}).get("toss_result_msg_id")
     for mid_msg in list((draft or {}).get("setup_msg_ids", []) or []):
@@ -2333,13 +2325,11 @@ async def _cleanup_setup_and_announce(context, state, draft):
             pass  # message too old / not deletable — leave it
 
     text = _match_start_announcement(state)
-    from services.live_batting_help import with_manage_batting
-    kb = with_manage_batting(state, _miniapp_row(state))
     try:
         from services.match_rich import match_start_blocks
+        blocks, text = _with_match_controls(state, text, match_start_blocks(state, text))
         sent = await R.send_rich_message(
-            context.bot, chat_id, match_start_blocks(state, text), text,
-            reply_markup=InlineKeyboardMarkup(kb) if kb else None)
+            context.bot, chat_id, blocks, text)
     except Exception:
         logger.exception("cipl match-start announcement failed")
         return
@@ -5182,13 +5172,13 @@ async def _innings_break(context, mid, state):
                      "🎳 Second innings next — follow the bowler and approach prompts."),
         scorecard=summary_text)
     kb = _between_overs_row(state, mid)
+    blocks, text = _with_match_controls(state, text, blocks, rows=kb or [])
     # The break card is cosmetic. A failed send must not stop the chase from
     # starting below — that left the match sitting on an innings break with no
     # picker and no clock, waiting for someone to type /rcl.
     try:
         sent = await R.send_rich_message(
-            context.bot, state["chat_id"], blocks, text,
-            reply_markup=InlineKeyboardMarkup(kb) if kb else None)
+            context.bot, state["chat_id"], blocks, text)
     except Exception:
         logger.exception("cipl innings-break card send failed for match %s", mid)
         sent = None

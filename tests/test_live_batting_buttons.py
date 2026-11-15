@@ -30,14 +30,14 @@ def context():
         pin_chat_message=AsyncMock()))
 
 
-def test_batting_entry_stays_below_the_rich_scorecard():
+def test_batting_entry_is_inside_collapsed_manage_match():
     state = _state(bot_match=False)
     blocks = cp._approach_card_blocks(state)
     assert any(b['type']=='paragraph' and 'Partnership' in str(b) for b in blocks)
-    assert not embedded_buttons(blocks)
-    keyboard = ui.with_manage_batting(state, None)
-    assert keyboard[-1][0].callback_data == "lb_n_42"
-    assert keyboard[-1][0].text == "🏏 Manage batting"
+    blocks, _ = cp._with_match_controls(state, "Scorecard", blocks)
+    menu = next(block for block in blocks if block.get("summary") == "⚙️ Manage match")
+    assert not menu.get("is_open")
+    assert embedded_buttons(menu)[-1]["callback_data"] == "lb_n_42"
 
 
 @pytest.mark.parametrize("prompt", ["_prompt_bowler", "_prompt_bowl_approach", "_prompt_bat_approach"])
@@ -50,8 +50,10 @@ def test_all_over_pickers_keep_one_manage_entry_without_a_miniapp_link(monkeypat
     asyncio.run(getattr(cp, prompt)(ctx, 42, state))
     calls = ctx.bot.send_message.call_args_list + ctx.bot.edit_message_text.call_args_list
     buttons = [b for call in calls for row in call.kwargs["reply_markup"].inline_keyboard for b in row]
-    assert len([b for b in buttons if b.callback_data == "lb_n_42"]) == 1
+    assert not any(b.callback_data == "lb_n_42" for b in buttons)
     assert any((b.callback_data or "").startswith("cipl_") for b in buttons)
+    assert "⚙️ Manage match" in calls[0].args[-1]
+    assert any("/managebatting" in str(call) for call in calls)
 
 
 @pytest.mark.parametrize("announce", ["cipl", "letsplay"])
@@ -64,7 +66,8 @@ def test_pinned_start_card_has_manage_entry_without_a_miniapp_link(monkeypatch, 
     else:
         asyncio.run(letsplay._announce(ctx, state, "Hard"))
     markup = ctx.bot.send_message.call_args.kwargs["reply_markup"]
-    assert markup.inline_keyboard[-1][0].callback_data == "lb_n_42"
+    assert markup is None
+    assert "/managebatting" in ctx.bot.send_message.call_args.args[1]
     assert state["pinned_msg_id"] == 10
 
 
@@ -109,12 +112,14 @@ def test_native_callback_or_html_fallback_keeps_an_actionable_button(monkeypatch
         ctx, state, "Batting scorecard", [], blocks=cp._approach_card_blocks(state)))
     endpoint, sent = ctx.bot._post.call_args_list[0].args
     assert endpoint == "sendRichMessage"
-    assert not embedded_buttons(sent['rich_message'])
-    assert sent['reply_markup'].inline_keyboard[-1][0].callback_data=='lb_n_42'
+    menu = next(b for b in sent['rich_message']['blocks'] if b.get('summary') == '⚙️ Manage match')
+    assert embedded_buttons(menu)[-1]['callback_data'] == 'lb_n_42'
+    assert sent.get('reply_markup') is None
     if refuse_rich:
         ctx.bot.send_message.assert_awaited_once()
         markup = ctx.bot.send_message.call_args.kwargs["reply_markup"]
-        assert markup.inline_keyboard[-1][0].callback_data == "lb_n_42"
+        assert markup is None
+        assert '/managebatting' in ctx.bot.send_message.call_args.args[1]
     else:
         ctx.bot.send_message.assert_not_awaited()
         assert state["action_msg_id"] == 44

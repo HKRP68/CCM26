@@ -180,8 +180,7 @@ class UnavailableTextTests(unittest.TestCase):
 
 
 class ButtonPlacementTests(unittest.TestCase):
-    """The button must ride beside View Match on every prompt, not only the
-    over summary — that message is deleted the moment the next over starts."""
+    """Impact Player stays available inside Manage match on live prompts."""
 
     def _labels(self, rows):
         return [b.text for row in (rows or []) for b in row]
@@ -201,10 +200,9 @@ class ButtonPlacementTests(unittest.TestCase):
         self.assertEqual(len(row_with_impact), 2)
 
     def test_every_prompt_carries_it(self):
-        # _with_view_match is what _new_action_message and _edit_action_message
-        # run for the bowler prompt and both approach prompts.
-        labels = self._labels(cp._with_view_match(_state(), [])) 
-        self.assertIn("🔄 Impact Player", labels)
+        blocks, text = cp._with_match_controls(_state(), "Live match")
+        self.assertIn("cipl_imp_", str(blocks))
+        self.assertIn("/impact", text)
 
     def test_the_over_summary_carries_it(self):
         labels = self._labels(cp._between_overs_row(_state(), 7))

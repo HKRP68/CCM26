@@ -85,9 +85,15 @@ momentum and match notes in one ordinary message. Milestone
 cards show known facts only and retain administrator wording in their full
 announcement. Configured milestone media can be embedded in the same rich card.
 
-Approach choices and Manage Batting use the separate inline keyboard below the
-message. Shared send/edit helpers preserve that placement by default. Native
-embedded buttons remain an explicit opt-in for a surface that needs them.
+Bowler and approach choices use the separate inline keyboard below the message.
+`services/match_controls.py` moves View Match, Impact Player, Manage batting and
+Live scores & stats into one collapsed **⚙️ Manage match** section in live match
+messages, pinned starts and innings breaks. Native callbacks reuse their exact
+existing data and permissions; Mini App links retain the match/chat route.
+Regular HTML has an expandable section with the same links and `/impact` and
+`/managebatting` commands. Over summaries remain non-rich and have no extra
+management keyboard. Dedicated substitution and medical selections keep their
+own required choices. Other surfaces retain their existing keyboard placement.
 
 `services/rich_media.py` sends documented photo/animation/video blocks and real
 multipart attachments through PTB. Cached file IDs are reused on edits; newly
@@ -103,7 +109,7 @@ image into a separate text receipt. See [Telegram rich media blocks](https://cor
 | `/openpack` inventory and results | The inventory uses its own numbered pack table. The final receipt separates main and bonus pulls with version, rating and actual roster placement for each card, then shows roster/unopened counts and the next command. Overflow is explicitly marked as not added. |
 | trade confirmation and completion | `services/trade_messages.py` keeps each captain’s offered/received card, fee and status visible until both confirm. Completion shows what each captain received, the fee paid and any traits returned. |
 | chat daily reward receipts | `services/daily_messages.py` shows base/streak reward totals, current balances, player placement and milestone progress. The next claim uses the configured cooldown and a native localized time; HTML fallback shows the remaining duration. Overflow retains its Release/Replace controls. |
-| pinned match-start announcements | `match_rich.match_start_blocks` shows teams, venue, format, pitch and batting first, keeps competition/conditions/chemistry notes and puts the command guide in collapsed details. View Match and Manage batting stay below the card. |
+| pinned match-start announcements | `match_rich.match_start_blocks` shows teams, venue, format, pitch and batting first, keeps competition/conditions/chemistry notes and puts the command guide in collapsed details. Match tools live inside **Manage match**. |
 | innings break | `services/innings_break_messages.py` leads with the first-innings result, the chasing side’s target, full chase allocation and required rate. Challenge League/Lets Play keeps the first-innings scorecard in expandable details and retains the existing match buttons. The Hundred shows balls and runs per ball. |
 | match highlights | `highlights.reel_blocks` features the moment of the match, followed by the same selected moments in match order; The Hundred uses set labels. |
 | `/pxi`, `/xi`, `/playingxi` | one `table` block — the four section names (batsmen, keeper, all-rounders, bowlers) are full-width header rows inside it |
@@ -119,7 +125,7 @@ image into a separate text receipt. See [Telegram rich media blocks](https://cor
 | `/lpt`, `/lptable`, `/lptfixtures`, `/lptteams` | the same shapes for the Lets Play tournament (`services/lp_tournament_rich.py`), with a Telegram id where the Challenge League has an owner |
 | the delivery and shot prompts, and the ball that follows | `services/match_rich.py` — the score as a `table`, the crease and the bowler's figures as tables, the headline (`SIX!`, `WICKET!`) as a `pullquote`, the commentary as a `blockquote`, the timeline still `code` so every ball keeps its width; the player whose turn it is is a real `tg://user` mention node |
 | the Challenge League / `/letsplay` over board — the bowler picker and both approach prompts | `handlers/cipl_play._approach_card_blocks` — both totals and the batters (R, B, 4s, 6s, SR) as tables, the chase as a `pullquote` with target/RRR/CRR on the line under it, the bowler's figures as a table captioned with the last over, CHEM and OVR as one match-up table, the last over's commentary behind a collapsed `details`, and the captain as a `tg://user` mention |
-| **Manage batting** on a live scorecard | The full-width keyboard entry beneath the message uses `lb_n_<match id>` in native and fallback delivery. It also appears on pinned chat-match start cards. Opening the menu keeps the plan picker and its deadline intact. |
+| **Manage batting** on a live scorecard | The control inside **Manage match** uses `lb_n_<match id>`; regular HTML offers `/managebatting`. It also appears on pinned chat-match start cards. Opening the menu keeps the plan picker and its deadline intact. |
 | the Mini App's `MATCH READY` card and its live scorecard broadcast | `services/match_broadcast.py` — the match facts and both XIs as tables, the chase as a `pullquote` |
 | the Challenge League XI picker, and the XI it confirms | `handlers/challenge.py` — the selection rules as a real `checklist`, the confirmed XI through `match_rich.playing_xi_blocks` (a numbered `table`, bench behind a `details`) |
 | the Challenge League's team picker, pitch menu, pitch confirmation and "the battle is set" recap | `services/challenge_rich.py` — the two sides as one table so captains and franchises line up in columns, the surfaces as a table of what each does to a match, the Pitch Report as a `blockquote`, and a bot opponent's XI behind a `details` so the Select XI buttons stay on screen. The team picker usually lives in a league banner's caption, which `sendRichMessage` cannot replace, so only its text-only path is rich |

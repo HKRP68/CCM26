@@ -170,7 +170,7 @@ def test_compatibility_bypass_is_local_to_one_async_task(delivery):
     assert [call[0] for call in delivery.calls] == ["sendRichMessage", "sendMessage"]
 
 
-def test_over_summary_keeps_old_html_keyboard_and_tracking_with_rich_enabled(delivery):
+def test_over_summary_keeps_old_html_and_moves_controls_inside_with_rich_enabled(delivery):
     from handlers import cipl_play
 
     client = Bot(TOKEN)
@@ -186,9 +186,10 @@ def test_over_summary_keeps_old_html_keyboard_and_tracking_with_rich_enabled(del
     asyncio.run(scenario())
     assert [call[0] for call in delivery.calls] == ["sendMessage", "sendRichMessage"]
     payload = delivery.calls[0][1]
-    assert payload["text"] == text and payload["parse_mode"] == "HTML"
+    assert payload["text"].startswith(text) and payload["parse_mode"] == "HTML"
     assert "rich_message" not in payload
-    assert payload["reply_markup"].inline_keyboard[0][0].callback_data == "impact_42"
+    assert payload.get("reply_markup") is None
+    assert "⚙️ Manage match" in payload["text"] and "/impact" in payload["text"]
     assert state["over_msg_ids"] == [77]
 
 

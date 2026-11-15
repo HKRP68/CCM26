@@ -56,7 +56,9 @@ def test_start_senders_deliver_native_card_and_keep_pin_and_controls(monkeypatch
     endpoint, payload = client._post.call_args.args
     assert endpoint == "sendRichMessage"
     assert payload["rich_message"]["blocks"][0]["type"] == "heading"
-    assert payload["reply_markup"].inline_keyboard[-1][0].callback_data == "lb_n_42"
+    assert payload.get("reply_markup") is None
+    menu = next(block for block in payload["rich_message"]["blocks"] if block.get("summary") == "⚙️ Manage match")
+    assert "lb_n_42" in str(menu)
     client.pin_chat_message.assert_awaited_once_with(1, 88, disable_notification=True)
     assert state["pinned_msg_id"] == 88
     client.send_message.assert_not_awaited()

@@ -2582,17 +2582,17 @@ async def _announce(context, state, pitch_type):
         f"👇 Tap <b>View Match</b> to follow live"
         + "\n\n" + start_guide_html(app_only=state.get("play_mode") == "app"))
     try:
-        from handlers.cipl_play import _miniapp_row
-        from services.live_batting_help import with_manage_batting
-        kb = with_manage_batting(state, _miniapp_row(state))
+        from handlers.cipl_play import _view_and_impact_rows
+        kb = _view_and_impact_rows(state)
     except Exception:
         kb = None
     try:
         from services.match_rich import match_start_blocks
+        from services.match_controls import attach
         start_state = dict(state, pitch_type=pitch_type)
+        blocks, text = attach(state, text, match_start_blocks(start_state, text), kb)
         sent = await R.send_rich_message(
-            context.bot, state["chat_id"], match_start_blocks(start_state, text), text,
-            reply_markup=InlineKeyboardMarkup(kb) if kb else None)
+            context.bot, state["chat_id"], blocks, text)
     except Exception:
         logger.exception("letsplay announcement failed")
         return

@@ -498,10 +498,11 @@ async def broadcast_scorecard(context, match_id, state, waiting_for_mention=None
     text = build_live_scorecard_text(state, waiting_for_mention)
     blocks = build_live_scorecard_blocks(state, waiting_for_mention)
     from services.live_batting_help import with_manage_batting
-    rows = with_manage_batting(state, play_match_keyboard(match_id))
-    kb = InlineKeyboardMarkup(rows) if rows else None
+    from services.match_controls import attach
+    rows = with_manage_batting(state, play_match_keyboard(
+        match_id, chat_id=chat_id, is_private=bool(state.get("is_private"))))
+    blocks, text = attach(dict(state, match_id=match_id), text, blocks, rows)
     try:
-        await R.send_rich_message(context.bot, chat_id, blocks, text,
-                                  reply_markup=kb)
+        await R.send_rich_message(context.bot, chat_id, blocks, text)
     except Exception:
         logger.exception("broadcast_scorecard failed")

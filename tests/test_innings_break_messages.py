@@ -55,7 +55,12 @@ def test_break_transitions_once_preserves_controls_and_prompts_chase(monkeypatch
         assert "20 overs" not in rendered and "Mini App" in rendered
     else:
         assert "9.05 runs/over" in rendered
-    assert payload["reply_markup"].inline_keyboard[0][0].callback_data == "impact_42"
+    assert payload.get("reply_markup") is None
+    assert "⚙️ Manage match" in rendered
+    if native:
+        assert "impact_42" in str(payload["rich_message"]["blocks"])
+    else:
+        assert "/impact" in rendered
     assert state["innings"] == 2 and state["target"] == 181
     assert state["bat_team_name"] == "B & Co" and state["total_runs"] == 0
     assert state["over_msg_ids"] == [77] and state["action_msg_id"] is None
