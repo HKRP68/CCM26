@@ -105,6 +105,7 @@ image into a separate text receipt. See [Telegram rich media blocks](https://cor
 
 | Surface | Rendering |
 | --- | --- |
+| `/myprofile` and all five tabs | Overview and Career stats use native headings and fact tables. Activity shows five recent events with older entries in collapsed details. Results distinguish wins, losses, ties and unrecorded winners, with match-number links. Prize receipts preserve private access, statuses, balances and pagination. All tabs keep the same callback routes, a selected-tab marker and formatted HTML fallback. |
 | `/buypack`, pack details and purchase receipts | `services/pack_messages.py` shares prices and contents between HTML and rich cards. Currency balances use tables, version filters are explicit, daily availability is visible, and receipts show the actual currency paid plus `/openpack`. |
 | `/openpack` inventory and results | The inventory uses its own numbered pack table. The final receipt separates main and bonus pulls with version, rating and actual roster placement for each card, then shows roster/unopened counts and the next command. Overflow is explicitly marked as not added. |
 | trade confirmation and completion | `services/trade_messages.py` keeps each captain’s offered/received card, fee and status visible until both confirm. Completion shows what each captain received, the fee paid and any traits returned. |
