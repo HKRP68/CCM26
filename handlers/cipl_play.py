@@ -5164,17 +5164,22 @@ async def _innings_break(context, mid, state):
     summary_text = _innings_scorecard(state, innings_label="1st Innings")
     cipl_match.end_first_innings(state)
     await _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
-    target = state["target"]
-    text = (f"🛑 <b>Innings Break</b>\n\n{summary_text}\n\n"
-            f"🎯 <b>{state['bat_team_name']}</b> need <b>{target}</b> to win "
-            f"in {state['overs']} overs.")
+    from services.innings_break_messages import build
+    progress = state["inn1_overs"] + ("" if cipl_match.is_hundred(state) else " overs")
+    blocks, text = build(
+        first_team=state["inn1_team"], chasing_team=state["bat_team_name"],
+        runs=state["inn1_runs"], wickets=state["inn1_wickets"], progress=progress,
+        balls=cipl_match.total_balls(state), hundred=cipl_match.is_hundred(state),
+        next_action=("📱 Continue the chase in the Mini App." if _app_mode(state) else
+                     "🎳 Second innings next — follow the bowler and approach prompts."),
+        scorecard=summary_text)
     kb = _between_overs_row(state, mid)
     # The break card is cosmetic. A failed send must not stop the chase from
     # starting below — that left the match sitting on an innings break with no
     # picker and no clock, waiting for someone to type /rcl.
     try:
-        sent = await context.bot.send_message(
-            state["chat_id"], text, parse_mode="HTML",
+        sent = await R.send_rich_message(
+            context.bot, state["chat_id"], blocks, text,
             reply_markup=InlineKeyboardMarkup(kb) if kb else None)
     except Exception:
         logger.exception("cipl innings-break card send failed for match %s", mid)
@@ -6119,7 +6124,7 @@ def _build_cipl_summary_image(state, result):
 def _innings_scorecard(state, innings_label=""):
     """Compact scorecard for the innings currently in ``state``."""
     ov_suffix = "" if state.get("ball_format") == "The100" else " ov"
-    lines = [f"<b>{state['bat_team_name']}</b> — {cipl_match.format_score(state)} "
+    lines = [f"<b>{html.escape(str(state['bat_team_name']))}</b> — {cipl_match.format_score(state)} "
              f"({cipl_match.format_overs(state)}{ov_suffix}){'  · ' + innings_label if innings_label else ''}"]
     bs = state["bat_stats"]
     batted = [p for p in state["bat_xi"]
@@ -6135,6 +6140,6 @@ def _innings_scorecard(state, innings_label=""):
         key=lambda p: bowl[str(p["roster_id"])].get("wickets", 0), reverse=True)
     if ranked:
         lines.append("🎳 " + " | ".join(
-            f"{p['name']} {cipl_match._bowler_figures(bowl[str(p['roster_id'])])}"
+            f"{html.escape(str(p['name']))} {cipl_match._bowler_figures(bowl[str(p['roster_id'])])}"
             for p in ranked[:3]))
     return "\n".join(lines)

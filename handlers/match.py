@@ -6579,10 +6579,13 @@ async def _end_innings(ctx, mid):
         # Send innings 1 scorecards (bowling then batting)
         await _send_innings_scorecards(ctx, mid, innings_num=1)
 
-        await ctx.bot.send_message(cid,
-            f"━━━━━━━━━━━━━━━━━━━\n📊 <b>END OF 1ST INNINGS</b>\n\n"
-            f"🔴 {s['bat_team_name']}: {format_score(s)} ({format_overs(s)})\n\n"
-            f"🎯 Target: {target}\n🏏 {s['bowl_team_name']} needs {target}\n━━━━━━━━━━━━━━━━━━━", parse_mode="HTML")
+        from services.innings_break_messages import build
+        blocks, text = build(
+            first_team=s["bat_team_name"], chasing_team=s["bowl_team_name"],
+            runs=s["inn1_runs"], wickets=s["inn1_wickets"],
+            progress=f"{s['inn1_overs']} overs", balls=s["overs"] * 6,
+            next_action="🏏 Second innings next — follow the opener and bowler prompts.")
+        await rich_message.send_rich_message(ctx.bot, cid, blocks, text)
         s["innings"] = 2; s["target"] = target; s["total_runs"] = 0; s["total_wickets"] = 0
         s["extras_total"] = 0; s["wides"] = 0; s["noballs"] = 0; s["legbyes"] = 0
         s["current_over"] = 1; s["current_ball"] = 0; s["timeline"] = []; s["partnership_runs"] = 0; s["partnership_balls"] = 0

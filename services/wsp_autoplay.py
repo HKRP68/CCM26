@@ -226,18 +226,17 @@ def _wicket_alert_text(state, striker, bowler, rtxt):
 
 
 def _innings_break_text(state):
+    from services.innings_break_messages import build
     runs = state.get("inn1_runs", 0)
     wkts = state.get("inn1_wickets", 0)
-    # inn1_team is set by transition_to_second_innings; bowl_team_name has
-    # already swapped (it now refers to the 2nd innings batting team).
+    # The transition archives the first side and swaps bat_team_name to the chaser.
     bat_team = state.get("inn1_team", "Team 1")
     chase_team = state.get("bat_team_name", "Team 2")
-    target = state.get("target", runs + 1)
-    return (
-        f"🏏 <b>Innings 1 Complete</b>\n"
-        f"• {bat_team}: {runs}/{wkts}\n\n"
-        f"🎯 <b>{chase_team} need {target} to win</b>"
-    )
+    _, text = build(first_team=bat_team, chasing_team=chase_team,
+                    runs=runs, wickets=wkts, progress=f"{state.get('inn1_overs') or '0.0'} overs",
+                    balls=state.get("overs", 20) * 6,
+                    next_action="⏳ The chase starts automatically after the break.")
+    return text
 
 
 def _match_result_text(state):
