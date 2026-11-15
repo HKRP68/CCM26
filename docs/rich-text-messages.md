@@ -43,6 +43,10 @@ Standalone end-of-over summaries deliberately retain the original formatted
 HTML through `sendMessage`, using the task-local `legacy_delivery()` bypass.
 Their controls and deletion tracking are preserved; other messages still use
 rich delivery. WSP autoplay summaries use the same exception.
+Final-over delivery reveals also bypass rich delivery. They show one score and
+target, the delivery result, the over timeline and the current requirement.
+Extras explain that no legal ball was used; terminal deliveries show the win,
+tie or successful defence. Per-delivery saves and message cleanup are unchanged.
 
 Existing HTML becomes native rich HTML. Plain text becomes a native paragraph;
 names containing `<`, `>` or `&` remain literal text. Explicit Telegram entities
@@ -96,6 +100,9 @@ image into a separate text receipt. See [Telegram rich media blocks](https://cor
 | Surface | Rendering |
 | --- | --- |
 | `/buypack`, pack details and purchase receipts | `services/pack_messages.py` shares prices and contents between HTML and rich cards. Currency balances use tables, version filters are explicit, daily availability is visible, and receipts show the actual currency paid plus `/openpack`. |
+| `/openpack` inventory and results | The inventory uses its own numbered pack table. The final receipt separates main and bonus pulls with version, rating and actual roster placement for each card, then shows roster/unopened counts and the next command. Overflow is explicitly marked as not added. |
+| trade confirmation and completion | `services/trade_messages.py` keeps each captain’s offered/received card, fee and status visible until both confirm. Completion shows what each captain received, the fee paid and any traits returned. |
+| chat daily reward receipts | `services/daily_messages.py` shows base/streak reward totals, current balances, player placement and milestone progress. The next claim uses the configured cooldown and a native localized time; HTML fallback shows the remaining duration. Overflow retains its Release/Replace controls. |
 | pinned match-start announcements | `match_rich.match_start_blocks` shows teams, venue, format, pitch and batting first, keeps competition/conditions/chemistry notes and puts the command guide in collapsed details. View Match and Manage batting stay below the card. |
 | match highlights | `highlights.reel_blocks` features the moment of the match, followed by the same selected moments in match order; The Hundred uses set labels. |
 | `/pxi`, `/xi`, `/playingxi` | one `table` block — the four section names (batsmen, keeper, all-rounders, bowlers) are full-width header rows inside it |

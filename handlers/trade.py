@@ -8,12 +8,13 @@ from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from config import TRADE_EXPIRES_SECONDS, TRADE_FEE_PERCENT
+from config import TRADE_EXPIRES_SECONDS
 from database import get_session
 from models import Player, User, UserRoster
 from services.rating_matcher_service import get_players_at_rating, get_tradable_players
 from services.roster_lock import MARKET_REASON, match_lock_message
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
+from services import rich_message as R, trade_messages
 from services.trading_service import complete_trade, create_pending_trade, get_pending_trade_for_user, reject_trade
 
 logger = logging.getLogger(__name__)
@@ -331,17 +332,9 @@ async def trade_user2_player_callback(update: Update, context: ContextTypes.DEFA
         recv_player = result["recv_player"]
         fee = int(result.get("fee") or 0)
         state["trade_fee"] = fee
-        fee_line = ""
-        if fee:
-            fee_line = (f"\n\nTrade fee: {fee:,} coins EACH "
-                        f"({TRADE_FEE_PERCENT}% of the card's buy value).")
-        text = (
-            "Trade Confirmation\n\n"
-            f"{_mention(user1)} gives:\n{_player_label(init_player)}\n\n"
-            f"{_mention(user2)} gives:\n{_player_label(recv_player)}\n\n"
-            "Both players have the same OVR rating."
-            f"{fee_line}"
-        )
+        state["offer_players"] = [trade_messages.player_snapshot(init_player),
+                                  trade_messages.player_snapshot(recv_player)]
+        blocks, text = trade_messages.confirmation(state, user1, user2)
         buttons = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(f"{_mention(user1)} Confirm", callback_data=f"tcfrm_{trade_id}_{user1.id}"),
@@ -349,7 +342,7 @@ async def trade_user2_player_callback(update: Update, context: ContextTypes.DEFA
             ],
             [InlineKeyboardButton("Cancel Trade", callback_data=f"tcancel_{trade_id}")],
         ])
-        await query.edit_message_text(text, reply_markup=buttons)
+        await R.edit_rich(query, blocks, text, reply_markup=buttons)
     except Exception:
         session.rollback()
         logger.exception("Trade user2 selection error")
@@ -389,13 +382,12 @@ async def trade_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
         confirmed_ids = set(confirmations)
         other = user2 if user.id == user1.id else user1
         if {user1.id, user2.id} - confirmed_ids:
-            await query.edit_message_text(
-                f"{_mention(user)} confirmed the trade.\nWaiting for {_mention(other)} confirmation...",
+            blocks, text = trade_messages.confirmation(state, user1, user2)
+            await R.edit_rich(query, blocks, text,
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton(f"{_mention(other)} Confirm", callback_data=f"tcfrm_{trade_id}_{other.id}")],
                     [InlineKeyboardButton("Cancel Trade", callback_data=f"tcancel_{trade_id}")],
-                ]),
-            )
+                ]))
             return
 
         # A trade sits here for up to TRADE_EXPIRES_SECONDS waiting on the second
@@ -417,30 +409,8 @@ async def trade_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             await context.bot.send_message(chat_id=state["chat_id"], text=result["message"])
             _clear_trade(context, trade_id)
             return
-        initiator = result["initiator"]
-        receiver = result["receiver"]
-        init_player = result["init_player"]
-        recv_player = result["recv_player"]
-        fee = int(result.get("fee") or 0)
-        final_text = (
-            "Trade Completed Successfully\n\n"
-            f"{_mention(initiator)} received: {_player_label(recv_player)}\n"
-            f"{_mention(receiver)} received: {_player_label(init_player)}"
-        )
-        if fee:
-            final_text += (
-                f"\n\nTrade fee: {fee:,} coins charged to each captain "
-                f"({TRADE_FEE_PERCENT}% of the card's buy value).\n"
-                f"{_mention(initiator)}: {initiator.total_coins:,} 🪙  |  "
-                f"{_mention(receiver)}: {receiver.total_coins:,} 🪙"
-            )
-        if result.get("traits_returned"):
-            final_text += (
-                f"\n\n{result['traits_returned']} trait(s) were unequipped and "
-                f"returned to their owner's inventory — traits don't travel "
-                f"with a traded player. Use /traitapply to re-attach them."
-            )
-        await context.bot.send_message(chat_id=state["chat_id"], text=final_text)
+        blocks, final_text = trade_messages.completed(result)
+        await R.send_rich_message(context.bot, state["chat_id"], blocks, final_text)
         _clear_trade(context, trade_id)
     except Exception:
         session.rollback()

@@ -128,3 +128,80 @@ def test_purchase_receipt_falls_back_to_a_new_rich_message_without_rebuying(monk
     assert "100 Quest Points" in visible(edit.call_args.args[1])
     assert send.call_args.args[1] == 42
     assert "1/50" in visible(send.call_args.args[2])
+
+
+def test_openpack_inventory_uses_inventory_entries_and_preserves_open_buttons(monkeypatch):
+    from handlers import packs
+    from services import pack_service
+    owner, item = user(), pack()
+    owner.roster_count = 4
+    inventory = [(SimpleNamespace(id=81), item)]
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = owner
+    monkeypatch.setattr(packs, "get_session", lambda: db)
+    monkeypatch.setattr(pack_service, "list_user_inventory", lambda *a: inventory)
+    monkeypatch.setattr(packs, "schedule_button_timeout", MagicMock())
+    reply = AsyncMock(return_value=SimpleNamespace(chat_id=42, message_id=10))
+    monkeypatch.setattr(R, "reply_rich", reply)
+    message = SimpleNamespace(reply_text=AsyncMock())
+    asyncio.run(packs.openpack_handler(SimpleNamespace(effective_user=SimpleNamespace(id=12), message=message),
+                                     SimpleNamespace()))
+    assert "YOUR PACK INVENTORY" in visible(reply.call_args.args[1])
+    assert "Star <Pack>" in visible(reply.call_args.args[1])
+    assert reply.call_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "opk_12_81"
+    message.reply_text.assert_not_awaited()
+
+
+def test_opening_receipt_matches_actual_main_bonus_and_overflow():
+    from config import MAX_ROSTER
+    owner = user()
+    owner.roster_count = MAX_ROSTER
+    main = SimpleNamespace(id=1, name="Main <Ace>", version="Gold", rating=95)
+    bonus = SimpleNamespace(id=2, name="Bonus B", version="Base", rating=75)
+    result = dict(players=[(main, "main"), (bonus, "bonus")], added=[(main, "main")],
+                  players_to_claim=[bonus], pity_triggered=True)
+    blocks, text = ui.opening_result(pack(), owner, result, 2)
+    for fact in ("Main pulls", "Bonus pulls", "Gold", "95", "75", "2/50", "Not added", "/releasepl", "/openpack"):
+        assert fact in text and fact in visible(blocks)
+    assert "Main &lt;Ace&gt;" in text
+    assert "re-pull" not in text
+    rows = [block["cells"][1] for block in blocks if block["type"] == "table" and block["cells"][0][0]["text"] == "Player"]
+    assert rows[0][2]["text"] == "✅ Added"
+    assert rows[1][2]["text"] == "⚠️ Not added · squad full"
+
+
+@pytest.mark.parametrize("receipt_fails", [False, True])
+def test_opening_callback_sends_one_durable_receipt_after_reveals(monkeypatch, receipt_fails):
+    from handlers import packs
+    from services import card_sender, pack_service, quest_service
+    owner = user()
+    owner.roster_count = 4
+    player = SimpleNamespace(id=1, name="Ace", version="Gold", rating=95, country="India",
+                             category="Batsman", bat_hand="Right", bowl_style="Fast", bowl_hand="Right")
+    result = dict(success=True, pack=pack(), players=[(player, "main")], added=[(player, "main")],
+                  players_to_claim=[], pity_triggered=False)
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = owner
+    monkeypatch.setattr(packs, "get_session", lambda: db)
+    monkeypatch.setattr(packs, "claim_once", lambda key: True)
+    monkeypatch.setattr(packs.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(pack_service, "open_unopened_pack", MagicMock(return_value=result))
+    monkeypatch.setattr(pack_service, "list_user_inventory", lambda *a: [])
+    monkeypatch.setattr(card_sender, "send_player_card", AsyncMock())
+    monkeypatch.setattr(quest_service, "safe_track", MagicMock())
+    send = AsyncMock(side_effect=RuntimeError("offline") if receipt_fails else None)
+    monkeypatch.setattr(R, "send_rich_message", send)
+    query = SimpleNamespace(data="opk_12_81", from_user=SimpleNamespace(id=12), answer=AsyncMock(),
+                            message=SimpleNamespace(chat_id=42, message_id=10), edit_message_text=AsyncMock())
+    context = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=11)),
+                                                  edit_message_text=AsyncMock()))
+    asyncio.run(packs.pack_open_inventory_callback(SimpleNamespace(callback_query=query), context))
+    send.assert_awaited_once()
+    assert "PACK OPENED" in visible(send.call_args.args[2])
+    assert "Ace · Gold" in visible(send.call_args.args[2])
+    assert "0/50" in visible(send.call_args.args[2])
+    if receipt_fails:
+        assert "rewards were saved" in context.bot.send_message.call_args.args[1]
+        assert "remains in inventory" not in context.bot.send_message.call_args.args[1]
+    else:
+        db.rollback.assert_not_called()

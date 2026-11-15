@@ -1,8 +1,7 @@
 """Handler for /daily — button first, claim flow for players if squad full."""
 
-import io
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
@@ -16,7 +15,8 @@ from services.quota_service import get_quota_status
 from services.streak_service import update_streak
 from services.card_text import format_player_card
 from services.activity_service import log_activity
-from config import DAILY_COOLDOWN, DAILY_COINS, STREAK_MILESTONE, MAX_ROSTER, get_sell_value
+from services import rich_message as R, daily_messages
+from config import DAILY_COOLDOWN, DAILY_COINS, MAX_ROSTER, get_sell_value
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +155,8 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         gems_award = (cr.gem_amount if cr and cr.gem_amount > 0
                        else cfg["daily_gems"])
 
+        base_coins, base_gems = coins_award, gems_award
+
         # Streak bonus (uses GameConfig values for now)
         if streak_count > 1:
             coins_award += cfg["daily_streak_bonus_coins"] * (streak_count - 1)
@@ -183,23 +185,9 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         stats.last_daily = datetime.utcnow()
 
-        remaining_days = STREAK_MILESTONE - streak_count if streak_count > 0 else STREAK_MILESTONE
-
-        # Build result text
-        gems_line = f"💎 +{gems_award} gems\n" if gems_award else ""
-        lines = [
-            f"📅 <b>Daily Reward Claimed!</b>\n",
-            f"✅ +{coins_award:,} coins",
-            *([f"💎 +{gems_award} gems"] if gems_award else []),
-            f"📊 Streak: {streak_count}/{STREAK_MILESTONE}",
-            f"⏳ {remaining_days} days until bonus card\n",
-        ]
-
-        if milestone and milestone_player:
-            lines.append(f"🎉 <b>MILESTONE!</b> 🏆 {milestone_player.name} - {milestone_player.rating} OVR\n")
-
         # Add players to roster if space, otherwise queue for claim flow
         players_to_claim = []
+        players_added = []
         all_players = players + ([milestone_player] if milestone_player else [])
 
         for p in all_players:
@@ -211,10 +199,9 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                                    acquired_date=datetime.utcnow())
                 session.add(entry)
                 user.roster_count += 1
-                lines.append(f"✅ {p.name} - {p.rating} OVR added to squad")
+                players_added.append(p)
             else:
                 players_to_claim.append(p)
-                lines.append(f"⚠️ {p.name} - {p.rating} OVR (squad full — choose below)")
 
         pnames = ", ".join(p.name for p in all_players if p)
         log_activity(session, user.id, "daily",
@@ -227,7 +214,14 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
         session.commit()
 
-        await query.edit_message_text("\n".join(lines), parse_mode="HTML")
+        blocks, text = daily_messages.receipt(user, {
+            "coins": coins_award, "gems": gems_award,
+            "bonus_coins": coins_award - base_coins, "bonus_gems": gems_award - base_gems,
+            "streak": streak_count, "milestone": milestone, "milestone_player": milestone_player,
+            "players_added": players_added, "players_pending": players_to_claim,
+        }, stats.last_daily + timedelta(seconds=effective_cooldown))
+        if not await R.edit_rich(query, blocks, text):
+            await R.reply_rich(query.message, blocks, text)
 
         # For each player that couldn't auto-add (squad full), send a claim card
         for p in players_to_claim:

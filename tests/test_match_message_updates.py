@@ -111,3 +111,49 @@ def test_completed_over_sends_old_report_through_regular_endpoint(monkeypatch, d
     assert "Timeline:" in payload["text"] and "Momentum:" in payload["text"]
     assert "Bot's plan" not in payload["text"]
     assert state["over_msg_ids"] == [77]
+
+
+@pytest.mark.parametrize("ball_format", ["T20", "The100"])
+@pytest.mark.parametrize("mark,headline,remaining", [
+    (4, "FOUR!", 5), (0, "DOT BALL", 5),
+    ({"type": "wide"}, "WIDE", 6), ({"type": "noball", "runs": 0}, "NO BALL", 6),
+    ("W", "WICKET!", 5),
+])
+def test_final_ball_uses_regular_messages_and_correct_legal_ball_counts(monkeypatch, delivery, ball_format, mark, headline, remaining):
+    from tests.test_final_over_drama import ready, scripted
+    state = ready(ball_format)
+    scripted(monkeypatch, [mark])
+    summary = cp.cipl_match.simulate_over(state, pause_after_delivery=True)
+    asyncio.run(cp._reveal_final_ball(SimpleNamespace(bot=Bot(TOKEN)), state, summary))
+    endpoint, payload, _ = delivery.calls[0]
+    assert endpoint == "sendMessage" and "rich_message" not in payload
+    text = payload["text"]
+    assert headline in text
+    if ball_format == "The100":
+        remaining -= 1  # The Hundred finishes with five-ball sets.
+    assert f"from <b>{remaining}</b> balls" in text
+    assert "Target" in text and "This" in text
+    assert "Bot's plan" not in text
+    assert state["final_ball_msg_id"] == 77
+    if ball_format == "The100":
+        assert "FINAL SET" in text and "/100 balls" in text
+    else:
+        assert "FINAL OVER" in text
+    if isinstance(mark, dict):
+        assert "no legal ball used" in text
+        if mark["type"] == "noball":
+            assert "+1 penalty" in text and "FREE HIT" in text
+
+
+@pytest.mark.parametrize("needed,marks,expected", [
+    (1, [4], "Target reached"), (1, [0] * 6, "innings tied"),
+    (24, [0] * 6, "win by 23 runs"),
+])
+def test_final_delivery_reports_win_tie_or_defence_without_a_next_ball_prompt(monkeypatch, needed, marks, expected):
+    from tests.test_final_over_drama import ready, scripted
+    state = ready(needed=needed)
+    scripted(monkeypatch, marks)
+    summary = cp.cipl_match.simulate_over(state)
+    text = cp._final_ball_text(state, summary)
+    assert expected in text
+    assert "Need <b>" not in text and "FREE HIT next" not in text

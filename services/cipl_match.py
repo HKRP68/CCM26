@@ -2398,7 +2398,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                 drama["pressure"]["wides" if extra_type == "Wide" else "noballs"] += 1
             if extra_type == "Wide":
                 over_timeline.append("WD")
-                over_events.append({"sym": "WD", "text": f"Wide ({striker_name})"})
+                over_events.append({"sym": "WD", "text": f"Wide +{1 + runs} ({striker_name})"})
                 _wd_text = (match_drama.line("pressure", "wide", bowler=bowler["name"])
                             if _pressed else None)
                 _push_commentary(state, "extra", striker_name,
@@ -2416,7 +2416,8 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                     elif runs == 6:
                         bs["sixes"] += 1
                 over_timeline.append("NB")
-                over_events.append({"sym": "NB", "text": f"No ball +{runs} — FREE HIT next"})
+                over_events.append({"sym": "NB", "text": "No ball · +1 penalty"
+                                    + (f" + {runs} off the bat" if runs else "")})
                 _nb_text = ((match_drama.line("pressure", "noball",
                                               bowler=bowler["name"])
                              if _pressed else None)

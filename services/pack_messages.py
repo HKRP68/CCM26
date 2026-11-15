@@ -140,3 +140,61 @@ def receipt_blocks(pack, user, result, inventory_count):
                 _balance_blocks(user), R.paragraph(["Your pack is ready. Use ", R.code("/openpack"),
                                                    " to reveal your players."])]
     return _safe(build)
+
+
+def inventory_blocks(inventory, user):
+    def build():
+        from config import MAX_ROSTER, PACK_OPEN_MIN_FREE_SLOTS
+        held = getattr(user, "roster_count", 0) or 0
+        blocks = [R.heading("📦 YOUR PACK INVENTORY", 2),
+                  _facts([("Unopened packs", f"{len(inventory)}/50"),
+                          ("Roster", f"{held}/{MAX_ROSTER}")])]
+        if inventory:
+            blocks.append(R.table([[R.cell("#", header=True), R.cell("Pack", header=True)]] + [
+                [R.cell(str(index)), R.cell(f"{pack.emoji} {pack.name}")]
+                for index, (_, pack) in enumerate(inventory, 1)], compact=True))
+            if MAX_ROSTER - held < PACK_OPEN_MIN_FREE_SLOTS:
+                blocks.append(R.paragraph(f"⚠️ You need at least {PACK_OPEN_MIN_FREE_SLOTS} free roster slots. Use /releasepl to make room."))
+            blocks.append(R.footer("Choose a pack below to reveal your players."))
+        else:
+            blocks.append(R.paragraph("No unopened packs. Use /buypack to get one."))
+        return blocks
+    return _safe(build)
+
+
+def opening_result(pack, user, result, inventory_count):
+    """One durable receipt naming every pull and its actual roster placement."""
+    from config import MAX_ROSTER
+    added_ids = {player.id for player, _ in result["added"]}
+    text = ["🎴 <b>PACK OPENED</b>", f"{html.escape(str(pack.emoji))} <b>{html.escape(pack.name)}</b>"]
+    blocks = [R.heading("🎴 PACK OPENED", 2), R.paragraph(R.bold(f"{pack.emoji} {pack.name}"))]
+    for slot, title in (("main", "⭐ Main pulls"), ("bonus", "🎁 Bonus pulls")):
+        pulls = [(p, s) for p, s in result["players"] if s == slot]
+        if not pulls:
+            continue
+        text.extend(["", f"<b>{title}</b>"])
+        rows = [[R.cell("Player", header=True), R.cell("OVR", header=True), R.cell("Roster status", header=True)]]
+        for player, _ in pulls:
+            version = getattr(player, "version", None)
+            name = f"{player.name}" + (f" · {version}" if version else "")
+            status = "✅ Added" if player.id in added_ids else "⚠️ Not added · squad full"
+            text.append(f"{html.escape(name)} · <b>{player.rating} OVR</b> · {status}")
+            rows.append([R.cell(name), R.cell(str(player.rating)), R.cell(status)])
+        blocks.extend([R.heading(title), R.table(rows, compact=True)])
+    if result.get("pity_triggered"):
+        note = "💎 Pity pull applied: the first main card was guaranteed at the maximum rating."
+        text.extend(["", note])
+        blocks.append(R.paragraph(note))
+    text.extend(["", f"📊 Roster: <b>{user.roster_count}/{MAX_ROSTER}</b>",
+                 f"📦 Inventory: <b>{inventory_count}/50</b> unopened packs"])
+    blocks.append(_facts([("Roster", f"{user.roster_count}/{MAX_ROSTER}"),
+                          ("Unopened packs", f"{inventory_count}/50")]))
+    if result["players_to_claim"]:
+        note = (f"⚠️ {len(result['players_to_claim'])} player(s) did not fit and were not added. "
+                "Use /releasepl to make room before opening another pack.")
+        text.extend(["", note])
+        blocks.append(R.paragraph(note))
+    note = "Use /openpack to open your next pack." if inventory_count else "All packs opened. View your squad with /myroster."
+    text.extend(["", note])
+    blocks.append(R.footer(note))
+    return blocks, "\n".join(text)

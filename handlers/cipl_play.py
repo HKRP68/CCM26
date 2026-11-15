@@ -4198,28 +4198,53 @@ async def _clear_final_ball(context, state):
             pass
 
 
-async def _reveal_final_ball(context, state, summary):
+def _final_ball_text(state, summary):
+    """A compact delivery report; legal-ball counts stay correct after extras."""
     events = summary.get("over_events") or []
     if not events:
-        return
+        return ""
+    event = events[-1]
+    symbol = str(event.get("sym", ""))
+    headline = {"0": "⚪ DOT BALL", "1": "🏃 1 RUN", "2": "🏃 2 RUNS", "3": "🏃 3 RUNS",
+                "4": "💥 FOUR!", "6": "🚀 SIX!", "W": "☝️ WICKET!",
+                "WD": "↔️ WIDE", "NB": "🚫 NO BALL", "LB": "🦵 LEG BYES"}.get(symbol, "🏏 DELIVERY")
     chase = cipl_match.chase(state)
     remaining = chase["balls_remaining"]
     need = chase["runs_required"]
+    bat = html.escape(str(state["bat_team_name"]))
+    bowl = html.escape(str(state["bowl_team_name"]))
     if need == 0:
-        suspense = "🏆 Target reached!"
+        suspense = f"🏆 Target reached — <b>{bat} win!</b>"
     elif cipl_match.is_innings_over(state):
-        suspense = "🏁 The innings is over."
+        suspense = ("🤝 <b>Scores level — innings tied!</b>" if need == 1 else
+                    f"🏁 <b>{bowl} win by {need - 1} {'run' if need == 2 else 'runs'}.</b>")
     else:
-        suspense = f"🔥 Need <b>{need}</b> from <b>{remaining}</b> balls. What comes next?"
+        suspense = f"🎯 Need <b>{need}</b> from <b>{remaining}</b> {'ball' if remaining == 1 else 'balls'}"
         if state.get("free_hit"):
             suspense += "\n🆓 FREE HIT next!"
-    text = (f"{_header(state)}\n\n🎬 <b>Final {_unit_word(state)}</b> · "
-            f"{cipl_match.format_overs(state)}\n"
-            f"<b>{html.escape(str(events[-1]['text']))}</b>\n"
-            f"{html.escape(cipl_match.format_score(state))}\n\n{suspense}")
+    progress = (_progress(state) if state.get("ball_format") == "The100"
+                else cipl_match.format_overs(state))
+    timeline = " ".join(cipl_match._SYM.get(_sym_key(s), s) for s in summary.get("over_timeline", []))
+    lines = [f"🔥 <b>FINAL {_unit_word(state).upper()}</b> · {progress}",
+             f"🏏 <b>{bat} {cipl_match.format_score(state)}</b> · Target {state['target']}",
+             f"🎳 {html.escape(str(summary.get('bowler', state.get('current_bowler') or {}).get('name', 'Bowler')))}",
+             "", f"<b>{headline}</b>", html.escape(str(event.get("text", "")))]
+    if symbol in {"WD", "NB"}:
+        lines.append("↻ Extra delivery — no legal ball used.")
+    if timeline:
+        lines.append(f"This {_unit_word(state)}: {html.escape(timeline)}")
+    lines.extend(["", suspense])
+    return "\n".join(lines)
+
+
+async def _reveal_final_ball(context, state, summary):
+    text = _final_ball_text(state, summary)
+    if not text:
+        return
     # Send first: a Telegram failure must not erase the last visible score.
-    sent = await context.bot.send_message(state["chat_id"], text,
-                                          parse_mode="HTML")
+    with R.legacy_delivery():
+        sent = await context.bot.send_message(state["chat_id"], text,
+                                              parse_mode="HTML", disable_web_page_preview=True)
     if sent and getattr(sent, "message_id", None):
         await _clear_final_ball(context, state)
         state["final_ball_msg_id"] = sent.message_id

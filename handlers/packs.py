@@ -17,6 +17,7 @@ All buttons expire after 45s. Owner-only triggers.
 
 import asyncio
 import io
+from html import escape
 import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -401,7 +402,7 @@ def _openpack_list_text(inventory, user):
     from collections import Counter
     pack_counts = Counter(pack.name for _, pack in inventory)
     summary = "  ·  ".join(
-        f"{name} ×{c}" if c > 1 else name
+        f"{escape(name)} ×{c}" if c > 1 else escape(name)
         for name, c in pack_counts.most_common()
     )
 
@@ -424,7 +425,7 @@ def _openpack_list_text(inventory, user):
         except Exception:
             pass
         lines.append(
-            f"\n<b>{idx}.</b> {pack.emoji} <b>{pack.name}</b>{age}"
+            f"\n<b>{idx}.</b> {pack.emoji} <b>{escape(pack.name)}</b>{age}"
         )
     from config import MAX_ROSTER, PACK_OPEN_MIN_FREE_SLOTS
     held = getattr(user, "roster_count", 0) or 0
@@ -449,7 +450,7 @@ async def openpack_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         inventory = list_user_inventory(session, user.id)
         text = _openpack_list_text(inventory, user)
         kb = _build_openpack_list_kb(inventory, tg.id)
-        sent = await R.reply_rich(update.message, pack_ui.list_blocks(packs, user), text, reply_markup=kb)
+        sent = await R.reply_rich(update.message, pack_ui.inventory_blocks(inventory, user), text, reply_markup=kb)
         try:
             schedule_button_timeout(context, sent.chat_id, sent.message_id,
                                     delay_seconds=PACK_BUTTON_TIMEOUT,
@@ -504,6 +505,7 @@ async def pack_open_inventory_callback(update: Update, context: ContextTypes.DEF
     await q.answer()
     session = get_session()
     chat_id = q.message.chat_id
+    opened = False
 
     try:
         user = session.query(User).filter(User.telegram_id == tg.id).first()
@@ -526,18 +528,18 @@ async def pack_open_inventory_callback(update: Update, context: ContextTypes.DEF
         pack = result["pack"]
         rolled = result["players"]
         added = result["added"]
-        to_claim = result["players_to_claim"]
         pity_triggered = result.get("pity_triggered", False)
         main_players = [(p, s) for p, s in rolled if s == "main"]
         bonus_players = [(p, s) for p, s in rolled if s == "bonus"]
         added_ids = {p.id for p, _ in added}
 
         session.commit()
+        opened = True
 
         # ── Animation: replace the listing with a sealed-pack message ──
         opening_text = (
             f"🎴 <b>OPENING…</b>\n\n"
-            f"{pack.emoji} <b>{pack.name}</b>\n\n"
+            f"{pack.emoji} <b>{escape(pack.name)}</b>\n\n"
             f"<i>The seal cracks open…</i>"
         )
         if pity_triggered:
@@ -615,11 +617,11 @@ async def pack_open_inventory_callback(update: Update, context: ContextTypes.DEF
 
             roster_status = ("✅ Added to your roster"
                              if player.id in added_ids
-                             else "⚠️ Squad full — release some via /releasepl")
+                             else "⚠️ Not added — squad full")
             cap = (
                 f"⭐ <b>MAIN PULL #{idx}</b>\n"
-                f"🌟 <b>{player.name}</b> — <b>{player.rating}</b> OVR\n"
-                f"{flag} {player.country}  ·  {role_icon} {player.category}\n"
+                f"🌟 <b>{escape(player.name)}</b> — <b>{player.rating}</b> OVR\n"
+                f"{flag} {escape(player.country or '')}  ·  {role_icon} {escape(player.category or '')}\n"
                 f"{roster_status}"
             )
             try:
@@ -650,28 +652,16 @@ async def pack_open_inventory_callback(update: Update, context: ContextTypes.DEF
                 await _edit(seed,
                     f"{flag} <b>{player.country.upper()}</b>  ·  "
                     f"{role_icon} {player.category}\n"
-                    f"{marker} <b>{player.name}</b> — <b>{player.rating} OVR</b>")
+                    f"{marker} <b>{escape(player.name)}</b> — <b>{player.rating} OVR</b>")
                 await asyncio.sleep(0.5)
 
         # ── Final summary ──
         from services.pack_service import list_user_inventory
         remaining_inv = list_user_inventory(session, user.id)
-        summary = [
-            f"{pack.emoji} <b>{pack.name}</b> — opened!",
-            "━━━━━━━━━━━━━━━━━━━",
-            f"📊 Roster: <b>{user.roster_count}/{MAX_ROSTER}</b>",
-            f"📦 Inventory: <b>{len(remaining_inv)}/50</b> unopened packs",
-        ]
-        if to_claim:
-            summary.append(
-                f"\n⚠️ <b>{len(to_claim)} player{'s' if len(to_claim) != 1 else ''} didn't fit</b> — "
-                f"release some with /releasepl, then re-pull from /myroster.")
-        if remaining_inv:
-            summary.append(f"\n👉 Use /openpack again to open the next one.")
+        blocks, summary = pack_ui.opening_result(pack, user, result, len(remaining_inv))
 
         await asyncio.sleep(0.3)
-        await context.bot.send_message(
-            chat_id, "\n".join(summary), parse_mode="HTML")
+        await R.send_rich_message(context.bot, chat_id, blocks, summary)
 
         # The shared pack service logs the opening inside its transaction.
         # Quest tracking runs once the result has been presented.
@@ -688,7 +678,9 @@ async def pack_open_inventory_callback(update: Update, context: ContextTypes.DEF
         logger.exception("pack_open_inventory_callback error")
         try:
             await context.bot.send_message(
-                chat_id, "⚠️ Error opening pack. Pack remains in inventory.")
+                chat_id, ("⚠️ Your pack was opened and the rewards were saved, but the reveal could not finish. "
+                          "Check /myroster and /openpack."
+                          if opened else "⚠️ Could not open the pack. Check /openpack and try again."))
         except Exception:
             pass
     finally:
