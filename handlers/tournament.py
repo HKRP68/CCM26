@@ -674,8 +674,7 @@ async def statstour_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
             if error:
                 await update.message.reply_text(error)
             else:
-                for page in pages:
-                    await update.message.reply_text(page, parse_mode="HTML")
+                await split_cards.reply_pages(update.message, pages)
             return
         rows = (session.query(TournamentPlayerStats)
                 .filter(TournamentPlayerStats.tournament_id == tour.id,

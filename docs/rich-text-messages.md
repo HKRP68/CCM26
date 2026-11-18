@@ -106,6 +106,8 @@ image into a separate text receipt. See [Telegram rich media blocks](https://cor
 | `/tournamentstats`, `/lptstats` | the board as a ranked `table` — rank, player, team and the value in its own named column (`RUNS`, `WKTS`, `ECON` …). Ten places open, ranks 11–25 in a collapsed `details`; MVP keeps its `footer` pointing at `/mvp` |
 | `/mvp` | the same split, with each player's season under their name |
 | `/statstour` | batting and bowling as two `table`s per player; a second player matching the same name goes behind a `details` |
+| Filtered `/statstour` and `/seasons` | A compact batting and bowling table for each result, pitch or phase split. Season-by-season figures are expandable, and missing-data notes stay visible. |
+| `/tagteam` | A match-call heading, Telegram user mentions for the selected team's managers, and the open fixture and play command when available. |
 | `/ctour`, `/cttable`, `/ctfixtures`, `/ctteams`, `/ctinjuries` | `services/cl_tournament_rich.py` — the points table and the fixture list as native tables, the champion as a `pullquote`, the points-adjustment footnote as a `details` holding a `list`. The schedule shows twenty fixtures open and the rest in a collapsed `details`; nothing is dropped |
 | `/clsd`, `/teamtourstats` | one team's card: standing and form as paragraphs, the fixtures as a `table`, the results behind a `details`, the batting/bowling splits as two-column tables |
 | `/lpt`, `/lptable`, `/lptfixtures`, `/lptteams` | the same shapes for the Lets Play tournament (`services/lp_tournament_rich.py`), with a Telegram id where the Challenge League has an owner |

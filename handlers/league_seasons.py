@@ -460,9 +460,7 @@ async def seasons_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif 'blocks' in response:
             await _send(update, response['blocks'], response['text'], response.get('markup'))
         elif 'pages' in response:
-            for index, page in enumerate(response['pages']):
-                markup = response['markup'] if index == len(response['pages']) - 1 else None
-                await message.reply_text(page, parse_mode="HTML", reply_markup=markup)
+            await split_cards.reply_pages(message, response['pages'], reply_markup=response['markup'])
         else:
             await message.reply_text(response['text'], reply_markup=response.get('markup'))
     except Exception:

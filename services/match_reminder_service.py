@@ -177,20 +177,8 @@ def on_cooldown(sent_at, now=None, cooldown=COOLDOWN):
 # Who to reach
 # ══════════════════════════════════════════════════════════════════════
 
-def _mention(tg_id, display_name):
-    """One person as Telegram HTML.
-
-    An ``@username`` is used where the bot has seen one, because that is what
-    people recognise in a chat and it notifies them. Otherwise an inline
-    ``tg://user`` link on their name does the same job — and unlike a raw id, it
-    still reads as a person.
-    """
-    name = (display_name or "").strip() or f"User {tg_id}"
-    return f'<a href="tg://user?id={int(tg_id)}">{escape(name)}</a>'
-
-
-def team_contacts(session, team):
-    """``[(tg_id, mention_html), ...]`` for everyone who runs this team.
+def team_contact_names(session, team):
+    """``[(tg_id, display_name, username), ...]`` for the team's managers.
 
     Owner first, then co-owners in the order the admin entered them — the owner
     is the name on the team, so they read first. A Lets Play team *is* a user, so
@@ -215,14 +203,20 @@ def team_contacts(session, team):
     for tg_id in ids:
         user = users.get(tg_id)
         username = (getattr(user, "username", "") or "").strip().lstrip("@")
-        if username:
-            out.append((tg_id, f"@{escape(username)}"))
-            continue
         name = (getattr(user, "first_name", "") or "").strip()
         if not name and tg_id == team.owner_tg_id:
             name = (team.owner_name or "").strip()
-        out.append((tg_id, _mention(tg_id, name)))
+        out.append((tg_id, name or f"User {tg_id}", username))
     return out
+
+
+def team_contacts(session, team):
+    """Return the manager mentions used by the reminder and recap messages."""
+    return [
+        (tg_id, f"@{escape(username)}" if username
+         else f'<a href="tg://user?id={tg_id}">{escape(name)}</a>')
+        for tg_id, name, username in team_contact_names(session, team)
+    ]
 
 
 # ══════════════════════════════════════════════════════════════════════

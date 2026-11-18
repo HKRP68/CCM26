@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 
 @pytest.fixture
 def competition(tmp_path):
-    from models import Base, Match, Tournament, TournamentMatch, TournamentTeam
+    from models import Base, Match, Tournament, TournamentMatch, TournamentTeam, User
     from services import league_season_service as seasons, tournament_service
 
     engine = create_engine(f"sqlite:///{tmp_path / 'splits.db'}")
@@ -25,9 +25,10 @@ def competition(tmp_path):
         session.add(tour)
         session.flush()
         a = TournamentTeam(tournament_id=tour.id, name="Mumbai Indians", short_name="MI",
-                           owner_tg_id=12345, co_owner_ids_json="[21000, 12345]")
+                           owner_tg_id=12345, owner_name="A&B <Owner>",
+                           co_owner_ids_json="[21000, 12345]")
         b = TournamentTeam(tournament_id=tour.id, name="Rajasthan Royals", owner_tg_id=34567)
-        session.add_all([a, b])
+        session.add_all([a, b, User(telegram_id=21000, username="co_owner")])
         session.flush()
         ids = tour.id, a.id, b.id
         match = Match(user1_id=101, user2_id=102, pitch_type="Green")
@@ -68,8 +69,10 @@ def competition(tmp_path):
     engine.dispose()
 
 
-def _update(chat_type="supergroup"):
-    msg = SimpleNamespace(reply_text=AsyncMock())
+def _update(chat_type="supergroup", *, bot=None):
+    msg = SimpleNamespace(reply_text=AsyncMock(), chat_id=42)
+    if bot is not None:
+        msg.get_bot = lambda: bot
     return SimpleNamespace(message=msg, effective_message=msg,
                            effective_user=SimpleNamespace(id=10000),
                            effective_chat=SimpleNamespace(type=chat_type))
@@ -132,7 +135,8 @@ def test_tagteam_mentions_only_one_team_and_limits_repeat_calls(competition, mon
     asyncio.run(cl_tournament.tagteam_handler(update, context))
     text = update.message.reply_text.await_args.args[0]
     assert text.count("tg://user?id=12345") == 1
-    assert "tg://user?id=21000" in text
+    assert "A&amp;B &lt;Owner&gt;" in text
+    assert 'tg://user?id=21000">@co_owner</a>' in text
     assert "34567" not in text
     assert "Open fixture #9 vs <b>Rajasthan Royals</b>" in text
     asyncio.run(cl_tournament.tagteam_handler(update, context))
@@ -141,3 +145,74 @@ def test_tagteam_mentions_only_one_team_and_limits_repeat_calls(competition, mon
     private = _update("private")
     asyncio.run(cl_tournament.tagteam_handler(private, context))
     assert "match group" in private.message.reply_text.await_args.args[0]
+
+
+def test_new_tournament_replies_send_native_rich_blocks(competition, monkeypatch):
+    from handlers import cl_tournament, league_seasons, tournament
+    from services import rich_message as rich
+    from services.rich_message_html import render
+
+    sessions, (tour_id, _, _) = competition
+    for handler_module in (tournament, league_seasons, cl_tournament):
+        monkeypatch.setattr(handler_module, "get_session", sessions)
+    monkeypatch.setattr(rich.config, "RICH_TEXT_ENABLED", True)
+    bot = SimpleNamespace(_post=AsyncMock(return_value={
+        "message_id": 7, "date": 0, "chat": {"id": 42, "type": "supergroup"},
+    }))
+
+    for handler, query in (
+        (tournament.statstour_handler, f"#{tour_id} Virat | Loss | Green | PP"),
+        (league_seasons.seasons_handler, "IPL | Virat | Loss | Green | PP"),
+        (cl_tournament.tagteam_handler, f"#{tour_id} MI"),
+    ):
+        update = _update(bot=bot)
+        asyncio.run(handler(update, SimpleNamespace(args=query.split(), chat_data={})))
+        update.message.reply_text.assert_not_awaited()
+        endpoint, payload = bot._post.await_args.args
+        assert endpoint == "sendRichMessage"
+        blocks = payload["rich_message"]["blocks"]
+        body = render(blocks)
+        if handler is cl_tournament.tagteam_handler:
+            assert 'tg://user?id=12345">A&amp;B &lt;Owner&gt;</a>' in body
+            assert 'tg://user?id=21000">@co_owner</a>' in body
+            assert "34567" not in body
+            assert "Open fixture #9 vs <b>Rajasthan Royals</b>" in body
+        else:
+            assert any(block["type"] == "table" for block in blocks)
+            assert "Losses · Green · Powerplay" in body
+            assert "4 runs off 1 ball" in body
+            assert "2 matches had missing filter data" in body
+            if handler is league_seasons.seasons_handler:
+                assert "<details><summary><b>Season by season</b></summary>" in body
+                assert payload["reply_markup"].inline_keyboard
+
+
+def test_long_rich_season_report_keeps_all_rows_and_buttons():
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    from handlers import player_stat_splits as cards
+    from services import player_stat_splits as splits
+    from utils.message_chunks import DEFAULT_CHUNK_LIMIT
+
+    filters = splits.parse_filters(["Win"])
+    report = splits.Report()
+    report.total = splits.Split(matches=40, runs=80, faced=40)
+    season_rows = [(f"Season {number} <Cup>", splits.Split(matches=1, runs=2, faced=1))
+                   for number in range(1, 41)]
+    pages = cards.pages("IPL", "Virat", filters, [("Total season stats", report, season_rows)])
+    assert len(pages) > 1
+    labels = [
+        child["text"][0]["text"]
+        for blocks, _ in pages for block in blocks if block["type"] == "details"
+        for child in block["blocks"] if child["type"] == "paragraph"
+    ]
+    assert labels == [label for label, _ in season_rows]
+    assert all(len(text) <= DEFAULT_CHUNK_LIMIT for _, text in pages)
+    assert "Season 40 &lt;Cup&gt;" in pages[-1][1]
+
+    message = _update().message
+    back = InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="ls_o_1_0_10000")]])
+    asyncio.run(cards.reply_pages(message, pages, reply_markup=back))
+    assert [call.kwargs["reply_markup"] for call in message.reply_text.await_args_list] == (
+        [None] * (len(pages) - 1) + [back]
+    )

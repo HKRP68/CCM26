@@ -421,6 +421,7 @@ _TAGTEAM_COOLDOWN = 60
 async def tagteam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/tagteam — call one team's managers to play a match."""
     from services import league_schedule_service, match_reminder_service
+    from services.rich_message_html import inline
 
     message, chat = update.effective_message, update.effective_chat
     if message is None:
@@ -460,16 +461,18 @@ async def tagteam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                              "Try /ctteams or /lptteams.")
                 return
             tour, team = matches[0]
-            contacts = match_reminder_service.team_contacts(session, team)
+            contacts = match_reminder_service.team_contact_names(session, team)
             if not contacts:
                 await message.reply_text(f"{team.name} has no registered managers to tag.")
                 return
             team_id = team.id
-            lines = [
-                f"🏏 <b>Match call · {escape(team.name)}</b>",
-                f"<i>{escape(tour.name)}</i>",
-                " ".join(mention for _, mention in contacts),
-            ]
+            heading = f"🏏 Match call · {team.name}"
+            mentions = []
+            for tg_id, name, username in contacts:
+                if mentions:
+                    mentions.append(" ")
+                mentions.append(R.mention(f"@{username}" if username else name, tg_id))
+            lines = [R.italic(tour.name), mentions]
             fixtures = match_reminder_service.pending_fixtures(session, tour.id, team_id=team_id)
             open_round = league_schedule_service.open_round(session, tour.id)
             fixture = next((fx for fx in fixtures
@@ -479,12 +482,15 @@ async def tagteam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 opponent = next((tt.name for tt in ctv.teams(session, tour.id) if tt.id == other_id), None)
                 if opponent:
                     number = f" #{fixture.match_no}" if fixture.match_no else ""
-                    lines.append(f"Open fixture{number} vs <b>{escape(opponent)}</b>")
+                    lines.append([f"Open fixture{number} vs ", R.bold(opponent)])
             if fixture or not tour.schedule_generated:
                 command = ("lptour" if tournament_service.tournament_kind(tour) == tournament_service.KIND_LETSPLAY
                            else tournament_service.start_command(session, tour))
                 if command:
-                    lines.append(f"Managers can reply to their opponent with <code>/{escape(command)}</code>.")
+                    lines.append(["Managers can reply to their opponent with ", R.code(f"/{command}"), "."])
+
+        blocks = [R.heading(heading, size=3), *(R.paragraph(line) for line in lines)]
+        fallback = "\n".join(inline(line) for line in [R.bold(heading), *lines])
 
         cooldowns = context.chat_data.setdefault("tagteam_cooldowns", {})
         now = time.time()
@@ -496,7 +502,7 @@ async def tagteam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         until = now + _TAGTEAM_COOLDOWN
         cooldowns[team_id] = until
         try:
-            await message.reply_text("\n".join(lines), parse_mode="HTML")
+            await R.reply_rich(message, blocks, fallback)
         except Exception:
             if cooldowns.get(team_id) == until:
                 del cooldowns[team_id]
