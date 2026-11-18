@@ -37,6 +37,7 @@ when one tournament is running and list each one's commands when several are.
 """
 
 import logging
+import time
 from html import escape
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -411,6 +412,98 @@ async def teamowner_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _reply(update, "⚠️ Could not load the team owners right now.")
     finally:
         session.close()
+
+
+_TAGTEAM_USAGE = "Use /tagteam [#tournament ID] <team name or abbreviation> in the match group."
+_TAGTEAM_COOLDOWN = 60
+
+
+async def tagteam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tagteam — call one team's managers to play a match."""
+    from services import league_schedule_service, match_reminder_service
+
+    message, chat = update.effective_message, update.effective_chat
+    if message is None:
+        return
+    args = list(context.args or [])
+    if chat is None or chat.type not in ("group", "supergroup") or not args:
+        await message.reply_text(_TAGTEAM_USAGE)
+        return
+    selector = args.pop(0)[1:] if args[0].startswith("#") else None
+    query = " ".join(args).strip()
+    if not query:
+        await message.reply_text(_TAGTEAM_USAGE)
+        return
+
+    try:
+        with get_session() as session:
+            tours = [tour for tour in _live_tournaments(session)
+                     if selector is None or str(tour.id) == selector]
+            if not tours:
+                await message.reply_text("❌ No active tournament with that ID." if selector is not None
+                                         else NO_ACTIVE_ANY)
+                return
+            matches = []
+            for tour in tours:
+                team, candidates = ctv.find_team(session, tour.id, query)
+                matches.extend((tour, candidate) for candidate in ([team] if team else candidates))
+            exact = [(tour, team) for tour, team in matches
+                     if " ".join((team.name or "").split()).casefold() == query.casefold()]
+            matches = exact or matches
+            if len(matches) != 1:
+                if matches:
+                    options = "\n".join(f"/tagteam #{tour.id} {team.name} ({tour.name})"
+                                        for tour, team in matches[:8])
+                    await message.reply_text(f"Which team?\n{options}")
+                else:
+                    await message.reply_text(f"❌ No active tournament team matches “{query[:100]}”. "
+                                             "Try /ctteams or /lptteams.")
+                return
+            tour, team = matches[0]
+            contacts = match_reminder_service.team_contacts(session, team)
+            if not contacts:
+                await message.reply_text(f"{team.name} has no registered managers to tag.")
+                return
+            team_id = team.id
+            lines = [
+                f"🏏 <b>Match call · {escape(team.name)}</b>",
+                f"<i>{escape(tour.name)}</i>",
+                " ".join(mention for _, mention in contacts),
+            ]
+            fixtures = match_reminder_service.pending_fixtures(session, tour.id, team_id=team_id)
+            open_round = league_schedule_service.open_round(session, tour.id)
+            fixture = next((fx for fx in fixtures
+                            if not league_schedule_service.is_round_locked(fx, open_round)), None)
+            if fixture:
+                other_id = fixture.team2_id if fixture.team1_id == team_id else fixture.team1_id
+                opponent = next((tt.name for tt in ctv.teams(session, tour.id) if tt.id == other_id), None)
+                if opponent:
+                    number = f" #{fixture.match_no}" if fixture.match_no else ""
+                    lines.append(f"Open fixture{number} vs <b>{escape(opponent)}</b>")
+            if fixture or not tour.schedule_generated:
+                command = ("lptour" if tournament_service.tournament_kind(tour) == tournament_service.KIND_LETSPLAY
+                           else tournament_service.start_command(session, tour))
+                if command:
+                    lines.append(f"Managers can reply to their opponent with <code>/{escape(command)}</code>.")
+
+        cooldowns = context.chat_data.setdefault("tagteam_cooldowns", {})
+        now = time.time()
+        for expired in [tid for tid, until in cooldowns.items() if until <= now]:
+            del cooldowns[expired]
+        if team_id in cooldowns:
+            await message.reply_text("This team was just tagged. Try again in a minute.")
+            return
+        until = now + _TAGTEAM_COOLDOWN
+        cooldowns[team_id] = until
+        try:
+            await message.reply_text("\n".join(lines), parse_mode="HTML")
+        except Exception:
+            if cooldowns.get(team_id) == until:
+                del cooldowns[team_id]
+            raise
+    except Exception:
+        logger.exception("/tagteam failed")
+        await message.reply_text("⚠️ Could not send the match call.")
 
 
 # ══════════════════════════════════════════════════════════════════════

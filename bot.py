@@ -1646,7 +1646,7 @@ def main():
             ctteams_handler, ctinjuries_handler, ct_view_callback,
             clsd_handler, clsd_pick_callback,
             teamtourstats_handler, teamtourstats_pick_callback,
-            teamowner_handler,
+            teamowner_handler, tagteam_handler,
         )
         # Deliberately absent from BOT_MENU_COMMANDS: both slash menus are at
         # Telegram's 100-command-per-scope ceiling, and pushing one over silently
@@ -1678,6 +1678,7 @@ def main():
         # printed as plain text (no ``@``), so nobody listed gets pinged.
         app.add_handler(CommandHandler(
             ["teamowner", "teamowners", "towner"], teamowner_handler))
+        app.add_handler(CommandHandler("tagteam", tagteam_handler))
 
         # ── /teamtourstats — one team's tournament by the numbers ──
         # /tournamentstats ranks players across the whole competition and /clsd

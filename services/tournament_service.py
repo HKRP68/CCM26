@@ -919,6 +919,8 @@ def _collect_player_lines(state):
                 if st.get("balls"):
                     entry["bowled"] = True
     lines = list(agg.values())
+    if lines and state.get("pitch_type"):
+        lines[0]["played_pitch"] = state["pitch_type"]
     from services.record_telemetry import detail
     telemetry = detail(state)
     if lines and telemetry is not None:

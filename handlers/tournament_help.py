@@ -49,6 +49,8 @@ PLAYER_SECTIONS = (
          "One team's schedule: standing, form, next matches, results"),
         ("/teamowner", "/teamowners /towner",
          "Who owns and co-owns each team — names shown, nobody tagged"),
+        ("/tagteam", "",
+         "Anyone in the group can call one team's managers to play: /tagteam <team>"),
         ("/teamtourstats", "/tts /myteamstats",
          "A team's tournament by the numbers"),
         ("/mvp", "/tourmvp /ctmvp",
@@ -68,7 +70,7 @@ PLAYER_SECTIONS = (
         ("/tteam", "/tott",
          "Team of the Tournament — the best XI so far, as cards"),
         ("/statstour", "",
-         "A player's This Season and Total Season stats"),
+         "Player stats by result, pitch or phase: /statstour Virat | Loss | Green | Powerplay"),
         ("/tvs", "", "Batter vs bowler: /tvs [#ID] Batter | Bowler"),
         ("/svs", "", "Batter vs bowler across current + linked seasons: /svs [#ID] Batter | Bowler"),
         ("/handover", "/transfermatch", "Pass match control to your team's owner/co-owner; receiver accepts"),
@@ -76,7 +78,7 @@ PLAYER_SECTIONS = (
         ("/frivalry", "/frh2h", "Franchise records across linked seasons: /frivalry [#ID] Team A | Team B"),
         ("/seasons", "",
          "Every season of a competition: champions, awards, all-time stats, "
-         "and /seasons <player> season by season"),
+         "and player splits: /seasons <player> | Win, Loss"),
         ("/mytours", "/tours", "Your tournaments"),
     )),
     ("📝 Tournament Draft", (

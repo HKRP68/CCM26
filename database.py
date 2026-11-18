@@ -743,6 +743,7 @@ def _migrate_add_columns():
     _try_add("activity_log", "gems_balance_after", "INTEGER")
     _try_add("stats_seasons", "player_duels_json", "TEXT")
     _try_add("stats_seasons", "franchise_results_json", "TEXT")
+    _try_add("stats_seasons", "player_match_stats_json", "TEXT")
 
     # Subscription recurring-drop cooldown timestamps on user_stats.
     _try_add("user_stats", "last_mysterybox", "TIMESTAMP")

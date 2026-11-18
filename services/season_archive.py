@@ -258,12 +258,15 @@ def archive_tournament(session, tour):
     """
     from services.tournament_duels import archived_duels
     from services.franchise_rivalry import tournament_snapshot
+    from services.player_stat_splits import live_matches
     season = StatsSeason(source_tournament_id=tour.id, name=tour.name,
                          league_id=tour.league_id, league_name=tour.league_name,
                          kind=tour.kind, completed_at=_tour_date(tour),
                          archived_at=datetime.utcnow(),
                          player_duels_json=json.dumps(archived_duels(session, tour.id)),
-                         franchise_results_json=json.dumps(tournament_snapshot(session, tour.id)))
+                         franchise_results_json=json.dumps(tournament_snapshot(session, tour.id)),
+                         player_match_stats_json=json.dumps(
+                             live_matches(session, tour.id, phases=True), separators=(",", ":")))
     session.add(season)
     session.flush()
     rows = (session.query(TournamentPlayerStats)

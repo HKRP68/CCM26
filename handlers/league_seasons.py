@@ -27,7 +27,9 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from database import get_session
+from handlers import player_stat_splits as split_cards
 from services import league_season_service as LS
+from services import player_stat_splits as splits
 from services import rich_message as R
 
 logger = logging.getLogger(__name__)
@@ -368,25 +370,34 @@ def _prepare_seasons(raw, opener):
         active = LS.series_list(session, active_only=True)
         if not active:
             return dict(text=NO_SERIES)
-        left, bar, right = raw.partition("|")
-        series, query, result = None, "", None
-        if bar:
-            series = LS.find_series(session, left)
-            query = right.strip()
-            if series is None:
-                return dict(text=f"❌ No competition called “{left.strip()}”. Try /seasons.")
-        elif raw:
-            series = LS.find_series(session, raw)
-            if series is None:
-                query = raw
+        left, *parts = (part.strip() for part in raw.split("|"))
+        series, result = LS.find_series(session, left), None
+        query = left
+        if series is not None:
+            query = parts.pop(0) if parts else ""
+        if parts and (not query or export_records):
+            return dict(text="Usage: /seasons [competition |] <player> | filters\n" + splits.FILTER_HELP)
+        try:
+            filters = splits.parse_filters(parts)
+        except ValueError as exc:
+            return dict(text=f"{exc}\n{splits.FILTER_HELP}")
         if series is None and query:
+            matches = []
             for candidate in active:
-                result = LS.player_history(session, candidate, query)
-                if result:
-                    series = candidate
-                    break
-            if series is None:
+                if parts and LS.sync_series(session, candidate):
+                    session.commit()
+                history = LS.player_history(session, candidate, query)
+                if history:
+                    matches.append((candidate, history))
+                    if not parts:
+                        break
+            if not matches:
                 return dict(text=f"❌ No season stats for “{query}”.")
+            if len(matches) > 1:
+                competitions = ", ".join(candidate.name for candidate, _ in matches[:10])
+                return dict(text=f"🏆 Which competition? {competitions}\n"
+                                 "Use /seasons <competition> | <player> | filters.")
+            series, result = matches[0]
         if series is None:
             if len(active) == 1:
                 series = active[0]
@@ -406,6 +417,23 @@ def _prepare_seasons(raw, opener):
             if "choices" in result:
                 return dict(text="🔎 Which one? " + ", ".join(result["choices"])
                             + f"\nUse the full name: /seasons {series.name} | <player>")
+            if parts:
+                name = splits.key(result["name"])
+                phases = bool(filters[2])
+                report, season_rows = splits.Report(), []
+                for season in LS.seasons(session, series):
+                    tour = LS.season_tournament(session, season)
+                    saved = LS.season_saved(session, season) if not tour else None
+                    if tour:
+                        matches = splits.live_matches(session, tour.id, phases=phases, name=name)
+                    elif saved:
+                        matches = splits.saved_matches(session, saved, phases=phases, name=name)
+                    else:
+                        continue
+                    season_rows.append((LS.season_title(season), report.add_season(matches, name, filters)))
+                pages = split_cards.pages(series.name, result["name"], filters,
+                                          [("Total season stats", report, season_rows)])
+                return dict(pages=pages, markup=_back_keyboard(series, opener))
             from services.league_record_insights import player_profile
             blocks, text = player_card(series, result, player_profile(session,series,result['name']))
             return dict(blocks=blocks, text=text, markup=_back_keyboard(series, opener))
@@ -431,6 +459,10 @@ async def seasons_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 filename=response['filename'], caption=response['caption'])
         elif 'blocks' in response:
             await _send(update, response['blocks'], response['text'], response.get('markup'))
+        elif 'pages' in response:
+            for index, page in enumerate(response['pages']):
+                markup = response['markup'] if index == len(response['pages']) - 1 else None
+                await message.reply_text(page, parse_mode="HTML", reply_markup=markup)
         else:
             await message.reply_text(response['text'], reply_markup=response.get('markup'))
     except Exception:

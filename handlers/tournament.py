@@ -21,6 +21,7 @@ HTML whenever the rich send is refused, so the two renderers stay live together
 and must agree; see ``docs/rich-text-messages.md``.
 """
 
+import asyncio
 import logging
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -29,7 +30,9 @@ from sqlalchemy import func
 import html
 
 from database import get_session
-from models import TournamentPlayerStats
+from models import StatsSeason, Tournament, TournamentPlayerStats
+from handlers import player_stat_splits as split_cards
+from services import player_stat_splits as splits
 from services import rich_message as R
 from services import tournament_service
 from utils.message_chunks import expandable_quotes
@@ -626,21 +629,53 @@ async def tournamentstats_callback(update: Update, context: ContextTypes.DEFAULT
 
 async def statstour_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
                             league_id=None):
-    """/statstour <player name> — a player's stats in the active tournament."""
-    args = context.args
-    if args is None:
+    """/statstour [#id] <player> [| filters] — a player's tournament stats."""
+    args = list(context.args or [])
+    command = "/statstour"
+    if context.args is None:
         # Reached from a derived command (``/tiplplayer``) through the league
         # MessageHandler, which leaves ``context.args`` unset.
-        args = ((getattr(update.effective_message, "text", None) or "").split()[1:])
-    if not args:
+        words = (getattr(update.effective_message, "text", None) or "").split()
+        if words:
+            command, *args = words
+    selector = args.pop(0)[1:] if league_id is None and args and args[0].startswith("#") else None
+    search, *parts = (part.strip() for part in " ".join(args).split("|"))
+    if not search:
         await update.message.reply_text(
-            "Usage: /statstour <player name>\nExample: /statstour Virat Kohli")
+            f"Usage: {command} <player name> [| filters]\n"
+            f"Example: {command} Virat Kohli | Loss | Green | Powerplay\n"
+            + splits.FILTER_HELP)
         return
-    search = " ".join(args).strip()
+    try:
+        filters = splits.parse_filters(parts)
+    except ValueError as exc:
+        await update.message.reply_text(f"{exc}\n{splits.FILTER_HELP}")
+        return
     session = get_session()
     try:
-        tour = await _pick_tournament(update, session, league_id)
+        if selector is not None:
+            tour = next((tour for kind in (tournament_service.KIND_CHALLENGE,
+                                           tournament_service.KIND_LETSPLAY)
+                         for tour in tournament_service.get_active_tournaments(session, kind)
+                         if str(tour.id) == selector), None)
+            if not tour:
+                await update.message.reply_text("❌ No active tournament with that ID.")
+                return
+            command += f" #{selector}"
+        else:
+            tour = await _pick_tournament(update, session, league_id)
         if not tour:
+            return
+        if parts:
+            tour_id = tour.id
+            session.close()
+            pages, error = await asyncio.to_thread(
+                _filtered_tournament, tour_id, search, filters, command)
+            if error:
+                await update.message.reply_text(error)
+            else:
+                for page in pages:
+                    await update.message.reply_text(page, parse_mode="HTML")
             return
         rows = (session.query(TournamentPlayerStats)
                 .filter(TournamentPlayerStats.tournament_id == tour.id,
@@ -691,3 +726,52 @@ async def statstour_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await update.message.reply_text("⚠️ Could not load player tournament stats.")
     finally:
         session.close()
+
+
+def _filtered_tournament(tour_id, search, filters, command):
+    from services import season_archive as archive
+
+    with get_session() as session:
+        tour = session.get(Tournament, tour_id)
+        if not tour:
+            return [], NO_ACTIVE
+        names = {splits.key(display): display for display, in
+                 session.query(TournamentPlayerStats.name)
+                 .filter(TournamentPlayerStats.tournament_id == tour.id,
+                         func.lower(TournamentPlayerStats.name).contains(search.lower(), autoescape=True))
+                 .distinct() if display}
+        name = splits.key(search)
+        if not names:
+            return [], f"❌ No tournament stats found for “{search}” in {tour.name}."
+        if name not in names:
+            words = {k: v for k, v in names.items() if name in k.split()}
+            choices = words or names
+            if len(choices) > 1:
+                options = ", ".join(sorted(choices.values())[:8])
+                return [], f"🔎 Which player? {options}\nUse {command} <full name> | filters."
+            name = next(iter(choices))
+        phases = bool(filters[2])
+        current = splits.live_matches(session, tour.id, phases=phases, name=name)
+        this_season = splits.Report()
+        this_season.add_season(current, name, filters)
+        reports = [("This season", this_season, [])]
+        linked = []
+        for ref in archive.effective_refs(session, tour):
+            kind, number = archive._parse_ref(ref)
+            if kind == "t" and number != tour.id:
+                past = session.get(Tournament, number)
+                if past:
+                    linked.append((archive._tour_date(past), past.name,
+                                   splits.live_matches(session, past.id, phases=phases, name=name)))
+            elif kind == "s":
+                saved = session.get(StatsSeason, number)
+                if saved:
+                    linked.append((archive._saved_date(saved), saved.name,
+                                   splits.saved_matches(session, saved, phases=phases, name=name)))
+        if linked:
+            linked.append((archive._tour_date(tour), tour.name, current))
+            total = splits.Report()
+            season_rows = [(label, total.add_season(matches, name, filters))
+                           for _, label, matches in sorted(linked, key=lambda item: (item[0], item[1]))]
+            reports.append(("Total season stats", total, season_rows))
+        return split_cards.pages(tour.name, names[name], filters, reports), None

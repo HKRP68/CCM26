@@ -233,6 +233,12 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/pitchstats` | `/pstats` `/ps` | What each pitch actually does — runs/over, wickets/over, win % |
 | `/botstatus` | `/bstatus` `/ping` | Bot ping, uptime and live health |
 
+Use commas to compare values within a filter and pipes to combine filters. Both player commands accept results (Win, Loss, Tie, No Result), pitch names, and phases (Powerplay, Middle, Death, All Phases). Phase stats use saved deliveries. The report flags missing match data.
+
+- `/statstour Virat Kohli | Loss, Won` compares his numbers in losses and wins.
+- `/statstour Virat | Loss | Green | Power Play` shows his powerplay numbers on Green pitches in matches his team lost.
+- `/seasons IPL | Virat Kohli | Green | All Phases` shows the split across the IPL's seasons. Use `/seasons Virat Kohli | Green` when the player matches one competition.
+
 ## 8. Play a match
 
 | Command | Aliases | What it does |
@@ -355,6 +361,7 @@ Admin commands for running one: [Appendix B](#appendix-b--admin--owner-commands)
 | `/ctinjuries` | `/ctinjury` | Who is ruled out injured, and for how many more matches 🚑 |
 | `/clsd` | `/clschedule` `/ctsd` | One team's schedule: standing, form, next matches, results |
 | `/teamowner` | `/teamowners` `/towner` | Who owns and co-owns each team (all teams, or one by name) — names shown, nobody tagged |
+| `/tagteam [#ID] <team>` | — | Any group member can call one team by name or abbreviation. Tags its registered managers and shows an open fixture when available. Repeat calls to the same team in the same chat have a one-minute cooldown |
 | `/teamtourstats` | `/teamstour` `/myteamstats` `/tts` | A team's tournament by the numbers |
 | `/mvp` | `/tourmvp` `/ctmvp` | Most Valuable Player — batting + bowling + wins + POTM |
 | `/tteam` | `/tott` `/teamoftournament` | Team of the Tournament — the best XI so far, as cards 🌟 |

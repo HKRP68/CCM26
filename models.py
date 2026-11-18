@@ -3314,6 +3314,8 @@ class StatsSeason(Base):
     player_duels_json = Column(Text, nullable=True)
     # Completed fixture evidence for franchise rivalries after team deletion.
     franchise_results_json = Column(Text, nullable=True)
+    # Per-match results, pitches and verified delivery splits for player stats.
+    player_match_stats_json = Column(Text, nullable=True)
 
     players = relationship("StatsSeasonPlayer", back_populates="season",
                            cascade="all, delete-orphan")
