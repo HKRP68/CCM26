@@ -121,7 +121,8 @@ ADMIN_SECTIONS = (
         ("/tfixturemode", "/tfixmode",
          "Release rounds: /tfixturemode batch 3 · /tfixturemode manual 3 · "
          "/tfixturemode next 2 · /tfixturemode scheduled 3 48h · /tfixturemode all "
-         "(rolling window: /tfixturemode 3; one round: /tfixturemode round)"),
+         "(rolling window: /tfixturemode 3; one round: /tfixturemode round). "
+         "Fixed IST deadline then hourly batches: /tfixturemode phased 1 3 YYYY-MM-DD HH:MM 1 24h"),
         ("/tchannels", "", "Result and ceremony destinations: /tchannels add @channel1 @channel2"),
         ("/awardceremony", "",
          "Present a finished tournament's awards one by one: /awardceremony #7"),

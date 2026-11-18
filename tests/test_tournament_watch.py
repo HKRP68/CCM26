@@ -135,3 +135,88 @@ class DeadlineTests(F.FourTeamCase):
         self.assertEqual(len(release), 1)
         self.assertIn("through 2", release[0].text)
         self.assertFalse(any(p.kind == "round_release" for p in self.tick(26)))
+
+
+class PhasedDeadlineTests(F.FourTeamCase):
+    KNOCKOUT = None
+
+    def setUp(self):
+        super().setUp()
+        from services import tournament_watch
+        self.tw = tournament_watch
+        self.t0 = datetime(2026, 10, 5, 12)
+        self.tour.league_format = "double_rr"
+        self.lss.generate_schedule(self.session, self.tour.id)
+        self.configure()
+
+    def configure(self, size=2, hours=18, now=None):
+        self.lss.configure_phased_release(self.session, self.tour, 1, 2, "2026-10-07 00:15", size, hours,
+                                          now=now or self.t0)
+        self.session.commit()
+
+    def finish_at(self, round_no, when):
+        with mock.patch.object(self.ts, "datetime", wraps=datetime) as clock:
+            clock.utcnow.return_value = when
+            self.finish_round(round_no)
+
+    def test_telegram_fixtures_switch_from_the_fixed_deadline_to_relative_batches(self):
+        from services import cl_tournament_view, lp_tournament_service
+
+        self.assertEqual(self.tour.round_deadline_at, datetime(2026, 10, 6, 18, 45))
+        _, pending = self.tw.open_round_pending(self.session, self.tour)
+        self.assertEqual({fx.round_no for fx in pending}, {1, 2})
+        for render in (cl_tournament_view.render_fixtures, lp_tournament_service.render_fixtures):
+            self.assertIn("07 Oct 2026, 00:15 IST", render(self.session, self.tour))
+        self.assertFalse(self.lss.fixture_in_open_round(self.session, self.fixtures(3)[0]))
+        self.finish_at(2, self.t0 + timedelta(hours=10))
+        self.assertEqual(self.lss.open_round(self.session, self.tour.id), 2)
+
+        opened = self.t0 + timedelta(hours=12)
+        self.finish_at(1, opened)
+        self.assertEqual(self.lss.open_round(self.session, self.tour.id), 4)
+        self.assertTrue(self.lss.fixture_in_open_round(self.session, self.fixtures(4)[0]))
+        self.assertFalse(self.lss.fixture_in_open_round(self.session, self.fixtures(5)[0]))
+        for render in (cl_tournament_view.render_fixtures, lp_tournament_service.render_fixtures):
+            self.assertIn("06 Oct 2026, 23:30 IST", render(self.session, self.tour))
+
+        later = opened + timedelta(hours=8)
+        posts = self.tw.tick(self.session, self.tour, now=later)
+        release = [post for post in posts if post.kind == "round_release"]
+        self.assertEqual(len(release), 1)
+        self.assertIn("06 Oct 2026, 23:30 IST", release[0].text)
+        self.assertEqual(self.tour.round_deadline_at, opened + timedelta(hours=18))
+        self.assertFalse(any(p.kind == "round_release" for p in self.tw.tick(self.session, self.tour, now=later)))
+
+    def test_settings_update_future_batches_and_expiry_buttons_honor_their_batch(self):
+        expired_at = self.t0 + timedelta(hours=32)
+        with mock.patch.object(self.tw, "_admin_ids", return_value=[111]):
+            alert, = self.tw.tick(self.session, self.tour, now=expired_at)
+        self.assertEqual(alert.kind, "expired")
+        self.assertIn("07 Oct 2026, 00:15 IST", alert.text)
+        self.assertIn(f"tdl_{self.tour.id}_24_2", [code for row in alert.buttons for _, code in row])
+        self.assertTrue(all(fx.status == "scheduled" for fx in self.fixtures()))
+        self.assertEqual(self.lss.open_round(self.session, self.tour.id), 2)
+        self.finish_at(1, expired_at)
+        self.finish_at(2, expired_at)
+        with self.assertRaisesRegex(ValueError, "batch has finished"):
+            self.tw.extend_deadline(self.session, self.tour, 24, now=expired_at, expected_round=2)
+
+        self.configure(size=1, hours=30, now=expired_at)
+        self.assertEqual(self.lss.open_round(self.session, self.tour.id), 4)
+        self.assertEqual(self.tour.round_deadline_at, expired_at + timedelta(hours=18))
+        self.finish_at(3, expired_at + timedelta(hours=1))
+        self.finish_at(4, expired_at + timedelta(hours=2))
+        self.tw.tick(self.session, self.tour, now=expired_at + timedelta(hours=3))
+        self.assertEqual(self.lss.open_round(self.session, self.tour.id), 5)
+        self.assertEqual(self.tour.round_deadline_at, expired_at + timedelta(hours=32))
+
+    def test_initial_range_can_start_later_after_earlier_rounds_finish(self):
+        configure = self.lss.configure_phased_release
+        with self.assertRaisesRegex(ValueError, "Finish the earlier league rounds"):
+            configure(self.session, self.tour, 2, 3, "2026-10-07 00:15", 1, 24, now=self.t0)
+        self.finish_at(1, self.t0)
+        configure(self.session, self.tour, 2, 3, "2026-10-07 00:15", 1, 24, now=self.t0)
+        self.assertEqual(self.lss.open_round(self.session, self.tour.id), 3)
+        self.tw.extend_deadline(self.session, self.tour, 3, now=self.t0)
+        self.assertEqual(self.tour.fixture_initial_deadline_at, datetime(2026, 10, 6, 21, 45))
+        self.assertEqual(self.tour.round_hours, 24)

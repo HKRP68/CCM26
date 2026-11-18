@@ -16447,6 +16447,19 @@ def _int_form(name, default=0):
         return default
 
 
+def _save_tournament_fixture_release(db, tour):
+    from services import league_schedule_service as release
+    mode = request.form.get("fixture_release_mode")
+    if mode == "phased":
+        release.configure_phased_release(
+            db, tour, _int_form("fixture_initial_round_from"), _int_form("fixture_initial_round_to"),
+            request.form.get("fixture_initial_deadline_at"), _int_form("fixture_followup_rounds"),
+            _int_form("fixture_followup_hours"))
+    else:
+        release.configure_release(db, tour, mode, _int_form("fixture_round_window", 3),
+                                  _int_form("fixture_batch_hours", 48))
+
+
 def _overseas_form(name):
     """Read an optional 0..11 overseas limit from the form.
 
@@ -17496,8 +17509,7 @@ def admin_tournaments_list():
                         db.add(t)
                         db.flush()
                         if request.form.get("fixture_release_present"):
-                            _lss.configure_release(db, t, request.form.get("fixture_release_mode"),
-                                _int_form("fixture_round_window", 3), _int_form("fixture_batch_hours", 48))
+                            _save_tournament_fixture_release(db, t)
                         for cid in request.form.getlist("team_ids"):
                             ct = db.get(ChallengeTeam, int(cid)) if cid else None
                             if ct and ct.league_id == league.id:
@@ -17750,9 +17762,7 @@ def admin_tournament_detail(tournament_id):
                         _ts_rr.set_rating_rules(db, t, rating_rows)
                     t.enforce_team_owner = _checked("enforce_team_owner")
                     if request.form.get("fixture_release_present"):
-                        from services import league_schedule_service as _release
-                        _release.configure_release(db, t, request.form.get("fixture_release_mode"),
-                            _int_form("fixture_round_window", 3), _int_form("fixture_batch_hours", 48))
+                        _save_tournament_fixture_release(db, t)
                     else:
                         t.fixtures_all_at_once = _checked("fixtures_all_at_once")
                     t.injuries_enabled = _checked("injuries_enabled")
@@ -17789,7 +17799,7 @@ def admin_tournament_detail(tournament_id):
                         _ta.finalize(db, t)
                     if request.form.get("tiebreak") in ("nrr", "h2h", "nrr_wins_h2h"):
                         t.tiebreak = request.form.get("tiebreak")
-                    if "round_hours" in request.form:
+                    if "round_hours" in request.form and t.fixture_release_mode != "phased":
                         from services import tournament_watch as _tw
                         rh = _int_form("round_hours", 0) or 0
                         rh = max(0, min(_tw.MAX_ROUND_HOURS, rh))
@@ -17849,9 +17859,7 @@ def admin_tournament_detail(tournament_id):
                               f"special type {variant}" if enabled else "standard")
                     flash("Tournament match-summary graphics saved.", "success")
                 elif action == "save_fixture_release":
-                    from services import league_schedule_service as _release
-                    _release.configure_release(db, t, request.form.get("fixture_release_mode"),
-                        _int_form("fixture_round_window", 3), _int_form("fixture_batch_hours", 48))
+                    _save_tournament_fixture_release(db, t)
                     log_admin(db, "tournament_fixture_release", "tournament", t.id, t.name)
                     flash("Fixture release settings saved.", "success")
                 elif action == "open_next_rounds":
@@ -18820,6 +18828,8 @@ def admin_tournament_schedule(tournament_id):
         league_total = sum(len(fxs) for _, fxs in rounds)
         league_played = sum(1 for _, fxs in rounds for fx in fxs if fx.status == "completed")
         open_round = league_schedule_service.open_round(db, t.id)
+        _, locked, progress = league_schedule_service.split_open_round(db, t.id, fixtures)
+        round_banner = league_schedule_service.round_banner(progress, locked, t)
         round_summaries = league_schedule_service.round_summaries(db, t.id)
         if selected_team:
             rounds = [(rno, [fx for fx in fxs if selected_team in (fx.team1_id, fx.team2_id)])
@@ -18827,6 +18837,7 @@ def admin_tournament_schedule(tournament_id):
         return render_template("admin_tournament_schedule.html", t=t, teams=teams,
                                selected_team=selected_team, round_byes=round_byes,
                                open_round=open_round,
+                               round_banner=round_banner,
                                round_summaries=round_summaries,
                                tt_map=tt_map, groups=groups, g_map=g_map,
                                rounds=rounds, fixtures=fixtures, knockout=knockout,

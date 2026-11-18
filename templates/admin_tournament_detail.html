@@ -264,18 +264,18 @@
             {% endfor %}
           </span>
           <small style="display:block;color:var(--muted);margin-top:.4rem;">All prizes earned by a team, including player awards, use its owner/co-owner split below. Default: 60K Champion + 30K Orange Cap = 45K each for two owners.</small>
-          {% if t.awards_given_at %}<small style="color:var(--muted);">Honours recorded on {{ t.awards_given_at.strftime('%d %b %Y') }}. Saving retries unpaid prizes; recorded shares and credited prizes stay unchanged.</small>{% endif %}</div>
+          {% if t.awards_given_at %}<small style="color:var(--muted);">Honours recorded on {{ t.awards_given_at|ist('%d %b %Y') }}. Saving retries unpaid prizes; recorded shares and credited prizes stay unchanged.</small>{% endif %}</div>
         <div><label>⚖️ Tiebreak after points</label>
           <select name="tiebreak">
             <option value="nrr" {{ 'selected' if (t.tiebreak or 'nrr') == 'nrr' else '' }}>Wins → net run rate</option>
             <option value="h2h" {{ 'selected' if t.tiebreak == 'h2h' else '' }}>Head-to-head → net run rate</option>
             <option value="nrr_wins_h2h" {{ 'selected' if t.tiebreak == 'nrr_wins_h2h' else '' }}>Net run rate → wins → head-to-head → admin priority</option>
           </select></div>
-        <div><label>⏳ Round length (hours)</label>
+        <div class="standard-release"><label>⏳ Round length (hours)</label>
           <input type="number" name="round_hours" min="0" max="1440"
                  value="{{ t.round_hours or '' }}" placeholder="blank = no deadline">
           <small style="color:var(--muted);">Reminders 24h &amp; 2h before; admins are alerted when time runs out — nothing is simulated automatically.
-            {% if t.round_deadline_at %}Current round ends {{ t.round_deadline_at.strftime('%d %b %H:%M') }} UTC.{% endif %}</small></div>
+            {% if t.round_deadline_at %}Current deadline {{ t.round_deadline_at|ist('%d %b %Y, %H:%M') }}.{% endif %}</small></div>
       </div>
       <div style="margin-top:.6rem;">
         <label>⭐ Rating rule — every XI must include at least N players rated X or lower</label>
@@ -385,7 +385,7 @@
       <div class="prize-split-team" style="margin-top:.5rem;">
         <strong>Redistribution #{{ redistribution.id }}</strong>
         <p style="margin:.4rem 0;">{{ redistribution.reason }}</p>
-        <small style="color:var(--muted);">{{ redistribution.corrected_by or 'Admin' }} · {{ redistribution.created_at.strftime('%d %b %Y %H:%M UTC') }}</small>
+        <small style="color:var(--muted);">{{ redistribution.corrected_by or 'Admin' }} · {{ redistribution.created_at|ist('%d %b %Y, %H:%M') }}</small>
       </div>
       {% endfor %}
     </div>
@@ -424,12 +424,12 @@
         {% for payout in payout_rows %}
           {% set user = payout_users.get(payout.recipient_tg_id) %}
           <tr>
-            <td style="padding:.65rem;vertical-align:top;">#{{ payout.id }}<br><small style="color:var(--muted);">Revision {{ payout.revision or 0 }}{% if payout.correction_id %} · Correction #{{ payout.correction_id }}{% endif %}</small>{% if payout.paid_at %}<br><small style="color:var(--muted);">{{ payout.paid_at.strftime('%d %b %Y %H:%M UTC') }}</small>{% endif %}</td>
+            <td style="padding:.65rem;vertical-align:top;">#{{ payout.id }}<br><small style="color:var(--muted);">Revision {{ payout.revision or 0 }}{% if payout.correction_id %} · Correction #{{ payout.correction_id }}{% endif %}</small>{% if payout.paid_at %}<br><small style="color:var(--muted);">{{ payout.paid_at|ist('%d %b %Y, %H:%M') }}</small>{% endif %}</td>
             <td style="padding:.65rem;vertical-align:top;">{{ payout_award_labels.get(payout.award, payout.award) }}<br><small style="color:var(--muted);">{{ payout.team_name or '—' }}</small></td>
             <td style="padding:.65rem;vertical-align:top;">{% if payout.recipient_tg_id %}{% if user %}{{ '@' ~ user.username if user.username else user.first_name or 'Registered user' }}<br>{% endif %}<code>{{ payout.recipient_tg_id }}</code>{% else %}<span style="color:var(--muted);">Unassigned — set team owner</span>{% endif %}</td>
             <td style="padding:.65rem;vertical-align:top;white-space:nowrap;">{{ '{:,}'.format(payout.coins) }} coins<br>{{ '{:,}'.format(payout.gems) }} gems</td>
             <td style="padding:.65rem;vertical-align:top;"><span class="status-pill {{ payout.status }}">{{ payout.status }}</span>{% if payout.failure_reason %}<br><small style="color:var(--muted);">{{ payout.failure_reason }}</small>{% endif %}</td>
-            <td style="padding:.65rem;vertical-align:top;white-space:nowrap;">{% if payout.balance_coins_after is not none %}{{ '{:,}'.format(payout.balance_coins_after) }} coins{% else %}—{% endif %}<br>{% if payout.balance_gems_after is not none %}{{ '{:,}'.format(payout.balance_gems_after) }} gems{% else %}—{% endif %}{% if payout.reversed_at %}<br><small style="color:var(--muted);">Reversed {{ payout.reversed_at.strftime('%d %b %Y %H:%M UTC') }}{% if payout.reversal_coins_after is not none %}<br>After reversal: {{ '{:,}'.format(payout.reversal_coins_after) }} coins / {{ '{:,}'.format(payout.reversal_gems_after or 0) }} gems{% endif %}</small>{% endif %}</td>
+            <td style="padding:.65rem;vertical-align:top;white-space:nowrap;">{% if payout.balance_coins_after is not none %}{{ '{:,}'.format(payout.balance_coins_after) }} coins{% else %}—{% endif %}<br>{% if payout.balance_gems_after is not none %}{{ '{:,}'.format(payout.balance_gems_after) }} gems{% else %}—{% endif %}{% if payout.reversed_at %}<br><small style="color:var(--muted);">Reversed {{ payout.reversed_at|ist('%d %b %Y, %H:%M') }}{% if payout.reversal_coins_after is not none %}<br>After reversal: {{ '{:,}'.format(payout.reversal_coins_after) }} coins / {{ '{:,}'.format(payout.reversal_gems_after or 0) }} gems{% endif %}</small>{% endif %}</td>
           </tr>
         {% endfor %}
         </tbody>
@@ -475,7 +475,7 @@
       <div class="prize-split-team" style="margin-top:.5rem;">
         <strong>Correction #{{ correction.id }}</strong> · revision {{ correction.previous_revision }} → {{ correction.revision }}
         <p style="margin:.4rem 0;">{{ correction.reason }}</p>
-        <small style="color:var(--muted);">{{ correction.corrected_by or 'Admin' }} · {{ correction.created_at.strftime('%d %b %Y %H:%M UTC') }}</small>
+        <small style="color:var(--muted);">{{ correction.corrected_by or 'Admin' }} · {{ correction.created_at|ist('%d %b %Y, %H:%M') }}</small>
       </div>
       {% endfor %}
     </div>

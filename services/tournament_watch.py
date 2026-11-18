@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from html import escape
 
+from utils.tournament_time import format_ist
+
 logger = logging.getLogger(__name__)
 
 # Reminder stages for the open round (``Tournament.round_reminder_stage``).
@@ -67,15 +69,16 @@ def fmt_left(delta):
     return f"{max(1, mins)}m"
 
 
-def deadline_text(tour, now=None):
-    """"⏳ ends in 1d 4h" for the open round, or "" when there's no deadline."""
-    at = getattr(tour, "round_deadline_at", None)
+def format_deadline(at, now=None):
     if not at:
         return ""
     left = at - (now or datetime.utcnow())
-    if left.total_seconds() <= 0:
-        return "⏰ deadline passed"
-    return f"⏳ ends in {fmt_left(left)}"
+    status = "overdue" if left <= timedelta(0) else f"ends in {fmt_left(left)}"
+    return f"⏳ Deadline {format_ist(at)} ({status})"
+
+
+def deadline_text(tour, now=None):
+    return format_deadline(getattr(tour, "round_deadline_at", None), now)
 
 
 def parse_hours(token):
@@ -139,7 +142,7 @@ def open_round_pending(session, tour):
     if rnd is None:
         return rnd, []
     rows = mrs.pending_fixtures(session, tour.id)
-    batch = lss.release_mode(tour) in ("batch", "manual", "scheduled")
+    batch = lss.release_mode(tour) in lss.BATCH_RELEASE_MODES
     return rnd, [f for f in rows
                  if (f.stage or "") in lss.LEAGUE_STAGES and
                  (0 < int(f.round_no or 0) <= rnd if batch else int(f.round_no or 0) == rnd)]
@@ -147,13 +150,21 @@ def open_round_pending(session, tour):
 
 def set_round_hours(session, tour, hours, now=None):
     """Set (or with None, clear) the round length; restarts the open round's clock."""
+    from services import league_schedule_service as lss
     now = now or datetime.utcnow()
+    if lss.release_mode(tour) == "phased":
+        if hours is None:
+            raise ValueError("Choose another fixture release mode to turn deadlines off.")
+        if tour.status in ("active", "paused"):
+            update_round_clock(session, tour, now)
+        tour.round_hours = int(hours)
+        session.flush()
+        return tour
     if hours is None:
         tour.round_hours = None
         tour.round_deadline_at = None
     else:
         tour.round_hours = int(hours)
-        from services import league_schedule_service as lss
         if lss.deadline_round(session, tour) is not None:
             tour.round_deadline_at = now + timedelta(hours=int(hours))
             tour.round_reminder_stage = STAGE_NONE
@@ -161,16 +172,26 @@ def set_round_hours(session, tour, hours, now=None):
     return tour
 
 
-def extend_deadline(session, tour, hours, now=None):
+def extend_deadline(session, tour, hours, now=None, *, expected_round=None):
     """Push the open round's deadline back by ``hours``. Caller commits."""
     from services import league_schedule_service as lss
     now = now or datetime.utcnow()
-    if lss.deadline_round(session, tour) is None:
+    rnd = lss.deadline_round(session, tour)
+    if rnd is None:
         raise ValueError("No league round is open right now.")
+    phased = lss.release_mode(tour) == "phased"
+    if expected_round is not None and (rnd != expected_round or not phased):
+        raise ValueError("This batch has finished. Use /tdeadline for the current batch.")
+    if phased:
+        update_round_clock(session, tour, now, rnd=rnd)
     base = tour.round_deadline_at or now
     if base < now:
         base = now
     tour.round_deadline_at = base + timedelta(hours=int(hours))
+    if phased and rnd == tour.fixture_initial_round_to:
+        if tour.round_deadline_at.second or tour.round_deadline_at.microsecond:
+            tour.round_deadline_at = tour.round_deadline_at.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        tour.fixture_initial_deadline_at = tour.round_deadline_at
     # Reminders that already fired fire again as the new deadline approaches.
     left = tour.round_deadline_at - now
     if left > timedelta(hours=24):
@@ -183,6 +204,50 @@ def extend_deadline(session, tour, hours, now=None):
     return tour
 
 
+def phased_deadline(session, tour, end, first, now=None):
+    """Find the active deadline even before the watch has seen a new batch."""
+    if end == tour.fixture_initial_round_to:
+        return tour.fixture_initial_deadline_at
+    if end == tour.round_tracked and tour.round_deadline_at:
+        return tour.round_deadline_at
+    from sqlalchemy import func
+    from models import TournamentMatch
+    from services.league_schedule_service import LEAGUE_STAGES
+
+    base = tour.fixture_open_through
+    size = tour.fixture_round_window
+    previous = base + max(0, (first - base - 1) // size) * size
+    opened_at = (session.query(func.max(TournamentMatch.completed_at))
+                 .filter(TournamentMatch.tournament_id == tour.id,
+                         TournamentMatch.stage.in_(LEAGUE_STAGES), TournamentMatch.status == "completed",
+                         TournamentMatch.round_no.between(1, previous)).scalar())
+    now = now or datetime.utcnow()
+    return min(opened_at or now, now) + timedelta(hours=tour.round_hours)
+
+
+def update_round_clock(session, tour, now, *, rnd=None, current=None):
+    """Start the clock for a new round or batch and keep its deadline stable."""
+    from services import league_schedule_service as lss
+
+    if rnd is None:
+        rnd = lss.deadline_round(session, tour)
+    if rnd is None:
+        tour.round_deadline_at = None
+        return
+    if lss.release_mode(tour) == "phased":
+        if rnd == tour.round_tracked and tour.round_deadline_at:
+            return
+        current = current or lss.current_round(session, tour.id)
+        tour.round_deadline_at = phased_deadline(session, tour, rnd, current, now)
+        tour.fixture_open_through = max(rnd, tour.fixture_open_through)
+    elif rnd != tour.round_tracked:
+        tour.round_deadline_at = (now + timedelta(hours=tour.round_hours) if tour.round_hours else None)
+    else:
+        return
+    tour.round_tracked = rnd
+    tour.round_reminder_stage = STAGE_NONE
+
+
 def _reminder_posts(session, tour, rnd, pending, label):
     """The roundup in the group plus the full card to each owner by DM."""
     from services import match_reminder_service as mrs
@@ -193,9 +258,9 @@ def _reminder_posts(session, tour, rnd, pending, label):
     if not nudges:
         return []
     from services import league_schedule_service as lss
-    scope = f"Batch through Round {rnd}" if lss.release_mode(tour) in ("batch", "manual", "scheduled") else f"Round {rnd}"
+    scope = f"Batch through Round {rnd}" if lss.release_mode(tour) in lss.BATCH_RELEASE_MODES else f"Round {rnd}"
     head = (f"⏳ <b>{scope} ends in {label}</b> — "
-            f"{escape(tour.name or 'Tournament')}\n")
+            f"{escape(tour.name or 'Tournament')}\nDeadline {format_ist(tour.round_deadline_at)}\n")
     if len(nudges) == 1:
         group_text = head + "\n" + nudges[0].text
     else:
@@ -219,8 +284,10 @@ def _expired_post(session, tour, rnd, pending):
     for tt in session.query(TournamentTeam).filter_by(tournament_id=tour.id).all():
         teams[tt.id] = tt.name or "—"
     from services import league_schedule_service as lss
-    label = f"Batch through Round {rnd}" if lss.release_mode(tour) in ("batch", "manual", "scheduled") else f"Round {rnd}"
+    mode = lss.release_mode(tour)
+    label = f"Batch through Round {rnd}" if mode in lss.BATCH_RELEASE_MODES else f"Round {rnd}"
     lines = [f"⏰ <b>{label} deadline passed</b> — {escape(tour.name or '')}",
+             f"Deadline {format_ist(tour.round_deadline_at)}",
              f"{len(pending)} match{'es' if len(pending) != 1 else ''} unplayed:", ""]
     buttons = []
     for fx in pending:
@@ -231,8 +298,9 @@ def _expired_post(session, tour, rnd, pending):
             buttons.append([(f"✅ {a[:14]}", f"tsim_{fx.id}_1"),
                             (f"✅ {b[:14]}", f"tsim_{fx.id}_2"),
                             (f"🎲 {tag}", f"tsim_{fx.id}_random")])
-    buttons.append([("⏳ +24h", f"{CB_EXTEND}{tour.id}_24"),
-                    ("⏳ +48h", f"{CB_EXTEND}{tour.id}_48")])
+    suffix = f"_{rnd}" if mode == "phased" else ""
+    buttons.append([("⏳ +24h", f"{CB_EXTEND}{tour.id}_24{suffix}"),
+                    ("⏳ +48h", f"{CB_EXTEND}{tour.id}_48{suffix}")])
     lines += ["", "Nothing is simulated automatically. A tournament admin can "
                   "settle a match (buttons or <code>/tsim</code>) or give the "
                   "round more time (<code>/tdeadline +24h</code>).",
@@ -253,6 +321,9 @@ def _deadline_posts(session, tour, now):
     left = tour.round_deadline_at - now
     stage = int(tour.round_reminder_stage or 0)
     hours = int(tour.round_hours or 0)
+    from services import league_schedule_service as lss
+    if lss.release_mode(tour) == "phased" and rnd == tour.fixture_initial_round_to:
+        hours = 0  # The fixed deadline has no configured duration.
     if left <= timedelta(0):
         if stage < STAGE_EXPIRED:
             tour.round_reminder_stage = STAGE_EXPIRED
@@ -368,17 +439,18 @@ def tick(session, tour, now=None):
     # season must not get a flood of recaps for rounds finished long ago.
     first_look = not tour.round_tracked and not tour.recap_round
     posts = []
+    previous_end = tour.fixture_open_through
+    phased_release = lss.release_mode(tour) == "phased" and rnd is not None and rnd > previous_end
+    update_round_clock(session, tour, now, rnd=rnd, current=current)
     if released:
         posts.append(Post(chat_id=tour.announce_chat_id,
             text=f"🔓 <b>Rounds through {lss.open_round(session, tour.id)} are now open.</b> See {_fixtures_cmd(tour)}.",
             kind="round_release"))
-    if rnd is not None and rnd != tour.round_tracked:
-        tour.round_tracked = rnd
-        tour.round_reminder_stage = STAGE_NONE
-        tour.round_deadline_at = (now + timedelta(hours=int(tour.round_hours))
-                                  if tour.round_hours else None)
-    elif rnd is None and tour.round_deadline_at:
-        tour.round_deadline_at = None
+    if phased_release:
+        scope = f"Round {rnd} is" if rnd == previous_end + 1 else f"Rounds {previous_end + 1}–{rnd} are"
+        posts.append(Post(chat_id=tour.announce_chat_id, kind="round_release",
+                          text=f"🔓 <b>{scope} now open.</b>\n"
+                               f"{deadline_text(tour, now)} · {_fixtures_cmd(tour)}"))
     if first_look:
         tour.recap_round = _completed_round(session, tour, current)
         if not tour.round_tracked:

@@ -142,9 +142,8 @@
       {{ release_controls(t) }}
       <button class="action-btn" type="submit">Save release settings</button>
     </form>
-    {% if t.fixture_next_release_at %}<p>Next scheduled release: <time class="release-time" datetime="{{ t.fixture_next_release_at.isoformat() }}Z">{{ t.fixture_next_release_at.strftime('%Y-%m-%d %H:%M') }} UTC</time></p>{% endif %}
-    {% if open_round is not none %}
-    <p>Rounds through {{ open_round }} are released. Existing round deadlines apply to the whole batch in batch modes.</p>
+    {% if round_banner %}<p>{{ round_banner }}</p>{% endif %}
+    {% if open_round is not none and t.fixture_release_mode != 'phased' %}
     <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="inline-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule">
       <input type="hidden" name="action" value="open_next_rounds">
@@ -321,9 +320,4 @@
     </form>
   </section>
 </div>
-<script>
-document.querySelectorAll('.release-time').forEach(function (el) {
-  el.textContent = new Date(el.dateTime).toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'short'});
-});
-</script>
 {% endblock %}

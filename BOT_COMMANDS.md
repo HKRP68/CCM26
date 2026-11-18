@@ -996,6 +996,7 @@ overdraw somebody is refused by name.
 | `/tfixsync` | Un-stick fixtures still showing as live |
 | `/tdeadline 48h` · `/tdeadline +12h` · `/tdeadline off` | Round deadlines. Owners are reminded 24h and 2h before; when time runs out the admins are alerted (group + DM, with /tsim and +24h buttons). **Nothing is simulated automatically**; a simulated match can still be played by its two teams, and the real result replaces it |
 | `/tfixturemode batch 3` | Open rounds **1–3**, then **4–6** only when the whole batch finishes. Any positive batch size up to 1000 is supported |
+| `/tfixturemode phased 1 3 YYYY-MM-DD HH:MM 1 24h` | Open rounds **1–3** with a shared fixed deadline in IST. After all their fixtures are complete, open the remaining rounds **one at a time**, each with **24 hours** from release. Set the last two values to change the follow-up batch size and hours |
 | `/tfixturemode manual 3` · `/tfixturemode next 2` | Open an initial batch manually, then release any number of additional rounds. Completing a batch waits for the admin |
 | `/tfixturemode scheduled 3 48h` | Release 3 more rounds every 48 hours while active. The tournament watch handles releases and catches up after restarts; no matches are settled automatically |
 | `/tfixturemode 3` · `/tfixturemode round` · `/tfixturemode all` | Keep a rolling window of 3 rounds, open one round at a time, or release all fixtures. Existing tournaments retain their current mode |
@@ -1022,6 +1023,11 @@ current batch and uses the new size for subsequent releases. In batch modes,
 `/tdeadline` gives all released unfinished rounds one shared deadline; completing
 one round inside the batch does not restart its clock. A completed manual batch
 has no active deadline while it waits for the next release.
+
+In phased mode, `/tdeadline 48h` updates the duration for future batches and
+`/tdeadline +12h` extends the current deadline. `/ctfixtures` and `/lptfixtures`
+show the active deadline in IST. Overdue fixtures remain open for play, and
+the next batch opens when the current one is complete.
 
 ---
 

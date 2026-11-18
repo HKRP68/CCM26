@@ -121,7 +121,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(bot.send_message.await_args.kwargs["chat_id"], 70001)
         notice = bot.send_message.await_args.kwargs["text"]
         self.assertIn("warning", notice)
-        self.assertIn("UTC", notice)
+        self.assertIn("IST", notice)
         self.assertIn("M1", notice)
 
     def test_target_first_shortcut_and_manual_release(self):

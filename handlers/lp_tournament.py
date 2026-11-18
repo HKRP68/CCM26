@@ -691,7 +691,10 @@ def _lifecycle_handler(action):
         def work(session, tour):
             if action == "start" and len(lpt.participants(session, tour.id)) < 2:
                 raise LPTError("Add at least two teams before starting.")
-            tournament_service.set_status(session, tour.id, status)
+            try:
+                tournament_service.set_status(session, tour.id, status)
+            except ValueError as exc:
+                raise LPTError(str(exc)) from exc
             return f"<b>{html.escape(tour.name)}</b> — {note}"
         await _with_active(update, work, admin=True)
 

@@ -28,6 +28,7 @@ import random
 from collections import Counter
 
 from services.pitch_report import PITCH_TYPES
+from utils.tournament_time import format_ist, parse_ist_deadline
 
 logger = logging.getLogger(__name__)
 
@@ -942,7 +943,8 @@ def list_fixtures(session, tournament_id):
 # rounds) are never locked.
 
 LEAGUE_STAGES = ("league", "group")
-RELEASE_MODES = ("rolling", "batch", "manual", "scheduled", "all")
+BATCH_RELEASE_MODES = ("batch", "manual", "scheduled", "phased")
+RELEASE_MODES = ("rolling", *BATCH_RELEASE_MODES, "all")
 
 
 def release_mode(tour):
@@ -963,7 +965,7 @@ def last_league_round(session, tournament_id):
 def configure_release(session, tour, mode, size=3, hours=48, now=None):
     """Save release controls without closing any already released round."""
     from datetime import datetime, timedelta
-    if mode not in RELEASE_MODES:
+    if mode not in RELEASE_MODES or mode == "phased":
         raise ValueError("Choose a valid fixture release mode.")
     size, hours = int(size), int(hours)
     if not 1 <= size <= 1000:
@@ -988,6 +990,8 @@ def configure_release(session, tour, mode, size=3, hours=48, now=None):
     tour.fixture_round_window = size
     tour.fixture_open_through = end
     tour.fixture_batch_hours = hours
+    if previous == "phased":
+        clear_phased_release(tour)
     if mode == "scheduled":
         if tour.status == "active" and (previous != mode or not tour.fixture_next_release_at):
             tour.fixture_next_release_at = (now or datetime.utcnow()) + timedelta(hours=hours)
@@ -996,11 +1000,86 @@ def configure_release(session, tour, mode, size=3, hours=48, now=None):
     session.flush()
 
 
+def clear_phased_release(tour):
+    tour.fixture_initial_round_from = None
+    tour.fixture_initial_round_to = None
+    tour.fixture_initial_deadline_at = None
+    tour.round_deadline_at = None
+    tour.round_tracked = 0
+    tour.round_reminder_stage = 0
+
+
+def validate_phased_schedule(session, tour, start, end, *, require_rounds=False):
+    last = last_league_round(session, tour.id)
+    if (require_rounds and not last) or tour.knockout_type == "pure_knockout":
+        raise ValueError("Generate numbered league fixtures before using phased release.")
+    if last and end > last:
+        raise ValueError(f"The league schedule ends at Round {last}.")
+    first = current_round(session, tour.id)
+    if (first and first < start) or (not last and start != 1):
+        raise ValueError("Finish the earlier league rounds before opening this initial range.")
+    return first
+
+
+def configure_phased_release(session, tour, start, end, deadline, size, hours, now=None):
+    """Open a fixed initial range, then release completion-based batches."""
+    from datetime import datetime
+    from services import tournament_watch
+    from models import TournamentMatch
+
+    start, end, size, hours = int(start), int(end), int(size), int(hours)
+    if not 1 <= start <= end <= 1000:
+        raise ValueError("Choose an initial round range between 1 and 1000.")
+    if not 1 <= size <= 1000:
+        raise ValueError("Choose between 1 and 1000 rounds per follow-up batch.")
+    if not 1 <= hours <= tournament_watch.MAX_ROUND_HOURS:
+        raise ValueError(f"Choose between 1 and {tournament_watch.MAX_ROUND_HOURS} hours per follow-up batch.")
+    now = now or datetime.utcnow()
+    fixed_at = parse_ist_deadline(deadline)
+    if fixed_at <= now and fixed_at != tour.fixture_initial_deadline_at:
+        raise ValueError("Choose an initial deadline in the future.")
+    first = validate_phased_schedule(session, tour, start, end, require_rounds=tour.status == "active")
+    previous_end = tour.fixture_initial_round_to if release_mode(tour) == "phased" else None
+    same_range = (start, end) == (tour.fixture_initial_round_from, previous_end)
+    if previous_end and (tour.fixture_open_through > previous_end or (first and first > previous_end)):
+        if not same_range or fixed_at != tour.fixture_initial_deadline_at:
+            raise ValueError("The initial range and its deadline are fixed once follow-up rounds open.")
+    elif first and first > end:
+        raise ValueError(f"Include the first unfinished round (Round {first}) in the initial range.")
+    if not same_range:
+        started_later = session.query(TournamentMatch.id).filter(
+            TournamentMatch.tournament_id == tour.id, TournamentMatch.stage.in_(LEAGUE_STAGES),
+            TournamentMatch.round_no > end, TournamentMatch.status != "scheduled").first()
+        if started_later:
+            raise ValueError("Include any later round that has already started in the initial range.")
+        clear_phased_release(tour)
+        tour.fixture_open_through = end
+    elif first and first > end:
+        # Capture the open batch using its current settings before future batches change.
+        tournament_watch.update_round_clock(session, tour, now)
+    elif fixed_at != tour.fixture_initial_deadline_at:
+        tour.round_deadline_at = None
+        tour.round_reminder_stage = tournament_watch.STAGE_NONE
+    tour.fixtures_all_at_once = False
+    tour.fixture_release_mode = "phased"
+    tour.fixture_initial_round_from = start
+    tour.fixture_initial_round_to = end
+    tour.fixture_initial_deadline_at = fixed_at
+    tour.fixture_round_window = size
+    tour.round_hours = hours
+    tour.fixture_next_release_at = None
+    if tour.status in ("active", "paused") and first is not None and first <= end:
+        tour.round_deadline_at = fixed_at
+    session.flush()
+
+
 def open_next_rounds(session, tour, count=None):
     """Extend the explicit boundary; preserve the current automatic batch."""
     mode = release_mode(tour)
     if mode == "all":
         raise ValueError("All rounds are already open.")
+    if mode == "phased":
+        raise ValueError("Complete the open matches to release the next batch.")
     count = tour.fixture_round_window if count is None else int(count)
     if not 1 <= count <= 1000:
         raise ValueError("Choose between 1 and 1000 additional rounds.")
@@ -1084,7 +1163,7 @@ def open_round(session, tournament_id):
     window = max(1, int(getattr(tour, "fixture_round_window", 1) or 1))
     if mode in ("manual", "scheduled"):
         end = tour.fixture_open_through or window
-    elif mode == "batch":
+    elif mode in ("batch", "phased"):
         end = tour.fixture_open_through or window
         if rnd > end:
             end += ((rnd - end - 1) // window + 1) * window
@@ -1096,7 +1175,7 @@ def open_round(session, tournament_id):
 def deadline_round(session, tour):
     """Stable deadline key: the batch boundary, or the earliest rolling round."""
     first = current_round(session, tour.id)
-    if release_mode(tour) in ("batch", "manual", "scheduled"):
+    if release_mode(tour) in BATCH_RELEASE_MODES:
         end = open_round(session, tour.id)
         return end if first is not None and end is not None and first <= end else None
     return first
@@ -1196,6 +1275,9 @@ def split_open_round(session, tournament_id, fixtures):
         progress["open_through"] = rnd
         progress["release_mode"] = release_mode(tour)
         progress["awaiting_release"] = progress["round"] > rnd
+        if progress["release_mode"] == "phased":
+            from services import tournament_watch
+            progress["deadline_at"] = tournament_watch.phased_deadline(session, tour, rnd, progress["round"])
     visible = [fx for fx in fixtures if not is_round_locked(fx, rnd)]
     return visible, len(fixtures) - len(visible), progress
 
@@ -1203,26 +1285,45 @@ def split_open_round(session, tournament_id, fixtures):
 def round_banner(progress, locked_count, tour=None):
     """One plain-text line describing the open round, or "" when there is none.
 
-    With ``tour``, the round's deadline is included ("⏳ ends in 1d 4h").
+    With ``tour``, include the open deadline in IST and the time remaining.
     """
     if not progress:
+        if tour and release_mode(tour) == "all" and tour.round_tracked > 0 and tour.round_deadline_at:
+            from services.tournament_watch import deadline_text
+            return f"Round {tour.round_tracked} · {deadline_text(tour)}"
         return ""
     if progress.get("awaiting_release"):
-        return f"Rounds through {progress['open_through']} complete · waiting for the next batch to open"
+        text = f"Rounds through {progress['open_through']} complete · waiting for the next batch to open"
+        if tour and tour.fixture_next_release_at:
+            text += f" · Next release {format_ist(tour.fixture_next_release_at)}"
+        return text
     text = (f"Round {progress['round']} of {progress['rounds']} · "
             f"{progress['played']}/{progress['total']} played")
-    if progress.get("open_through", progress["round"]) > progress["round"]:
+    phased_initial = (tour and progress.get("release_mode") == "phased"
+                      and progress["open_through"] == tour.fixture_initial_round_to)
+    if phased_initial:
+        text += f" · Initial rounds {tour.fixture_initial_round_from}–{tour.fixture_initial_round_to} open"
+    elif progress.get("open_through", progress["round"]) > progress["round"]:
         text += f" · Rounds {progress['round']}–{progress['open_through']} open"
     if tour is not None:
-        from services.tournament_watch import deadline_text
-        left = deadline_text(tour)
+        from services.tournament_watch import deadline_text, format_deadline
+        if progress.get("release_mode") == "phased":
+            left = format_deadline(progress["deadline_at"])
+        else:
+            left = deadline_text(tour)
         if left:
             text += f" · {left}"
+        if tour.fixture_next_release_at:
+            text += f" · Next release {format_ist(tour.fixture_next_release_at)}"
     if locked_count:
-        rule = {"batch": "when the whole batch finishes", "manual": "when the admin opens them",
+        rule = {"batch": "when the whole batch finishes", "phased": "when the whole batch finishes",
+                "manual": "when the admin opens them",
                 "scheduled": "on the release schedule"}.get(progress.get("release_mode"), "as each round finishes")
         text += (f" · 🔒 {locked_count} match{'es' if locked_count != 1 else ''}"
                  f" in later rounds unlock {rule}")
+        if tour and progress.get("release_mode") == "phased":
+            size = tour.fixture_round_window
+            text += f" · {size} round{'s' if size != 1 else ''} per follow-up batch, {tour.round_hours}h each"
     return text
 
 
@@ -1246,6 +1347,7 @@ def round_lock_message(session, tournament_id, team1_id, team2_id):
     from models import Tournament
     mode = release_mode(session.get(Tournament, int(tournament_id)))
     action = {"batch": "Finish the whole batch to open the next one.",
+              "phased": "Finish the whole batch to open the next one.",
               "manual": "Wait for the admin to open the next batch.",
               "scheduled": "Wait for the scheduled release or an admin opening."}.get(
                   mode, f"Finish Round {first} to advance the open rounds.")

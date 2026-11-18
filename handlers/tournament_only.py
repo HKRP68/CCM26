@@ -13,6 +13,7 @@ from sqlalchemy import func
 from database import get_session
 from models import User
 from services.admin_ids import is_bot_admin
+from utils.tournament_time import format_ist
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +117,7 @@ def _execute(action, target, reason, admin_id):
             for user in users:
                 lines.append(_label(user, max_name_chars=40))
                 starts = user.tournament_only_starts_at
-                lines.append(f"  Warning until {starts:%Y-%m-%d %H:%M} UTC"
+                lines.append(f"  Warning until {format_ist(starts)}"
                              if starts and starts > datetime.utcnow() else "  Restricted")
                 if user.tournament_only_reason:
                     # Five bounded labels/snippets stay below 4096 characters,
@@ -135,7 +136,7 @@ def _execute(action, target, reason, admin_id):
             if user.tournament_only_reason:
                 lines.append(f"Reason: {html.escape(user.tournament_only_reason)}")
             if user.tournament_only_at:
-                lines.append(f"Since: {user.tournament_only_at:%Y-%m-%d %H:%M} UTC")
+                lines.append(f"Since: {format_ist(user.tournament_only_at)}")
             if user.tournament_only_by:
                 lines.append(f"Set by admin: <code>{int(user.tournament_only_by)}</code>")
             lines.append(html.escape(service.restriction_message(user, session=session)))

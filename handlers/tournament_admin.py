@@ -843,8 +843,7 @@ def _sim_listing(session, tour):
              session.query(TournamentTeam).filter_by(tournament_id=tour.id).all()}
     open_fx = _open_fixtures(session, tour)
     head = f"🎲 <b>{html.escape(tour.name)}</b> — simulate a fixture"
-    progress = (None if league_schedule_service.all_at_once(session, tour.id)
-                else league_schedule_service.round_progress(session, tour.id))
+    _, _, progress = league_schedule_service.split_open_round(session, tour.id, open_fx)
     banner = league_schedule_service.round_banner(progress, 0, tour)
     if banner:
         head += f"\n🔵 {banner}"
@@ -1099,7 +1098,8 @@ _DEADLINE_USAGE = (
     "<code>/tdeadline 48h</code> — every round gets 48 hours (or <code>2d</code>)\n"
     "<code>/tdeadline +12h</code> — give the current round 12 more hours\n"
     "<code>/tdeadline off</code> — no deadlines\n\n"
-    "In batch modes this is one shared deadline for all released unfinished rounds. "
+    "In batch modes the open rounds share a deadline. In phased mode a length "
+    "updates future batches, and you can edit the initial IST deadline with /tfixturemode. "
     "Reminders go out 24h and 2h before the end. When a round's time runs out "
     "the admins are alerted — <b>nothing is simulated automatically</b>; settle "
     "a match with <code>/tsim</code> or extend the round."
@@ -1115,6 +1115,8 @@ _FIXTURE_MODE_USAGE = (
     "any of them playable in any order\n"
     "<code>/tfixturemode 3</code> — keep three rounds open at a time\n"
     "<code>/tfixturemode batch 3</code> — open 1–3, then 4–6 when all finish\n"
+    "<code>/tfixturemode phased 1 3 YYYY-MM-DD HH:MM 1 24h</code> — open 1–3 "
+    "with a fixed IST deadline, then open one round at a time for 24h each\n"
     "<code>/tfixturemode manual 3</code> — open batches only when you choose\n"
     "<code>/tfixturemode scheduled 3 48h</code> — release 3 more rounds every 48h\n"
     "<code>/tfixturemode next 2</code> — open 2 additional rounds now\n"
@@ -1131,6 +1133,11 @@ def _fixture_mode_summary(tour):
     release = release_mode(tour)
     if getattr(tour, "fixtures_all_at_once", False):
         mode = "📋 <b>All at once</b> — every fixture is shown and playable"
+    elif release == "phased":
+        from utils.tournament_time import format_ist
+        mode = (f"🔵 <b>Initial rounds {tour.fixture_initial_round_from}–{tour.fixture_initial_round_to}</b> "
+                f"due {format_ist(tour.fixture_initial_deadline_at)}. Then "
+                f"<b>{tour.fixture_round_window}</b> round(s) per batch for <b>{tour.round_hours}h</b> each")
     elif release in ("batch", "manual", "scheduled"):
         descriptions = {"batch": "the next batch opens when the whole batch finishes",
                         "manual": "the admin opens additional rounds with /tfixturemode next",
@@ -1162,7 +1169,7 @@ async def tfixturemode_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                          + _FIXTURE_MODE_USAGE)
             return
         from services import league_schedule_service as lss
-        if args[0].lower() in ("batch", "manual", "scheduled", "next"):
+        if args[0].lower() in ("batch", "manual", "scheduled", "next", "phased"):
             try:
                 mode = args[0].lower()
                 if mode == "next" and len(args) <= 2:
@@ -1170,7 +1177,17 @@ async def tfixturemode_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                     session.commit()
                     await _reply(update, f"✅ Rounds through {end} are now open.")
                     return
-                if len(args) != (3 if mode == "scheduled" else 2):
+                if mode == "phased" and len(args) == 7:
+                    from services.tournament_watch import parse_hours
+                    hours, relative = parse_hours(args[6])
+                    if relative:
+                        raise ValueError("Use a duration such as 24h, without +.")
+                    lss.configure_phased_release(session, tour, args[1], args[2],
+                                                 f"{args[3]} {args[4]}", args[5], hours)
+                    session.commit()
+                    await _reply(update, "✅ " + _fixture_mode_summary(tour))
+                    return
+                if mode == "phased" or len(args) != (3 if mode == "scheduled" else 2):
                     raise ValueError("Check the command arguments.")
                 hours = 48
                 if mode == "scheduled":
@@ -1187,6 +1204,8 @@ async def tfixturemode_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             return
         word = "".join(args).lower().replace("-", "").replace("_", "")
         if len(args) == 1 and args[0].isascii() and args[0].isdigit() and 0 < int(args[0]) <= 2147483647:
+            if lss.release_mode(tour) == "phased":
+                lss.clear_phased_release(tour)
             tour.fixture_round_window = int(args[0])
             tour.fixtures_all_at_once = False
             tour.fixture_release_mode = "rolling"
@@ -1198,6 +1217,8 @@ async def tfixturemode_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         if word not in _FIXTURE_MODE_WORDS:
             await _reply(update, _FIXTURE_MODE_USAGE)
             return
+        if lss.release_mode(tour) == "phased":
+            lss.clear_phased_release(tour)
         tour.fixtures_all_at_once = _FIXTURE_MODE_WORDS[word]
         tour.fixture_round_window = 1
         tour.fixture_release_mode = "rolling"
@@ -1209,18 +1230,30 @@ async def tfixturemode_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         session.close()
 
 
-def _deadline_summary(tour):
+def _deadline_summary(session, tour):
     from services import tournament_watch as tw
-    from services.league_schedule_service import release_mode
-    batch = release_mode(tour) in ("batch", "manual", "scheduled")
-    if not tour.round_hours:
+    from services import league_schedule_service as lss
+    from utils.tournament_time import format_ist
+    mode = lss.release_mode(tour)
+    batch = mode in lss.BATCH_RELEASE_MODES
+    rnd = lss.deadline_round(session, tour)
+    if mode == "phased":
+        line = (f"⏳ <b>{html.escape(tour.name)}</b> — initial rounds "
+                f"{tour.fixture_initial_round_from}–{tour.fixture_initial_round_to} due "
+                f"{format_ist(tour.fixture_initial_deadline_at)}. Follow-up batches get <b>{tour.round_hours}h</b>.")
+        if rnd is not None and rnd > tour.fixture_initial_round_to:
+            first = lss.current_round(session, tour.id)
+            line += f"\nBatch through Round {rnd} · {tw.format_deadline(tw.phased_deadline(session, tour, rnd, first))}"
+        return line
+    if not tour.round_hours and not tour.round_deadline_at:
         return f"⏳ <b>{html.escape(tour.name)}</b> — no round deadlines."
     unit = "batch" if batch else "round"
-    line = (f"⏳ <b>{html.escape(tour.name)}</b> — each {unit} gets "
-            f"<b>{tour.round_hours}h</b>.")
+    line = f"⏳ <b>{html.escape(tour.name)}</b>"
+    if tour.round_hours:
+        line += f" — each {unit} gets <b>{tour.round_hours}h</b>."
     left = tw.deadline_text(tour)
     if left:
-        label = f"Batch through Round {tour.round_tracked}" if batch else f"Round {tour.round_tracked}"
+        label = f"Batch through Round {rnd}" if batch else f"Round {rnd}"
         line += f"\n{label}: {left}."
     return line
 
@@ -1236,7 +1269,7 @@ async def tdeadline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             tour = _resolve_tournament(session, args)
             if not args:
-                await _reply(update, _deadline_summary(tour) + "\n\n" + _DEADLINE_USAGE)
+                await _reply(update, _deadline_summary(session, tour) + "\n\n" + _DEADLINE_USAGE)
                 return
             token = args[0].lower()
             if token in ("off", "none", "clear", "0"):
@@ -1252,7 +1285,7 @@ async def tdeadline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.rollback()
             await _reply(update, f"⚠️ {html.escape(str(exc))}")
             return
-        await _reply(update, "✅ " + _deadline_summary(tour))
+        await _reply(update, "✅ " + _deadline_summary(session, tour))
     finally:
         session.close()
 
@@ -1266,7 +1299,8 @@ async def tdeadline_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not is_admin(query.from_user.id if query.from_user else 0):
         await query.answer(NOT_ADMIN, show_alert=True)
         return
-    tid, _, hours = (query.data or "")[len(tw.CB_EXTEND):].partition("_")
+    tid, _, rest = (query.data or "")[len(tw.CB_EXTEND):].partition("_")
+    hours, _, batch_end = rest.partition("_")
     session = get_session()
     try:
         tour = session.get(Tournament, int(tid))
@@ -1274,14 +1308,16 @@ async def tdeadline_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await query.answer("That tournament is gone.", show_alert=True)
             return
         try:
-            tw.extend_deadline(session, tour, int(hours or 24))
+            tw.extend_deadline(session, tour, int(hours or 24),
+                               expected_round=int(batch_end) if batch_end else None)
             session.commit()
         except ValueError as exc:
             session.rollback()
             await query.answer(str(exc)[:200], show_alert=True)
             return
-        text = (f"⏳ <b>{html.escape(tour.name)}</b> — Round {tour.round_tracked} "
-                f"extended by {int(hours or 24)}h: {tw.deadline_text(tour)}.")
+        scope = f"Batch through Round {batch_end}" if batch_end else f"Round {tour.round_tracked}"
+        text = (f"⏳ <b>{html.escape(tour.name)}</b> — {scope} "
+                f"extended by {int(hours or 24)}h · {tw.deadline_text(tour)}.")
     finally:
         session.close()
     await query.answer("Extended.")

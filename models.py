@@ -2930,6 +2930,11 @@ class Tournament(Base):
     fixture_open_through = Column(Integer, default=0, server_default="0", nullable=False)
     fixture_batch_hours = Column(Integer, default=48, server_default="48", nullable=False)
     fixture_next_release_at = Column(DateTime, nullable=True)
+    # Phased release uses a fixed initial deadline (UTC). The batch size and
+    # round_hours apply after that initial range is complete.
+    fixture_initial_round_from = Column(Integer, nullable=True)
+    fixture_initial_round_to = Column(Integer, nullable=True)
+    fixture_initial_deadline_at = Column(DateTime, nullable=True)
 
     # How the surface for a tournament match is decided:
     #   "host"    – the host picks it during setup (the original behaviour)

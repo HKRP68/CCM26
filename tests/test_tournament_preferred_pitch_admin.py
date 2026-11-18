@@ -497,6 +497,28 @@ class PreferredPitchAdminTests(unittest.TestCase):
                         "fixture_round_window": "0", "fixture_batch_hours": "48"})
         self.assertEqual(t.fixture_release_mode, "rolling")
 
+    def test_phased_release_controls_save_and_render_ist(self):
+        from datetime import datetime
+        from services import league_schedule_service as lss
+
+        data = {"fixture_release_present": "1", "fixture_release_mode": "phased",
+                "fixture_initial_round_from": "1", "fixture_initial_round_to": "2",
+                "fixture_initial_deadline_at": "2038-02-01T00:15", "fixture_followup_rounds": "1",
+                "fixture_followup_hours": "24"}
+        t = self.create(**data)
+        lss.generate_schedule(self.session, t.id)
+        self.session.commit()
+        self.assertEqual(t.fixture_initial_deadline_at, datetime(2038, 1, 31, 18, 45))
+        body = self.client.get(f"/tournaments/{t.id}/schedule").get_data(as_text=True)
+        self.assertIn("01 Feb 2038, 00:15 IST", body)
+        self.assertIn('value="2038-02-01T00:15"', body)
+        self.assertIn("Round 3 · Locked", body)
+        self.detail(t, {**data, "action": "save_fixture_release", "fixture_followup_hours": "36"})
+        self.assertEqual(t.round_hours, 36)
+        invalid_end = str(lss.last_league_round(self.session, t.id) + 1)
+        self.detail(t, {**data, "action": "save_fixture_release", "fixture_initial_round_to": invalid_end})
+        self.assertEqual(t.fixture_initial_round_to, 2)
+
     def test_bot_release_commands_and_legacy_modes(self):
         from handlers import tournament_admin as handler
         from services import league_schedule_service as lss
@@ -523,6 +545,12 @@ class PreferredPitchAdminTests(unittest.TestCase):
             t = self.session.get(model, tid)
             self.assertEqual(lss.release_mode(t), "all")
             self.assertIn("Choose between", reply.call_args.args[1])
+            args = ["phased", "1", "2", "2038-02-01", "00:15", "1", "24h"]
+            asyncio.run(handler.tfixturemode_handler(None, SimpleNamespace(args=args)))
+            t = self.session.get(model, tid)
+            self.assertEqual(lss.release_mode(t), "phased")
+            self.assertEqual(lss.open_round(self.session, t.id), 2)
+            self.assertIn("01 Feb 2038, 00:15 IST", reply.call_args.args[1])
 
 
 

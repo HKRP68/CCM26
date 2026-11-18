@@ -313,6 +313,7 @@ def recipient_receipt_page(session, telegram_id, before_id=None, limit=12):
     """A complete, bounded Telegram page and the cursor for older receipts."""
     from models import TournamentPrizePayout
     from services.tournament_awards import AWARD_LABEL, prize_text
+    from utils.tournament_time import format_ist
     query = session.query(TournamentPrizePayout).filter_by(recipient_tg_id=int(telegram_id))
     if before_id:
         query = query.filter(TournamentPrizePayout.id < int(before_id))
@@ -332,9 +333,9 @@ def recipient_receipt_page(session, telegram_id, before_id=None, limit=12):
         if row.balance_coins_after is not None:
             receipt.append(f"Balance after credit: {row.balance_coins_after:,} coins + {row.balance_gems_after or 0:,} gems")
         if row.paid_at:
-            receipt.append(row.paid_at.strftime("%d %b %Y %H:%M UTC"))
+            receipt.append(format_ist(row.paid_at))
         if row.reversed_at:
-            receipt.append("Reversed: " + row.reversed_at.strftime("%d %b %Y %H:%M UTC"))
+            receipt.append("Reversed: " + format_ist(row.reversed_at))
             if row.reversal_coins_after is not None:
                 receipt.append(f"Balance after reversal: {row.reversal_coins_after:,} coins + {row.reversal_gems_after or 0:,} gems")
         receipt.append("")

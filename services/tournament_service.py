@@ -116,6 +116,10 @@ def activate_tournament(session, tournament_id):
     tour = session.get(Tournament, int(tournament_id))
     if not tour:
         return None
+    if tour.status in ("draft", "scheduled") and tour.fixture_release_mode == "phased":
+        from services.league_schedule_service import validate_phased_schedule
+        validate_phased_schedule(session, tour, tour.fixture_initial_round_from,
+                                 tour.fixture_initial_round_to, require_rounds=True)
     from services.tournament_prize_splits import lock_splits
     lock_splits(session, tour)
     kind = tournament_kind(tour)
@@ -265,6 +269,10 @@ def set_status(session, tournament_id, status):
     if not tour:
         return None
     if status == "active":
+        if tour.status in ("draft", "scheduled") and tour.fixture_release_mode == "phased":
+            from services.league_schedule_service import validate_phased_schedule
+            validate_phased_schedule(session, tour, tour.fixture_initial_round_from,
+                                     tour.fixture_initial_round_to, require_rounds=True)
         from services.tournament_prize_splits import lock_splits
         lock_splits(session, tour)
     tour.status = status
@@ -342,6 +350,11 @@ def reset_tournament(session, tournament_id):
             tour.activated_at = None
         tour.knockout_generated = False
         tour.completed_at = None
+        if tour.fixture_release_mode == "phased":
+            tour.fixture_initial_round_from = 1
+            tour.fixture_open_through = tour.fixture_initial_round_to
+            tour.round_deadline_at = None
+            tour.round_tracked = tour.round_reminder_stage = tour.recap_round = 0
         if tour.status not in ("cancelled",):
             tour.status = "draft" if not tour.is_active else "active"
     return tour
@@ -1521,7 +1534,7 @@ def schedule_news(session, tm):
         from services import league_schedule_service
         rnd = league_schedule_service.current_round(session, tm.tournament_id)
         mode = league_schedule_service.release_mode(tour)
-        if mode in ("batch", "manual", "scheduled"):
+        if mode in league_schedule_service.BATCH_RELEASE_MODES:
             same_round_left = session.query(TournamentMatch).filter(
                 TournamentMatch.tournament_id == tm.tournament_id,
                 TournamentMatch.stage.in_(league_schedule_service.LEAGUE_STAGES),
@@ -1534,6 +1547,8 @@ def schedule_news(session, tm):
             end = league_schedule_service.open_round(session, tour.id)
             if rnd > end:
                 return f"✅ <b>Batch complete — waiting for the next release.</b> See {fixtures_cmd}."
+            if mode == "phased" and end > tour.fixture_open_through:
+                return ""  # The tournament watch announces the batch and its deadline.
             if mode == "batch":
                 size = max(1, tour.fixture_round_window)
                 base = tour.fixture_open_through or size

@@ -486,7 +486,7 @@
         <td>{{ s.name }}</td>
         <td>{{ s.league_name or '—' }}</td>
         <td>{{ count }}</td>
-        <td>{{ s.archived_at.strftime('%d %b %Y') if s.archived_at else '—' }}</td>
+        <td>{{ s.archived_at|ist('%d %b %Y') if s.archived_at else '—' }}</td>
         <td>
           <form method="POST" class="inline-form" onsubmit='return confirm("Remove the saved stats of " + {{ s.name|tojson }} + " for good?");'>
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

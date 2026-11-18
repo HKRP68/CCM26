@@ -1227,6 +1227,7 @@ TOURNAMENT_RUN_STATE = (
     # A custom bracket's config names last season's teams.
     "knockout_config_json", "knockout_generated",
     "linked_seasons_json", "best_catch_json",
+    "fixture_initial_round_from", "fixture_initial_round_to", "fixture_initial_deadline_at",
     "round_deadline_at", "round_tracked", "round_reminder_stage", "recap_round",
     "bracket_posted_key", "awards_given_at", "awards_announced_at", "ceremony_claimed_at",
     "activated_at", "completed_at", "created_at", "updated_at",

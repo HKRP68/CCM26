@@ -9,6 +9,8 @@ their next gameplay request.
 import json
 from datetime import datetime, timedelta
 
+from utils.tournament_time import format_ist
+
 
 DEFAULT_REASON = "Please play your pending tournament matches."
 RESTRICTION_NOTICE = (
@@ -50,7 +52,7 @@ def restriction_message(user_or_id=None, session=None):
     notice = RESTRICTION_NOTICE
     starts = getattr(user, "tournament_only_starts_at", None)
     if starts and starts > datetime.utcnow():
-        notice = f"⚠️ Tournament warning. Other modes will lock at {starts:%Y-%m-%d %H:%M} UTC unless you finish your open-round fixtures."
+        notice = f"⚠️ Tournament warning. Other modes will lock at {format_ist(starts)} unless you finish your open-round fixtures."
     if session is not None and getattr(user, "tournament_only_fixture_ids_json", None):
         rows = remaining_fixtures(session, user)
         notice += "\nRequired fixtures: " + ", ".join(
