@@ -5310,9 +5310,9 @@ def webapp_tournament_directory():
     auth, _, error = _webapp_auth()
     if error:
         return error
-    db, _, telegram_id = auth
+    db, user, telegram_id = auth
     try:
-        return directory(db, telegram_id)
+        return directory(db, user.id, telegram_id)
     finally:
         db.close()
 
@@ -5344,7 +5344,7 @@ def webapp_tournament_team():
 def webapp_tournament():
     """The live tournament: header, points table, fixtures, injuries.
 
-    Body: ``{tournament_id?}`` — omitted means the first live tournament.
+    Body: ``{tournament_id?}`` — omitted means the featured live tournament.
     """
     auth, tg_id, err = _webapp_auth()
     if err:
@@ -5385,7 +5385,7 @@ def webapp_tournament_stats():
         tour = tw.resolve_visible(db, data.get("tournament_id"), data.get("archive") is True)
         if tour is None:
             return {"ok": False, "live": False,
-                    "message": "This tournament is not live."}, 404
+                    "message": "This tournament is unavailable in the Mini App."}, 404
         return {"ok": True, "tournament_id": tour.id, **tw.stats_payload(db, tour)}
     except Exception as e:
         db.rollback()
@@ -5408,7 +5408,7 @@ def webapp_tournament_match():
         data = request.get_json(silent=True) or {}
         tour = tw.resolve_visible(db, data.get("tournament_id"), data.get("archive") is True)
         if tour is None:
-            return {"ok": False, "message": "This tournament is not live."}, 404
+            return {"ok": False, "message": "This tournament is unavailable in the Mini App."}, 404
         out = tw.fixture_scorecard(db, tour, data.get("fixture_id"), user.id)
         return out if out.get("ok") else (out, 404)
     except Exception as e:

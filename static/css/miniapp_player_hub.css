@@ -58,3 +58,21 @@
 .hub-tournament-card .hub-label { color: var(--hub-mint); font-size: .73rem; flex-shrink: 0; }
 .hub-screen [hidden] { display: none !important; }
 .hub-screen :focus-visible, .hub-profile-link:focus-visible { outline: 2px solid #b9f2db; outline-offset: 2px; }
+
+.tn-career-record {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px;
+  margin: 12px 0 0;
+}
+.tn-career-record div {
+  padding: 7px 5px; min-width: 0; background: #132d37; border-radius: 8px;
+}
+.tn-career-record dt { color: var(--hub-secondary); font-size: .69rem; }
+.tn-career-record dd {
+  margin: 3px 0 0; color: var(--hub-mint); overflow-wrap: anywhere;
+  font: 800 1.12rem var(--font-display); font-variant-numeric: tabular-nums;
+}
+.tn-career-title-link { margin-top: 8px; text-align: left; overflow-wrap: anywhere; max-width: 100%; }
+.tn-directory-controls { margin-bottom: 10px; }
+@media (max-width: 360px) {
+  .tn-career-record { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

@@ -234,3 +234,77 @@ def test_telegram_photo_proxy_fetches_restricted_file_and_reencodes(monkeypatch)
             assert photo.format == "JPEG" and photo.size == (192, 192)
     finally:
         miniapp_avatar._cached_photo.cache_clear()
+
+
+def test_tournament_centre_features_only_the_latest_live_competition(clubhouse):
+    from models import Tournament
+
+    admin, sessions = clubhouse
+    now = datetime.utcnow()
+    with sessions.begin() as db:
+        db.add_all([
+            Tournament(id=1, name="Earlier Cup", kind="challenge", status="active",
+                       is_active=True, activated_at=now - timedelta(days=1)),
+            Tournament(id=2, name="Featured Cup", kind="letsplay", status="active",
+                       is_active=True, activated_at=now),
+            Tournament(id=3, name="Paused Cup", kind="challenge", status="paused",
+                       is_active=True, activated_at=now + timedelta(seconds=1)),
+        ])
+
+    client = admin.app.test_client()
+    headers = {"Authorization": "tma DEV_11"}
+    directory = client.post("/api/webapp/tournament/directory", headers=headers).get_json()
+    assert [item["id"] for item in directory["current"]] == [2]
+    assert directory["career"] == {
+        "played": 0, "titles": 0, "match_wins": 0, "match_losses": 0, "latest_title": None,
+    }
+    detail = "/api/webapp/tournament"
+    featured = client.post(detail, headers=headers).get_json()
+    assert featured["tournament"]["id"] == 2
+    assert [item["id"] for item in featured["live_tournaments"]] == [2]
+    assert client.post(detail, headers=headers, json={"tournament_id": 1}).get_json()["live"] is False
+    assert client.post(detail + "/stats", headers=headers, json={"tournament_id": 1}).status_code == 404
+
+
+def test_tournament_career_attributes_results_and_titles_once(clubhouse):
+    from models import Tournament, TournamentMatch, TournamentTeam
+
+    admin, sessions = clubhouse
+    with sessions.begin() as db:
+        db.add_all([
+            Tournament(id=1, name="Crown Cup", status="completed"),
+            Tournament(id=2, name="Challenge Series", status="active", is_active=True),
+            Tournament(id=3, name="Draft Cup", status="draft"),
+            TournamentTeam(id=1, tournament_id=1, name="Owned", owner_tg_id=11),
+            TournamentTeam(id=2, tournament_id=1, name="Co-owned", co_owner_ids_json="[11]"),
+            TournamentTeam(id=3, tournament_id=1, name="Rivals", owner_tg_id=22),
+            TournamentTeam(id=4, tournament_id=2, name="Unowned XI"),
+            TournamentTeam(id=5, tournament_id=2, name="Other XI", co_owner_ids_json="[111]"),
+            TournamentTeam(id=6, tournament_id=3, name="Draft entry", user_tg_id=11),
+        ])
+        db.add_all([
+            TournamentMatch(tournament_id=1, team1_id=1, team2_id=3, winner_team_id=1,
+                            stage="final", match_no=2),
+            # A rebuild produced a newer, decisive final. The title is counted once.
+            TournamentMatch(tournament_id=1, team1_id=2, team2_id=3, winner_team_id=2,
+                            stage="final", match_no=3, host_user_id=1, target_user_id=2),
+            # A named captain gets the match result even when someone else owns the side.
+            TournamentMatch(tournament_id=1, team1_id=1, team2_id=3, winner_team_id=1,
+                            host_user_id=2),
+            TournamentMatch(tournament_id=2, team1_id=4, team2_id=5, winner_team_id=5,
+                            host_user_id=1),
+            TournamentMatch(tournament_id=2, team1_id=4, team2_id=5, result_type="no_result",
+                            host_user_id=1),
+            TournamentMatch(tournament_id=2, team1_id=4, team2_id=5, winner_team_id=5,
+                            host_user_id=1, is_simulated=True),
+            TournamentMatch(tournament_id=2, team1_id=4, team2_id=5, status="scheduled",
+                            host_user_id=1),
+        ])
+
+    path = "/api/webapp/tournament/directory"
+    client = admin.app.test_client()
+    alice = client.post(path, headers={"Authorization": "tma DEV_11"}).get_json()["career"]
+    assert alice == {"played": 2, "titles": 1, "match_wins": 2, "match_losses": 1,
+                     "latest_title": {"id": 1, "name": "Crown Cup"}}
+    bob = client.post(path, headers={"Authorization": "tma DEV_22"}).get_json()["career"]
+    assert bob["played"] == 1 and bob["titles"] == 0

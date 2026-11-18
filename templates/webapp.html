@@ -2417,7 +2417,7 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/franchise_draft.css', v='draft-controls-v4') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/auction_arena.css', v='auction-settings-v1') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_clubhouse.css', v='2') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_player_hub.css', v='1') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_player_hub.css', v='2') }}">
 </head>
 <body>
 
@@ -3269,7 +3269,6 @@
     <h2 class="hub-title">Tournament centre</h2>
     <button type="button" class="hub-button" id="tn-directory-back" hidden onclick="showTournamentDirectory()">All tournaments</button>
   </div>
-  <div id="tn-switch" class="filters" style="display:none;"></div>
   <div id="tn-content"><div class="empty"><div class="spinner"></div></div></div>
 </div>
 
@@ -3340,7 +3339,7 @@
     <div class="icon">👥</div>
     <div>Squad</div>
   </button>
-  <button class="tab" id="tab-tournament" data-screen="tournament" onclick="navigate('tournament')">
+  <button class="tab" id="tab-tournament" data-screen="tournament" onclick="openTournamentDirectory()">
     <span id="tn-live-dot" class="tab-live-dot" hidden></span>
     <div class="icon">🏟️</div>
     <div>Tourney</div>
@@ -9679,26 +9678,6 @@ function updateTournamentTab(info) {
   const dot = document.getElementById('tn-live-dot');
   if (dot) dot.hidden = !tnLive.length;
   if (!tnArchive && tnId && !tnLive.some(t => t.id === tnId)) { tnId = null; tnData = null; tnInvalidateStats(); }
-
-}
-
-function renderTnSwitch() {
-  const el = document.getElementById('tn-switch');
-  if (tnArchive || tnLive.length < 2) { el.style.display = 'none'; return; }
-  el.style.display = 'flex';
-  el.innerHTML = tnLive.map(t => `
-    <button class="chip ${t.id === tnId ? 'active' : ''}" onclick="tnSelect(${t.id})">
-      ${t.kind === 'letsplay' ? '🎮' : '🏆'} ${escapeHtml(t.name)}
-    </button>`).join('');
-}
-
-function tnSelect(id) {
-  if (id === tnId) return;
-  haptic('light');
-  stopTournamentPolling();
-  tnDirectoryOpen = false; tnArchive = false;
-  tnId = id; tnData = null; tnInvalidateStats();
-  loadTournament();
 }
 
 async function loadTournament(force = false, background = false) {
@@ -9709,7 +9688,6 @@ async function loadTournament(force = false, background = false) {
   if (back) back.hidden = false;
   const el = document.getElementById('tn-content');
   if (!tnId && tnLive.length) tnId = tnLive[0].id;
-  renderTnSwitch();
   const cached = tnData && tnData.tournament.id === tnId;
   // Each selection owns its response. A newer request can recover immediately
   // even if an older request is still waiting for the network.
@@ -9729,7 +9707,7 @@ async function loadTournament(force = false, background = false) {
     if (currentScreen !== 'tournament') return;
     if (!data.live && !data.archive) {
       tnData = null;
-      el.innerHTML = `<div class="empty"><div class="icon">🏟️</div>This tournament has ended. <button class="hub-button" onclick="showTournamentDirectory()">Browse results</button></div>`;
+      el.innerHTML = `<div class="empty"><div class="icon">🏟️</div>This tournament is no longer featured. <button class="hub-button" onclick="showTournamentDirectory()">Tournament centre</button></div>`;
       return;
     }
     if (!data.tournament || !Array.isArray(data.table) || !Array.isArray(data.fixtures)) {
@@ -9739,7 +9717,6 @@ async function loadTournament(force = false, background = false) {
     if (force || (tnData && JSON.stringify(tnData.fixtures) !== JSON.stringify(data.fixtures))) tnInvalidateStats();
     tnData = data;
     tnId = data.tournament.id;
-    renderTnSwitch();
     renderTournament();
     if (['overview', 'stats', 'mvp'].includes(tnSub)) loadTnStats();
   } catch (error) {
@@ -9795,7 +9772,6 @@ async function showTournamentDirectory() {
   tnId = null;
   tnData = null;
   tnInvalidateStats();
-  document.getElementById('tn-switch').style.display = 'none';
   document.getElementById('tn-directory-back').hidden = true;
   const root = document.getElementById('tn-content');
   root.innerHTML = '<div class="empty">Loading competitions…</div>';
@@ -9821,15 +9797,24 @@ function renderTnDirectory(filter = tnDirectoryFilter) {
     ${t.champion ? `<p>Champion · ${escapeHtml(t.champion.name)}</p>` : ''}
     ${t.my_team ? '<p>Your team is entered</p>' : ''}
   </button>`).join('');
+  const career = tnDirectoryData.career;
+  const metrics = [
+    ['Tournaments', career.played], ['Titles', career.titles],
+    ['Match wins', career.match_wins], ['Match losses', career.match_losses],
+  ];
   document.getElementById('tn-content').innerHTML = `
-    <div class="hub-hero">
-      <h2>Competitions</h2>
-      <div class="hub-actions">
-        <button class="hub-button" aria-pressed="${!archive}" onclick="renderTnDirectory('current')">Live</button>
-        <button class="hub-button" aria-pressed="${archive}" onclick="renderTnDirectory('archive')">Completed</button>
-        <button class="hub-button" onclick="navigate('auction')">Franchise auction</button>
-      </div>
-    </div>${cards || '<div class="empty">' + (archive ? 'No completed tournaments yet.' : 'No tournaments are live right now.') + '</div>'}`;
+    <section class="hub-hero tn-career" aria-labelledby="tn-career-title">
+      <h2 id="tn-career-title">Your tournament career</h2>
+      <dl class="tn-career-record">${metrics.map(([label, value]) => `
+        <div><dt>${label}</dt><dd>${formatNum(value)}</dd></div>`).join('')}</dl>
+      ${career.latest_title ? `<button type="button" class="hub-button tn-career-title-link"
+        onclick="openDirectoryTournament(${career.latest_title.id}, true)">Latest title · ${escapeHtml(career.latest_title.name)} ›</button>` : ''}
+    </section>
+    <div class="hub-actions tn-directory-controls" role="group" aria-label="Competitions">
+      <button class="hub-button" aria-pressed="${!archive}" onclick="renderTnDirectory('current')">Live</button>
+      <button class="hub-button" aria-pressed="${archive}" onclick="renderTnDirectory('archive')">Completed</button>
+      <button class="hub-button" onclick="navigate('auction')">Franchise auction</button>
+    </div>${cards || '<div class="empty">' + (archive ? 'No completed tournaments yet.' : 'No tournament is live right now.') + '</div>'}`;
 }
 
 function openDirectoryTournament(id, archive) {
@@ -10259,9 +10244,8 @@ function handleHashDeepLink() {
     card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     return;
   }
-  if (validScreens.includes(target) && target !== 'home') {
-    navigate(target);
-  }
+  if (target === 'tournament') openTournamentDirectory();
+  else if (validScreens.includes(target) && target !== 'home') navigate(target);
 }
 
 // Open directly into a match if launched via a match/scorecard link,

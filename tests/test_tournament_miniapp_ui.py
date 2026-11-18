@@ -16,7 +16,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync(process.argv[1], 'utf8');
 const start = source.indexOf('const TN_SUBS =');
 const end = source.indexOf('\nasync function loadTnStats()', start);
-const elements = Object.fromEntries(['tn-content', 'tn-switch', 'tab-tournament'].map(id => [id, {style:{}, innerHTML:''}]));
+const elements = Object.fromEntries(['tn-content', 'tab-tournament'].map(id => [id, {style:{}, innerHTML:''}]));
 const pending = [];
 const context = vm.createContext({
   document:{hidden:false,getElementById:id => elements[id],addEventListener:() => {}},
@@ -188,7 +188,7 @@ function boot() {
   // A slow old tournament response cannot replace the newly selected cup.
   const switched = boot(); switched.holdReads(true);
   switched.run("navigate('tournament')");
-  switched.run('tnSelect(2)');
+  switched.run('openDirectoryTournament(2, false)');
   assert.equal(switched.waiting.length, 2);
   switched.waiting.find(w => w.id === 1).resolve(); await tick();
   assert.equal(switched.run('tnId'), 2);

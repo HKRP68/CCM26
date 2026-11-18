@@ -11,7 +11,7 @@ unpublished competitions stay in the admin panel.
 """
 import json
 import logging
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 
 from models import (Tournament, TournamentGroup, TournamentMatch, TournamentTeam)
 from services import tournament_service
@@ -55,41 +55,30 @@ BOARDS = (
 # Which tournaments are live
 # ──────────────────────────────────────────────────────────────────────
 
-def live_tournaments(session):
-    """Every active tournament, Challenge League first: ``[Tournament, …]``.
-
-    Challenge League allows one active tournament per league and Lets Play one,
-    so this can be several rows.
-    """
-    out = []
-    for kind in (KIND_CHALLENGE, KIND_LETSPLAY):
-        out.extend(tournament_service.get_active_tournaments(session, kind=kind))
-    return out
+def featured_tournament(session):
+    """The most recently activated competition that is still live."""
+    return (session.query(Tournament)
+            .filter(Tournament.is_active.is_(True), Tournament.status == "active")
+            .order_by(Tournament.activated_at.desc().nullslast(), Tournament.id.desc())
+            .first())
 
 
 def live_summary(session):
     """The small ``tournament`` block ``/api/webapp/init`` carries."""
-    tours = live_tournaments(session)
-    return {
-        "live": bool(tours),
-        "tournaments": [{"id": t.id, "name": t.name,
-                         "kind": tournament_service.tournament_kind(t),
-                         "kind_label": KIND_LABEL.get(tournament_service.tournament_kind(t), "")}
-                        for t in tours],
-    }
+    tour = featured_tournament(session)
+    if tour is None:
+        return {"live": False, "tournaments": []}
+    kind = tournament_service.tournament_kind(tour)
+    return {"live": True, "tournaments": [
+        {"id": tour.id, "name": tour.name, "kind": kind, "kind_label": KIND_LABEL.get(kind, "")}
+    ]}
 
 
 def resolve_live(session, tournament_id=None):
-    """The active tournament asked for, or the first active one; else None.
-
-    An id that names a tournament which is not active resolves to None — the
-    Mini App only ever follows live competitions.
-    """
-    if tournament_id:
-        tour = session.get(Tournament, int(tournament_id))
-        return tour if (tour is not None and tour.is_active) else None
-    tours = live_tournaments(session)
-    return tours[0] if tours else None
+    tour = featured_tournament(session)
+    if tour and (not tournament_id or tour.id == int(tournament_id)):
+        return tour
+    return None
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -140,20 +129,17 @@ def _short(name):
     return (name or "?")[:3].upper()
 
 
+def _represents_team(team, telegram_id):
+    return (team.user_tg_id == telegram_id
+            or tournament_service.is_team_member(team, telegram_id))
+
+
 def my_team_ids(session, tour, tg_id):
     """Ids of the teams in ``tour`` the viewer owns, co-owns or *is*."""
     if not tg_id:
         return set()
-    tg_id = int(tg_id)
-    out = set()
-    for tt in session.query(TournamentTeam).filter_by(tournament_id=tour.id).all():
-        if tt.user_tg_id and int(tt.user_tg_id) == tg_id:
-            out.add(tt.id)
-        elif tt.owner_tg_id and int(tt.owner_tg_id) == tg_id:
-            out.add(tt.id)
-        elif tg_id in tournament_service.co_owner_ids(tt):
-            out.add(tt.id)
-    return out
+    return {team.id for team in session.query(TournamentTeam).filter_by(tournament_id=tour.id)
+            if _represents_team(team, int(tg_id))}
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -488,9 +474,81 @@ def resolve_visible(session, tournament_id=None, include_completed=False):
     return archive if archive and archive.status == "completed" else None
 
 
-def directory(session, telegram_id):
-    """Current competitions and the most recent completed results."""
-    active = [tour for tour in live_tournaments(session) if tour.status != "completed"]
+def tournament_career(session, user_id, telegram_id):
+    """Career totals from published tournaments with recorded participation.
+
+    For match records, named captains take precedence. Team registration is used
+    on older or manually entered fixtures where a side has no recorded captain.
+    Titles belong to the winning team members and the captain who won the final.
+    """
+    statuses = ("active", "paused", "completed")
+    teams = (session.query(TournamentTeam).join(Tournament)
+             .filter(Tournament.status.in_(statuses), or_(
+                 TournamentTeam.user_tg_id == telegram_id,
+                 TournamentTeam.owner_tg_id == telegram_id,
+                 TournamentTeam.co_owner_ids_json.contains(str(telegram_id)))))
+    owned = {team.id: team.tournament_id for team in teams if _represents_team(team, telegram_id)}
+    entered = set(owned.values())
+    wins = losses = 0
+    match = TournamentMatch
+    results = session.query(match).join(Tournament).filter(
+        Tournament.status.in_(statuses),
+        match.status == "completed",
+        match.is_simulated.is_(False),
+        match.team1_id.isnot(None), match.team2_id.isnot(None),
+        or_(
+            match.host_user_id == user_id, match.target_user_id == user_id,
+            and_(match.host_user_id.is_(None), match.team1_id.in_(owned)),
+            and_(match.target_user_id.is_(None), match.team2_id.in_(owned)),
+        ),
+    )
+    for result in results:
+        entered.add(result.tournament_id)
+        if result.result_type in ("tie", "no_result"):
+            continue
+        if result.host_user_id == user_id:
+            side = result.team1_id
+        elif result.target_user_id == user_id:
+            side = result.team2_id
+        else:
+            sides = [team_id for team_id, captain in (
+                (result.team1_id, result.host_user_id), (result.team2_id, result.target_user_id)
+            ) if captain is None and team_id in owned]
+            if len(sides) != 1:
+                continue
+            side = sides[0]
+        wins += result.winner_team_id == side
+        losses += (result.winner_team_id in (result.team1_id, result.team2_id)
+                   and result.winner_team_id != side)
+
+    # Match the final selection used by the archive's champion card.
+    finals = (session.query(match, Tournament).join(Tournament)
+              .filter(Tournament.id.in_(entered), Tournament.status == "completed",
+                      match.stage == "final", match.status == "completed",
+                      match.winner_team_id.isnot(None))
+              .order_by(Tournament.completed_at.desc().nullslast(), Tournament.id.desc(),
+                        match.match_no.desc(), match.id.desc()))
+    seen = set()
+    titles = 0
+    latest_title = None
+    for final, tour in finals:
+        if tour.id in seen:
+            continue
+        seen.add(tour.id)
+        winning_captain = (final.host_user_id if final.winner_team_id == final.team1_id
+                           else final.target_user_id if final.winner_team_id == final.team2_id else None)
+        if final.winner_team_id in owned or winning_captain == user_id:
+            titles += 1
+            if latest_title is None:
+                latest_title = {"id": tour.id, "name": tour.name}
+
+    return {"played": len(entered), "titles": titles, "match_wins": wins,
+            "match_losses": losses, "latest_title": latest_title}
+
+
+def directory(session, user_id, telegram_id):
+    """Featured competition, career totals and recent completed results."""
+    active = featured_tournament(session)
     completed = (session.query(Tournament).filter_by(status="completed")
                  .order_by(Tournament.id.desc()).limit(20).all())
 
@@ -510,7 +568,9 @@ def directory(session, telegram_id):
                         if tour.status == "completed" else None,
         }
 
-    return {"ok": True, "current": [card(t) for t in active], "archive": [card(t) for t in completed]}
+    return {"ok": True, "current": [card(active)] if active else [],
+            "archive": [card(t) for t in completed],
+            "career": tournament_career(session, user_id, telegram_id)}
 
 
 
