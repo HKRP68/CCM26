@@ -10,12 +10,15 @@
 <!-- Config status banner -->
 {% if configured %}
 <div style="background:rgba(0,212,170,.08);border:1px solid var(--green);border-radius:10px;padding:.85rem 1rem;margin-bottom:1rem;">
-  <strong style="color:var(--green);">✅ Adsgram is LIVE</strong>
+  <strong style="color:var(--green);">Adsgram reward block configured</strong>
   <span style="color:var(--muted);font-size:.85rem;margin-left:.5rem;">Block ID: <code>{{ block_id }}</code></span>
   <p style="color:var(--muted);font-size:.78rem;margin:.5rem 0 0;line-height:1.5;">
-    The SDK script is loaded on every Mini App page regardless of this setting —
-    only <code>init()</code> depends on the block id, so a wrong value can never
-    make the SDK itself disappear.
+    {% if recent %}
+      Latest callback received {{ recent[0].received_at | ist('%Y-%m-%d %H:%M:%S') }} IST.
+    {% endif %}
+    {% if not today %}
+      No reward callbacks received in the last 24 hours. Check the Reward URL after a completed ad.
+    {% endif %}
   </p>
 </div>
 {% else %}
@@ -78,7 +81,7 @@
         ADSGRAM_BLOCK_ID=&lt;your_block_id&gt;
       </code>
     </li>
-    <li>Verify here: this page should show "✅ Adsgram is LIVE" instead of "Rewarded ads unavailable"</li>
+    <li>Complete a live rewarded ad and check for a new row below. Adsgram debug ads do not send a reward callback.</li>
   </ol>
 </details>
 
@@ -110,9 +113,7 @@
 </div>
 {% else %}
 <p style="color:var(--muted);padding:2rem;text-align:center;background:var(--card);border-radius:8px;">
-  No postbacks yet. Once Adsgram is configured (with its Reward URL set) and users
-  start watching ads, they'll appear here. Client-side ad completions don't create
-  rows — they mint a one-shot token instead.
+  No Adsgram callbacks received yet. Completed ads appear here after Adsgram calls the Reward URL.
 </p>
 {% endif %}
 

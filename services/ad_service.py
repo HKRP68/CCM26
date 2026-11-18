@@ -12,6 +12,7 @@ import threading
 import time
 from collections import namedtuple
 from datetime import datetime, timedelta
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,18 @@ def get_block_id() -> str | None:
     return value if value and value.lower() not in _PLACEHOLDERS else None
 
 
+def reward_origin(webapp_url: str) -> str:
+    """Adsgram's callback is mounted at the HTTPS origin, outside /webapp."""
+    try:
+        url = urlsplit(webapp_url.strip())
+        if (url.scheme == "https" and url.hostname
+                and not url.username and not url.password):
+            return f"https://{url.netloc}"
+    except ValueError:
+        pass
+    return "https://your-app.example.com"
+
+
 def postback_authorized(supplied: str) -> bool:
     expected = _env("ADSGRAM_POSTBACK_SECRET")
     return (len(expected) >= 32 and expected.isascii() and supplied.isascii()
@@ -154,7 +167,7 @@ def record_postback(session, telegram_id: int, source_ip: str | None = None,
     return row
 
 
-def claim_postback(session, telegram_id: int) -> bool:
+def claim_postback(session, telegram_id: int, *, commit=True) -> bool:
     """Find and consume an unclaimed Adsgram postback for this user.
 
     Returns True if a recent (within POSTBACK_WINDOW_SECONDS) unconsumed
@@ -178,7 +191,7 @@ def claim_postback(session, telegram_id: int) -> bool:
         # claim_credit. Legacy rows have a NULL provider and are postbacks.
         .filter((AdReward.provider.is_(None))
                 | (AdReward.provider.notin_(REDEEMABLE_PROVIDERS)))
-        .first())
+        .first(), commit=commit)
 
 
 def _unclaimed(session, telegram_id: int, window_seconds: int,
@@ -200,7 +213,7 @@ def _unclaimed(session, telegram_id: int, window_seconds: int,
             .order_by(order))
 
 
-def _claim_row(session, row) -> bool:
+def _claim_row(session, row, *, commit=True) -> bool:
     """Consume ``row`` with a conditional UPDATE. See ``claim_postback``."""
     from models import AdReward
     if not row:
@@ -210,7 +223,8 @@ def _claim_row(session, row) -> bool:
                        AdReward.consumed_at.is_(None))
                .update({AdReward.consumed_at: datetime.utcnow()},
                        synchronize_session=False))
-    session.commit()
+    if commit:
+        session.commit()
     return bool(claimed)
 
 
@@ -249,7 +263,7 @@ def bank_credit(session, telegram_id: int, reason: str = "",
         return None
 
 
-def claim_credit(session, telegram_id: int) -> bool:
+def claim_credit(session, telegram_id: int, *, commit=True) -> bool:
     """Consume one banked credit, oldest first. True if one was just spent.
 
     FIFO matters here in a way it doesn't for postbacks. Credits live for
@@ -271,7 +285,7 @@ def claim_credit(session, telegram_id: int) -> bool:
     return _claim_row(
         session,
         _unclaimed(session, telegram_id, CREDIT_TTL_SECONDS, oldest_first=True)
-        .first())
+        .first(), commit=commit)
 
 
 def count_credits(session, telegram_id: int) -> int:

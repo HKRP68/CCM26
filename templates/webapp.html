@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>CricMaster Ultra</title>
+<script src="{{ url_for('static', filename='js/ad_reward_confirmation.js', v='1') }}"></script>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script>
   // Track third-party SDK load state so a DNS/network failure on these
@@ -3476,6 +3477,8 @@ const START_PARAM = (() => {
 const urlParams = new URLSearchParams(window.location.search);
 const devId = urlParams.get('dev');
 const AUTH_VALUE = INIT_DATA || (devId ? `DEV_${devId}` : '');
+const adConfirmation = window.AdRewardConfirmation(INIT_DATA,
+  () => api('/api/webapp/ad-completed', {}, 3000));
 
 let currentScreen = 'home';
 let userData = null;
@@ -4437,7 +4440,7 @@ function updateSpinButton(g) {
         return;
       }
       btn.disabled = false;
-      btn.textContent = `📺 Watch ad to play (${adsLeft} left)`;
+      btn.textContent = adConfirmation.isPending() ? 'Check reward' : `📺 Watch ad to play (${adsLeft} left)`;
       return;
     }
     // All used — show countdown to reset
@@ -4450,7 +4453,7 @@ function updateSpinButton(g) {
   }
   // Fallback (no quota info yet)
   btn.disabled = false;
-  btn.textContent = '📺 Watch ad to play';
+  btn.textContent = adConfirmation.isPending() ? 'Check reward' : '📺 Watch ad to play';
 }
 
 // ════════════════ Daily ════════════════
@@ -4484,7 +4487,7 @@ function updateDailyButton() {
         return;
       }
       btn.disabled = false;
-      btn.textContent = `📺 Watch ad to claim (${adsLeft} left)`;
+      btn.textContent = adConfirmation.isPending() ? 'Check reward' : `📺 Watch ad to claim (${adsLeft} left)`;
       return;
     }
     const secs = quota.cycle_reset_in;
@@ -4495,7 +4498,7 @@ function updateDailyButton() {
     return;
   }
   btn.disabled = false;
-  btn.textContent = '📺 Watch ad to claim';
+  btn.textContent = adConfirmation.isPending() ? 'Check reward' : '📺 Watch ad to claim';
 }
 
 async function onDailyClick() {
@@ -4531,8 +4534,7 @@ async function onDailyClick() {
     } finally {
       isClaimingDailyAd = false;
     }
-    // Watched, but we never got a receipt back: claim with no token and let
-    // the server redeem the ad from the ledger. See AD_TOKEN_LEDGER.
+    // The server can redeem a confirmed credit without a client token.
     if (adToken === AD_TOKEN_LEDGER) adToken = '';
     else if (!adToken) {
       // showAd already toasted the specific reason (skipped / no fill / no
@@ -4556,11 +4558,12 @@ async function onDailyClick() {
   }
   if (!ok) {
     updateDailyButton();
-    toast(data.message || 'Daily claim failed', 'error');
+    toast(rewardClaimMessage(data, 'Daily claim failed'), 'error');
     hapticNotif('error');
     refreshDashboard();
     return;
   }
+  if (data.slot_type === 'ad' && data.verified_via !== 'nofill_pass') adConfirmation.clear();
   updateDailyButton();
   hapticNotif('success');
   showDailyReward(data.reward);
@@ -5542,8 +5545,7 @@ async function onSpinClick() {
   setPickHint('Dealing…', false);
 
   // Watchdog: never leave the button stuck on "Dealing…" if the request
-  // neither resolves nor rejects. The ad is already paid for by this point, so
-  // this only has to cover the reward request itself.
+  // neither resolves nor rejects. This covers the reward request itself.
   let settled = false;
   const stopRound = () => { isSpinning = false; updateSpinButton(); };
   const watchdog = setTimeout(() => {
@@ -5551,7 +5553,7 @@ async function onSpinClick() {
     settled = true;
     stopRound();
     resetDeck('Timed out — tap to try again');
-    toast('Timed out — please try again. Any watched ad is saved.', 'error');
+    toast('Timed out. Tap again to check your reward.', 'error');
     hapticNotif('error');
     refreshDashboard();
   }, SPIN_REQUEST_WATCHDOG_MS);
@@ -5567,7 +5569,7 @@ async function onSpinClick() {
       // ad_banked: the ad was accepted but the reward couldn't be given yet.
       // Say that plainly — a bare "failed" after a watched ad is what made
       // this look like the app eating ads.
-      toast(data?.message || (data?.ad_banked
+      toast(rewardClaimMessage(data, data?.ad_banked
               ? 'Your ad was saved — play again to use it'
               : 'Could not deal your cards'),
             data?.ad_banked ? 'info' : 'error');
@@ -5576,6 +5578,7 @@ async function onSpinClick() {
       return;
     }
 
+    if (data.slot_type === 'ad' && data.verified_via !== 'nofill_pass') adConfirmation.clear();
     // The reward is committed server-side from here on. The deck is only a
     // reveal, so refresh the balances now rather than after the animation —
     // a player who closes the app mid-reveal has still been paid.
@@ -5720,13 +5723,8 @@ const NOFILL_REQUEST_TIMEOUT_MS = 8000;
 // deadline, which is the behaviour before this existed — so listening is a
 // bonus, never a dependency.
 const AD_START_EVENTS = ['onStart', 'onReward', 'onNonStopShow'];
-// What showAd() hands back when the ad WAS watched but the request that
-// registers it never got an answer. It is not a token and must never be sent
-// as one — it means "go ahead with no token", because the ad is already spent
-// and the server redeems it from the ledger (a receipt one of the retries did
-// land, or Adsgram's own postback). Distinct from null, which means the user
-// gets nothing this time, and from '' which is an ordinary free/saved round.
-const AD_TOKEN_LEDGER = '__watched_unregistered__';
+// Local marker for a confirmed provider credit. Reward APIs redeem it with no token.
+const AD_TOKEN_LEDGER = '__confirmed_ad__';
 
 // What the spin/daily button says while the ad phase runs. Updated as the
 // phase progresses so a slow ad looks like progress rather than a freeze.
@@ -5801,43 +5799,27 @@ function _showAdBounded(controller, loadMs, watchMs) {
     }
     Promise.resolve(shown).then(
       v => {
-        // A show() we stopped waiting for can still finish, and by then the
-        // user HAS watched the whole ad. Losing it there is the very complaint
-        // this file exists to answer, so it gets banked instead.
-        if (settled) { _bankLateAd(v); return; }
+        // A late SDK completion can still have a pending callback.
+        if (settled) {
+          if (v?.done === true) adConfirmation.markWatched();
+          return;
+        }
         finish(resolve, v);
       },
       e => { if (!settled) finish(reject, e); });
   });
 }
 
-// Register an ad that finished after we had given up on it. The server writes
-// it to the ledger as a saved ad (see services/ad_service.py "Ad credits"), so
-// the player's next tap spends it with no second ad to sit through.
-async function _bankLateAd(result) {
-  if (!(result && result.done)) return;   // not watched — nothing to keep
-  try {
-    const r = await _registerWatchedAd();
-    if (r) toast('📺 Your ad was saved — tap again to use it.', 'info');
-  } catch (e) {
-    console.warn('[ads] could not bank a late ad', e);
-  }
+async function _confirmWatchedAd() {
+  _setAdPhase('Checking ad reward…');
+  if (await adConfirmation.waitForCredit()) return AD_TOKEN_LEDGER;
+  toast(adConfirmation.pendingMessage, 'info');
+  return null;
 }
 
-// Poll for the authenticated callback after the ad finishes playing.
-async function _registerWatchedAd(attempts = 3) {
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    let r = null;
-    try {
-      r = await api('/api/webapp/ad-completed', {});
-    } catch (e) {
-      console.warn('[ads] ad-completed request failed', e);
-    }
-    if (r?.ok && r.data.confirmed) return AD_TOKEN_LEDGER;
-    if (r && !r.ok && r.status && r.status < 500) break;   // a definitive client error
-    if (attempt < attempts - 1) await _sleep(500 * (attempt + 1));
-  }
-  return null;
+function rewardClaimMessage(data, fallback) {
+  return data?.error === 'ad_required' && adConfirmation.isPending()
+    ? adConfirmation.pendingMessage : (data?.message || fallback);
 }
 
 function _adFailureKind(err) {
@@ -5985,6 +5967,7 @@ async function _requestNoFillPass(quotaKind, budgetMs) {
 // the no-fill pass request that may follow them carries its own smaller
 // timeout on top, so the worst case is the budget plus that.
 async function showAd(quotaKind = null) {
+  if (adConfirmation.isPending()) return _confirmWatchedAd();
   const deadline = Date.now() + AD_PHASE_BUDGET_MS;
   const timeLeft = () => deadline - Date.now();
   _setAdPhase('Getting your ad…');
@@ -6015,17 +5998,9 @@ async function showAd(quotaKind = null) {
           _adController, Math.min(AD_SHOW_TIMEOUT_MS, timeLeft()),
           AD_WATCH_TIMEOUT_MS);
         // SDK promise resolves only if user watched ad till the end
-        if (result && result.done) {
-          _setAdPhase('Claiming reward…');
-          // Wait briefly for the provider callback before redeeming the saved ad.
-          const token = await _registerWatchedAd();
-          if (token) return token;
-          // Every attempt failed. The ad is watched and gone either way, so
-          // carry on with no token rather than refusing the round: if any of
-          // those requests did reach the server, or Adsgram's own postback
-          // landed, the reward endpoint redeems it from the ledger.
-          toast('Ad watched — claiming your reward…', 'info');
-          return AD_TOKEN_LEDGER;
+        if (result?.done === true) {
+          adConfirmation.markWatched();
+          return _confirmWatchedAd();
         }
         // Resolved without `done` — the SDK's "closed early" path on the
         // versions that resolve rather than reject. Say so: returning silently
@@ -7927,7 +7902,7 @@ function renderFreePackAction() {
       <button class="spin-button" id="freepack-open-btn" onclick="openFreePack()" style="width:100%;">
         ${(d.ads_saved || 0) > 0
           ? `🎟️ Open with saved ad (${d.ads_saved})`
-          : '📺 Watch ad &amp; open pack'}
+          : adConfirmation.isPending() ? 'Check reward' : '📺 Watch ad &amp; open pack'}
       </button>
     `;
   } else {
@@ -7974,18 +7949,17 @@ async function openFreePack() {
   const useSavedAd = (freePackState?.ads_saved || 0) > 0;
   if (btn) {
     btn.disabled = true;
-    btn.textContent = useSavedAd ? '📦 Opening…' : '📺 Loading ad…';
+    btn.textContent = useSavedAd ? '📦 Opening…' : adConfirmation.isPending() ? 'Checking ad reward…' : '📺 Loading ad…';
   }
   haptic('medium');
 
   let adToken = '';
   if (!useSavedAd) {
     adToken = await showAd();
-    // Watched, but we never got a receipt back: open with no token and let the
-    // server redeem the ad from the ledger. See AD_TOKEN_LEDGER.
+    // The server can redeem a confirmed credit without a client token.
     if (adToken === AD_TOKEN_LEDGER) adToken = '';
     else if (!adToken) {
-      if (btn) { btn.disabled = false; btn.textContent = '📺 Watch ad & open pack'; }
+      if (btn) { btn.disabled = false; btn.textContent = adConfirmation.isPending() ? 'Check reward' : '📺 Watch ad & open pack'; }
       return;  // showAd already toasted
     }
   }
@@ -7995,12 +7969,13 @@ async function openFreePack() {
   if (!ok) {
     // ad_banked / ads_saved: the ad was kept, so this isn't the loss it reads
     // as. Say so rather than only "Pack failed".
-    toast(data.message || 'Pack failed', data.ad_banked ? 'info' : 'error');
+    toast(rewardClaimMessage(data, 'Pack failed'), data.ad_banked ? 'info' : 'error');
     hapticNotif('error');
     loadFreePack();
     return;
   }
 
+  adConfirmation.clear();
   hapticNotif('success');
   showFreePackReveal(data.player, data.band, data.overflow_claim);
   refreshDashboard();

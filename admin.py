@@ -6248,14 +6248,10 @@ def webapp_spin():
             except Exception:
                 pass
 
-        # ── Check quota ──
-        # Re-read the row under a lock first. Deciding and consuming have to be
-        # one step: two taps that both read `ad_ready_in == 0` would both be
-        # granted an ad slot and the second would skip the gap entirely. The
-        # lock is taken HERE rather than at load, because the ad-verification
-        # above commits (each claim is a conditional UPDATE + commit) and a
-        # commit drops any lock held before it.
-        stats = _locked_stats(db, user.id)
+        # Legacy client tokens may commit independently. Provider receipts
+        # keep the original user lock until the reward and quota commit.
+        if ad_token.startswith("CT-"):
+            stats = _locked_stats(db, user.id)
         allowed, slot_type, reason = quota_service.can_use(stats, "spin", ad_provided, session=db, user=user)
         if not allowed:
             # The ad was real but can't be spent right now — keep it. Without
@@ -6352,9 +6348,8 @@ def webapp_spin():
     except Exception as e:
         db.rollback()
         logger.exception("webapp_spin failed")
-        # The spin blew up after the ad had already been consumed — bank it so
-        # the retry costs the player nothing. `verified_via` only exists once
-        # the ad has been verified, so a failure before that banks nothing.
+        # Rollback restores a database receipt. A legacy token may need to
+        # be banked separately because consuming it commits immediately.
         banked = False
         try:
             verified = None if locals().get("reward_committed") else locals().get("verified_via")
@@ -6382,7 +6377,8 @@ def webapp_ad_completed():
     try:
         from services import ad_service
         saved = ad_service.count_credits(db, tg_id)
-        return {"ok": True, "confirmed": saved > 0, "ads_saved": saved}
+        return ({"ok": True, "confirmed": saved > 0, "ads_saved": saved},
+                200, {"Cache-Control": "no-store"})
     finally:
         db.close()
 
@@ -6469,16 +6465,13 @@ def _locked_stats(db, user_id):
 
 
 def _bank_if_spendable(db, tg_id, ad_provided, verified_via, reason):
-    """Bank a consumed ad as a credit when its reward couldn't be handed over.
-
-    Returns whether anything was banked, for the ``ad_banked`` flag the clients
-    read. A no-fill pass is excluded: no ad was ever shown, so there is nothing
-    to keep — and banking one would turn the pass grace into free credits.
-
-    Shared by spin, daily and the free pack so the rule can't drift between
-    them; each has two call sites (the blocked path and its except handler).
-    """
-    if ad_provided and verified_via != "nofill_pass":
+    """Keep a confirmed ad available if a payout was blocked or rolled back."""
+    if verified_via in ("server_postback", "ad_credit"):
+        # Receipt and payout share a transaction. Roll back to put the same
+        # receipt back into the ledger without creating a second one.
+        db.rollback()
+        return True
+    if ad_provided and verified_via == "client_token":
         from services import ad_service
         return ad_service.bank_credit(db, tg_id, reason) is not None
     return False
@@ -6509,7 +6502,7 @@ def _verify_ad_for_action(db, tg_id, ad_token, dev_mode, ads_configured,
     none.
     """
     from services import ad_service
-    if ad_service.claim_postback(db, tg_id):
+    if ad_service.claim_postback(db, tg_id, commit=False):
         return "server_postback"
     if ad_token and ad_token.startswith("CT-"):
         # The session matters: a token minted with one addresses a ledger row,
@@ -6528,7 +6521,7 @@ def _verify_ad_for_action(db, tg_id, ad_token, dev_mode, ads_configured,
     if ad_token and ad_token.startswith("MOCK-"):
         if dev_mode:
             return "mock"
-    if allow_credit and ad_service.claim_credit(db, tg_id):
+    if allow_credit and ad_service.claim_credit(db, tg_id, commit=False):
         return "ad_credit"
     return None
 
@@ -6591,10 +6584,8 @@ def webapp_daily():
             except Exception:
                 pass
 
-        # ── Check quota ──
-        # Locked re-read, for the same reason as the spin: the decision and the
-        # consumption have to be one step, and ad verification above commits.
-        stats = _locked_stats(db, user.id)
+        if ad_token.startswith("CT-"):
+            stats = _locked_stats(db, user.id)
         allowed, slot_type, reason = quota_service.can_use(stats, "daily", ad_provided, session=db, user=user)
         if not allowed:
             # A verified ad that can't be spent right now is banked, not burned.
@@ -7335,8 +7326,8 @@ def webapp_freepack_open():
                     "ads_saved": ad_service.count_credits(db, tg_id),
                     "ads_configured": ads_configured}, 400
 
-        # Spending a receipt commits its claim, releasing the first lock.
-        stats = _locked_stats(db, user.id)
+        if ad_token.startswith("CT-"):
+            stats = _locked_stats(db, user.id)
 
         if verified_via == "mock":
             try:
@@ -7350,10 +7341,7 @@ def webapp_freepack_open():
         result = open_free_pack(db, user, hold_overflow=True)
         if not result.get("ok"):
             db.rollback()
-            # The ad was watched and the pack still didn't open — bank it so
-            # the next attempt doesn't ask for another ad. verified_via is
-            # non-empty here (the endpoint returns above without it) and a free
-            # pack takes no no-fill pass, so this always banks.
+            # Keep the confirmed ad available for the next attempt.
             result["ad_banked"] = _bank_if_spendable(
                 db, tg_id, True, verified_via, "free pack failed")
             return result, 400
@@ -7371,11 +7359,6 @@ def webapp_freepack_open():
     except Exception as e:
         db.rollback()
         logger.exception("webapp_freepack_open failed")
-        # Same contract as the spin and the daily claim: an ad that has already
-        # been consumed is banked rather than lost when the open falls over
-        # mid-flight. Without this the free pack was the one ad-gated feature
-        # where an unlucky 500 really did eat the ad — the rollback above
-        # cannot bring it back, because claiming the evidence commits.
         banked = False
         try:
             verified = None if locals().get("reward_committed") else locals().get("verified_via")
@@ -21066,21 +21049,21 @@ def admin_ads():
         from services import ad_service
         from sqlalchemy import func as _sqlfn
 
-        # Last 100 postbacks
-        recent = (db.query(AdReward)
+        postbacks = db.query(AdReward).filter(AdReward.provider == "adsgram")
+        recent = (postbacks
                   .order_by(AdReward.received_at.desc())
                   .limit(100).all())
 
-        # Summary
-        total = db.query(_sqlfn.count(AdReward.id)).scalar() or 0
-        consumed = (db.query(_sqlfn.count(AdReward.id))
+        counts = postbacks.with_entities(_sqlfn.count(AdReward.id))
+        total = counts.scalar() or 0
+        consumed = (counts
                     .filter(AdReward.consumed_at.isnot(None))
                     .scalar() or 0)
 
         # Today (last 24h)
         from datetime import timedelta
         day_ago = datetime.utcnow() - timedelta(hours=24)
-        today = (db.query(_sqlfn.count(AdReward.id))
+        today = (counts
                  .filter(AdReward.received_at >= day_ago)
                  .scalar() or 0)
 
@@ -21109,8 +21092,7 @@ def admin_ads():
             ad_config=ad_service.client_config(),
             configured=ad_service.is_configured(),
             block_id=ad_service.get_block_id() or "",
-            public_base_url=(os.getenv("WEBAPP_URL", "").strip().rstrip("/")
-                             or "https://your-app.example.com"),
+            public_base_url=ad_service.reward_origin(os.getenv("WEBAPP_URL", "")),
         )
     finally:
         db.close()

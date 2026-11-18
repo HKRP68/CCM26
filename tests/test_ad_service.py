@@ -156,5 +156,13 @@ class LegacyImportTests(unittest.TestCase):
         self.assertTrue(ad_service.consume_client_token(token, 777))
 
 
+class RewardOriginTests(unittest.TestCase):
+    def test_reward_callback_is_based_on_the_host(self):
+        self.assertEqual(ad_service.reward_origin("https://game.example/webapp?src=telegram#spin"),
+                         "https://game.example")
+        self.assertEqual(ad_service.reward_origin("http://localhost/webapp"),
+                         "https://your-app.example.com")
+
+
 if __name__ == "__main__":
     unittest.main()

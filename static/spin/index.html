@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="/static/js/ad_reward_confirmation.js?v=1"></script>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://sad.adsgram.ai/js/sad.min.js" async></script>
   <!-- The block id can't be baked in: this page is a static file with no
@@ -338,6 +339,7 @@
     if (tg) { tg.ready(); tg.expand(); }
 
     const initData = (tg && tg.initData) ? tg.initData : '';
+    const adConfirmation = window.AdRewardConfirmation(initData, checkRewardCredit);
     function authHeaders() {
       return { 'Content-Type': 'application/json', 'Authorization': 'tma ' + initData };
     }
@@ -455,7 +457,7 @@
       const release = () => {
         btn.disabled = !slotsLeft;
         btn.innerHTML = slotsLeft
-          ? '<span>📺 Watch Ad to Play</span>'
+          ? (adConfirmation.isPending() ? '<span>Check reward</span>' : '<span>📺 Watch Ad to Play</span>')
           : '<span>✅ All picks used</span>';
       };
       if (wait <= 0) { release(); return; }
@@ -698,20 +700,7 @@
     }
 
     // ── The ad ──────────────────────────────────────────────────────
-    // Returns {token} when the player has genuinely earned a slot, or
-    // {error} naming why they haven't.
-    //
-    // Only a *watched* ad mints a token. This used to call /ad-completed
-    // regardless — after a skip, after a timeout, even when the SDK was never
-    // usable — which meant the page handed out rewards for ads nobody saw. A
-    // network that served nothing is a real problem and it has its own answer
-    // below (the no-fill pass); silently paying out is not that answer.
-    // How long the page waits for an ad to APPEAR, and how long it then waits
-    // for the player to finish watching it. Two numbers, because they are two
-    // different waits: the old single 12-second race fired while the ad was
-    // still playing, abandoned the promise, and left the player who had just
-    // watched a full rewarded ad being told no ad was available. See
-    // AD_SHOW_TIMEOUT_MS in templates/webapp.html for the same reasoning.
+    // Allow more time once the SDK shows the player an ad.
     const AD_LOAD_TIMEOUT_MS = 12000;
     const AD_WATCH_TIMEOUT_MS = 180000;
     // The SDK events that mean "an ad is on screen now". Names vary between
@@ -720,9 +709,8 @@
     const AD_START_EVENTS = ['onStart', 'onReward', 'onNonStopShow'];
 
     // Show one ad, bounded by the load deadline until it starts and by the
-    // watch deadline afterwards. An ad that finishes after we gave up is
-    // registered anyway — the player watched it, so it is banked as a saved ad
-    // rather than thrown away.
+    // watch deadline afterwards. If a video finishes after the timeout,
+    // remember to check for its callback before showing another ad.
     function showAdBounded(controller) {
       return new Promise((resolve, reject) => {
         let settled = false;
@@ -764,9 +752,7 @@
         Promise.resolve(shown).then(
           v => {
             if (settled) {
-              // Too late for this round, but the ad was genuinely watched:
-              // register it so the ledger keeps it for the next one.
-              if (v && v.done) registerWatchedAd().catch(() => {});
+              if (v?.done === true) adConfirmation.markWatched();
               return;
             }
             finish(resolve, v);
@@ -775,30 +761,28 @@
       });
     }
 
-    // Wait briefly for the authenticated provider callback.
-    async function registerWatchedAd(attempts = 3) {
-      for (let attempt = 0; attempt < attempts; attempt++) {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 15000);
-        try {
-          const res = await fetch('/api/webapp/ad-completed', {
-            method: 'POST', headers: authHeaders(), signal: controller.signal });
-          const data = await res.json().catch(() => ({}));
-          if (data.confirmed) return true;
-          if (!res.ok && res.status < 500) return null;   // it decided
-        } catch (e) {
-          console.warn('[ads] could not register the completed ad', e);
-        } finally {
-          clearTimeout(timer);
-        }
-        if (attempt < attempts - 1) {
-          await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
-        }
+    async function checkRewardCredit() {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3000);
+      try {
+        const res = await fetch('/api/webapp/ad-completed', {
+          method: 'POST', headers: authHeaders(), signal: controller.signal });
+        const data = await res.json().catch(() => ({}));
+        return { ok: res.ok, status: res.status, data };
+      } catch (_) {
+        return { ok: false, status: 0 };
+      } finally {
+        clearTimeout(timer);
       }
-      return null;
+    }
+
+    async function confirmWatchedAd() {
+      setStatus('Checking ad reward…');
+      return await adConfirmation.waitForCredit() ? { token: '' } : { error: 'pending' };
     }
 
     async function getAdToken() {
+      if (adConfirmation.isPending()) return confirmWatchedAd();
       let ctrl = null;
       try {
         ctrl = await adController();
@@ -822,9 +806,7 @@
         // "LOADING AD…" with nothing ever happening. The bound moves once the
         // ad is on screen; see showAdBounded.
         const result = await showAdBounded(ctrl);
-        // Some SDK versions resolve without `done` when the user closed the ad
-        // early. Treat a missing `done` as a skip, not as a completed view.
-        done = !!(result && result.done !== false);
+        done = result?.done === true;
       } catch (e) {
         const desc = ((e && (e.description || e.message)) || '').toString();
         const state = ((e && (e.state || e.error)) || '').toString().toLowerCase();
@@ -838,11 +820,8 @@
       }
       if (!done) return { error: 'skipped' };
 
-      await registerWatchedAd();
-      // The ad was watched. Even if every one of those responses was lost, the
-      // server wrote it to the ledger (or Adsgram's own postback did), so the
-      // round goes ahead with no token and the saved ad is redeemed there.
-      return { token: '' };
+      adConfirmation.markWatched();
+      return confirmWatchedAd();
     }
 
     // The network had nothing to serve. That is not the player's fault and
@@ -873,6 +852,7 @@
     }
 
     const AD_ERROR_TEXT = {
+      pending: adConfirmation.pendingMessage,
       skipped: 'Ad skipped — watch it to the end to earn a pick.',
       nofill: 'No ad available right now, and your no-ad passes are used up. Try again in a few minutes.',
       unavailable: 'Ads can\'t load right now — check your connection and reopen the app.',
@@ -904,7 +884,8 @@
           setStatus('LOADING AD… ⏳');
           const r = await getAdToken();
           if (r.error) {
-            setStatus(`<span style="color:var(--danger);">${esc(AD_ERROR_TEXT[r.error] || 'No ad available.')}</span>`);
+            const color = r.error === 'pending' ? 'var(--gold)' : 'var(--danger)';
+            setStatus(`<span style="color:${color};">${esc(AD_ERROR_TEXT[r.error] || 'No ad available.')}</span>`);
             applyQuota(spinQuota);
             loadQuota();
             return;
@@ -919,12 +900,13 @@
 
         if (!ok || !data.ok || !data.reward) {
           resetDeck();
-          const msg = esc((data && (data.message || data.error))
-                          || 'Could not deal your cards.');
+          const pending = data?.error === 'ad_required' && adConfirmation.isPending();
+          const msg = esc(pending ? adConfirmation.pendingMessage
+            : data?.message || data?.error || 'Could not deal your cards.');
           // A banked ad is not a loss — it is the ad waiting for its slot, so
           // it gets the neutral colour rather than the error red.
           const banked = !!(data && data.ad_banked);
-          setStatus(`<span style="color:${banked ? 'var(--gold)' : 'var(--danger)'};">${msg}</span>`);
+          setStatus(`<span style="color:${banked || pending ? 'var(--gold)' : 'var(--danger)'};">${msg}</span>`);
           if (data && data.quota) {
             spinQuota = data.quota;
             applyQuota(spinQuota);
@@ -940,6 +922,7 @@
         // reveal, so the balance and the quota are updated now rather than
         // after the animation — a player who closes the app mid-reveal has
         // still been paid.
+        if (data.slot_type === 'ad' && data.verified_via !== 'nofill_pass') adConfirmation.clear();
         setBalance(data.balance);
         spinQuota = data.quota || spinQuota;
         applyQuota(spinQuota);
@@ -948,7 +931,7 @@
         resetDeck();
         const timedOut = err && err.name === 'AbortError';
         setStatus(`<span style="color:var(--danger);">${timedOut
-          ? 'Timed out. Please try again — any watched ad is saved.'
+          ? 'Timed out. Tap again to check your reward.'
           : 'Something went wrong. Try again.'}</span>`);
         applyQuota(spinQuota);
       } finally {

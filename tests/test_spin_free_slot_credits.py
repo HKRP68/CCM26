@@ -21,6 +21,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _module_swap  # noqa: E402  (sibling helper; see its docstring)
@@ -171,6 +172,28 @@ class SpinSlotTests(unittest.TestCase):
         self.assertEqual(status, 400, body)
         self.assertEqual(body["error"], "ad_required")
         self.assertEqual(self._credits(), 0)
+
+    def test_failed_payout_leaves_the_same_postback_available(self):
+        from models import AdReward
+
+        self.assertEqual(self._spin()[0], 200)
+        receipt_id = self.ad_service.record_postback(self.db, TG_ID).id
+
+        with patch("services.gspin_reward_service.apply_reward", side_effect=RuntimeError("payout failed")):
+            status, body = self._spin()
+        self.assertEqual(status, 500, body)
+        self.assertTrue(body["ad_banked"])
+        self.assertEqual(self._credits(), 1)
+        self.db.expire_all()
+        receipt = self.db.query(AdReward).filter_by(telegram_id=TG_ID).one()
+        self.assertEqual(receipt.id, receipt_id)
+        self.assertIsNone(receipt.consumed_at)
+
+        status, body = self._spin()
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["verified_via"], "server_postback")
+        self.assertEqual(self._credits(), 0)
+        self.assertEqual(self._spin()[1]["error"], "ad_required")
 
 
 if __name__ == "__main__":
