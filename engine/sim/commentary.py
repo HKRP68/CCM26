@@ -49,7 +49,8 @@ def condition_tag(fs, bowler, result):
     return ""
 
 
-def line(label, bowler_name, batter_name, result, rng, fs=None, bowler=None, event=None):
+def line(label, bowler_name, batter_name, result, rng, fs=None, bowler=None, event=None,
+         free_hit=False):
     """``"15.3 Bumrah to Kohli, FOUR — driven through the covers"``."""
     if result.is_wicket:
         body = _WICKET.get(result.wicket_type, "OUT")
@@ -65,7 +66,8 @@ def line(label, bowler_name, batter_name, result, rng, fs=None, bowler=None, eve
     else:
         body = rng.choice(_RUNS.get(result.runs, ["played"]))
     tag = condition_tag(fs, bowler, result)
-    out = f"{label} {bowler_name} to {batter_name}, {body}"
+    free_hit_label = "FREE HIT — " if free_hit else ""
+    out = f"{label} {bowler_name} to {batter_name}, {free_hit_label}{body}"
     if tag:
         out += f" ({tag})"
     if event:

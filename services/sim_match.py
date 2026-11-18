@@ -658,6 +658,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 continue  # not a legal ball
 
             # -- Legal ball --
+            free_hit = False
             balls_this_over += 1
             legal_balls += 1
             bw["balls"] += 1
@@ -694,7 +695,6 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                             _balls_to_overs(legal_balls)))
                 event_key = _WICKET_EVENT.get(wtype, "wicket_caught_fielder")
                 _emit(event_key, striker_name, last_bowler_name, 0, legal_balls)
-                free_hit = False
                 batter_streaks.pop(striker_name, None)
                 if next_i < len(batting_order):
                     striker_i = next_i
@@ -721,10 +721,6 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 over_timeline.append(str(runs))
                 _emit(_RUNS_TO_EVENT.get(runs, "general"),
                       striker_name, last_bowler_name, runs, legal_balls)
-                # A free hit is consumed by this one legal delivery — clear it
-                # even on a boundary, else the run-out-only protection would
-                # wrongly carry to the next ball.
-                free_hit = False
                 if runs % 2 == 1:
                     striker_i, non_striker_i = non_striker_i, striker_i
 

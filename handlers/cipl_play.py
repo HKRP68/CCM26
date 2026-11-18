@@ -2734,8 +2734,7 @@ def _over_strip(timeline, bpu=6):
 
 async def _prompt_new_batsman(context, mid, state, summary=None):
     """Ask the batting captain who walks in after a mid-over wicket."""
-    order = state.get("batting_order") or []
-    out = order[state.get("striker_idx", 0)] if order else {}
+    out = cipl_match.dismissed_batsman(state) or {}
     bs = (state.get("bat_stats") or {}).get(str(out.get("roster_id")), {})
     progress = state.get("over_in_progress") or {}
     timeline = (summary or {}).get("over_timeline") or progress.get("over_timeline")

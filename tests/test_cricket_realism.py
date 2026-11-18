@@ -127,19 +127,19 @@ class DotPressureTests(unittest.TestCase):
         self.assertEqual(cm._trailing_dots(["4", "WD", "NB"]), 0)
 
     def test_nothing_fires_below_three_dots(self):
-        for marks in ([], ["0"], ["0", "0"]):
-            self.assertIsNone(cm._make_dot_pressure_hook(marks), marks)
+        for dots in range(3):
+            self.assertIsNone(cm._make_dot_pressure_hook(dots))
 
     def test_pressure_builds_with_every_dot(self):
         weights = {"Dot": 0.33, "Single": 0.36, "Double": 0.07, "Three": 0.006,
                    "Four": 0.12, "Six": 0.05, "Wicket": 0.04, "Extras": 0.024}
 
-        def dot_share(marks):
-            hook = cm._make_dot_pressure_hook(marks)
+        def dot_share(dots):
+            hook = cm._make_dot_pressure_hook(dots)
             out = hook(weights) if hook else weights
             return out["Dot"] / sum(out.values())
 
-        shares = [dot_share(["0"] * n) for n in (0, 3, 4, 5)]
+        shares = [dot_share(n) for n in (0, 3, 4, 5)]
         self.assertEqual(shares, sorted(shares, reverse=True))
         # By five dots the batter is markedly less likely to play out a sixth.
         self.assertLess(shares[-1], shares[0] * 0.65)
@@ -151,9 +151,20 @@ class DotPressureTests(unittest.TestCase):
             self.assertGreater(cm.DOT_PRESSURE[n]["Four"], 1.0)
             self.assertLess(cm.DOT_PRESSURE[n]["Dot"], 1.0)
 
-    def test_it_does_not_run_past_the_last_ball_of_an_over(self):
-        """Six dots is a maiden; there is no seventh to apply pressure to."""
-        self.assertLessEqual(cm.DOT_PRESSURE_MAX, 5)
+    def test_dot_pressure_is_bounded_across_overs(self):
+        weights = {"Dot": 1, "Wicket": 1}
+        self.assertEqual(cm._make_dot_pressure_hook(12)(weights),
+                         cm._make_dot_pressure_hook(cm.DOT_PRESSURE_MAX)(weights))
+
+    def test_carried_dots_add_less_pressure_than_dots_in_the_current_over(self):
+        weights = {"Dot": 1, "Wicket": 1}
+        carried = cm._make_dot_pressure_hook(4, 0)(weights)
+        partial = cm._make_dot_pressure_hook(4, 3)(weights)
+        local = cm._make_dot_pressure_hook(4, 4)(weights)
+        self.assertLess(local["Dot"], partial["Dot"])
+        self.assertLess(partial["Dot"], carried["Dot"])
+        self.assertLess(carried["Dot"], weights["Dot"])
+        self.assertGreater(carried["Wicket"], weights["Wicket"])
 
 
 class SetBatterTests(unittest.TestCase):

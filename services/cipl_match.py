@@ -1275,6 +1275,7 @@ DOT_PRESSURE = {
     5: {"Dot": 0.40, "Single": 1.20, "Four": 1.36, "Six": 1.42, "Wicket": 1.18},
 }
 DOT_PRESSURE_MAX = max(DOT_PRESSURE)
+DOT_PRESSURE_CARRY = 0.35
 
 
 def _trailing_dots(over_timeline):
@@ -1395,11 +1396,21 @@ def _after_ball_sledge(state, drama, oc, striker, bowler, batter_adapted,
         logger.exception("sledging failed (non-fatal)")
 
 
-def _make_dot_pressure_hook(over_timeline):
+def _make_dot_pressure_hook(dot_streak, current_over_dots=None):
     """Weight hook for a batter who has been tied down. See ``DOT_PRESSURE``."""
-    dots = min(_trailing_dots(over_timeline), DOT_PRESSURE_MAX)
-    mult = DOT_PRESSURE.get(dots)
-    return _mult_hook(mult) if mult else None
+    tier = min(dot_streak, DOT_PRESSURE_MAX)
+    mult = DOT_PRESSURE.get(tier)
+    if not mult:
+        return None
+    if current_over_dots is None or current_over_dots >= tier:
+        return _mult_hook(mult)
+    local = DOT_PRESSURE.get(current_over_dots, {})
+    # The streak still matters after a break. Consecutive dots in the current
+    # over bring the stronger urgency because the batter has less time to reset.
+    return _mult_hook({
+        bucket: local.get(bucket, 1.0) + DOT_PRESSURE_CARRY * (factor - local.get(bucket, 1.0))
+        for bucket, factor in mult.items()
+    })
 
 
 def _longest_dot_run(over_timeline):
@@ -1922,6 +1933,19 @@ def _make_set_finisher_hook(state):
     return _hook
 
 
+def _resolve_running_wicket(outcome, runs_needed):
+    """Resolve the completed runs and ends on a naturally sampled run-out."""
+    if outcome.get("wicket_type") != "Run Out":
+        return outcome
+    runs = random.choices((0, 1, 2), weights=(55, 40, 5))[0]
+    if 0 < runs_needed <= runs:
+        # Play ends as soon as the winning run is completed.
+        return dict(outcome, type="run", runs=runs_needed, wicket_type=None,
+                    batter_out=False, mixup=False)
+    return dict(outcome, runs=runs, run_out_non_striker=random.random() < 0.35,
+                run_out_crossed=random.random() < 0.5)
+
+
 def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
     """Simulate the current over using the stored approaches. Mutates state and
     returns a summary dict for rendering. Auto-advances batsmen on wickets and
@@ -1988,7 +2012,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
     resume = state.pop("over_in_progress", None)
     if not isinstance(resume, dict):
         resume = None
-    elif _striker_is_out(state):
+    elif _dismissed_end(state):
         # Resumed without a pick (a recovery path that skipped the prompt):
         # never let a dismissed batsman face again — send in the next one.
         bring_in_batsman(state)
@@ -2001,8 +2025,8 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
         # match-up — pitch, phase, the mind game, momentum, fatigue,
         # partnership chemistry and anything the previous over's special
         # combination carried in. Built once, from the state as it stands
-        # BEFORE the first ball, so every delivery in the over is bowled under
-        # the same conditions the captains picked into.
+        # BEFORE the first ball. The picks and bowling context hold over the
+        # whole over, while chemistry follows the active partnership.
         approach_ctx = approach_context(state, bowler)
     else:
         bowl_wkts_before = resume.get("bowl_wkts_before", bws["wickets"])
@@ -2271,7 +2295,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             mpi_hook = _make_mpi_hook(state)
             # A batter who has been tied down for three or more balls starts
             # looking for the boundary — the reason maidens are rare in T20.
-            dot_hook = _make_dot_pressure_hook(over_timeline)
+            dot_hook = _make_dot_pressure_hook(bs.get("dot_streak", 0), _trailing_dots(over_timeline))
             # Per-batter recent rhythm. Rebuilt for each delivery so an over
             # can respond to its own events, including after a wicket/resume.
             # Distinct from permanent settling and team-wide momentum/MPI.
@@ -2324,6 +2348,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                                          confidence_hook,
                                          bat_p_hook, bowl_p_hook, sledge_hook,
                                          clutch_hook, chase_hook, finisher_hook)
+            delivery_ctx = dict(approach_ctx, partnership_overs=state.get("partnership_balls", 0) / bpu)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
                 streak=streak, over_number=eng_over_idx, batter_runs=bs["runs"],
@@ -2334,11 +2359,13 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                 fielding_quality=fielding_q,
                 format_config=engine_fmt,
                 batting_approach=bat_app, bowling_approach=bowl_app,
-                approach_context=approach_ctx,
+                approach_context=delivery_ctx,
                 weight_hook=weight_hook,
                 **bowl_p_kwargs))
             # Batting side under the pump: the odd wicket becomes a mix-up.
             oc = match_drama.maybe_mixup(oc, bat_p, free_hit=is_free_hit_ball)
+            if not (state.get('_planned_super_overs') or state.get('_planned_winner_user_id')):
+                oc = _resolve_running_wicket(oc, runs_needed)
 
         if state.get('_planned_super_overs') and innings == 1:
             from services.tournament_match_settings import cap_first_innings
@@ -2378,10 +2405,10 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
         over_runs_before = state["total_runs"] - runs_before
         recent_wkts = _recent_wickets(state)
 
-        def _ec(is_maiden=False):
+        def _ec(is_maiden=False, *, batter=striker, batter_runs=bs_runs_before):
             return _engine_text(
-                state, oc, striker, bowler, over_idx, innings, target,
-                required_rr, bs_runs_before, partnership_before, recent_wkts,
+                state, oc, batter, bowler, over_idx, innings, target,
+                required_rr, batter_runs, partnership_before, recent_wkts,
                 over_runs_before, balls_this_over, overs_total,
                 is_maiden=is_maiden)
 
@@ -2427,8 +2454,8 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                                  f"can dismiss.",
                                  runs=1 + runs, event_key="no_ball")
                 free_hit = True
-                if runs % 2 == 1:
-                    _swap_strike(state)
+            if runs % 2 == 1:
+                _swap_strike(state)
             from services.batting_milestones import capture
             capture(bs, bs_runs_before)
             record_telemetry.capture(state, record_before, oc)
@@ -2441,6 +2468,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             continue
 
         # --- Legal ball ---
+        free_hit = False
         # Hat-trick streak baseline — compared once the outcome is applied.
         wkts_before_ball = bws["wickets"]
         balls_this_over += 1
@@ -2450,6 +2478,9 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
         bs["balls"] += 1
         # Legal ball faced by the current pair → counts toward the partnership.
         state["partnership_balls"] = state.get("partnership_balls", 0) + 1
+        dismissed = None
+        bs["dot_streak"] = (min(DOT_PRESSURE_MAX, bs.get("dot_streak", 0) + 1)
+                           if not (runs or is_extra or otype == "wicket" or batter_out) else 0)
 
         if is_extra and extra_type in ("Byes", "LegByes", "LegBye", "Leg Byes"):
             state["total_runs"] += runs
@@ -2460,12 +2491,17 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             _push_commentary(state, "extra", striker_name,
                              fh_prefix + (_ec() or f"Leg byes, {runs} run(s)."),
                              runs=runs, event_key="legbye")
-            free_hit = False  # legal delivery consumes the free hit
             if runs % 2 == 1:
                 _swap_strike(state)
 
         elif otype == "wicket" or batter_out:
             wtype = wicket_type or "Caught"
+            non_striker = state["batting_order"][state["non_striker_idx"]]
+            dismissed = (non_striker if wtype == "Run Out" and oc.get("run_out_non_striker")
+                         else striker)
+            out_rid = str(dismissed["roster_id"])
+            out_stat = state["bat_stats"].setdefault(out_rid, _new_bat_stat())
+            out_name = dismissed["name"]
             if runs:  # completed runs on a run-out
                 state["total_runs"] += runs
                 bs["runs"] += runs
@@ -2474,15 +2510,15 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                 state["partnership_runs"] = partnership_before + runs
             state["total_wickets"] += 1
             # A wicket off a no-run delivery is a dot ball for both the bowler
-            # and the dismissed batter — the same rule handlers.match and
+            # and the batter who faced it — the same rule handlers.match and
             # services.match_webapp_service apply, so a dot-ball quest counts
             # the same wherever the match was played.
             if not runs:
                 bws["dots"] = bws.get("dots", 0) + 1
                 bs["dots"] = bs.get("dots", 0) + 1
-            bs["out"] = True
-            bs["how_out"] = wtype
-            bs["bowled_by"] = bowler["name"]
+            out_stat["out"] = True
+            out_stat["how_out"] = wtype
+            out_stat["bowled_by"] = bowler["name"]
             # Attribute a fielder so the scorecard shows a full dismissal line
             # (c <fielder> b <bowler> / run out (<fielder>) / st <keeper> ...).
             needs_fielder = wtype.lower() in ("caught", "run out", "stumped")
@@ -2492,31 +2528,32 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                 keeper = next((p for p in impact_player.active_players(state.get("bowl_xi") or [])
                                if str(p.get("category") or "").lower().replace(" ", "") == "wicketkeeper"), None)
                 fielder = keeper.get("name") if keeper else ""
-            bs["fielder"] = fielder
-            bs["dismissal"] = _dismissal_text(wtype, bowler["name"], fielder)
+            out_stat["fielder"] = fielder
+            out_stat["dismissal"] = _dismissal_text(wtype, bowler["name"], fielder)
             if wtype != "Run Out":
                 bws["wickets"] += 1
             over_timeline.append("W")
-            over_events.append({"sym": "W", "text": f"WICKET! {striker_name} {wtype}"})
+            over_events.append({"sym": "W", "text": f"WICKET! {out_name} {wtype}"})
             state["fow"].append([state["total_runs"], state["total_wickets"],
-                                 striker_name, format_overs(state)])
+                                 out_name, format_overs(state)])
             # Ball row (paints the W badge in the over column) + the red OUT card.
             # On a free hit this can only be a run out (engine-enforced).
-            _wkt_line = fh_prefix + (_ec() or f"OUT! {striker_name} {bs['dismissal']}.")
+            out_runs_before = bs_runs_before if dismissed is striker else out_stat["runs"]
+            _wkt_line = fh_prefix + (_ec(batter=dismissed, batter_runs=out_runs_before)
+                                     or f"OUT! {out_name} {out_stat['dismissal']}.")
             if oc.get("mixup"):
                 drama["pressure"]["mixups"] += 1
                 _wkt_line = fh_prefix + (match_drama.line(
-                    "pressure", "mixup", batter=striker_name) or _wkt_line)
+                    "pressure", "mixup", batter=out_name) or _wkt_line)
             elif bat_p >= PRESSURE_CALLOUT and random.random() < 0.30:
-                _nerves = match_drama.line("pressure", "nerves", batter=striker_name)
+                _nerves = match_drama.line("pressure", "nerves", batter=out_name)
                 if _nerves:
                     _wkt_line = f"{_wkt_line} {_nerves}"
-            _push_commentary(state, "ball", striker_name, _wkt_line,
+            _push_commentary(state, "ball", out_name, _wkt_line,
                              runs=runs, is_wicket=True, event_key="wicket")
-            non_striker = state["batting_order"][state["non_striker_idx"]]
             _push_commentary(
-                state, "wicket", striker_name,
-                f"OUT! {striker_name} {bs['runs']}({bs['balls']}) {bs['dismissal']}")
+                state, "wicket", out_name,
+                f"OUT! {out_name} {out_stat['runs']}({out_stat['balls']}) {out_stat['dismissal']}")
             # Record the completed partnership for the Partnership tab, then reset.
             state.setdefault("partnership_history", []).append({
                 "wicket": state["total_wickets"],
@@ -2528,8 +2565,9 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             state["partnership_runs"] = 0
             state["partnership_balls"] = 0
             state.setdefault("wkt_marks", []).append(balls_bowled(state))
-            free_hit = False
-            streaks.pop(srid, None)
+            streaks.pop(out_rid, None)
+            if wtype == "Run Out" and (runs + bool(oc.get("run_out_crossed"))) % 2:
+                _swap_strike(state)
             # The batting captain picks who walks in: stop the over after this
             # ball (the rest of its bookkeeping still runs below) and hand the
             # choice back. Only when there is a real choice — the innings goes
@@ -2561,8 +2599,8 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                 bws["dots"] = bws.get("dots", 0) + 1
             over_timeline.append(str(runs))
             over_events.append({"sym": str(runs), "text": _run_text(runs, striker_name, bowler["name"])})
-            # Maiden = full over/set of dots with no runs off it yet.
-            _maiden = (balls_this_over >= bpu and over_runs_before == 0 and runs == 0)
+            # Byes do not count against a bowler's maiden.
+            _maiden = balls_this_over >= bpu and bws["this_over_runs"] == 0
             _run_key = ("dot_ball" if runs == 0 else "four" if runs == 4
                         else "six" if runs == 6 else None)
             # A dropped catch converts a wicket into runs in the engine —
@@ -2605,16 +2643,12 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                                  fh_prefix + (_ec(is_maiden=_maiden)
                                               or _run_text(runs, striker_name, bowler["name"])),
                                  runs=runs, event_key=_run_key)
-            # A free hit is consumed by this one legal delivery — clear it even if
-            # the batter found the boundary (otherwise the free-hit run-out lock
-            # would wrongly carry on to the next ball).
-            free_hit = False
             if runs % 2 == 1:
                 _swap_strike(state)
 
         from services.batting_milestones import capture
         capture(bs, bs_runs_before)
-        record_telemetry.capture(state, record_before, oc)
+        record_telemetry.capture(state, record_before, oc, dismissed=dismissed)
         note_bowler_ball(bws, bowler_wicket=bws["wickets"] > wkts_before_ball)
 
         if not is_extra and otype != "wicket" and not batter_out:
@@ -2626,7 +2660,9 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
         _flavour = match_drama.pitch_flavour(pitch, pitch_strength, oc)
         if _flavour:
             _append_to_last_ball_row(state, _flavour)
-        _after_ball_sledge(state, drama, oc, striker, bowler, batter_adapted,
+        sledge_batter = dismissed or striker
+        sledge_adapted = batter_adapted if sledge_batter is striker else _adapt_player(sledge_batter)
+        _after_ball_sledge(state, drama, oc, sledge_batter, bowler, sledge_adapted,
                            bowl_adapted, over_timeline, bowl_p, innings,
                            is_out=_ball_out)
 
@@ -2670,7 +2706,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
     # ── End of over bookkeeping ──
     over_runs = state["total_runs"] - runs_before
     over_wkts = state["total_wickets"] - wkts_before
-    if balls_this_over >= bpu and over_runs == 0:
+    if balls_this_over >= bpu and bws["this_over_runs"] == 0:
         bws["maidens"] += 1
     bws["overs_done"] = bws["balls"] // bpu
     bws["this_over_balls"] = 0
@@ -2877,16 +2913,25 @@ def awaiting_new_batsman(state):
 
 def needs_new_batsman(state):
     """True while a parked over is still waiting for its new batsman."""
-    return awaiting_new_batsman(state) and _striker_is_out(state)
+    return awaiting_new_batsman(state) and _dismissed_end(state) is not None
 
 
-def _striker_is_out(state):
+def _dismissed_end(state):
     order = state.get("batting_order") or []
-    idx = state.get("striker_idx", 0)
-    if not (0 <= idx < len(order)):
-        return False
-    st = (state.get("bat_stats") or {}).get(str(order[idx].get("roster_id")), {})
-    return bool(st.get("out"))
+    stats = state.get("bat_stats") or {}
+    for end in ("striker_idx", "non_striker_idx"):
+        idx = state.get(end)
+        if idx is not None and 0 <= idx < len(order):
+            rid = str(order[idx].get("roster_id"))
+            if stats.get(rid, {}).get("out"):
+                return end
+    return None
+
+
+def dismissed_batsman(state):
+    """Return the dismissed batter still waiting to be replaced at either end."""
+    end = _dismissed_end(state)
+    return state["batting_order"][state[end]] if end else None
 
 
 def _can_pause_for_batsman(state):
@@ -2904,8 +2949,8 @@ def _park_over(state, bowler, scenario_eng, free_hit, ball_history, streaks,
     state["ball_history"] = ball_history[-BALL_HISTORY_WINDOW:]
     state["batter_streaks"] = streaks
     _save_scenario_engine(state, scenario_eng)
-    out = state["batting_order"][state["striker_idx"]]
-    bs = state["bat_stats"].get(str(out["roster_id"]), {})
+    out = dismissed_batsman(state) or {}
+    bs = state["bat_stats"].get(str(out.get("roster_id")), {})
     return {
         "paused": True,
         "over_no": state["current_over"],
@@ -2946,7 +2991,7 @@ def bring_in_batsman(state, roster_id=None):
                if str(order[i].get("roster_id")) == str(roster_id))
     if pos != nxt:
         order.insert(nxt, order.pop(pos))
-    state["striker_idx"] = nxt
+    state[_dismissed_end(state) or "striker_idx"] = nxt
     state["next_batsman_idx"] = nxt + 1
     player = order[nxt]
     from services.live_batting import arrive

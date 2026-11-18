@@ -161,6 +161,22 @@ def test_chase_stops_immediately_when_no_ball_reaches_target(monkeypatch):
     assert inn["timeline"] == ["NB"]
 
 
+def test_short_sim_free_hit_is_used_up_by_leg_byes(monkeypatch):
+    home, away = _make_xi("H", 70), _make_xi("A", 70)
+    deliveries = iter([{"type": "noball"}, {"type": "wide"}, {"type": "legbye"}])
+    seen = []
+
+    def resolve(*args, free_hit, **kwargs):
+        seen.append(free_hit)
+        return next(deliveries, {"type": "runs", "runs": 0})
+
+    monkeypatch.setattr("services.sim_match.calculate_outcome", resolve)
+    inn = simulate_innings(home, away, 1, "Flat", 1, "Home", "Away")
+
+    assert seen == [False, True, True, False, False, False, False, False]
+    assert inn["timeline"][:3] == ["NB", "WD", "LB"]
+
+
 def test_player_of_match_counts_each_bowler_wicket_impact_once_per_innings():
     from services.sim_match import _player_of_the_match
 

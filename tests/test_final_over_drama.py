@@ -81,6 +81,102 @@ def test_wicket_pick_takes_priority_over_the_delivery_pause(monkeypatch):
     assert s["bat_stats"][str(incoming["roster_id"])]["runs"] == 4
 
 
+@pytest.mark.parametrize("runs,crossed,new_batter_faces", [
+    (0, False, False), (0, True, True), (1, False, True), (1, True, False),
+])
+def test_non_striker_run_out_replaces_the_right_end_after_resume(
+        monkeypatch, runs, crossed, new_batter_faces):
+    from services import record_telemetry
+    from services.crickidex_arena import _approach_payload
+    from services.tournament_service import _collect_player_lines
+
+    state = _make_state()
+    bowler = state["current_bowler"] = cm.eligible_bowlers(state)[0]
+    striker, partner = state["batting_order"][:2]
+    wicket = dict(type="wicket", wicket_type="Run Out", runs=runs,
+                  run_out_non_striker=True, run_out_crossed=crossed)
+    scripted(monkeypatch, [wicket, 4])
+    monkeypatch.setattr(cm, "_resolve_running_wicket", lambda outcome, needed: outcome)
+
+    summary = cm.simulate_over(state, pause_on_wicket=True)
+    assert summary["out_batsman"]["roster_id"] == partner["roster_id"]
+    assert state["fow"][0][2] == partner["name"]
+    assert state["bat_stats"][str(striker["roster_id"])]["balls"] == 1
+    assert state["bat_stats"][str(striker["roster_id"])]["runs"] == runs
+    assert state["bat_stats"][str(partner["roster_id"])]["balls"] == 0
+    assert state["bowl_stats"][str(bowler["roster_id"])]["wickets"] == 0
+    event = state["record_deliveries"][0]
+    assert event["batter"] == striker["name"] and event["dismissed_batter"] == partner["name"]
+    assert event["fielder"] == state["bat_stats"][str(partner["roster_id"])]["fielder"]
+
+    state = json.loads(json.dumps(state))
+    assert cm.needs_new_batsman(state)
+    payload = _approach_payload(state, A_PICK_CIPL_NEW_BATSMAN, "batting")
+    assert payload["outBatsman"]["name"] == partner["name"]
+    incoming = cm.bring_in_batsman(state, cm.available_batsmen(state)[-1]["roster_id"])
+    cm.simulate_over(state, pause_after_delivery=True)
+    expected = incoming if new_batter_faces else striker
+    assert state["record_deliveries"][-1]["batter"] == expected["name"]
+    detail = record_telemetry.detail(state)
+    assert "invalid_reason" not in record_telemetry.analyse(detail, _collect_player_lines(state))
+
+
+def test_winning_completed_run_ends_play_before_a_run_out(monkeypatch):
+    state = ready(needed=1)
+    scripted(monkeypatch, [{"type": "wicket", "wicket_type": "Run Out", "runs": 1}])
+    choices = random.choices
+    monkeypatch.setattr(random, "choices", lambda population, *args, **kwargs:
+                        [2] if population == (0, 1, 2) else choices(population, *args, **kwargs))
+    summary = cm.simulate_over(state)
+    assert summary["over_timeline"] == ["1"]
+    assert state["total_runs"] == state["target"] and state["total_wickets"] == 0
+
+
+def test_dot_pressure_stays_with_the_batter_across_overs(monkeypatch):
+    state = _make_state()
+    state["current_bowler"] = cm.eligible_bowlers(state)[0]
+    streaks = []
+    pressure_hook = cm._make_dot_pressure_hook
+
+    def observe(streak, local_dots):
+        streaks.append((streak, local_dots))
+        return pressure_hook(streak, local_dots)
+
+    monkeypatch.setattr(cm, "_make_dot_pressure_hook", observe)
+    scripted(monkeypatch, [0] * 6 + [1, {"type": "wide"}, 4, 0])
+    cm.simulate_over(state)
+    state = json.loads(json.dumps(state))
+    state["current_bowler"] = cm.eligible_bowlers(state)[0]
+    for _ in range(4):
+        cm.simulate_over(state, pause_after_delivery=True)
+    assert streaks == [(n, n) for n in range(6)] + [(0, 0), (5, 0), (5, 0), (0, 0)]
+
+
+def test_partnership_chemistry_ends_when_a_wicket_falls(monkeypatch):
+    state = _make_state()
+    state["current_bowler"] = cm.eligible_bowlers(state)[0]
+    state["partnership_balls"] = 23
+    calls = []
+    scripted(monkeypatch, [0, "W", 4], calls)
+    for _ in range(3):
+        cm.simulate_over(state, pause_after_delivery=True)
+    assert [call["approach_context"]["partnership_overs"] for call in calls] == [23 / 6, 4, 0]
+
+
+def test_leg_byes_consume_a_free_hit_and_do_not_cost_a_maiden(monkeypatch):
+    state = _make_state()
+    bowler = state["current_bowler"] = cm.eligible_bowlers(state)[0]
+    leg_bye = {"type": "legbye", "runs": 1}
+    state["free_hit"] = True
+    calls = []
+    scripted(monkeypatch, [leg_bye, 0, 0, 0, 0, 0], calls)
+    cm.simulate_over(state)
+    assert [call["free_hit"] for call in calls] == [True, False, False, False, False, False]
+    assert state["total_runs"] == state["extras_total"] == 1
+    stats = state["bowl_stats"][str(bowler["roster_id"])]
+    assert stats["runs"] == 0 and stats["maidens"] == 1
+
+
 @pytest.mark.parametrize("mark", [4, {"type": "wide"}, {"type": "noball", "runs": 0}])
 def test_winning_delivery_stops_immediately(monkeypatch, mark):
     s = ready(needed=1)

@@ -35,24 +35,26 @@ def snapshot(state, striker, bowler):
                 pair=[dict(name=p.get('name'),rid=p.get('roster_id')) for p in pair])
 
 
-def capture(state, before, outcome):
+def capture(state, before, outcome, *, dismissed=None):
     """One call per applied delivery; replayed states retain the same stream."""
     bat = (state.get('bat_stats') or {}).get(before['rid'], {})
     bowl = (state.get('bowl_stats') or {}).get(before['bid'], {})
     kind = str(outcome.get('extra_type') or outcome.get('type') or '').lower().replace(' ', '')
     illegal = kind in ('wide','noball')
     wicket = int(state.get('total_wickets') or 0) > before['wickets']
-    how = str(bat.get('how_out') or outcome.get('wicket_type') or outcome.get('how') or '').lower().replace('runout','run out')
-    fielder = bat.get('fielder') or outcome.get('fielder')
+    dismissed_rid = str(dismissed['roster_id']) if dismissed else before['rid']
+    dismissal = bat if dismissed_rid == before['rid'] else (state.get('bat_stats') or {}).get(dismissed_rid, {})
+    how = str(dismissal.get('how_out') or outcome.get('wicket_type') or outcome.get('how') or '').lower().replace('runout','run out')
+    fielder = dismissal.get('fielder') or outcome.get('fielder')
     if wicket and how in ('caught and bowled','caught & bowled','c&b','c & b'):
         fielder = before['bowler']
-        bat['fielder'] = fielder
+        dismissal['fielder'] = fielder
     if wicket and not fielder and ('stump' in how or how == 'caught behind'):
         from services.impact_player import active_players
         selected_keeper = next((p for p in active_players(state.get('bowl_xi') or []) if str(p.get('category') or '').lower().replace(' ','') == 'wicketkeeper'),None)
         if selected_keeper:
             fielder = selected_keeper.get('name')
-            bat['fielder'] = fielder
+            dismissal['fielder'] = fielder
     keeper = False
     for player in state.get('bowl_xi') or []:
         if player.get('name') == fielder:
@@ -73,6 +75,8 @@ def capture(state, before, outcome):
                fielder=fielder if wicket else None,keeper=keeper,
                direct_hit=outcome.get('direct_hit') if wicket and 'run out' in how else None,
                assists=outcome.get('assists') or [] if wicket and 'run out' in how else [])
+    if wicket and dismissed_rid != before['rid']:
+        row['dismissed_batter'] = dismissed.get('name')
     stream.append(row)
 
 
@@ -96,7 +100,9 @@ def analyse(detail, lines=None):
         totals = defaultdict(lambda:dict(bat_runs=0,bat_balls=0,bowl_runs=0,bowl_balls=0,bowl_wickets=0,outs=0))
         for event in events:
             b=totals[event.get('batter')]
-            b['bat_runs']+=event['bat_runs'];b['bat_balls']+=event['faced'];b['outs']+=int(event['wicket'])
+            b['bat_runs']+=event['bat_runs'];b['bat_balls']+=event['faced']
+            if event['wicket']:
+                totals[event.get('dismissed_batter') or event.get('batter')]['outs'] += 1
             b=totals[event.get('bowler')]
             b['bowl_runs']+=event['conceded'];b['bowl_balls']+=int(event['legal']);b['bowl_wickets']+=int(event['bowler_wicket'])
         for line in lines:

@@ -1080,8 +1080,7 @@ def _approach_payload(state, next_action, my_role):
                     "retired": bool(_stat(state.get("bat_stats"), p.get("roster_id")).get("retired")),
                     "runs": _stat(state.get("bat_stats"), p.get("roster_id")).get("runs", 0),
                     "balls": _stat(state.get("bat_stats"), p.get("roster_id")).get("balls", 0)})
-            order = state.get("batting_order") or []
-            out = order[state.get("striker_idx", 0)] if order else {}
+            out = cm.dismissed_batsman(state) or {}
             bs = (state.get("bat_stats") or {}).get(str(out.get("roster_id")), {})
             payload["outBatsman"] = {
                 "name": out.get("name"), "runs": bs.get("runs", 0),

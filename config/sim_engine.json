@@ -123,6 +123,12 @@
     "choke": {"targetBelow": 50, "wicketsInHand": 5, "shotQuality": 0.9, "accuracy": 1.15},
     "saveMatch": {"_readme": "Test 4th innings: when the target needs more than requiredRateAbove an over on the remaining clock, the side bats for the draw.", "requiredRateAbove": 4.5, "minOversLeft": 15, "aggression": 22, "wicket": 0.7},
     "death": {"overs": {"T20": [16, 20], "The100": [14, 17], "ODI": [45, 50]}, "specialist": 1.3, "yorkerAccuracy": 0.2, "aggression": 100},
+    "odiPacing": {
+      "powerplay": {"Four": 1.07, "Six": 0.95},
+      "middle": {"Single": 1.09, "Double": 1.07, "Four": 0.94, "Six": 0.90, "Wicket": 1.04},
+      "death": {"Dot": 0.95, "Four": 1.10, "Six": 1.22, "Wicket": 1.12},
+      "cruiseRate": 6.0, "rampPerRun": 0.33, "chaseAggression": 1.5
+    },
     "fatigue": {"staminaPerOver": {"pace": 4.0, "spin": 2.0}, "recoverPerOver": 3.0, "lowStaminaBelow": 40, "lowStaminaAccuracy": 0.9}
   },
 
@@ -153,7 +159,8 @@
       "pace": {"Caught": 0.55, "Bowled": 0.2, "LBW": 0.17, "Run Out": 0.05, "Hit Wicket": 0.01, "Caught Behind": 0.02},
       "spin": {"Caught": 0.5, "Bowled": 0.15, "LBW": 0.18, "Stumped": 0.12, "Run Out": 0.05}
     },
-    "extrasSplit": {"Wide": 0.6, "No Ball": 0.15, "Leg Bye": 0.2, "Bye": 0.05}
+    "extrasSplit": {"Wide": 0.6, "No Ball": 0.15, "Leg Bye": 0.2, "Bye": 0.05},
+    "freeHit": {"Wicket": 0.1, "Four": 1.25, "Six": 1.25}
   },
 
   "formats": {

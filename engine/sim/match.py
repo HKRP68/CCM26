@@ -61,7 +61,7 @@ class _Innings:
         self.bowl = {b.id: {"name": b.name, "balls": 0, "runs": 0, "wkts": 0, "maidens": 0,
                             "dots": 0, "kind": b.kind} for b in self.bowlers}
         self.stamina = {b.id: b.stamina for b in self.bowlers}
-        self.spell = {}
+        self.spells = {}  # bowler ID -> (last over bowled, overs in the spell)
         self.fow = []
         self.over_runs = []
         self.over_wkts = []
@@ -70,6 +70,7 @@ class _Innings:
         self.partnership = 0
         self.partnerships = []
         self.last_event = None
+        self.free_hit = False
         self.declared = False
         self.all_out = False
         self.target = None
@@ -79,6 +80,12 @@ class _Innings:
     @property
     def overs_str(self):
         return f"{self.legal_balls // 6}.{self.legal_balls % 6}"
+
+    def spell_overs(self, bowler_id, over_idx):
+        # The other end bowls in between. A bowler can also change ends with
+        # two intervening overs, so three overs off marks the end of a spell.
+        last_over, overs = self.spells.get(bowler_id, (-4, 0))
+        return overs if over_idx - last_over <= 3 else 0
 
     def summary(self):
         return {
@@ -212,6 +219,7 @@ class _Match:
         f = self.cfg["formats"]["Test"]
         if self.innings and not self.test_over():
             inn = self.innings[-1]
+            inn.spells.clear()
             self.stumps.append({"day": day, "text": self._stumps_text(day),
                                 "team": inn.bat_team.name, "runs": inn.runs,
                                 "wickets": inn.wkts, "innings": inn.number})
@@ -298,7 +306,7 @@ class _Match:
         cfg = self.cfg
         cond = self.conditions(inn, over_idx, end)
         overs_left_after = (inn.max_overs - over_idx - 1) if inn.max_overs else 0
-        death = situation.is_death_over(self.fmt, over_idx, cfg)
+        death = situation.is_death_over(self.fmt, over_idx, cfg, inn.max_overs)
         spell_cap = cfg["formats"]["Test"]["maxSpellOvers"]
         best, best_score = None, -1e9
         rng = self.rng.derive("pick", inn.number, over_idx)
@@ -307,7 +315,7 @@ class _Match:
                 continue
             if not self._feasible(inn, b, overs_left_after):
                 continue
-            if self.fmt == "Test" and inn.spell.get(b.id, 0) >= spell_cap[b.kind]:
+            if self.fmt == "Test" and inn.spell_overs(b.id, over_idx) >= spell_cap[b.kind]:
                 continue
             fs = factors.compose(cond, ball, cfg, bowler=b)
             skill = (b.spin if b.is_spin else (b.pace + b.swing + b.seam) / 3.0)
@@ -332,23 +340,19 @@ class _Match:
         ball = ball_holder[end]
         bowler = self.pick_bowler(inn, over_idx, end, ball)
         inn.prev_bowler = bowler.id
+        if self.fmt == "Test":
+            inn.spells[bowler.id] = (over_idx, inn.spell_overs(bowler.id, over_idx) + 1)
         for b in inn.bowlers:
             if b.id != bowler.id:
-                inn.spell[b.id] = 0
                 inn.stamina[b.id] = min(b.stamina, inn.stamina[b.id] + cfg["situation"]["fatigue"]["recoverPerOver"])
-        inn.spell[bowler.id] = inn.spell.get(bowler.id, 0) + 1
 
         brng = self.rng.derive("over", inn.number, over_idx)
+        commentary_rng = brng.derive("commentary") if setup_comm(self) else None
         runs_needed = (inn.target - inn.runs) if inn.target else None
         balls_left = ((inn.max_overs * 6 - inn.legal_balls) if inn.max_overs else None)
         close = drama.is_close_chase(runs_needed, balls_left) if inn.target and balls_left else False
         event = drama.roll_over(brng.derive("drama"), cfg, bowler_is_spin=bowler.is_spin,
                                 close_chase=close, is_chase=bool(inn.target))
-        if event:
-            self.drama_events.append({"innings": inn.number, "over": over_idx + 1,
-                                      "kind": event.kind, "text": event.text})
-            self.events.append({"innings": inn.number, "over": over_idx + 1,
-                                "score": 12 if self.fmt == "Test" else 22, "text": event.text})
 
         over_runs = over_wkts = legal = 0
         bowler_runs_this_over = 0
@@ -369,7 +373,7 @@ class _Match:
                 batter_balls=bstat["balls"], batting_position=bstat["position"],
                 last_event=inn.last_event, bowler_death_specialist=bowler.is_death_specialist,
                 is_chase=bool(inn.target) and self.fmt != "Test",
-                save_match=saving), cfg)
+                save_match=saving, total_overs=inn.max_overs), cfg)
             fat = cfg["situation"]["fatigue"]
             fatigue_acc = fat["lowStaminaAccuracy"] if inn.stamina[bowler.id] < fat["lowStaminaBelow"] else 1.0
             mults = outcome.bucket_multipliers(batter, bowler, fs, cfg, sit, fatigue_acc, self.fmt)
@@ -386,19 +390,27 @@ class _Match:
             ev_text = None
             res = None
             if event and event.ball == ball_no:
-                res, ev_text = self._drama_ball(event, bowler, brng)
+                res, ev_text = self._drama_ball(event, bowler, brng, free_hit=inn.free_hit)
             if res is None and sixes_forced and ball_no >= 4:
                 sixes_forced -= 1
                 res = outcome.BallResult("Six", runs=6)
-                ev_text = event.text if event else None
+                if sixes_forced == 0:
+                    ev_text = event.text
             if res is None:
                 res = outcome.resolve(cfg["outcome"]["base"][self._base_key()], mults, brng, cfg,
-                                      bowler=bowler, fs=fs, shot_quality=shot_q, drop_chance=drop)
+                                      bowler=bowler, fs=fs, shot_quality=shot_q, drop_chance=drop,
+                                      free_hit=inn.free_hit)
+            if ev_text:
+                self.drama_events.append({"innings": inn.number, "over": over_idx + 1,
+                                          "kind": event.kind, "text": ev_text})
+                self.events.append({"innings": inn.number, "over": over_idx + 1,
+                                    "score": 12 if self.fmt == "Test" else 22, "text": ev_text})
+                event = None
             self._record_effects(inn, over_idx, fs, bowler)
             label = f"{inn.legal_balls // 6}.{inn.legal_balls % 6 + 1}"
-            if setup_comm(self):
-                inn.lines.append(commentary.line(label, bowler.name, batter.name, res, brng,
-                                                 fs=fs, bowler=bowler, event=ev_text))
+            if commentary_rng:
+                inn.lines.append(commentary.line(label, bowler.name, batter.name, res, commentary_rng,
+                                                 fs=fs, bowler=bowler, event=ev_text, free_hit=inn.free_hit))
             r = self._apply_result(inn, batter, bowler, res, over_idx, brng)
             over_runs += r
             if res.legal:
@@ -443,8 +455,10 @@ class _Match:
     def _base_key(self):
         return self.fmt if self.fmt in self.cfg["outcome"]["base"] else "T20"
 
-    def _drama_ball(self, event, bowler, rng):
+    def _drama_ball(self, event, bowler, rng, *, free_hit=False):
         k = event.kind
+        if free_hit and k in ("droppedCatch", "stumping", "drsOverturn"):
+            return None, None
         if k == "droppedCatch":
             return outcome.BallResult("Dot", runs=1, dropped=True), event.text
         if k == "directHit":
@@ -458,7 +472,7 @@ class _Match:
         if k == "crunchMisfield":
             return outcome.BallResult("Four", runs=4), event.text
         if k == "rainScare":
-            return None, None
+            return None, event.text
         return None, None
 
     def _record_effects(self, inn, over_idx, fs, bowler):
@@ -488,6 +502,7 @@ class _Match:
             bstat["runs"] += res.runs
             wstat["runs"] += res.runs
         if res.legal:
+            inn.free_hit = False
             inn.legal_balls += 1
             wstat["balls"] += 1
             if res.extra_type != "Wide":
@@ -495,6 +510,7 @@ class _Match:
             if total == 0 and not res.is_wicket:
                 wstat["dots"] += 1
         elif res.extra_type == "No Ball":
+            inn.free_hit = self.fmt != "Test"
             bstat["balls"] += 1
         off_bat = res.extra_type in (None, "No Ball")   # byes/leg byes are not hits
         if res.runs == 4 and off_bat:
@@ -646,7 +662,8 @@ class _Match:
             if ball_aging.needs_new_ball(holder["A"], "Test", self.cfg):
                 nb = ball_aging.new_ball(color, holder["A"].number + 1)
                 holder = {"A": nb, "B": nb}
-                inn.lines.append(f"{inn.overs_str} New ball taken")
+                if setup_comm(self):
+                    inn.lines.append(f"{inn.overs_str} New ball taken")
             self.play_over(inn, over, holder)
             over += 1
             lead = lead_before + inn.runs
@@ -657,7 +674,7 @@ class _Match:
                 want = max(250.0, min(f["declareLeadInnings3"], remaining * 3.2))
                 if lead >= want and remaining >= 45:
                     inn.declared = True
-            if inn.declared:
+            if inn.declared and setup_comm(self):
                 inn.lines.append(f"{inn.overs_str} {inn.bat_team.name} declare at {inn.runs}/{inn.wkts}")
 
     def toss(self):

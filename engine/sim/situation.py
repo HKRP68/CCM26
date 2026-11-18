@@ -5,8 +5,9 @@ already models all of this (``engine.pressure_engine``, ``engine.momentum``),
 so these rules are used only by the standalone simulator.
 """
 
+import math
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class Situation:
     bowler_death_specialist: bool = False
     is_chase: bool = False
     save_match: bool = False         # Test 4th innings: the target is gone, bat out time
+    total_overs: Optional[int] = None  # current allocation after any rain reduction
 
 
 @dataclass
@@ -34,12 +36,18 @@ class SituationMods:
     bowler_edge: float = 1.0
     accuracy: float = 1.0
     tags: List[str] = field(default_factory=list)
+    ball_weights: Dict[str, float] = field(default_factory=dict)
 
 
-def is_death_over(fmt, over, cfg):
+def is_death_over(fmt, over, cfg, total_overs=None):
     rng = cfg["situation"]["death"]["overs"].get(fmt)
     if not rng:
         return False
+    if fmt == "ODI" and total_overs is not None:
+        full_overs = cfg["formats"][fmt]["overs"]
+        if total_overs != full_overs:
+            death_overs = math.ceil((rng[1] - rng[0] + 1) * total_overs / full_overs)
+            return total_overs - death_overs <= over < total_overs
     return rng[0] <= over + 1 <= rng[1]
 
 
@@ -93,8 +101,32 @@ def evaluate(s, cfg):
         m.tags.append("saving")
 
     d = c["death"]
-    if is_death_over(s.fmt, s.over, cfg):
-        m.aggression_set = float(d["aggression"])
+    death = is_death_over(s.fmt, s.over, cfg, s.total_overs)
+    pacing = c.get("odiPacing") if s.fmt == "ODI" else None
+    if pacing:
+        f = cfg["formats"][s.fmt]
+        total_overs = s.total_overs or f["overs"]
+        powerplay = math.ceil(f["powerplayOvers"] * total_overs / f["overs"])
+        if death:
+            m.ball_weights.update(pacing["death"])
+        elif s.over < powerplay:
+            m.ball_weights.update(pacing["powerplay"])
+        else:
+            m.ball_weights.update(pacing["middle"])
+
+    if death:
+        if pacing and rrr is not None:
+            # Chasers accelerate only as needed. In a comfortable chase they
+            # can keep rotating the strike even with a death bowler on.
+            attack = max(0.0, min(1.0, (rrr - pacing["cruiseRate"]) * pacing["rampPerRun"]))
+            middle, finish = pacing["middle"], pacing["death"]
+            m.ball_weights = {
+                k: (1 - attack) * middle.get(k, 1.0) + attack * finish.get(k, 1.0)
+                for k in middle.keys() | finish.keys()
+            }
+            m.aggression_mult *= 1 + attack * (pacing["chaseAggression"] - 1)
+        else:
+            m.aggression_set = float(d["aggression"])
         m.accuracy *= 1 + d["yorkerAccuracy"]
         if s.bowler_death_specialist:
             m.bowler_edge *= d["specialist"]

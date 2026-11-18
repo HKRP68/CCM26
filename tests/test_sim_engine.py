@@ -254,6 +254,28 @@ def test_settling_tail_choke_and_death(cfg):
     assert situation.is_death_over("ODI", 44, cfg) and not situation.is_death_over("ODI", 43, cfg)
 
 
+def test_odi_pacing_tracks_the_phase_and_required_rate(cfg):
+    full = situation.Situation(fmt="ODI", batter_balls=20)
+
+    def weights(state):
+        return outcome.bucket_multipliers(None, None, factors.FactorSet(), cfg,
+                                          situation.evaluate(state, cfg), fmt="ODI")
+
+    opening, middle, finish = (weights(replace(full, over=over)) for over in (9, 10, 44))
+    assert middle["Single"] > opening["Single"]
+    assert finish["Four"] > opening["Four"] > middle["Four"]
+    assert finish["Six"] > middle["Six"] and finish["Wicket"] > middle["Wicket"]
+
+    chase = replace(full, total_overs=30, over=26, innings=2, is_chase=True, balls_left=24)
+    assert not situation.is_death_over("ODI", 25, cfg, total_overs=30)
+    assert situation.is_death_over("ODI", chase.over, cfg, total_overs=30)
+    comfortable, pressured, urgent = (weights(replace(chase, runs_needed=runs))
+                                      for runs in (24, 30, 40))
+    assert comfortable["Single"] > pressured["Single"] > urgent["Single"]
+    assert comfortable["Six"] < pressured["Six"] < urgent["Six"]
+    assert comfortable["Wicket"] < pressured["Wicket"] < urgent["Wicket"]
+
+
 def test_drama_chance_is_slider_over_1000(cfg):
     assert drama.chance_per_over(cfg) == pytest.approx(cfg["drama"]["dramaSlider"] / 1000)
     quiet = sim_config.build(override={"drama": {"dramaSlider": 0}}, local_path="")
@@ -282,6 +304,11 @@ def test_resolve_always_returns_a_legal_bucket(cfg):
                             fs=factors.FactorSet())
         assert r.bucket in outcome.BUCKETS
         assert r.total_runs >= 0
+
+
+def test_run_out_is_the_only_modelled_free_hit_dismissal(cfg):
+    result = outcome.resolve({"Wicket": 1}, {}, SimRng(17), cfg, free_hit=True)
+    assert result.legal and result.wicket_type == "Run Out"
 
 
 def test_player_derivation_is_stable():
@@ -334,10 +361,14 @@ def _play(fmt, seed, a=None, b=None, **kw):
 
 @pytest.mark.parametrize("fmt", ["T20", "ODI", "Test"])
 def test_same_seed_same_match(fmt):
-    a = json.dumps(_play(fmt, 99, commentary=True), sort_keys=True, default=str)
+    verbose = _play(fmt, 99, commentary=True)
+    a = json.dumps(verbose, sort_keys=True, default=str)
     b = json.dumps(_play(fmt, 99, commentary=True), sort_keys=True, default=str)
     assert a == b
     assert a != json.dumps(_play(fmt, 100, commentary=True), sort_keys=True, default=str)
+    for inn in verbose["innings"]:
+        inn["commentary"] = []
+    assert verbose == _play(fmt, 99, commentary=False)
 
 
 def test_limited_overs_scorecard_is_consistent():
@@ -380,6 +411,30 @@ def test_test_innings_carry_the_new_ball_and_sessions():
     long_innings = [i for i in res["innings"] if i["legal_balls"] >= 80 * 6]
     if long_innings:
         assert any("New ball taken" in l for l in lines)
+
+
+def test_test_bowlers_rest_after_their_spell_across_alternating_overs(monkeypatch):
+    from engine.sim.match import _Innings, _Match
+
+    cfg = sim_config.build(override={"formats": {"Test": {"maxSpellOvers": {"pace": 2}}},
+                                    "drama": {"dramaSlider": 0}}, local_path="")
+    a, b = _xi("A", 80, 80), _xi("B", 80, 50)
+    for player in b.players[:2]:
+        player.update(pace=100, swing=100, seam=100, accuracy=100)
+    match = _Match(MatchSetup(fmt="Test", team1=a, team2=b, seed=5, commentary=False), cfg)
+    inn = _Innings(1, a, b, cfg)
+    match.innings.append(inn)
+    ball = ball_aging.new_ball()
+    holder = {"A": ball, "B": ball}
+    monkeypatch.setattr(outcome, "resolve", lambda *a, **kw: outcome.BallResult("Dot"))
+
+    bowled = []
+    for over in range(8):
+        match.play_over(inn, over, holder)
+        bowled.append(inn.prev_bowler)
+    assert bowled[:2] == bowled[2:4]
+    assert set(bowled[:2]).isdisjoint(bowled[4:6])
+    assert bowled[6:8] == bowled[:2]
 
 
 def test_rain_reshapes_but_never_abandons():
@@ -516,6 +571,58 @@ def test_no_ball_boundaries_count_for_the_batter(monkeypatch):
     res = _play("T20", 1)
     opener = res["innings"][0]["batting"][0]
     assert opener["fours"] >= 1
+
+
+@pytest.mark.parametrize("fmt", ["T20", "ODI", "Test"])
+def test_no_ball_free_hit_persists_until_a_legal_delivery(monkeypatch, fmt):
+    from engine.sim.match import _Innings, _Match
+
+    cfg = sim_config.build(override={"drama": {"dramaSlider": 0}}, local_path="")
+    a, b = _xi("A", 80, 80), _xi("B", 80, 80)
+    match = _Match(MatchSetup(fmt=fmt, team1=a, team2=b, seed=4), cfg)
+    inn = _Innings(1, a, b, cfg)
+    match.innings.append(inn)
+    no_ball = outcome.BallResult("Extras", extra_type="No Ball", extra_runs=1, legal=False)
+    deliveries = iter([
+        no_ball,
+        outcome.BallResult("Extras", extra_type="Wide", extra_runs=1, legal=False),
+        no_ball,
+        outcome.BallResult("Extras", extra_type="Leg Bye", extra_runs=1),
+    ])
+    seen = []
+
+    def resolve(*args, free_hit, **kwargs):
+        seen.append(free_hit)
+        return next(deliveries, outcome.BallResult("Dot"))
+
+    monkeypatch.setattr(outcome, "resolve", resolve)
+    ball = ball_aging.new_ball()
+    match.play_over(inn, 0, {"A": ball, "B": ball})
+
+    has_free_hit = fmt != "Test"
+    assert seen == [False] + [has_free_hit] * 3 + [False] * 5
+    assert sum("FREE HIT" in line for line in inn.lines) == 3 * has_free_hit
+    assert inn.legal_balls == 6 and inn.extras == 4
+
+
+@pytest.mark.parametrize("kind,event_ball", [("hugeOver", 4), ("drsOverturn", 1)])
+def test_unplayed_drama_does_not_appear_in_a_completed_chase(monkeypatch, cfg, kind, event_ball):
+    from engine.sim.match import _Innings, _Match
+
+    a, b = _xi("A", 80, 80), _xi("B", 80, 80)
+    match = _Match(MatchSetup(fmt="ODI", team1=a, team2=b, seed=9), cfg)
+    inn = _Innings(2, a, b, cfg)
+    inn.max_overs = 50
+    inn.target = 1
+    inn.free_hit = True
+    monkeypatch.setattr(drama, "roll_over", lambda *a, **kw: drama.DramaEvent(kind, event_ball, "Drama"))
+    monkeypatch.setattr(outcome, "resolve", lambda *a, **kw: outcome.BallResult("Single", runs=1))
+
+    ball = ball_aging.new_ball()
+    match.play_over(inn, 0, {"A": ball, "B": ball})
+
+    assert inn.runs == 1 and inn.wkts == 0
+    assert not match.drama_events
 
 
 def test_chase_clock_starts_when_the_first_innings_ended():

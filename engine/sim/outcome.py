@@ -136,7 +136,7 @@ def bucket_multipliers(batter, bowler, fs, cfg, sit=None, fatigue_accuracy=1.0, 
     wkt_ch **= d["wicketChance"]
 
     bnd = (1.0 / ratio) ** s["boundary"] * agg_bnd
-    return {
+    weights = {
         "Dot": ratio ** s["dot"],
         "Single": 1.0,
         "Double": 1.0,
@@ -146,6 +146,10 @@ def bucket_multipliers(batter, bowler, fs, cfg, sit=None, fatigue_accuracy=1.0, 
         "Wicket": ratio ** s["wicket"] * wkt_ch * sit.wicket * agg_wkt,
         "Extras": (0.6 / max(0.1, acc)) ** s["extras"],
     }
+    for bucket, multiplier in sit.ball_weights.items():
+        if bucket in weights:
+            weights[bucket] *= multiplier
+    return weights
 
 
 def clamp_mults(mults, lo, hi):
@@ -175,11 +179,16 @@ def _wicket_type(bowler, fs, rng, cfg):
 
 
 def resolve(base, mults, rng, cfg, *, bowler=None, fs=None, shot_quality=1.0,
-            drop_chance=0.0, bounds=None):
+            drop_chance=0.0, bounds=None, free_hit=False):
     """Draw one delivery from ``base`` scaled by ``mults``."""
     lo, hi = bounds or (cfg["meta"]["standalone_bounds"]["min"],
                         cfg["meta"]["standalone_bounds"]["max"])
-    weights = apply_mults(base, clamp_mults(mults, lo, hi))
+    mults = clamp_mults(mults, lo, hi)
+    if free_hit:
+        # Keep the small chance of a run-out and let the batter swing freely.
+        for bucket, multiplier in cfg["outcome"].get("freeHit", {}).items():
+            mults[bucket] = mults.get(bucket, 1.0) * multiplier
+    weights = apply_mults(base, mults)
     bucket = rng.weighted(weights)
 
     if bucket == "Extras":
@@ -196,7 +205,7 @@ def resolve(base, mults, rng, cfg, *, bowler=None, fs=None, shot_quality=1.0,
         return BallResult("Extras", runs=0, extra_type=et, extra_runs=1 if rng.chance(0.92) else 4)
 
     if bucket == "Wicket":
-        wt = _wicket_type(bowler, fs, rng, cfg)
+        wt = "Run Out" if free_hit else _wicket_type(bowler, fs, rng, cfg)
         if wt == "Caught" and rng.chance(drop_chance):
             return BallResult("Dot", runs=rng.choice([0, 0, 1, 2]), dropped=True)
         return BallResult("Wicket", runs=0, wicket_type=wt)
