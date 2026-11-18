@@ -496,15 +496,35 @@ MOMENTUM_OVER_RUNS = 12            # 12+ in an over and the batter is flying
 MOMENTUM_BAT = 1.05                # → +5% runs next over
 MOMENTUM_BOWL = _wkt(+0.08)        # a wicket last over → +8% wicket chance
 
-# A bowler's third over of the innings is where the legs go, and the fourth is
-# worse. The engine never lets a T20 bowler send down back-to-back overs, so
-# "consecutive" is read as how deep into their own spell this over is — which is
-# the quantity the rule is really about, and the one that forces a captain to
-# think about who is left.
+# The third unit in a spell carries a small penalty. The fourth and later
+# units carry the maximum until the bowler gets a break between spells.
 FATIGUE = {
     3: {"Wicket": 0.95, "Dot": 0.98},
     4: _merge({"Wicket": 0.90, "Dot": 0.96}, _runs_factor(1.05)),
 }
+
+
+def batting_matchup_delta(batter, bowling_type):
+    """Small, stable rating adjustment for the batter against pace or spin."""
+    from engine.sim.rng import stable_unit
+
+    spin = bowling_type in ("Off spin", "Leg spin", "Finger spin", "Wrist spin")
+    profile = batter.get("vs_spin" if spin else "vs_pace")
+    rating = float(batter.get("bat_rating") or batter.get("batting_rating") or batter.get("rating") or 50)
+    if profile is not None:
+        try:
+            return max(-8.0, min(8.0, float(profile) - rating))
+        except (TypeError, ValueError):
+            pass
+    identity = (batter.get("parent_player_id") or batter.get("player_id")
+                or batter.get("roster_id") or batter.get("name"))
+    if identity is None:
+        return 0.0
+    # An inferred game profile has a strength and a corresponding weakness.
+    spin_delta = 6.0 * (2 * stable_unit("approach batting matchup", identity) - 1)
+    return spin_delta if spin else -spin_delta
+
+
 CHEMISTRY_OVERS = 4                # overs together before a pair is humming
 CHEMISTRY_BAT = 1.03               # → +3% runs
 

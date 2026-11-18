@@ -970,6 +970,7 @@ def compute_weighted_prob(
     balls_faced: int = 0,
     format_name: Optional[str] = None,
     config=None,
+    confidence_scale: float = 1.0,
 ) -> float:
     """
     Returns a raw weight for one outcome (Dot/Single/Double/Three/Four/Six/Wicket/Extras),
@@ -1003,9 +1004,9 @@ def compute_weighted_prob(
     # flattened for exactly this reason — see the note it used to carry about
     # opener snowballing — and this brings T20 into line with it.
     if batter_runs >= 50:
-        effective_batting *= 1.10 if _is_lista else 1.12
+        effective_batting *= 1.0 + confidence_scale * (0.10 if _is_lista else 0.12)
     elif batter_runs >= 35:
-        effective_batting *= 1.07 if _is_lista else 1.09
+        effective_batting *= 1.0 + confidence_scale * (0.07 if _is_lista else 0.09)
     elif batter_runs >= 20:
         effective_batting *= 1.05 if _is_lista else 1.06
     elif batter_runs >= 10:
@@ -1145,7 +1146,7 @@ def _dismissal_phase(over_number, format_config=None, approach_context=None):
 
 
 def _get_wicket_type_by_bowling(bowling_type: str, phase: str = None,
-                                batting_approach: str = None):
+                                batting_approach: str = None, *, run_out_scale=1.0):
     """Return ``(types, weights)`` for how this wicket fell.
 
     Three layers, in the order a commentator would describe them: what the
@@ -1162,10 +1163,8 @@ def _get_wicket_type_by_bowling(bowling_type: str, phase: str = None,
 
     phase_mult = _DISMISSAL_PHASE.get(phase or "", {})
     intent_mult = _DISMISSAL_INTENT.get(batting_approach or "", {})
-    if not phase_mult and not intent_mult:
-        return list(_DISMISSAL_TYPES), list(base)
-
     weights = [w * phase_mult.get(t, 1.0) * intent_mult.get(t, 1.0)
+               * (run_out_scale if t == "Run Out" else 1.0)
                for t, w in zip(_DISMISSAL_TYPES, base)]
     return list(_DISMISSAL_TYPES), weights
 
@@ -1241,12 +1240,21 @@ def calculate_outcome(
         if (format_config is not None and format_config.name == "ListA")
         else _POS_BATTING_MULT.get(batting_position, 1.00)
     )
-    batting = batter["batting_rating"] * _pos_mult
+    batting = batter["batting_rating"]
     bowling = bowler["bowling_rating"]
     fielding = bowler["fielding_rating"]
     batting_hand = batter["batting_hand"]
     bowling_hand = bowler["bowling_hand"]
     bowling_type = bowler["bowling_type"]
+    confidence_scale = 1.0
+    if approach_context is not None:
+        from engine.approach_modifiers import batting_matchup_delta
+
+        batting = max(1.0, min(100.0, batting + batting_matchup_delta(batter, bowling_type)))
+        # Retain the initial settling bonus and taper the extra rating driven
+        # by runs once a batter is set. Ratings still drive the contest.
+        confidence_scale -= 0.55 * min(1.0, max(0.0, (batter_runs - 40) / 25))
+    batting *= _pos_mult
 
     # 2) Select scoring matrix — format-aware.
     #    ListA: phase-specific matrix (PP1 / Middle / Death) scaled by pitch run factor.
@@ -1327,6 +1335,7 @@ def calculate_outcome(
                 pitch, bowling_type, streak, batter_runs, balls_faced,
                 format_name=(format_config.name if format_config is not None else None),
                 config=_gc,
+                confidence_scale=confidence_scale,
             )
             # Apply boundary suppression when bowler has favorable matchup
             if outcome in ("Four", "Six") and boundary_suppression < 1.0:
@@ -1339,6 +1348,7 @@ def calculate_outcome(
                 pitch, bowling_type, streak, batter_runs, balls_faced,
                 format_name=(format_config.name if format_config is not None else None),
                 config=_gc,
+                confidence_scale=confidence_scale,
             ) * matchup_boost
         else:  # "Extras"
             weight = compute_weighted_prob(
@@ -1680,7 +1690,8 @@ def calculate_outcome(
         types, weights_pct = _get_wicket_type_by_bowling(
             bowling_type,
             phase=_dismissal_phase(over_number, format_config, approach_context),
-            batting_approach=batting_approach)
+            batting_approach=batting_approach,
+            run_out_scale=0.75 if approach_context is not None else 1.0)
         if free_hit:
             # On a free hit (the ball after a no-ball) the only legal dismissal
             # is a run out — bowled/caught/LBW/stumped do not count.

@@ -83,3 +83,19 @@ def apply(weights, stats):
             if key in out:
                 out[key] *= before / after
     return out
+
+
+def rotate_after_long_innings(weights, balls_faced, required_rate=0.0):
+    """Long spells at the crease gradually trade power for strike rotation."""
+    fatigue = min(1.0, max(0.0, (balls_faced - 30) / 25))
+    fatigue *= min(1.0, max(0.0, (10.0 - required_rate) / 3))
+    if not fatigue:
+        return weights
+    out = dict(weights)
+    four = out.get("Four", 0.0) * 0.24 * fatigue
+    six = out.get("Six", 0.0) * 0.30 * fatigue
+    out["Four"] = out.get("Four", 0.0) - four
+    out["Six"] = out.get("Six", 0.0) - six
+    out["Single"] = out.get("Single", 0.0) + (four + six) * 0.8
+    out["Double"] = out.get("Double", 0.0) + (four + six) * 0.2
+    return out

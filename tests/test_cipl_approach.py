@@ -504,6 +504,7 @@ class ApproachContextTests(unittest.TestCase):
         rid = str(s["current_bowler"]["roster_id"])
         s["bowl_stats"][rid].update({"balls": 12, "wickets": 1,
                                      "last_over_wickets": 1})
+        s["approach_log"] = [{"over": over, "bowler_rid": rid} for over in (14, 16)]
         s["partnership_balls"] = 30
         s["over_runs"] = [6, 14]
         ctx = cm.approach_context(s)

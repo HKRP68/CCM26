@@ -46,7 +46,7 @@ import logging
 import math
 
 from engine.approach_modifiers import (
-    BATTING_APPROACHES, BOWLING_APPROACHES, apply_approach_modifiers,
+    BATTING_APPROACHES, BOWLING_APPROACHES, apply_approach_modifiers, batting_matchup_delta,
 )
 from engine.ball_outcome import (DEFAULT_SCORING_MATRIX, PITCH_SCORING_MATRIX,
                                  get_pitch_run_multiplier,
@@ -262,6 +262,8 @@ def match_up_edge(state, bowler=None):
     bat = striker(state)
     bowl = bowler if bowler is not None else ((state or {}).get("current_bowler") or {})
     bat_rating = rating(bat, "bat_rating", "rating", default=50.0)
+    if bowl:
+        bat_rating = max(1.0, min(100.0, bat_rating + batting_matchup_delta(bat, _bowling_type(bowl))))
     bat_rating += batter_confidence.experience_bonus(
         bat_rating, _striker_stats(state).get("balls", 0))
     bowl_rating = rating(bowl, "bowl_rating", default=60.0) if bowl else 60.0
@@ -271,9 +273,7 @@ def match_up_edge(state, bowler=None):
 
 def _bowling_type(bowler):
     """The engine's bowling-type name for *bowler* (defaults to medium pace)."""
-    from services.sim_match import _BOWL_TYPE_MAP
-    style = (bowler or {}).get("bowl_style") or (bowler or {}).get("bowling_type") or ""
-    return _BOWL_TYPE_MAP.get(style, "Medium-fast")
+    return cipl_match.approach_bowling_type(bowler)
 
 
 def _pitch_matrix(pitch, bowler=None):
@@ -352,6 +352,8 @@ def ball_probabilities(state, bowler=None):
     # Use the same recent-execution signal the live over consumes, so the
     # captain's projected over does not ignore a batter being tied down.
     probs = batter_confidence.apply(probs, _striker_stats(state))
+    chase = _chase(state) or {}
+    probs = batter_confidence.rotate_after_long_innings(probs, balls_faced, chase.get("rrr", 0.0))
     return _normalized(probs)
 
 
@@ -572,6 +574,7 @@ def _fingerprint(state, bowler):
         int((state or {}).get("total_runs") or 0), wickets_lost(state),
         wickets_in_hand(state),
         bat.get("roster_id"), round(rating(bat, "bat_rating", "rating"), 1),
+        round(match_up_edge(state, bowler), 4),
         round(batter_confidence.value(_striker_stats(state)), 3),
         (bowl or {}).get("roster_id"), round(rating(bowl, "bowl_rating", default=60.0), 1),
         balls_faced, round(sr, 1),

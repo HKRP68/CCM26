@@ -2492,6 +2492,38 @@ async def _prompt_in_app(context, mid, state, action, actor_tg, lead="",
     await _mark_prompt_delivered(context, mid, state, delivered, action)
 
 
+async def _send_bowling_matchup_dm(context, mid, state):
+    """Send advice to the bowling captain's Telegram user ID."""
+    captain_id = state.get("bowl_user_tg")
+    if not isinstance(captain_id, int) or captain_id <= 0 or _bot_bowls(state):
+        return
+    from services import bot_tactics
+
+    batter = bot_tactics.striker(state)
+    candidates = cipl_match.eligible_bowlers(state)
+    if not batter or len(candidates) < 2:
+        return
+    seen = context.bot_data.setdefault("cipl_bowling_matchup_dms", {})
+    turn = (state["innings"], state["current_over"], captain_id)
+    if seen.get(mid) == turn:
+        return
+    seen.pop(mid, None)
+    seen[mid] = turn
+    if len(seen) > 256:
+        del seen[next(iter(seen))]
+    try:
+        pick = await asyncio.to_thread(min, candidates, key=lambda p: bot_tactics.bowler_edge(state, p))
+        await context.bot.send_message(
+            chat_id=captain_id,
+            text=(f"🎳 Bowling advice · {state['bowl_team_name']} · "
+                  f"{_unit_word(state).title()} {state['current_over']}\n"
+                  f"Try {pick['name']} against {batter['name']} on strike. "
+                  "This pick weighs the matchup, pitch and spell workload."),
+            connect_timeout=3, read_timeout=3, write_timeout=3)
+    except Exception:
+        logger.debug("cipl: private bowling advice unavailable for match %s", mid, exc_info=True)
+
+
 async def _prompt_bowler(context, mid, state=None, first=False):
     if state is None:
         state = await _gs(context, mid)
@@ -2511,6 +2543,7 @@ async def _prompt_bowler(context, mid, state=None, first=False):
     if _app_mode(state):
         await _prompt_in_app(context, mid, state, A_PICK_CIPL_BOWLER,
                              state["bowl_user_tg"], fresh=True)
+        await _send_bowling_matchup_dm(context, mid, state)
         return
     elig = cipl_match.eligible_bowlers(state)
     # When the front-line attack is exhausted, eligible_bowlers falls back to
@@ -2549,6 +2582,8 @@ async def _prompt_bowler(context, mid, state=None, first=False):
         delivered = False
     await _mark_prompt_delivered(context, mid, state, delivered,
                                  A_PICK_CIPL_BOWLER)
+    if delivered:
+        await _send_bowling_matchup_dm(context, mid, state)
 
 
 async def _bot_consider_impact(context, mid, state):

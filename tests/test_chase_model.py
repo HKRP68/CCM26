@@ -519,6 +519,7 @@ class SolverTests(unittest.TestCase):
 def _mk(rid, name, cat, bat, bowl, style="Fast", traits=None):
     d = {"roster_id": rid, "player_id": rid, "name": name, "rating": max(bat, bowl),
          "category": cat, "bat_rating": bat, "bowl_rating": bowl,
+         "vs_pace": bat, "vs_spin": bat,
          "bowl_style": style, "bowl_hand": "Right", "bat_hand": "Right"}
     if traits:
         d["traits"] = traits

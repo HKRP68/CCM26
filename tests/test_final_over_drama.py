@@ -257,23 +257,61 @@ def test_low_rated_batter_gains_boundary_confidence_after_25_balls():
     assert bat["bat_rating"] == 50
 
 
-@pytest.mark.parametrize("active_idx", [0, 1])
 @pytest.mark.parametrize("needed", [1, 2, 3, 4])
-def test_surviving_40_ball_batter_cannot_lose_a_tiny_final_ask(active_idx, needed):
-    original = ready(needed=needed)
-    original["current_ball"] = 5
-    player = original["batting_order"][active_idx]
-    original["bat_stats"][str(player["roster_id"])].update(balls=40, runs=55)
-    assert chase_model.target_probabilities(**cm._chase_inputs(original))["lose"] == 0
-    for seed in range(8):
-        s = copy.deepcopy(original)
-        random.seed(seed)
-        cm.simulate_over(s)
-        assert s["total_runs"] >= s["target"] - 1
-        assert cm.is_innings_over(s)
+def test_final_ball_prices_the_set_striker_and_can_still_be_lost(needed):
+    state = ready(needed=needed)
+    state["current_ball"] = 5
+    inputs = cm._chase_inputs(state)
+    fresh = chase_model.target_probabilities(**inputs)
+    assert chase_model.target_probabilities(**dict(inputs, non_striker_balls=40)) == fresh
+    settled = chase_model.target_probabilities(**dict(inputs, striker_balls=40))
+    assert settled["win"] > fresh["win"]
+    assert settled["lose"] > 0
+    assert settled["win"] + settled["tie"] + settled["lose"] == pytest.approx(100)
 
 
-def test_finishing_guarantee_excludes_fresh_dismissed_and_large_asks():
+@pytest.mark.parametrize("fmt,prior", [("T20", (14, 16, 18)), ("The100", (16, 17, 19))])
+def test_bowler_fatigue_recovers_after_a_break_in_the_spell(fmt, prior):
+    state = ready(ball_format=fmt)
+    bowler = state["current_bowler"]
+    rid = str(bowler["roster_id"])
+    state["bowl_stats"][rid]["balls"] = 3 * cm.balls_per_unit(state)
+    state["approach_log"] = [{"over": over, "bowler_rid": rid} for over in prior]
+    assert cm.approach_context(state)["bowler_over_index"] == 4
+    tired = chase_model.target_probabilities(**cm._chase_inputs(state))["win"]
+    state["approach_log"] = [{"over": over, "bowler_rid": rid} for over in (12, 14, 16)]
+    assert cm.approach_context(state)["bowler_over_index"] == 1
+    rested = chase_model.target_probabilities(**cm._chase_inputs(state))["win"]
+    assert tired > rested
+
+
+def test_batter_matchup_changes_the_bot_and_chase_estimates():
+    state = ready()
+    batter = state["batting_order"][state["striker_idx"]]
+    batter.update(bat_rating=80, vs_pace=85, vs_spin=74)
+    pace = dict(state["current_bowler"], bowl_style="Fast")
+    spin = dict(pace, bowl_style="Leg Spinner")
+    assert bot_tactics.match_up_edge(state, pace) > bot_tactics.match_up_edge(state, spin)
+    state["current_bowler"] = pace
+    assert cm._chase_inputs(state)["striker_bat"] == 85
+    state["current_bowler"] = spin
+    assert cm._chase_inputs(state)["striker_bat"] == 74
+
+
+def test_long_innings_fatigue_moves_boundary_weight_to_running():
+    assert batter_confidence.rotate_after_long_innings(BASE_WEIGHTS, 30) == BASE_WEIGHTS
+    settled = batter_confidence.rotate_after_long_innings(BASE_WEIGHTS, 40)
+    tired = batter_confidence.rotate_after_long_innings(BASE_WEIGHTS, 55)
+    assert tired["Six"] < settled["Six"] < BASE_WEIGHTS["Six"]
+    assert tired["Single"] > settled["Single"] > BASE_WEIGHTS["Single"]
+    assert tired["Wicket"] == BASE_WEIGHTS["Wicket"]
+    assert tired["Extras"] == BASE_WEIGHTS["Extras"]
+    assert sum(tired.values()) == pytest.approx(sum(BASE_WEIGHTS.values()))
+    urgent = batter_confidence.rotate_after_long_innings(BASE_WEIGHTS, 55, required_rate=10)
+    assert urgent == BASE_WEIGHTS
+
+
+def test_fallback_finishing_edge_preserves_all_outcomes():
     s = ready(needed=4)
     s["current_ball"] = 5
     stats = s["bat_stats"][str(s["batting_order"][0]["roster_id"])]
@@ -282,10 +320,39 @@ def test_finishing_guarantee_excludes_fresh_dismissed_and_large_asks():
     stats.update(balls=40, out=True)
     assert cm._make_set_finisher_hook(s) is None
     stats["out"] = False
+    weights = cm._make_set_finisher_hook(s)(BASE_WEIGHTS)
+    assert weights["Four"] > BASE_WEIGHTS["Four"]
+    assert weights["Dot"] == BASE_WEIGHTS["Dot"]
+    assert weights["Wicket"] == BASE_WEIGHTS["Wicket"]
+    assert weights["Extras"] == BASE_WEIGHTS["Extras"]
     s["target"] += 1
     assert cm._make_set_finisher_hook(s) is None
     s.update(innings=1, target=None)
     assert cm._make_set_finisher_hook(s) is None
+
+
+@pytest.mark.parametrize("app", [False, True])
+def test_bowler_prompt_sends_advice_only_to_the_bowling_captain(monkeypatch, app):
+    state = _make_state()
+    state.update(chat_id=-901, bowl_user_tg=200, bat_user_tg=300,
+                 play_mode="app" if app else "chat")
+    send = AsyncMock(side_effect=RuntimeError("DM unavailable"))
+    context = SimpleNamespace(bot_data={}, bot=SimpleNamespace(send_message=send))
+    public = AsyncMock()
+    monkeypatch.setattr(cp, "_prompt_in_app" if app else "_new_action_message", public)
+    monkeypatch.setattr(cp, "_mark_prompt_delivered", AsyncMock())
+    monkeypatch.setattr(cp, "_delete_prev_over", AsyncMock())
+    monkeypatch.setattr(bot_tactics, "bowler_edge", lambda state, p: -p["bowl_rating"])
+
+    async def prompt_twice():
+        await cp._prompt_bowler(context, 1, state)
+        await cp._prompt_bowler(context, 1, state)
+
+    asyncio.run(prompt_twice())
+    send.assert_awaited_once()
+    assert send.call_args.kwargs["chat_id"] == state["bowl_user_tg"]
+    assert "Bowling advice" in send.call_args.kwargs["text"]
+    assert "Bowling advice" not in str(public.call_args_list)
 
 
 def test_live_reveals_save_before_send_and_delete_previous_ball(monkeypatch):

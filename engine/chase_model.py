@@ -758,7 +758,7 @@ def _lookup(table, edge, balls_left, runs_needed):
 def situational_shift(wickets_in_hand=5, striker_balls=0, striker_traits=None,
                       bowler_traits=None, pitch=None, momentum=0.0, pressure=0.0,
                       conditions=None, fielding_quality=None,
-                      part_time_bowler=False, **_rest):
+                      part_time_bowler=False, bowler_spell_unit=1, **_rest):
     """Sum of the small logit shifts, clamped to +/-SHIFT_CLAMP.
 
     Takes the same input vocabulary as :func:`target_probabilities` and ignores
@@ -784,6 +784,7 @@ def situational_shift(wickets_in_hand=5, striker_balls=0, striker_traits=None,
 
     if part_time_bowler:
         shift += PART_TIME_SHIFT
+    shift += 0.05 * _clamp(bowler_spell_unit - 2, 0, 2)
 
     if pitch is not None:
         from engine import chase_chance
@@ -833,7 +834,8 @@ def target_probabilities(runs_needed, balls_left, striker_bat=75,
     partner_rating = float(non_striker_bat if non_striker_bat is not None else striker_rating)
     striker_rating += experience_bonus(striker_rating, factors.get("striker_balls", 0))
     partner_rating += experience_bonus(partner_rating, factors.get("non_striker_balls", 0))
-    edge = effective_batting(striker_rating, partner_rating) - float(bowler_rating or 50)
+    batting = striker_rating if balls_left == 1 else effective_batting(striker_rating, partner_rating)
+    edge = batting - float(bowler_rating or 50)
     par_table, tie_table = tables()
     win = _lookup(par_table, edge, balls_left, runs_needed)
     tie = _lookup(tie_table, edge, balls_left, runs_needed)
@@ -844,13 +846,6 @@ def target_probabilities(runs_needed, balls_left, striker_bat=75,
 
     win = _clamp(win, FLOOR_PCT, 99.9)
     tie = _clamp(tie, 0.0, max(0.0, 99.95 - win))
-    if (balls_left == 1 and runs_needed <= 4
-            and max(int(factors.get("striker_balls", 0) or 0),
-                    int(factors.get("non_striker_balls", 0) or 0)) >= 40):
-        # Same close-finish rule as cipl_match's last weight hook: a surviving
-        # 40-ball batter earns at least a tie, with the win/tie split retained.
-        win = 100.0 * win / max(win + tie, 1e-9)
-        return {"win": win, "tie": 100.0 - win, "lose": 0.0}
     return {"win": win, "tie": tie, "lose": max(0.0, 100.0 - win - tie)}
 
 

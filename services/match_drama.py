@@ -415,8 +415,8 @@ def make_bat_pressure_hook(p):
 def maybe_mixup(oc, p, free_hit=False):
     """Turn a Caught/Bowled wicket into a run-out mix-up under batting pressure.
 
-    Mutates and returns *oc*. The engine's run-out convention is one run
-    completed, out going for the second.
+    Mutates and returns *oc*. The delivery loop resolves how many runs
+    were completed and which batter was short of their ground.
     """
     if p < PRESSURE_FLOOR or free_hit:
         return oc
@@ -424,7 +424,7 @@ def maybe_mixup(oc, p, free_hit=False):
         return oc
     if oc.get("wicket_type") not in ("Caught", "Bowled"):
         return oc
-    if random.random() < 0.20 * p:
+    if random.random() < 0.15 * p:
         oc["wicket_type"] = "Run Out"
         oc["runs"] = 1
         oc["mixup"] = True

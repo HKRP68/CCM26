@@ -40,7 +40,8 @@ from services import weather_drift
 from engine.approach_modifiers import batting_label, bowling_label
 from services.match_engine import note_bowler_ball
 from services.sim_match import (
-    _adapt_player,
+    _adapt_player as _adapt_sim_player,
+    _BOWL_TYPE_MAP,
     _fmt_to_engine_fmt,
     _normalize_outcome,
 )
@@ -142,6 +143,38 @@ def _repeat_if_same(state, side):
     return run + 1
 
 
+def approach_bowling_type(bowler):
+    """Translate the styles used by player cards into Approach bowling types."""
+    bowler = bowler or {}
+    style = bowler.get("bowl_style") or bowler.get("bowling_type") or ""
+    if style == "Off Spinner":
+        return "Off spin"
+    if style == "Leg Spinner":
+        return "Leg spin"
+    return _BOWL_TYPE_MAP.get(style, "Medium-fast")
+
+
+def _adapt_player(player):
+    adapted = _adapt_sim_player(player)
+    adapted["bowling_type"] = approach_bowling_type(player)
+    return adapted
+
+
+def bowling_spell_unit(state, bowler):
+    """Upcoming unit of a spell, with recovery after two intervening units."""
+    rid = str((bowler or {}).get("roster_id"))
+    last = state.get("current_over", 1)
+    count = 1
+    for over in reversed(state.get("approach_log") or []):
+        if str(over.get("bowler_rid")) != rid or over["over"] >= last:
+            continue
+        if last - over["over"] > 2:
+            break
+        count += 1
+        last = over["over"]
+    return count
+
+
 def approach_context(state, bowler=None):
     """The situational context for the upcoming over's approach match-up.
 
@@ -158,13 +191,11 @@ def approach_context(state, bowler=None):
     bpu = balls_per_unit(state)
     stats = ((state or {}).get("bowl_stats") or {}).get(
         str(bowl.get("roster_id")), {})
-    # 1-based: the over about to be bowled is one past the ones already sent down.
-    spell_over = int(stats.get("balls", 0) or 0) // max(1, bpu) + 1
     return approach_modifiers.make_context(
         pitch=(state or {}).get("pitch_type"),
         phase=approach_phase(state),
-        bowling_type=_adapt_player(bowl).get("bowling_type") if bowl else None,
-        bowler_over_index=spell_over,
+        bowling_type=approach_bowling_type(bowl) if bowl else None,
+        bowler_over_index=bowling_spell_unit(state, bowl),
         partnership_overs=float((state or {}).get("partnership_balls") or 0) / max(1, bpu),
         # The batting side of "momentum" is now the tracked accumulator in
         # engine.momentum, applied per ball through _make_mpi_hook. Feeding the
@@ -304,14 +335,9 @@ BASELINE_WICKET_K = 0.12         # only ∓12% wickets (weak on purpose)
 # target, dew, etc.). Shift the effective win% down so a spec-50% total is
 # actually defended ~50% of the time rather than routinely chased down.
 #
-# Raised from 14 with the v3.0 section 9 Step-1 grid, which is markedly more
-# defensive at big targets than the bands it replaced: measured over 220 matches
-# per pitch, 14 left the engine chasing about 5 points more often than the grid
-# says across every judgeable band, and 20 more than halves that. Past ~24 there
-# is nothing left to win — the residual is sampling noise, and pushing harder
-# only starts blowing losing chases away, which the Fighting Match rule exists to
-# prevent.
-CHASE_INTRINSIC_BIAS = 20
+# Ease the early-chase suppression now that the final ball is open to all
+# ordinary results. The calibrated controller takes over in the last five overs.
+CHASE_INTRINSIC_BIAS = 12
 
 
 def _clamp(v, lo, hi):
@@ -1691,14 +1717,22 @@ def _chase_inputs(state, fielding_quality=None):
     # on them, so a side with a rabbit to come really is worse off at the death.
     nxt = state.get("next_batsman_idx", 2)
     next_in = order[nxt] if nxt < len(order) else {}
+    bowling_type = approach_bowling_type(bowler) if bowler else None
+
+    def matchup_rating(player):
+        rating = float(player.get("bat_rating", 50) or 50)
+        if bowling_type and player:
+            rating += approach_modifiers.batting_matchup_delta(player, bowling_type)
+        return max(1.0, min(100.0, rating))
 
     return {
         "runs_needed": runs_needed,
         "balls_left": balls_left,
-        "striker_bat": int(striker.get("bat_rating", 50) or 50),
-        "next_bat": int(next_in.get("bat_rating", 50) or 50) if next_in else None,
-        "non_striker_bat": int(non_striker.get("bat_rating", 50) or 50),
+        "striker_bat": matchup_rating(striker),
+        "next_bat": matchup_rating(next_in) if next_in else None,
+        "non_striker_bat": matchup_rating(non_striker),
         "bowler_rating": int(bowler.get("bowl_rating", 50) or 50),
+        "bowler_spell_unit": bowling_spell_unit(state, bowler) if bowler else 1,
         "wickets_in_hand": (state.get("wicket_limit", WICKET_LIMIT)
                             - int(state.get("total_wickets", 0))),
         "striker_balls": int(bs.get("balls", 0) or 0),
@@ -1902,35 +1936,20 @@ def is_innings_over(state):
 # ════════════════════════════════════════════════════════════════════
 
 def _make_set_finisher_hook(state):
-    """A 40-ball survivor closes out a tiny, reachable final-ball ask.
-
-    With at most four needed, keep only legal scores that tie or win. Extras
-    must be wides/no-balls (the caller sets their split), so a legal bye cannot
-    sneak a narrow defeat back in. Applies to either of the two active batters.
-    Larger asks and already-dismissed batters receive no guarantee.
-    """
+    """Modest final-ball edge for the set striker when chase steering is off."""
     situation = chase(state)
     if (not situation or situation["balls_remaining"] != 1
             or not 0 < situation["runs_required"] <= 4):
         return None
     if is_innings_over(state):
         return None
-    order = state.get("batting_order") or []
-    active = [order[i] for i in (state["striker_idx"], state["non_striker_idx"])]
-    if not any((bs := state["bat_stats"].get(str(p["roster_id"]), {})).get("balls", 0) >= 40
-               and not bs.get("out") for p in active):
+    striker = state["batting_order"][state["striker_idx"]]
+    bs = state["bat_stats"].get(str(striker["roster_id"]), {})
+    if bs.get("balls", 0) < 40 or bs.get("out"):
         return None
-    minimum = situation["runs_required"] - 1
-
-    def _hook(weights):
-        out = dict(weights)
-        for key, runs in (("Dot", 0), ("Single", 1), ("Double", 2),
-                          ("Three", 3), ("Four", 4), ("Six", 6), ("Wicket", -1)):
-            if key in out and runs < minimum:
-                out[key] = 0.0
-        return out
-
-    return _hook
+    return _mult_hook({key: 1.2 for key, runs in (
+        ("Single", 1), ("Double", 2), ("Three", 3), ("Four", 4), ("Six", 6))
+        if runs >= situation["runs_required"]})
 
 
 def _resolve_running_wicket(outcome, runs_needed):
@@ -2299,7 +2318,9 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             # Per-batter recent rhythm. Rebuilt for each delivery so an over
             # can respond to its own events, including after a wicket/resume.
             # Distinct from permanent settling and team-wide momentum/MPI.
-            confidence_hook = lambda weights, stats=bs: batter_confidence.apply(weights, stats)
+            def confidence_hook(weights):
+                weights = batter_confidence.apply(weights, bs)
+                return batter_confidence.rotate_after_long_innings(weights, bs["balls"], required_rr)
             # LetsPlay clutch amplifier — layered AFTER traits so trait deltas
             # (Finisher/Clutch/Death/Yorker) land first, then chase intent scales
             # the six-or-bust spread. None for /cipl and non-finale balls.
@@ -2325,17 +2346,8 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             bat_p_hook = match_drama.make_bat_pressure_hook(bat_p)
             big_ask = match_drama.final_over_big_ask(innings, runs_needed, balls_left, bpu)
             bowl_p_hook, bowl_p_kwargs = match_drama.bowl_pressure_effects(bowl_p, big_ask)
-            finisher_hook = _make_set_finisher_hook(state)
-            if finisher_hook is not None:
-                # Keep the normal wide:no-ball ratio, but every extra now
-                # preserves the final legal delivery rather than ending it.
-                split = bowl_p_kwargs.get("extras_split", [0.40, 0.25, 0.20, 0.15])
-                free_share = split[0] + split[1]
-                bowl_p_kwargs["extras_split"] = [
-                    split[0] / free_share, split[1] / free_share, 0.0, 0.0]
+            finisher_hook = None if chase_active else _make_set_finisher_hook(state)
             sledge_hook = sledging.make_hook(state, srid)
-            # The controller sees all natural weights. Only the explicit
-            # set-batter close-finish guarantee can constrain it afterwards.
             split = bowl_p_kwargs.get("extras_split", [0.40, 0.25, 0.20, 0.15])
             chase_hook = (_make_chase_hook(state, fielding_q, is_free_hit_ball,
                                            extra_free_ball_share=sum(split[:2]))
