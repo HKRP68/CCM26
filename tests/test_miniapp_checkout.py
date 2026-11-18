@@ -69,7 +69,7 @@ def test_overlapping_orders_share_one_wallet(tmp_path, same_order):
         engine.dispose()
 
 
-def test_ad_status_waits_for_authenticated_callback(tmp_path, monkeypatch):
+def test_ad_status_is_read_only_and_callback_requires_secret(tmp_path, monkeypatch):
     import admin
     import database
     from models import AdReward
@@ -104,6 +104,56 @@ def test_ad_status_waits_for_authenticated_callback(tmp_path, monkeypatch):
                 "ok": True, "confirmed": True, "ads_saved": 1}
         with session() as db:
             assert not db.query(AdReward).one().query_string
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("callback", [None, "before", "after"])
+def test_sdk_completion_can_pay_once_with_or_without_callback(tmp_path, monkeypatch, callback):
+    from datetime import datetime, timedelta
+
+    import admin
+    import database
+    from models import AdReward
+    from services import ad_service, config_service
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'sdk.sqlite'}")
+    database.Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)
+    with session() as db:
+        db.add(User(telegram_id=7))
+        db.commit()
+    monkeypatch.setattr(admin, "get_session", session)
+    monkeypatch.setattr(admin, "post_miniapp_activity", lambda *args, **kwargs: None)
+    monkeypatch.setattr(config_service, "get_config", lambda *args, **kwargs: {})
+    monkeypatch.setenv("BOT_TOKEN", "test")
+    monkeypatch.setenv("ADSGRAM_BLOCK_ID", "1234")
+    monkeypatch.setenv("ADSGRAM_POSTBACK_SECRET", "s" * 32 if callback else "")
+    auth = {"Authorization": "tma " + signed({"user": '{"id":7}', "auth_date": str(int(time.time()))})}
+    url = "/api/webapp/ad-completed"
+    payload = {"view_id": "1" * 32}
+    params = {"userid": 7, "secret": "s" * 32}
+    try:
+        with admin.app.test_client() as client:
+            assert client.get("/api/ads/config").get_json()["ads"]["block_id"] == "1234"
+            assert client.post(url, json=payload).status_code == 401
+            assert client.post(url, headers=auth, json={"view_id": "invalid"}).status_code == 400
+            assert client.post("/api/webapp/spin", headers=auth, json={}).get_json()["slot_type"] == "free"
+            if callback == "before":
+                assert client.get("/api/ads/reward", query_string=params).status_code == 200
+            for _ in range(2):
+                assert client.post(url, headers=auth, json=payload).get_json()["ads_saved"] == 1
+            if callback == "after":
+                assert client.get("/api/ads/reward", query_string=params).status_code == 200
+            result = client.post("/api/webapp/spin", headers=auth, json={}).get_json()
+            assert result["slot_type"] == "ad"
+            assert result["ads_saved"] == 0
+            with session() as db:
+                db.query(AdReward).update({AdReward.received_at: datetime.utcnow() - timedelta(
+                    seconds=ad_service.MIN_CLIENT_AD_INTERVAL_SECONDS + 1)})
+                db.commit()
+            assert client.post(url, headers=auth, json=payload).get_json()["ads_saved"] == 0
+            assert client.post("/api/webapp/spin", headers=auth, json={}).get_json()["error"] == "ad_required"
     finally:
         engine.dispose()
 

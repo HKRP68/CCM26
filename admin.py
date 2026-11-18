@@ -6369,13 +6369,29 @@ def webapp_spin():
 @app.route("/api/webapp/ad-completed", methods=["POST"])
 @csrf_exempt
 def webapp_ad_completed():
-    """Report whether a server-confirmed reward is available for this account."""
+    """Save a reported Adsgram SDK completion or check for an available credit."""
     auth, tg_id, err = _webapp_auth()
     if err:
         return err
     db, user, tg_id = auth
     try:
         from services import ad_service
+        data = request.get_json(silent=True)
+        if isinstance(data, dict) and "view_id" in data:
+            import re
+
+            view_id = data["view_id"]
+            if not isinstance(view_id, str) or not re.fullmatch(r"[0-9a-f]{32}", view_id):
+                return {"ok": False, "error": "invalid_view_id"}, 400
+            if not ad_service.is_configured():
+                return {"ok": False, "error": "ads_unavailable"}, 409
+
+            _lock_user_row(db, user.id)
+            if ad_service.record_client_view(db, tg_id, view_id):
+                from services.quest_service import safe_track
+                safe_track(db, user.id, "ad_watched", 1)
+            db.commit()
+
         saved = ad_service.count_credits(db, tg_id)
         return ({"ok": True, "confirmed": saved > 0, "ads_saved": saved},
                 200, {"Cache-Control": "no-store"})

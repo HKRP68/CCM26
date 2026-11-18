@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <script src="/static/js/ad_reward_confirmation.js?v=1"></script>
+  <script src="/static/js/ad_reward_confirmation.js?v=2"></script>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://sad.adsgram.ai/js/sad.min.js" async></script>
   <!-- The block id can't be baked in: this page is a static file with no
@@ -339,7 +339,7 @@
     if (tg) { tg.ready(); tg.expand(); }
 
     const initData = (tg && tg.initData) ? tg.initData : '';
-    const adConfirmation = window.AdRewardConfirmation(initData, checkRewardCredit);
+    const adConfirmation = window.AdRewardConfirmation(initData, saveAdCompletion);
     function authHeaders() {
       return { 'Content-Type': 'application/json', 'Authorization': 'tma ' + initData };
     }
@@ -710,7 +710,7 @@
 
     // Show one ad, bounded by the load deadline until it starts and by the
     // watch deadline afterwards. If a video finishes after the timeout,
-    // remember to check for its callback before showing another ad.
+    // keep the completion available for the next tap.
     function showAdBounded(controller) {
       return new Promise((resolve, reject) => {
         let settled = false;
@@ -761,12 +761,13 @@
       });
     }
 
-    async function checkRewardCredit() {
+    async function saveAdCompletion(viewId) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 3000);
       try {
         const res = await fetch('/api/webapp/ad-completed', {
-          method: 'POST', headers: authHeaders(), signal: controller.signal });
+          method: 'POST', headers: authHeaders(), signal: controller.signal,
+          body: JSON.stringify({ view_id: viewId }) });
         const data = await res.json().catch(() => ({}));
         return { ok: res.ok, status: res.status, data };
       } catch (_) {
@@ -777,7 +778,7 @@
     }
 
     async function confirmWatchedAd() {
-      setStatus('Checking ad reward…');
+      setStatus('Claiming ad reward…');
       return await adConfirmation.waitForCredit() ? { token: '' } : { error: 'pending' };
     }
 

@@ -16,16 +16,14 @@
     {% if recent %}
       Latest callback received {{ recent[0].received_at | ist('%Y-%m-%d %H:%M:%S') }} IST.
     {% endif %}
-    {% if not today %}
-      No reward callbacks received in the last 24 hours. Check the Reward URL after a completed ad.
-    {% endif %}
+    Ad rewards use SDK completions. Server callbacks are optional.
   </p>
 </div>
 {% else %}
 <div style="background:rgba(255,217,102,.08);border:1px solid var(--accent);border-radius:10px;padding:.85rem 1rem;margin-bottom:1rem;">
   <strong style="color:var(--accent);">Rewarded ads unavailable</strong>
   <p style="color:var(--muted);font-size:.85rem;margin:.4rem 0 0;line-height:1.5;">
-    Set <code>ADSGRAM_BLOCK_ID</code> and <code>ADSGRAM_POSTBACK_SECRET</code> on your host to enable rewarded ads.<br>
+    Set <code>ADSGRAM_BLOCK_ID</code> on your host to enable rewarded ads.<br>
     Get a block ID at <a href="https://partner.adsgram.ai" target="_blank" style="color:var(--accent);">partner.adsgram.ai</a> after signing up + creating a Reward block.
 
   </p>
@@ -65,7 +63,7 @@
       </ul>
     </li>
     <li>Click "Create" → "Ad unit". Choose <strong>Reward</strong> block type</li>
-    <li>In Ad unit settings, set <strong>Reward URL</strong> to:<br>
+    <li>To receive optional server callbacks, set <code>ADSGRAM_POSTBACK_SECRET</code> on your host and use this <strong>Reward URL</strong> in the ad unit.<br>
       <code style="background:var(--card-2);padding:.25rem .5rem;border-radius:4px;display:inline-block;margin-top:.25rem;word-break:break-all;">
         {{ public_base_url }}/api/ads/reward?userid=[userId]&amp;secret=YOUR_SECRET
       </code>
@@ -81,7 +79,7 @@
         ADSGRAM_BLOCK_ID=&lt;your_block_id&gt;
       </code>
     </li>
-    <li>Complete a live rewarded ad and check for a new row below. Adsgram debug ads do not send a reward callback.</li>
+    <li>When using a Reward URL, complete a live rewarded ad and check for a new row below. Adsgram debug ads do not send a reward callback.</li>
   </ol>
 </details>
 

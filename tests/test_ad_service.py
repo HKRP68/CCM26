@@ -50,9 +50,9 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg["sdk_url"], ad_service.ADSGRAM_SDK_URL)
 
     @patch.dict(os.environ, {"ADSGRAM_POSTBACK_SECRET": ""})
-    def test_block_without_callback_verification_stays_disabled(self):
+    def test_block_without_callback_secret_still_loads_ads(self):
         with ad_env("int-1234"):
-            self.assertFalse(ad_service.client_config()["configured"])
+            self.assertTrue(ad_service.client_config()["configured"])
 
     def test_no_block_id_is_mock_mode(self):
         with ad_env(None):

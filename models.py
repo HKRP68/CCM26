@@ -2192,17 +2192,7 @@ class PendingUndo(Base):
 
 
 class AdReward(Base):
-    """Records ad-watch postbacks received from the ad network's server.
-
-    Adsgram fires GET /api/ads/reward?userid=<telegram_id> after a user
-    finishes watching a rewarded ad. We log it here so the /api/webapp/spin
-    endpoint can validate "this user really watched an ad in the last few
-    minutes" before granting the spin.
-
-    consumed_at is set when the user actually claims a spin using this
-    postback, preventing replay.
-
-    """
+    """Single-use ad credit recorded from an SDK completion or a postback."""
     __tablename__ = "adsgram_rewards"
     id = Column(Integer, primary_key=True, autoincrement=True)
     # BigInteger, not Integer: Telegram ids have already passed 2^31, and an
@@ -2212,11 +2202,9 @@ class AdReward(Base):
     received_at = Column(DateTime, default=datetime.utcnow,
                          nullable=False, index=True)
     consumed_at = Column(DateTime, nullable=True)
-    # Which network sent it. Always "adsgram"; the column is kept rather than
-    # dropped because a live database has it and removing it buys nothing.
     provider = Column(String(20), nullable=True)
-    # Optional fields for debugging — IP and full query string Adsgram sent
     source_ip = Column(String(64), nullable=True)
+    # Legacy rows store request metadata. SDK completions store a view reference.
     query_string = Column(String(500), nullable=True)
 
 

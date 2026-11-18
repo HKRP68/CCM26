@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>CricMaster Ultra</title>
-<script src="{{ url_for('static', filename='js/ad_reward_confirmation.js', v='1') }}"></script>
+<script src="{{ url_for('static', filename='js/ad_reward_confirmation.js', v='2') }}"></script>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script>
   // Track third-party SDK load state so a DNS/network failure on these
@@ -3478,7 +3478,7 @@ const urlParams = new URLSearchParams(window.location.search);
 const devId = urlParams.get('dev');
 const AUTH_VALUE = INIT_DATA || (devId ? `DEV_${devId}` : '');
 const adConfirmation = window.AdRewardConfirmation(INIT_DATA,
-  () => api('/api/webapp/ad-completed', {}, 3000));
+  viewId => api('/api/webapp/ad-completed', { view_id: viewId }, 3000));
 
 let currentScreen = 'home';
 let userData = null;
@@ -5723,7 +5723,7 @@ const NOFILL_REQUEST_TIMEOUT_MS = 8000;
 // deadline, which is the behaviour before this existed — so listening is a
 // bonus, never a dependency.
 const AD_START_EVENTS = ['onStart', 'onReward', 'onNonStopShow'];
-// Local marker for a confirmed provider credit. Reward APIs redeem it with no token.
+// Local marker for a saved credit. Reward APIs redeem it with no token.
 const AD_TOKEN_LEDGER = '__confirmed_ad__';
 
 // What the spin/daily button says while the ad phase runs. Updated as the
@@ -5799,7 +5799,7 @@ function _showAdBounded(controller, loadMs, watchMs) {
     }
     Promise.resolve(shown).then(
       v => {
-        // A late SDK completion can still have a pending callback.
+        // Keep a late SDK completion available for the next tap.
         if (settled) {
           if (v?.done === true) adConfirmation.markWatched();
           return;
@@ -5811,7 +5811,7 @@ function _showAdBounded(controller, loadMs, watchMs) {
 }
 
 async function _confirmWatchedAd() {
-  _setAdPhase('Checking ad reward…');
+  _setAdPhase('Claiming ad reward…');
   if (await adConfirmation.waitForCredit()) return AD_TOKEN_LEDGER;
   toast(adConfirmation.pendingMessage, 'info');
   return null;

@@ -1,9 +1,4 @@
-"""Rewarded ads use an authenticated Adsgram callback and a single-use database receipt.
-
-The browser polls its saved balance after the SDK completes. A declined reward
-may return a credit for a later claim. Legacy client receipts can still be
-redeemed during their normal lifetime. No-fill passes have a separate quota.
-"""
+"""Adsgram SDK completions and optional postbacks share a single-use ledger."""
 
 import logging
 import os
@@ -120,16 +115,14 @@ def postback_authorized(supplied: str) -> bool:
 
 
 def is_configured() -> bool:
-    secret = _env("ADSGRAM_POSTBACK_SECRET")
-    return bool(get_block_id()) and len(secret) >= 32 and secret.isascii()
+    return get_block_id() is not None
 
 
 def client_config() -> dict:
-    """Only advertise an ad unit when its reward callback can be verified."""
-    configured = is_configured()
+    block_id = get_block_id()
     return {
-        "configured": configured,
-        "block_id": get_block_id() if configured else None,
+        "configured": block_id is not None,
+        "block_id": block_id,
         "sdk_url": ADSGRAM_SDK_URL,
     }
 
@@ -301,6 +294,39 @@ def count_credits(session, telegram_id: int) -> int:
     except Exception:
         logger.exception("count_credits failed for %s", telegram_id)
         return 0
+
+
+def record_client_view(session, telegram_id: int, view_id: str) -> bool:
+    """Record an SDK completion. Caller holds the user's row lock and commits.
+
+    Returns whether a new credit was created. Persist the view reference so
+    a retried request still matches after the credit has been spent.
+    """
+    from models import AdReward
+
+    reference = f"view:{view_id}"
+    receipts = session.query(AdReward).filter(AdReward.telegram_id == telegram_id)
+    if receipts.filter(AdReward.query_string == reference).first():
+        return False
+
+    recent = datetime.utcnow() - timedelta(seconds=MIN_CLIENT_AD_INTERVAL_SECONDS)
+    postback = (receipts.filter(AdReward.provider == "adsgram",
+                                AdReward.received_at >= recent,
+                                AdReward.query_string == "")
+                .order_by(AdReward.received_at.desc()).first())
+    if postback:
+        postback.query_string = reference
+        return False
+
+    if receipts.filter(AdReward.provider == CLIENT_PROVIDER,
+                       AdReward.received_at >= recent).first():
+        return False
+    if _unclaimed(session, telegram_id, CREDIT_TTL_SECONDS).count() >= MAX_OUTSTANDING_CLIENT_ADS:
+        return False
+
+    session.add(AdReward(telegram_id=telegram_id, provider=CLIENT_PROVIDER,
+                         query_string=reference))
+    return True
 
 
 def _issue_token(prefix: str, telegram_id: int, scope=None,
