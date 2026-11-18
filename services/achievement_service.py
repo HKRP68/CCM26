@@ -516,3 +516,31 @@ def get_top_unlocked(session, user_id, limit=3):
         reverse=True,
     )
     return unlocked[:limit]
+
+
+def progress_snapshot(session, user):
+    """Measured progress for milestones with a numeric target."""
+    from sqlalchemy import func
+
+    roster = (session.query(Player.rating).join(UserRoster, UserRoster.player_id == Player.id)
+              .filter(UserRoster.user_id == user.id).all())
+    runs, wickets, best = (session.query(func.sum(PlayerGameStats.runs),
+                                          func.sum(PlayerGameStats.wickets_taken),
+                                          func.max(PlayerGameStats.highest_score))
+                           .filter(PlayerGameStats.user_id == user.id).one())
+    groups = (
+        (len(roster), "cards", {"first_player": 1, "roster_10": 10, "roster_25": MAX_ROSTER}),
+        (sum(rating >= 95 for rating, in roster), "95+ OVR cards", {"first_legend": 1, "five_legends": 5}),
+        (sum(rating >= 85 for rating, in roster), "85+ OVR cards", {"elite_squad": 11}),
+        (user.matches_played, "matches", {"first_match": 1, "ten_played": 10, "fifty_played": 50}),
+        (user.matches_won, "wins", {"first_win": 1, "ten_wins": 10, "fifty_wins": 50, "hundred_wins": 100}),
+        (user.best_streak, "consecutive wins", {"streak_3": 3, "streak_5": 5, "streak_10": 10}),
+        (best, "runs in one innings", {"first_fifty": 50, "first_hundred": 100, "double_century": 200}),
+        (runs, "runs", {"runs_1k": 1000, "runs_5k": 5000, "runs_10k": 10000}),
+        (wickets, "wickets", {"wickets_50": 50, "wickets_250": 250, "wickets_1k": 1000}),
+        (user.total_coins, "coins", {"coins_100k": 100000, "coins_1m": 1000000}),
+        (user.total_gems, "gems", {"gems_100": 100, "gems_500": 500}),
+        (user.active_days, "active days", {"active_7": 7, "active_30": 30}),
+    )
+    return {key: {"current": max(0, min(current or 0, target)), "target": target, "unit": unit}
+            for current, unit, goals in groups for key, target in goals.items()}

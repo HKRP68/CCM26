@@ -594,7 +594,18 @@ def player_slot_prices(user, slot, player):
     return listed, price
 
 
-def buy_player(session, user, slot_index, *, expected_slot_id=None):
+def first_signing_available(session, user_id, slot):
+    """Only the first purchase of this listing earns a signing rebate."""
+    history = session.query(MarketPurchase.id).filter_by(
+        user_id=user_id, market_type="player", slot_index=slot.slot_index,
+        item_id=slot.player_id)
+    if slot.listed_at is not None:
+        history = history.filter(MarketPurchase.purchased_at >= slot.listed_at)
+    return history.first() is None
+
+
+def buy_player(session, user, slot_index, *, expected_slot_id=None,
+               expected_price=None, expected_player_id=None):
     """Atomic buy of a player from the global market.
 
     Returns (success, message_or_player_name, gem_bonus) — ``gem_bonus`` is the
@@ -617,7 +628,7 @@ def buy_player(session, user, slot_index, *, expected_slot_id=None):
                      GlobalPlayerMarket.is_active == True))
     if expected_slot_id is not None:
         query = query.filter(GlobalPlayerMarket.id == expected_slot_id)
-    slot = query.first()
+    slot = query.populate_existing().with_for_update().first()
     if not slot:
         return False, "Slot not found or inactive.", 0
 
@@ -643,6 +654,9 @@ def buy_player(session, user, slot_index, *, expected_slot_id=None):
     asked = subscription_service.market_price(
         user, slot.base_price, slot.final_price)
     _listed, price = player_slot_prices(user, slot, player)
+    if ((expected_price is not None and expected_price != price)
+            or (expected_player_id is not None and expected_player_id != player.id)):
+        return False, "Listing changed. Review the new offer.", 0
     if price > asked:
         # An admin's sale price (or a discount on top of one) dipped under what
         # releasing the card pays back. Say so — the markets page still shows
@@ -683,6 +697,8 @@ def buy_player(session, user, slot_index, *, expected_slot_id=None):
     )
     session.add(entry)
 
+    first_signing = first_signing_available(session, user.id, slot)
+
     # Audit
     session.add(MarketPurchase(
         user_id=user.id, market_type="player",
@@ -699,8 +715,8 @@ def buy_player(session, user, slot_index, *, expected_slot_id=None):
     # That is also what makes the rebate safe to credit — nothing can reverse
     # the purchase while leaving the gems behind.
     from services.buy_bonus import award_buy_gem_bonus
-    gem_bonus = award_buy_gem_bonus(session, user, player, price,
-                                    source="playermarket")
+    gem_bonus = (award_buy_gem_bonus(session, user, player, price, source="playermarket")
+                 if first_signing else 0)
 
     return True, player.name, gem_bonus
 

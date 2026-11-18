@@ -1,86 +1,8 @@
-"""Adsgram rewarded-ad integration.
+"""Rewarded ads use an authenticated Adsgram callback and a single-use database receipt.
 
-The Mini App gates spins, the daily claim and free packs behind a rewarded ad.
-Adsgram serves them; ``ADSGRAM_BLOCK_ID`` turns it on and its absence means
-mock mode (dev only).
-
-────────────────────────────────────────────────────────────────────────
-How a reward is proven
-────────────────────────────────────────────────────────────────────────
-Adsgram gives the publisher two signals:
-
-  1. CLIENT-SIDE: the SDK's ``AdController.show()`` promise resolves with
-     ``done: true`` in the user's browser. The client then calls
-     /api/webapp/ad-completed, which mints a one-shot, short-lived ``CT-``
-     token that the spin/daily endpoint spends.
-  2. SERVER-SIDE (optional): Adsgram fires a GET at our reward URL with the
-     user's telegram id. We insert an ``AdReward`` row; the spin endpoint
-     claims the most recent unconsumed one inside POSTBACK_WINDOW_SECONDS.
-
-Server-side evidence is preferred when present, client-side is the fallback.
-Adsgram describes the reward URL as worth it "for publishers who have more than
-50k daily users", so the client path has to remain acceptable — the short TTL,
-single use and the per-cycle ad quota are what keep it honest.
-
-────────────────────────────────────────────────────────────────────────
-Two clocks, not one
-────────────────────────────────────────────────────────────────────────
-Worth knowing from this side of the wire, because it produced the loudest
-version of "ads run but the reward never arrives" and none of it was visible
-here: the Mini App used to cap ``AdController.show()`` at twelve seconds. A
-rewarded ad runs fifteen to thirty, so the cap fired *while the player was
-watching it*. The promise was abandoned, /api/webapp/ad-completed was never
-called, and someone who had just sat through a full ad was told no ad was
-available.
-
-The client now bounds the two waits separately — a short one for an ad to
-appear, a long one for the person watching it, switched by the SDK's own
-"started" events — and an ad that finishes after the client gave up is still
-registered here rather than dropped. That last part is why
-``register_client_ad`` has to be idempotent over its repeat window: the client
-retries a lost /ad-completed, and a retry must bind to the same receipt instead
-of minting a second ad.
-
-────────────────────────────────────────────────────────────────────────
-No-fill passes
-────────────────────────────────────────────────────────────────────────
-An ad network is not a guarantee. Adsgram routinely answers "no banner" for a
-request — no inventory for this user, this country, this minute — and a Telegram
-WebView on a phone network drops the SDK often enough that a session can spend
-its whole life with no ads at all. Neither is the player's fault, and neither is
-a reason to lock them out of the feature the ad was gating: the old flow left
-them tapping a button that spun a wheel for a minute and a half and then said
-"no ad available", which reads as a broken app.
-
-So when the client has genuinely exhausted its ad attempts, it asks for a
-**no-fill pass** (``NF-`` token) instead. The pass spends an ad slot exactly as
-a watched ad would, but it is separately capped per cycle
-(``GameConfig.spin_nofill_grace``, default 2) so it can never become the cheap
-route past every ad — a client that always claims no-fill still gets no more
-free value than the grace allows, and a real ad remains the only way to use the
-rest of the quota.
-
-────────────────────────────────────────────────────────────────────────
-Ad credits — a watched ad is never lost
-────────────────────────────────────────────────────────────────────────
-Proving the ad and spending it are two steps, and everything between them can
-fail: the reward request times out on a phone network, the quota cycle turned
-over, the gap between rewarded ads had not elapsed, the reward table came back
-empty. Every one of those used to end the same way — the player watched a full
-ad and got nothing, which is the complaint this module now has to make
-impossible.
-
-So whenever ad evidence has been consumed but the reward could not be handed
-over, the endpoint calls ``bank_credit``: an ``AdReward`` row tagged
-``provider="credit"``. It is exactly the receipt a postback is, minus the
-5-minute window — the player redeems it on their next spin with no second ad.
-``claim_credit`` spends one, and the balance is reported to the client so the
-app can say "1 ad saved" instead of leaving it invisible.
-
-``claim_credit`` redeems *any* unconsumed row, network postbacks included.
-Postbacks have their own five-minute claim window, and one that goes unspent
-inside it is still an ad the player watched; leaving it outside the credit
-query meant it simply expired, unreachable by every path.
+The browser polls its saved balance after the SDK completes. A declined reward
+may return a credit for a later claim. Legacy client receipts can still be
+redeemed during their normal lifetime. No-fill passes have a separate quota.
 """
 
 import logging
@@ -178,50 +100,30 @@ def get_block_id() -> str | None:
     return value if value and value.lower() not in _PLACEHOLDERS else None
 
 
+def postback_authorized(supplied: str) -> bool:
+    expected = _env("ADSGRAM_POSTBACK_SECRET")
+    return (len(expected) >= 32 and expected.isascii() and supplied.isascii()
+            and secrets.compare_digest(expected, supplied))
+
+
 def is_configured() -> bool:
-    """True when ADSGRAM_BLOCK_ID is set (real ads active).
-    False means mock/dev mode."""
-    return bool(get_block_id())
+    secret = _env("ADSGRAM_POSTBACK_SECRET")
+    return bool(get_block_id()) and len(secret) >= 32 and secret.isascii()
 
 
 def client_config() -> dict:
-    """What the Mini App needs to drive the SDK.
-
-    The SDK script itself is loaded unconditionally by the page — it is a fixed
-    URL and costs nothing when unused. Only whether we have a block id to
-    ``init()`` with depends on configuration, which is the one thing here.
-    Gating the script tag on this instead was a mistake worth not repeating: a
-    single wrong env var then removed the SDK from the page entirely, and every
-    ad in the app failed with nothing in the config to suggest why.
-    """
+    """Only advertise an ad unit when its reward callback can be verified."""
+    configured = is_configured()
     return {
-        "configured": is_configured(),
-        "block_id": get_block_id(),
+        "configured": configured,
+        "block_id": get_block_id() if configured else None,
         "sdk_url": ADSGRAM_SDK_URL,
     }
 
 
 def record_postback(session, telegram_id: int, source_ip: str | None = None,
                     query_string: str | None = None):
-    """Insert a row when Adsgram pings the reward URL.
-    Called from /api/ads/reward.
-
-    One ad is one reward, and both halves of Adsgram's contract fire for the
-    same ad: the SDK resolves in the browser (which registers a receipt — see
-    ``register_client_ad``) and the network calls this URL. Whichever lands
-    first is the receipt; a postback that follows the client's receipt for that
-    same ad is stored already consumed. It stays in the table for debugging,
-    but it can't be spent — banked on top of the receipt it would pay twice.
-
-    Which receipt it reconciles against has to be exact, or the rule does the
-    very damage it exists to prevent. Two things scope it:
-
-      • only a CLIENT_PROVIDER row counts. Ads banked back after a refused
-        reward are credits too, and matching those meant a leftover credit from
-        an hour-gapped spin silently voided the postback for a later, real ad;
-      • only a receipt no postback has already answered. Once one postback has
-        landed for a receipt, the next belongs to a different ad.
-    """
+    """Record a verified callback, reconciling legacy client receipts during rollout."""
     from models import AdReward
     now = datetime.utcnow()
     cutoff = now - timedelta(seconds=POSTBACK_DEDUPE_SECONDS)

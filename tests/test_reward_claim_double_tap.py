@@ -339,13 +339,13 @@ class WebappClaimEndpointTests(unittest.TestCase):
                 self.assertIn(call, self._endpoint(route))
 
     def test_the_user_row_lock_refreshes_what_it_locks(self):
-        body = self.src[self.src.index("def _lock_user_row("):]
-        body = body[:body.index("\ndef ", 1)]
+        self.assertIn("return lock_user_for_update(db, db.get(User, user_id))", self.src)
+        body = _read("services/economy_transactions.py")
         self.assertIn(".populate_existing()", body)
         self.assertIn(".with_for_update()", body)
         self.assertLess(body.index(".populate_existing()"),
                         body.index(".with_for_update()"))
-        self.assertIn("db.flush()", body,
+        self.assertIn("session.flush()", body,
                       "autoflush is off — pending writes must be flushed first")
 
     def test_a_refused_quest_claim_rolls_back(self):

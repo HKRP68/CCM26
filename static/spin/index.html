@@ -775,11 +775,7 @@
       });
     }
 
-    // Tell the backend an ad was watched; returns its one-shot token or null.
-    // Retried, because the ad is already spent by the time this runs and a
-    // dropped request here is a watched ad turning into nothing. The server is
-    // idempotent over the retry window, so a duplicate binds to the same
-    // receipt rather than minting a second ad.
+    // Wait briefly for the authenticated provider callback.
     async function registerWatchedAd(attempts = 3) {
       for (let attempt = 0; attempt < attempts; attempt++) {
         const controller = new AbortController();
@@ -788,8 +784,8 @@
           const res = await fetch('/api/webapp/ad-completed', {
             method: 'POST', headers: authHeaders(), signal: controller.signal });
           const data = await res.json().catch(() => ({}));
-          if (data && data.ad_token) return data.ad_token;
-          if (res.status && res.status < 500) return null;   // it decided
+          if (data.confirmed) return true;
+          if (!res.ok && res.status < 500) return null;   // it decided
         } catch (e) {
           console.warn('[ads] could not register the completed ad', e);
         } finally {
@@ -810,16 +806,8 @@
         console.warn('[ads] no usable ad controller', e);
       }
       if (!ctrl) {
-        // No ad network configured at all (dev, or a deployment with no block
-        // id) — the same mock token the Mini App sends. The server accepts a
-        // MOCK- token only when ads really are unconfigured or WEBAPP_DEV_MODE
-        // is on, so this cannot become a way past a live ad network.
         await window.__adSdkReady;
-        if (!window.__adConfig?.configured) {
-          setStatus('📺 Playing ad… (mock)');
-          await new Promise(r => setTimeout(r, 1000));
-          return { token: 'MOCK-' + Date.now() };
-        }
+        if (!window.__adConfig?.configured) return { error: 'unavailable' };
         // Configured, but the SDK never became usable: blocked domain, dead
         // DNS, a block id it rejects. The player cannot watch an ad their
         // network will not load, so rescue the attempt with a pass.
@@ -850,8 +838,7 @@
       }
       if (!done) return { error: 'skipped' };
 
-      const token = await registerWatchedAd();
-      if (token) return { token };
+      await registerWatchedAd();
       // The ad was watched. Even if every one of those responses was lost, the
       // server wrote it to the ledger (or Adsgram's own postback did), so the
       // round goes ahead with no token and the saved ad is redeemed there.

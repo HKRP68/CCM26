@@ -29,14 +29,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def active_match_for(session, user_id):
+def active_match_for(session, user_id, *, strict=False):
     """The unfinished match this user is part of, or ``None``."""
     if not user_id:
         return None
     try:
         from handlers.match import _active_match_for_user
+        if strict:
+            return _active_match_for_user(session, user_id, commit_expiry=False)
         return _active_match_for_user(session, user_id)
     except Exception:
+        if strict:
+            raise
         logger.exception("roster lock: active-match lookup failed for user %s", user_id)
         return None
 

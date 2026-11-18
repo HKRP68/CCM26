@@ -277,7 +277,7 @@ ACTIVE_MATCH_STATUSES = (
 LIVE_MATCH_STATUSES = ("playing", "active", "in_progress")
 
 
-def _expire_stale_pending_matches(session):
+def _expire_stale_pending_matches(session, *, commit=True):
     """Expire pre-play rows whose timer elapsed while no expiry job was running.
 
     Scheduled expiry jobs are best-effort: they can be missed when the bot is
@@ -302,7 +302,7 @@ def _expire_stale_pending_matches(session):
                .update({Match.status: "expired",
                         Match.end_reason: END_AUTO},
                        synchronize_session=False))
-    if expired:
+    if expired and commit:
         session.commit()
 
 
@@ -318,9 +318,9 @@ def _active_match_in_chat(session, chat_id):
             .first())
 
 
-def _active_match_for_user(session, user_id):
+def _active_match_for_user(session, user_id, *, commit_expiry=True):
     """Return an unfinished match involving ``user_id``, if one exists."""
-    _expire_stale_pending_matches(session)
+    _expire_stale_pending_matches(session, commit=commit_expiry)
     match = (session.query(Match)
             .filter(or_(Match.user1_id == user_id, Match.user2_id == user_id),
                     Match.status.in_(ACTIVE_MATCH_STATUSES))

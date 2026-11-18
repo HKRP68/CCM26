@@ -22,7 +22,7 @@ import random
 from datetime import datetime, timedelta
 from sqlalchemy import func
 
-from models import Pack, PackPurchase, UnopenedPack, Player, User, UserRoster
+from models import Pack, PackPurchase, UnopenedPack, Player, UserRoster
 
 from services.player_service import not_career
 
@@ -379,42 +379,12 @@ MAX_INVENTORY = 50  # max unopened packs a user can hold
 PITY_THRESHOLD = 10
 
 
-def _lock_buyer_row(session, user):
-    """Row-lock the buyer for the rest of this transaction.
-
-    ``buy_pack`` does check-then-charge: it validates the balance, the
-    inventory cap and the daily limit, and only then deducts. Two buys that
-    overlap — the classic double-tap on the Mini App "Buy" button, which fires
-    a second POST before the first has committed — each read the same
-    pre-deduction snapshot from their own session, both pass validation, and
-    both charge. The user ends up with two packs for one price, or past the
-    daily limit.
-
-    ``SELECT … FOR UPDATE`` makes the second buy wait until the first commits,
-    then re-read the charged balance. Real lock on Postgres, a harmless no-op
-    on SQLite (dev/tests), where writes serialize anyway. Best-effort: a
-    session that cannot lock (a test double, an exotic backend) must never
-    stop a legitimate purchase.
-    """
-    try:
-        # autoflush is off, so flush first — populate_existing() would
-        # otherwise overwrite pending in-session writes to this User.
-        session.flush()
-        (session.query(User)
-         .filter(User.id == user.id)
-         .populate_existing()
-         .with_for_update()
-         .first())
-    except Exception:
-        logger.debug("buy_pack: buyer row lock unavailable", exc_info=True)
-
-
-def buy_pack(session, user, pack):
+def buy_pack(session, user, pack, *, request_id=None, payment=None, expected_cost=None):
     """Validate cost + limits, charge user, add an UnopenedPack to inventory.
 
     Does NOT roll players — that happens in open_unopened_pack().
 
-    Concurrency: the buyer row is locked first (see ``_lock_buyer_row``) so
+    Concurrency: the buyer row is locked first (see ``lock_user_for_update``) so
     duplicate/rapid purchases can't both spend the same balance.
 
     Returns dict:
@@ -424,17 +394,35 @@ def buy_pack(session, user, pack):
       currency: str
       inventory_id: int (the UnopenedPack.id created)
     """
-    _lock_buyer_row(session, user)
-
-    if pack.cost_coins and user.total_coins < pack.cost_coins:
-        return {"success": False,
-                "message": f"❌ Need {pack.cost_coins:,} coins (you have {user.total_coins:,})."}
-    if pack.cost_quest_points and (user.quest_points or 0) < pack.cost_quest_points:
-        return {"success": False,
-                "message": f"❌ Need {pack.cost_quest_points:,} quest points (you have {user.quest_points or 0:,})."}
-    if pack.cost_gems and user.total_gems < pack.cost_gems:
-        return {"success": False,
-                "message": f"❌ Need {pack.cost_gems} gems (you have {user.total_gems})."}
+    from services.economy_transactions import lock_user_for_update
+    lock_user_for_update(session, user)
+    if request_id:
+        receipt = session.query(PackPurchase).filter_by(user_id=user.id, request_id=request_id).first()
+        if receipt:
+            if receipt.pack_id != pack.id or (payment is not None and payment != receipt.currency):
+                return {"success": False, "error": "order_conflict", "message": "This order already has a different receipt."}
+            return {"success": True, "replayed": True, "cost_paid": receipt.cost_paid,
+                    "currency": receipt.currency, "inventory_id": receipt.inventory_id}
+    pack = (session.query(Pack).filter_by(id=pack.id, is_active=True)
+            .populate_existing().with_for_update().first())
+    if pack is None:
+        return {"success": False, "message": "This pack is no longer on sale."}
+    # Each configured price is an alternative payment method.
+    wallets = {"coins": "total_coins", "quest_points": "quest_points", "gems": "total_gems"}
+    prices = {currency: getattr(pack, "cost_" + currency) for currency in wallets
+              if getattr(pack, "cost_" + currency)}
+    if any(amount < 0 for amount in prices.values()):
+        return {"success": False, "message": "This pack has an invalid price."}
+    if not prices:
+        prices = {"free": 0}
+    currency = payment or next((key for key, price in prices.items()
+                                if key == "free" or (getattr(user, wallets[key]) or 0) >= price),
+                               next(iter(prices)))
+    if currency not in prices or (expected_cost is not None and prices[currency] != expected_cost):
+        return {"success": False, "error": "price_changed", "message": "Pack price changed. Review the shop."}
+    cost_paid = prices[currency]
+    if cost_paid and (getattr(user, wallets[currency]) or 0) < cost_paid:
+        return {"success": False, "message": f"You need {cost_paid:,} {currency.replace('_', ' ')}."}
 
     inv_count = (session.query(func.count(UnopenedPack.id))
                  .filter(UnopenedPack.user_id == user.id).scalar()) or 0
@@ -450,29 +438,22 @@ def buy_pack(session, user, pack):
                                 PackPurchase.purchased_at >= since)
                         .scalar()) or 0
         if bought_today >= pack.daily_limit:
-            return {"success": False,
+            return {"success": False, "error": "daily_limit",
                     "message": f"❌ Daily limit reached ({pack.daily_limit}/24h). Try again later."}
 
-    cost_paid = 0
-    currency = "free"
-    if pack.cost_coins:
-        user.total_coins -= pack.cost_coins
-        cost_paid = pack.cost_coins; currency = "coins"
-    elif pack.cost_quest_points:
-        user.quest_points = (user.quest_points or 0) - pack.cost_quest_points
-        cost_paid = pack.cost_quest_points; currency = "quest_points"
-    elif pack.cost_gems:
-        user.total_gems -= pack.cost_gems
-        cost_paid = pack.cost_gems; currency = "gems"
+    if cost_paid:
+        wallet = wallets[currency]
+        setattr(user, wallet, getattr(user, wallet) - cost_paid)
 
     inv = UnopenedPack(user_id=user.id, pack_id=pack.id,
                        acquired_at=datetime.utcnow(), source="buypack")
     session.add(inv)
+    session.flush()
 
     # Audit row created at buy time. players_json filled later when opened.
     audit = PackPurchase(
         user_id=user.id, pack_id=pack.id,
-        cost_paid=cost_paid, currency=currency,
+        cost_paid=cost_paid, currency=currency, request_id=request_id, inventory_id=inv.id,
         players_json=None, purchased_at=datetime.utcnow(),
     )
     session.add(audit)
@@ -493,6 +474,8 @@ def list_user_inventory(session, user_id):
 
 def open_unopened_pack(session, user, inventory_id):
     """Roll players, add to roster, delete inventory row."""
+    from services.economy_transactions import lock_user_for_update
+    lock_user_for_update(session, user)
     inv = (session.query(UnopenedPack)
            .filter(UnopenedPack.id == inventory_id,
                    UnopenedPack.user_id == user.id).first())
@@ -591,11 +574,12 @@ def open_unopened_pack(session, user, inventory_id):
     # Backfill the audit row created at buy time
     received = [{"player_id": p.id, "name": p.name, "rating": p.rating, "slot": s}
                 for p, s in rolled]
-    last_audit = (session.query(PackPurchase)
-                  .filter(PackPurchase.user_id == user.id,
-                          PackPurchase.pack_id == pack.id,
-                          PackPurchase.players_json.is_(None))
-                  .order_by(PackPurchase.purchased_at.asc()).first())
+    audits = session.query(PackPurchase).filter_by(
+        user_id=user.id, pack_id=pack.id, players_json=None)
+    last_audit = audits.filter_by(inventory_id=inv.id).first()
+    if last_audit is None and inv.source == "buypack":
+        # Purchases made before inventory ids were recorded used FIFO matching.
+        last_audit = audits.filter_by(inventory_id=None).order_by(PackPurchase.purchased_at).first()
     if last_audit:
         last_audit.players_json = json.dumps(received)
     else:

@@ -6,12 +6,12 @@ the same questions of ``tournament_service`` and friends and answers in plain
 dicts the Mini App can render. Nothing here writes — the caller decides whether
 to refresh the aggregates first.
 
-Only an *active* tournament is served (``Tournament.is_active``): the tab exists
-to follow the competition that is on right now, and a finished or draft one is
-the admin site's business.
+Active competitions and completed results are available to players. Draft and
+unpublished competitions stay in the admin panel.
 """
 import json
 import logging
+from sqlalchemy import func
 
 from models import (Tournament, TournamentGroup, TournamentMatch, TournamentTeam)
 from services import tournament_service
@@ -291,6 +291,10 @@ def tournament_payload(session, tour, tg_id=None):
             "round_banner": league_schedule_service.round_banner(progress, locked, tour),
             "champion": _team_brief(champ),
         },
+        "teams": [dict(_team_brief(team), played=team.played, won=team.won,
+                       points=team.points, mine=team.id in mine,
+                       has_roster=bool(team.challenge_team_id and tour.status != "completed"), stadium=team.home_stadium)
+                  for team in sorted(teams.values(), key=lambda row: (row.name.casefold(), row.id))],
         "table": table_rows,
         "group_tables": group_tables,
         "points_footnote": [
@@ -474,3 +478,53 @@ def fixture_scorecard(session, tour, fixture_id, user_id=None):
            "summary_only": True}
     out.update(head)
     return out
+
+
+def resolve_visible(session, tournament_id=None, include_completed=False):
+    tour = resolve_live(session, tournament_id)
+    if tour or not include_completed or not tournament_id:
+        return tour
+    archive = session.get(Tournament, int(tournament_id))
+    return archive if archive and archive.status == "completed" else None
+
+
+def directory(session, telegram_id):
+    """Current competitions and the most recent completed results."""
+    active = [tour for tour in live_tournaments(session) if tour.status != "completed"]
+    completed = (session.query(Tournament).filter_by(status="completed")
+                 .order_by(Tournament.id.desc()).limit(20).all())
+
+    def card(tour):
+        kind = tournament_service.tournament_kind(tour)
+        summary = session.query(TournamentMatch.status, func.count(TournamentMatch.id)).filter_by(
+            tournament_id=tour.id).group_by(TournamentMatch.status).all()
+        counts = dict(summary)
+        mine = my_team_ids(session, tour, telegram_id)
+        return {
+            "id": tour.id, "name": tour.name, "format": tour.format,
+            "status": STATUS_LABEL.get(tour.status, tour.status),
+            "kind_label": KIND_LABEL.get(kind, ""),
+            "played": counts.get("completed", 0), "total": sum(counts.values()),
+            "my_team": bool(mine),
+            "champion": _team_brief(tournament_service.tournament_champion(session, tour.id))
+                        if tour.status == "completed" else None,
+        }
+
+    return {"ok": True, "current": [card(t) for t in active], "archive": [card(t) for t in completed]}
+
+
+
+def team_roster(session, tour, team_id):
+    from models import ChallengePlayer
+    from services.xi_rules import challenge_player_category, challenge_rating_or_none
+    team = session.query(TournamentTeam).filter_by(tournament_id=tour.id, id=team_id).first()
+    if not team:
+        return None
+    if tour.status == "completed" or not team.challenge_team_id:
+        return []
+    players = (session.query(ChallengePlayer)
+               .filter_by(team_id=team.challenge_team_id)
+               .order_by(ChallengePlayer.sort_order, ChallengePlayer.id).all())
+    return [{"name": player.name, "role": challenge_player_category(player),
+             "rating": challenge_rating_or_none(player), "overseas": player.is_overseas}
+            for player in players]

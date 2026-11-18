@@ -168,14 +168,15 @@ MINIAPP_LIVE_MATCH_PATHS = (
 def is_miniapp_path(path):
     """True when this request path belongs to a lockable Mini App API."""
     path = path or ""
-    return any(path.startswith(prefix) for prefix in MINIAPP_GUARDED_PREFIXES)
+    return (path == "/api/match" or path.startswith("/api/match/")
+            or any(path.startswith(prefix) for prefix in MINIAPP_GUARDED_PREFIXES))
 
 
 def is_miniapp_live_match_path(path):
     """True for the Mini App endpoints an in-flight match still needs."""
     path = path or ""
-    return any(path == allowed or path.startswith(allowed)
-               for allowed in MINIAPP_LIVE_MATCH_PATHS)
+    return (path == "/api/match" or path.startswith("/api/match/")
+            or any(path == allowed or path.startswith(allowed) for allowed in MINIAPP_LIVE_MATCH_PATHS))
 
 
 def is_ad_postback_path(path):

@@ -238,17 +238,17 @@ def get_chemistry_config():
     return dict(_CHEMISTRY_CACHE["data"])
 
 
-def get_config(session=None, *, fresh=False):
+def get_config(session=None, *, fresh=False, strict=False):
     """Return current config as a dict. Uses cache unless ``fresh=True``.
 
     If session is None, opens its own short-lived session.
     """
     if not fresh and _CACHE["data"] is not None:
         return _CACHE["data"]
-    return _refresh(session)
+    return _refresh(session, strict=strict)
 
 
-def _refresh(session=None):
+def _refresh(session=None, *, strict=False):
     """Load fresh from DB into cache."""
     own = False
     if session is None:
@@ -265,6 +265,8 @@ def _refresh(session=None):
         _CACHE["loaded_at"] = datetime.utcnow()
         return data
     except Exception:
+        if strict:
+            raise
         logger.exception("config refresh failed; falling back to defaults")
         return dict(DEFAULTS)
     finally:

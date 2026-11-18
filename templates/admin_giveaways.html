@@ -7,6 +7,36 @@
   <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
 </div>
 
+<details style="margin-bottom:1rem;border:1px solid var(--border);border-radius:10px;padding:1rem;">
+  <summary style="cursor:pointer;font-weight:700;">Send a private Mini App gift</summary>
+  <form method="post" action="{{ url_for('admin_miniapp_gift') }}" style="display:flex; flex-wrap:wrap; align-items:end; gap:.8rem; margin-top:.8rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="request_key" value="{{ gift_request_key }}">
+    <label>Telegram user ID<br><input required name="telegram_id" inputmode="numeric" pattern="[0-9]+"></label>
+    <label>Gift title<br><input required name="title" maxlength="120"></label>
+    <label>Reward<br><select id="gift-currency" name="currency"><option value="coins">Coins</option><option value="gems">Gems</option><option value="quest_points">Quest points</option><option value="player">Player card</option><option value="pack">Pack</option></select></label>
+    <label data-gift-field="amount">Amount<br><input required type="number" name="amount" min="1" max="2147483647"></label>
+    <label data-gift-field="player" hidden>Player<br><select name="player_id">
+      {% for p in dropdown_options %}<option value="{{ p.id }}">{{ p.label }}</option>{% endfor %}
+    </select></label>
+    <label data-gift-field="pack" hidden>Pack<br><select name="pack_id">
+      {% for pack in gift_packs %}<option value="{{ pack.id }}">{{ pack.name }}</option>{% endfor %}
+    </select></label>
+    <button type="submit" class="btn btn-primary">Send gift</button>
+  </form>
+</details>
+<script>
+  document.getElementById('gift-currency').addEventListener('change', event => {
+    const form = event.target.form;
+    const selected = ['player', 'pack'].includes(event.target.value) ? event.target.value : 'amount';
+    form.querySelectorAll('[data-gift-field]').forEach(label => {
+      label.hidden = label.dataset.giftField !== selected;
+      label.querySelector('input, select').disabled = label.hidden;
+    });
+  });
+</script>
+
+
 <details style="background:var(--card);border:1px solid var(--accent);border-radius:10px;padding:1rem 1.2rem;margin-bottom:1rem;" {% if auto_cfg.enabled %}open{% endif %}>
   <summary style="cursor:pointer;font-weight:700;">
     🤖 Automatic giveaways —

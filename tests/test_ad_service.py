@@ -17,6 +17,7 @@ import threading
 import time
 import unittest
 from contextlib import contextmanager
+from unittest.mock import patch
 
 from services import ad_service
 
@@ -40,12 +41,18 @@ def ad_env(block_id=None):
 
 class ConfigTests(unittest.TestCase):
 
-    def test_a_block_id_turns_real_ads_on(self):
+    @patch.dict(os.environ, {"ADSGRAM_POSTBACK_SECRET": "x" * 32})
+    def test_a_block_id_and_callback_secret_turn_real_ads_on(self):
         with ad_env("int-1234"):
             cfg = ad_service.client_config()
         self.assertTrue(cfg["configured"])
         self.assertEqual(cfg["block_id"], "int-1234")
         self.assertEqual(cfg["sdk_url"], ad_service.ADSGRAM_SDK_URL)
+
+    @patch.dict(os.environ, {"ADSGRAM_POSTBACK_SECRET": ""})
+    def test_block_without_callback_verification_stays_disabled(self):
+        with ad_env("int-1234"):
+            self.assertFalse(ad_service.client_config()["configured"])
 
     def test_no_block_id_is_mock_mode(self):
         with ad_env(None):

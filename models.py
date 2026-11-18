@@ -20,6 +20,7 @@ class User(Base):
     total_coins = Column(Integer, default=0)
     total_gems = Column(Integer, default=0)
     roster_count = Column(Integer, default=0)
+    miniapp_economy_next = Column(DateTime, nullable=True)
     captain_roster_id = Column(Integer, nullable=True)
     # Short unique code used by friends to redeem a referral via /debut prompt
     # or /redeem <code>. Auto-generated on first /invite or first request that
@@ -1673,6 +1674,9 @@ class PackPurchase(Base):
     cost_paid = Column(Integer, nullable=False)
     currency = Column(String(20), nullable=False)   # 'coins' / 'quest_points' / 'gems'
     players_json = Column(Text, nullable=True)      # serialized list of player_ids/names received
+    request_id = Column(String(64), nullable=True)
+    inventory_id = Column(Integer, nullable=True)  # Kept on the receipt after opening.
+    __table_args__ = (Index("uq_pack_order_request", "user_id", "request_id", unique=True),)
     purchased_at = Column(DateTime, default=datetime.utcnow, index=True)
 
 
@@ -2388,6 +2392,25 @@ class Giveaway(Base):
     reminder_sent_at = Column(DateTime, nullable=True)
 
     prize_player = relationship("Player")
+
+
+class MiniappGift(Base):
+    """A private, single-use balance gift sent from the admin panel."""
+    __tablename__ = "miniapp_gifts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    request_key = Column(String(36), nullable=False, unique=True)
+    title = Column(String(120), nullable=False)
+    currency = Column(String(20), nullable=False)
+    amount = Column(Integer, nullable=False)
+    player_id = Column(Integer, ForeignKey("players.id", ondelete="SET NULL"), nullable=True)
+    pack_id = Column(Integer, ForeignKey("packs.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    claimed_at = Column(DateTime, nullable=True)
+
+    player = relationship("Player")
+    pack = relationship("Pack")
 
 
 class GiveawayAutoConfig(Base):

@@ -4,6 +4,9 @@ Call before validation or mutation, then commit/rollback before awaiting any
 network operation. Failures deliberately propagate so callers roll back.
 """
 
+from datetime import datetime, timedelta
+import math
+
 from sqlalchemy import update
 
 from models import User
@@ -50,3 +53,19 @@ def debit_coins(session, user, amount):
     )
     session.refresh(user)
     return result.rowcount == 1
+
+
+def reserve_miniapp_action(session, user):
+    """Allow eight rapid economy actions, replenishing one per second.
+
+    The caller commits the reservation before the action starts, so rejected
+    orders count too. All workers use the same account row.
+    """
+    user = lock_user_for_update(session, user)
+    now = datetime.utcnow()
+    next_action = max(user.miniapp_economy_next or now, now)
+    wait = (next_action - now).total_seconds() - 7
+    if wait > 0:
+        return math.ceil(wait)
+    user.miniapp_economy_next = next_action + timedelta(seconds=1)
+    return 0

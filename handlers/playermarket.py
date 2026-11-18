@@ -277,7 +277,9 @@ async def playermarket_select_callback(update: Update, context: ContextTypes.DEF
         # Elite cards pay gems back on purchase — priced off what this buyer
         # actually pays, so the line matches their receipt.
         from services.buy_bonus import teaser_line
-        teaser = teaser_line(player.rating, price, prefix="", session=session)
+        from services.global_market import first_signing_available
+        teaser = (teaser_line(player.rating, price, prefix="", session=session)
+                  if user and first_signing_available(session, user.id, slot) else "")
         if teaser:
             cap_lines.append(teaser)
         if is_unlimited(slot):

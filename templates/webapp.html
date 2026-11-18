@@ -117,25 +117,6 @@
   }
   .top-link:active { background: rgba(0,212,170,0.18); }
 
-  .quest-teaser {
-    margin: 0.65rem 0.8rem 0;
-    padding: 0.85rem 0.9rem;
-    border: 1px solid rgba(252,200,68,0.38);
-    border-radius: 15px;
-    background:
-      radial-gradient(circle at top left, rgba(252,200,68,0.22), transparent 42%),
-      linear-gradient(135deg, rgba(255,77,109,0.14), rgba(0,212,170,0.09), rgba(17,24,39,0.92));
-    box-shadow: 0 12px 32px rgba(0,0,0,0.28), 0 0 22px rgba(232,184,75,0.08);
-  }
-  .quest-teaser-title { font-size: 0.88rem; font-weight: 900; letter-spacing: 0.01em; }
-  .quest-teaser-copy { margin: 0.28rem 0 0.7rem; color: var(--muted); font-size: 0.74rem; line-height: 1.42; }
-  .quest-teaser-btn {
-    width: 100%; border: 0; border-radius: 11px; padding: 0.62rem 0.75rem;
-    color: #08111d; font: inherit; font-size: 0.78rem; font-weight: 900;
-    background: linear-gradient(135deg, var(--accent-2), var(--green));
-    box-shadow: 0 8px 22px rgba(0,212,170,0.16); cursor: pointer;
-  }
-
   .suggestion-box {
     margin: 0.65rem 0.8rem 0.75rem;
     padding: 0.8rem;
@@ -2051,19 +2032,40 @@
   }
   .link-btn:active { background: var(--card-2); }
 
-  /* Market */
-  .market-row {
-    display: flex; gap: 0.6rem; align-items: center;
-    padding: 0.65rem 0.75rem;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    margin-bottom: 0.45rem;
-  }
-  .market-info { flex: 1; min-width: 0; }
-  .market-name { font-weight: 700; font-size: 0.88rem;
-                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .market-meta { color: var(--muted); font-size: 0.72rem; margin-top: 0.15rem; }
+  /* Transfer market */
+  .market-header { padding: 1.1rem; border-radius: 16px; border: 1px solid #355849;
+    background: linear-gradient(115deg,#163e32,#102921 85%); margin-bottom: .85rem; }
+  .market-title, .market-wallet, .market-filters, .market-order, .market-price-line {
+    display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; }
+  .market-title, .market-order, .market-price-line { justify-content: space-between; }
+  .market-title h2 { margin: 0; font: 800 1.5rem var(--font-display); color: #f4f4d9; }
+  #market-cadence, .market-meta, .market-stock, #market-count { font-size: .8rem; color: #aabbce; }
+  #market-cadence { color: #bed3c5; margin: .3rem 0 .9rem; }
+  .market-wallet { border-top: 1px solid #3b574b; padding-top: .7rem; gap: 2rem; }
+  .market-wallet small, .market-wallet strong { display: block; }
+  .market-wallet small { color: #c1d7c9; }
+  .market-wallet strong { font: 800 1.12rem var(--font-display); margin-top: .12rem; }
+  .market-field { background: var(--input-bg); color: var(--text); border: 1px solid #385067;
+    font: inherit; font-size: .87rem; border-radius: 9px; min-height: 42px; padding: .45rem .65rem; }
+  .market-filters { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,.7fr); }
+  .market-filters input { grid-column: 1/-1; }
+  .market-order { margin: .65rem 0; font-size: .86rem; }
+  .market-order label { display: inline-flex; gap: .4rem; align-items: center; min-height: 36px; }
+  .market-order input { accent-color: var(--green); }
+  .market-row { display: grid; grid-template-columns: minmax(75px,26%) minmax(0,1fr); gap: .8rem;
+    padding: .85rem; border: 1px solid #2a3b4f; background: var(--card);
+    border-radius: 12px; margin-bottom: .5rem; align-items: center; }
+  .market-art { position: relative; width: 100%; aspect-ratio: 5/4; border-radius: 6px;
+    background: #182c30; overflow: hidden; display: grid; place-items: center; }
+  .market-art span { color: var(--accent); font-weight: 800; text-align: center; }
+  .market-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+  .market-name { font: 800 1.02rem var(--font-display); margin: 0; overflow-wrap: anywhere; }
+  .market-meta, .market-stock { margin: .2rem 0; }
+  .market-price-line { margin-top: .5rem; gap: .3rem; }
+  .market-price-line strong { color: #ffda77; }
+  #market-receipt:not(:empty) { background: #12372e; color: #b8f6df; border-radius: 9px;
+    padding: .7rem; margin-bottom: .65rem; font-size: .86rem; }
+  #screen-market :focus-visible { outline: 2px solid #ffda77; outline-offset: 2px; }
   .ver-badge {
     background: rgba(255,217,102,0.18); color: var(--accent);
     font-size: 0.55rem; font-weight: 800; padding: 0.1rem 0.32rem;
@@ -2077,6 +2079,7 @@
     font-family: inherit; cursor: pointer;
     white-space: nowrap;
   }
+  .market-buy-btn { min-height: 40px; }
   .market-buy-btn:active { opacity: 0.85; }
   .market-buy-btn.disabled {
     background: var(--card-2); color: var(--muted); cursor: not-allowed;
@@ -2413,6 +2416,8 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/auction_miniapp.css', v='auction-settings-v1') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/franchise_draft.css', v='draft-controls-v4') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/auction_arena.css', v='auction-settings-v1') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_clubhouse.css', v='2') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_player_hub.css', v='1') }}">
 </head>
 <body>
 
@@ -2427,12 +2432,6 @@
 
 <!-- Top community links (channel + official group) — populated from init -->
 <div class="top-links" id="top-links" style="display:none;"></div>
-
-<div class="quest-teaser" id="quest-teaser" style="display:none;">
-  <div class="quest-teaser-title">🚨 Free rewards are hiding in your Quests</div>
-  <div class="quest-teaser-copy">Open the Mini App, finish today’s quests, and grab the loot before someone else flexes a better squad.</div>
-  <button class="quest-teaser-btn" onclick="navigate('quests')">🎯 Reveal my quest rewards</button>
-</div>
 
 <div class="suggestion-box cm-card" id="suggestion-box" style="display:none;">
   <button class="cm-head" onclick="toggleCommunityCard('suggestion-box')">
@@ -2496,7 +2495,9 @@
   <div id="resume-match-banner" style="display:none;"></div>
   <div class="greeting">
     <p class="hi">Welcome back,</p>
-    <p class="name" id="user-name">…</p>
+    <button class="hub-profile-link" type="button" onclick="navigate('profile')">
+      <span class="name" id="user-name">…</span><span class="hub-open-profile">Profile ›</span>
+    </button>
   </div>
 
 
@@ -2521,6 +2522,13 @@
     </div>
   </div>
 
+  <div class="club-shortcuts">
+    <button type="button" class="club-shortcut" onclick="navigate('matchcentre')"><span aria-hidden="true">🏏</span><span>Matches</span></button>
+    <button type="button" class="club-shortcut" onclick="navigate('wallet')"><span aria-hidden="true">◈</span><span>Wallet</span></button>
+    <button type="button" class="club-shortcut" onclick="navigate('rewards')"><span aria-hidden="true">🎁</span><span>Rewards</span>
+      <span class="club-gift-count" id="club-gift-count" hidden></span></button>
+  </div>
+
   <!-- Login streak banner -->
   <div class="login-streak-banner" id="login-streak-banner" style="display:none;" onclick="showLoginStreakModal()">
     <div class="lsb-flame">🔥</div>
@@ -2534,13 +2542,13 @@
   <!-- Active event banner -->
   <div class="event-banner" id="event-banner" style="display:none;"></div>
 
-  <!-- Mission hub: quests are the first actionable content on every visit. -->
+  <!-- Mission hub -->
   <section class="mission-hub" aria-labelledby="mission-hub-title">
     <div class="mission-hub-head">
       <div>
         <div class="mission-kicker">Your game plan</div>
         <h2 class="mission-hub-title" id="mission-hub-title">Today's quests</h2>
-        <div class="mission-hub-sub" id="mission-hub-sub">Complete quests to grow your squad.</div>
+        <div class="mission-hub-sub" id="mission-hub-sub"></div>
       </div>
       <div class="mission-toggle" aria-label="Quest period">
         <button class="mission-toggle-btn active" data-home-qtab="daily" onclick="switchHomeQuestTab('daily')">Today</button>
@@ -2549,12 +2557,17 @@
     </div>
     <div class="mission-list" id="home-quest-list"><div class="mission-loading">Loading your game plan…</div></div>
     <div class="mission-footer">
-      <span class="mission-footer-copy" id="home-quest-footer">Every quest moves you forward.</span>
-      <button class="mission-link" onclick="navigate('quests')">View all <span aria-hidden="true">→</span></button>
+      <span class="mission-footer-copy" id="home-quest-footer"></span>
+      <button class="mission-link" onclick="openHomeQuestPeriod()">View all <span aria-hidden="true">→</span></button>
     </div>
   </section>
 
   <div class="tile-grid">
+    <button class="tile season" onclick="openTournamentDirectory()">
+      <div class="tile-icon">🏟️</div>
+      <div class="tile-label">Tournament Centre</div>
+      <div class="tile-sub">Live competitions and past results</div>
+    </button>
     <button class="tile season" onclick="navigate('auction')">
       <div class="tile-icon">🔨</div>
       <div class="tile-label">Franchise Auction</div>
@@ -2821,16 +2834,18 @@
 </div>
 
 <!-- ════ Roster screen ════ -->
-<div class="screen" id="screen-roster">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
-    <h2 style="margin:0;font-size:1.25rem;">Your Squad</h2>
-    <span style="color:var(--muted);font-size:0.85rem;" id="roster-count">—/25</span>
-  </div>
-  <div style="display:flex;gap:0.4rem;margin-bottom:0.65rem;flex-wrap:wrap;">
-    <button class="link-btn" onclick="toggleSquadSelectMode()" id="squad-select-toggle">
-      ☑️ Select
-    </button>
-    <button class="link-btn" onclick="navigate('xi')">👥 Manage XI</button>
+<div class="screen hub-screen" id="screen-roster">
+  <header class="hub-hero">
+    <div class="hub-between"><h2>Squad management</h2><strong id="roster-count">—</strong></div>
+    <progress class="hub-progress" id="roster-capacity" value="0" max="1" aria-label="Squad capacity"></progress>
+    <div class="hub-actions">
+      <button type="button" class="hub-button primary" onclick="navigate('xi')">Manage Playing XI</button>
+      <button type="button" class="hub-button" onclick="toggleSquadSelectMode()" id="squad-select-toggle">Sell multiple</button>
+    </div>
+  </header>
+  <div class="hub-actions hub-filters">
+    <input id="roster-search" type="search" placeholder="Search squad" aria-label="Search squad" oninput="renderSquadList()">
+    <select id="roster-role" aria-label="Filter by role" onchange="renderSquadList()"><option value="">All roles</option></select>
   </div>
   <div id="squad-bulk-bar" style="display:none;background:rgba(212,168,42,0.12);border:1px solid var(--accent);border-radius:8px;padding:0.6rem 0.75rem;margin-bottom:0.65rem;align-items:center;gap:0.6rem;">
     <span style="flex:1;font-size:0.85rem;"><b id="squad-bulk-count">0</b> selected · <b id="squad-bulk-coins">0</b> 🪙</span>
@@ -2844,13 +2859,27 @@
 
 <!-- ════ Market screen ════ -->
 <div class="screen" id="screen-market">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
-    <h2 style="margin:0;font-size:1.25rem;">🌟 Player Market</h2>
-    <span style="color:var(--muted);font-size:0.8rem;" id="market-balance">— 🪙</span>
+  <header class="market-header">
+    <div class="market-title"><h2>Player market</h2>
+      <button class="link-btn" onclick="navigate('roster')">My squad</button></div>
+    <p id="market-cadence">Current listings</p>
+    <div class="market-wallet">
+      <div><small>Transfer budget</small><strong id="market-balance">—</strong></div>
+      <div><small>Squad places used</small><strong id="market-capacity">—</strong></div>
+    </div>
+  </header>
+  <div id="market-receipt" role="status"></div>
+  <div id="market-offer"></div>
+  <div class="market-filters">
+    <input id="market-search" class="market-field" type="search" placeholder="Search player or country" aria-label="Search player or country">
+    <select id="market-role" class="market-field" aria-label="Player role"><option value="">All roles</option></select>
+    <select id="market-sort" class="market-field" aria-label="Sort listings">
+      <option value="listed">Listing order</option><option value="rating">Highest rating</option>
+      <option value="price">Lowest price</option>
+    </select>
   </div>
-  <p style="color:var(--muted);font-size:0.78rem;margin:0 0 0.7rem;" id="market-cadence">
-    The current market. Prices include discounts.
-  </p>
+  <div class="market-order"><label><input type="checkbox" id="market-available"> Can sign now</label>
+    <span id="market-count" role="status"></span></div>
   <div id="market-list">
     <div class="empty"><div class="spinner"></div></div>
   </div>
@@ -2934,19 +2963,26 @@
 </div>
 
 <!-- ════ Achievements screen ════ -->
-<div class="screen" id="screen-achievements">
-  <div style="text-align:center;padding:0.8rem 0;">
-    <div style="font-size:3rem;">🏆</div>
-    <h2 style="margin:0.3rem 0 0.2rem;font-size:1.35rem;">Achievements</h2>
-    <p style="color:var(--muted);margin:0;font-size:0.85rem;" id="ach-progress-text">—</p>
+<section class="screen hub-screen" id="screen-profile" aria-labelledby="profile-title">
+  <h2 id="profile-title" class="hub-title">Player profile</h2>
+  <div id="hub-profile-body"><div class="empty">Loading profile…</div></div>
+</section>
+
+<section class="screen hub-screen" id="screen-achievements" aria-labelledby="achievement-title">
+  <header class="hub-hero">
+    <h2 id="achievement-title">Achievements</h2>
+    <p id="ach-progress-text" aria-live="polite">Loading milestones…</p>
+    <progress class="hub-progress" id="ach-progress-bar" value="0" max="1" aria-label="Achievements unlocked"></progress>
+    <div id="achievement-next"></div>
+  </header>
+  <div class="hub-actions hub-filters" id="achievement-controls" hidden>
+    <select id="achievement-status" aria-label="Achievement status">
+      <option value="all">All achievements</option><option value="earned">Unlocked</option><option value="locked">In progress</option>
+    </select>
+    <select id="achievement-category" aria-label="Achievement category"><option value="">All categories</option></select>
   </div>
-  <div class="ach-progress-wrap">
-    <div class="ach-progress-bar" id="ach-progress-bar" style="width:0%;"></div>
-  </div>
-  <div id="achievements-content" style="margin-top:0.8rem;">
-    <div class="empty"><div class="spinner"></div></div>
-  </div>
-</div>
+  <div id="achievements-content"></div>
+</section>
 
 <!-- ════ Login streak modal ════ -->
 <div id="login-streak-modal" class="swap-overlay" style="display:none;" onclick="if(event.target.id==='login-streak-modal') closeLoginStreakModal()">
@@ -3228,7 +3264,11 @@
 </div>
 
 <!-- ════ TOURNAMENT (live competition) ════ -->
-<div class="screen" id="screen-tournament">
+<div class="screen hub-screen" id="screen-tournament">
+  <div class="hub-between hub-tournament-head">
+    <h2 class="hub-title">Tournament centre</h2>
+    <button type="button" class="hub-button" id="tn-directory-back" hidden onclick="showTournamentDirectory()">All tournaments</button>
+  </div>
   <div id="tn-switch" class="filters" style="display:none;"></div>
   <div id="tn-content"><div class="empty"><div class="spinner"></div></div></div>
 </div>
@@ -3241,15 +3281,56 @@
   <div class="empty" role="status">Opening Franchise Draft…</div>
 </div>
 
+<section class="screen club-page" id="screen-matchcentre" aria-labelledby="club-matches-title">
+  <header class="club-hero">
+    <h2 id="club-matches-title">Match centre</h2>
+    <p>Resume a game or revisit your results.</p>
+    <button type="button" class="club-link primary" onclick="navigate('match')">Play Quick Match</button>
+  </header>
+  <div class="club-segment" role="group" aria-label="Match type">
+    <button type="button" data-club-filter="matches" aria-pressed="true">My matches</button>
+    <button type="button" data-club-filter="quick" aria-pressed="false">Quick Match</button>
+  </div>
+  <div id="club-match-body"></div>
+</section>
+
+<section class="screen club-page" id="screen-wallet" aria-labelledby="club-wallet-title">
+  <header class="club-hero"><h2 id="club-wallet-title">Wallet</h2>
+    <p>Balances and recorded coin and gem activity.</p></header>
+  <div class="club-balance" id="club-balances" aria-label="Current balances"></div>
+  <div class="club-segment" role="group" aria-label="Currency">
+    <button type="button" data-club-filter="all" aria-pressed="true">All activity</button>
+    <button type="button" data-club-filter="coins" aria-pressed="false">Coins</button>
+    <button type="button" data-club-filter="gems" aria-pressed="false">Gems</button>
+  </div>
+  <div id="club-wallet-body"></div>
+</section>
+
+<section class="screen club-page" id="screen-rewards" aria-labelledby="club-rewards-title">
+  <header class="club-hero"><h2 id="club-rewards-title">Rewards</h2>
+    <div class="club-shortcuts" style="margin:12px 0 0;">
+      <button type="button" class="club-shortcut" onclick="navigate('daily')">Daily</button>
+      <button type="button" class="club-shortcut" onclick="navigate('freepack')">Free Pack</button>
+      <button type="button" class="club-shortcut" onclick="navigate('spin')">Lucky Pick</button>
+    </div>
+  </header>
+  <div class="club-segment" role="group" aria-label="Reward type">
+    <button type="button" data-club-filter="gifts" aria-pressed="true">My gifts</button>
+    <button type="button" data-club-filter="giveaways" aria-pressed="false">Giveaways</button>
+  </div>
+  <div id="club-reward-body"></div>
+  <p id="club-reward-feedback" role="status"></p>
+</section>
+
 <!-- ════ Bottom tabs ════ -->
 <div class="tabs" id="bottom-nav">
   <button class="tab active" data-screen="home" onclick="navigate('home')">
     <div class="icon">🏠</div>
     <div>Home</div>
   </button>
-  <button class="tab" data-screen="spin" onclick="navigate('spin')">
-    <div class="icon">🎴</div>
-    <div>Pick</div>
+  <button class="tab" data-screen="matchcentre" onclick="navigate('matchcentre')">
+    <div class="icon">🏏</div>
+    <div>Matches</div>
   </button>
   <button class="tab" data-screen="market" onclick="navigate('market')">
     <div class="icon">🌟</div>
@@ -3259,8 +3340,8 @@
     <div class="icon">👥</div>
     <div>Squad</div>
   </button>
-  <button class="tab" id="tab-tournament" data-screen="tournament" style="display:none;" onclick="navigate('tournament')">
-    <span class="tab-live-dot"></span>
+  <button class="tab" id="tab-tournament" data-screen="tournament" onclick="navigate('tournament')">
+    <span id="tn-live-dot" class="tab-live-dot" hidden></span>
     <div class="icon">🏟️</div>
     <div>Tourney</div>
   </button>
@@ -3667,6 +3748,7 @@ function navigate(screen) {
   if (screen === 'home') refreshDashboard();
   if (screen === 'leaderboard') loadLeaderboard();
   if (screen === 'match') resetMatchScreen();
+  window.Clubhouse?.open(screen);
   if (screen === 'market') loadMarket();
   if (screen === 'xi') loadXi();
   if (screen === 'invite') loadInvite();
@@ -3674,9 +3756,13 @@ function navigate(screen) {
   if (screen === 'career') loadCareer();
   if (screen === 'freepack') loadFreePack();
   if (screen === 'packs') loadPacks();
-  if (screen === 'achievements') loadAchievements();
+  if (screen === 'achievements') PlayerHub.achievements();
+  if (screen === 'profile') PlayerHub.profile();
   if (screen === 'season') loadSeason();
-  if (screen === 'tournament') loadTournament();
+  if (screen === 'tournament') {
+    if (tnDirectoryOpen || (!tnId && !tnLive.length)) showTournamentDirectory();
+    else loadTournament();
+  }
   if (screen === 'auction') AuctionApp.open();
   if (screen === 'franchisedraft') FranchiseDraftApp.open();
   if (screen === 'clubs') loadClubs();
@@ -3719,6 +3805,7 @@ async function refreshDashboard() {
   setNativeSetupButton(false);
   document.getElementById('bottom-nav').style.display = '';
   userData = data.user;
+  window.Clubhouse?.giftCount(data.unclaimed_gifts || 0);
   lastInitData = data;
   renderStarterGuide(data.onboarding || {});
   document.getElementById('user-name').textContent = userData.first_name || userData.username || 'Player';
@@ -3880,10 +3967,10 @@ function renderTopLinks(branding) {
   if (!branding || !branding.has_any) { el.style.display = 'none'; return; }
   const links = [];
   if (branding.channel_username && branding.channel_link) {
-    links.push(`<a class="top-link" href="${escapeHtmlAttr(branding.channel_link)}" target="_blank" onclick="openBrandingLink(event,'${escapeHtmlAttr(branding.channel_link)}')">📢 ${escapeHtml(branding.channel_label || 'Channel')}</a>`);
+    links.push(`<a class="top-link" href="${escapeHtmlAttr(branding.channel_link)}" target="_blank" onclick="openBrandingLink(event,this.href)">📢 ${escapeHtml(branding.channel_label || 'Channel')}</a>`);
   }
   if (branding.group_username && branding.group_link) {
-    links.push(`<a class="top-link" href="${escapeHtmlAttr(branding.group_link)}" target="_blank" onclick="openBrandingLink(event,'${escapeHtmlAttr(branding.group_link)}')">💬 ${escapeHtml(branding.group_label || 'Group')}</a>`);
+    links.push(`<a class="top-link" href="${escapeHtmlAttr(branding.group_link)}" target="_blank" onclick="openBrandingLink(event,this.href)">💬 ${escapeHtml(branding.group_label || 'Group')}</a>`);
   }
   if (!links.length) { el.style.display = 'none'; return; }
   el.innerHTML = links.join('');
@@ -3900,11 +3987,6 @@ function renderCommunityPanel(show) {
 // screen (an open article especially) they would just push content down.
 function syncCommunityCards() {
   const onHome = communityReady && currentScreen === 'home';
-  // The quest teaser keeps its old everywhere-but-setup behaviour, except over
-  // a news article or the submit form, where it would sit above the story.
-  const teaser = document.getElementById('quest-teaser');
-  const onNews = currentScreen === 'newsarticle' || currentScreen === 'newssubmit';
-  if (teaser) teaser.style.display = communityReady && !onNews && currentScreen !== 'auction' ? '' : 'none';
   const box = document.getElementById('suggestion-box');
   const news = document.getElementById('news-box');
   const poll = document.getElementById('poll-box');
@@ -4500,7 +4582,7 @@ function showDailyReward(r) {
     r.players_added.forEach(p => {
       const sv = p.sell_value || 0;
       const releaseBtn = p.roster_id
-        ? `<button class="release-btn" style="margin-left:0.5rem;" onclick="releaseDailyReward(${p.roster_id}, this, '${escapeHtmlAttr(p.name)}', ${sv})">✕ Release · ${sv.toLocaleString()}🪙</button>`
+        ? `<button class="release-btn" style="margin-left:0.5rem;" data-player="${escapeHtmlAttr(p.name)}" onclick="releaseDailyReward(${p.roster_id}, this, this.dataset.player, ${sv})">✕ Release · ${sv.toLocaleString()}🪙</button>`
         : '';
       lines += `<div style="display:flex;align-items:center;justify-content:space-between;margin:0.2rem 0;flex-wrap:wrap;">
         <span>✅ ${escapeHtml(p.name)} (${p.rating}) added</span>
@@ -5162,7 +5244,7 @@ async function loadLeaderboard() {
     metric: lbMetric, limit: 30,
   });
   if (!ok) {
-    el.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
+    el.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Failed')}</div>`;
     return;
   }
   if (!data.rows || !data.rows.length) {
@@ -5743,12 +5825,7 @@ async function _bankLateAd(result) {
   }
 }
 
-// Tell the backend an ad was watched and take the one-shot token back.
-// Retried, because by the time this runs the ad is already spent: a dropped
-// request here is a watched ad turning into nothing, which is precisely the
-// failure the whole ledger exists to make impossible. The server is
-// idempotent over the retry window (see ad_service.register_client_ad), so a
-// duplicate binds to the same receipt rather than minting a second ad.
+// Poll for the authenticated callback after the ad finishes playing.
 async function _registerWatchedAd(attempts = 3) {
   for (let attempt = 0; attempt < attempts; attempt++) {
     let r = null;
@@ -5757,8 +5834,8 @@ async function _registerWatchedAd(attempts = 3) {
     } catch (e) {
       console.warn('[ads] ad-completed request failed', e);
     }
-    if (r && r.ok && r.data?.ad_token) return r.data.ad_token;
-    if (r && r.status && r.status !== 0) break;   // the server answered: it decided
+    if (r?.ok && r.data.confirmed) return AD_TOKEN_LEDGER;
+    if (r && !r.ok && r.status && r.status < 500) break;   // a definitive client error
     if (attempt < attempts - 1) await _sleep(500 * (attempt + 1));
   }
   return null;
@@ -5941,7 +6018,7 @@ async function showAd(quotaKind = null) {
         // SDK promise resolves only if user watched ad till the end
         if (result && result.done) {
           _setAdPhase('Claiming reward…');
-          // Tell our backend the ad was completed → returns a single-use token
+          // Wait briefly for the provider callback before redeeming the saved ad.
           const token = await _registerWatchedAd();
           if (token) return token;
           // Every attempt failed. The ad is watched and gone either way, so
@@ -6007,11 +6084,8 @@ async function showAd(quotaKind = null) {
     return null;
   }
 
-  // Fallback: dev/mock mode (only works if backend has WEBAPP_DEV_MODE=1
-  // or ADSGRAM_BLOCK_ID is unset)
-  toast('📺 Playing ad… (mock)', 'info');
-  await new Promise(r => setTimeout(r, 1200));
-  return 'MOCK-' + Date.now();
+  toast('Rewarded ads are unavailable right now.', 'info');
+  return null;
 }
 
 // Celebration confetti — bursts from top, falls down. count scales with tier.
@@ -6185,7 +6259,7 @@ async function doBrowse(append) {
   const { ok, data } = await api('/api/webapp/players', body);
   browseInFlight = false;
   if (!ok) {
-    resultsEl.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
+    resultsEl.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Failed')}</div>`;
     return;
   }
   const html = (data.results || []).map(p => playerRow(p)).join('');
@@ -6281,8 +6355,8 @@ function gemBonusBanner(offer) {
   return `<div style="margin:0 0 0.8rem;padding:0.6rem 0.8rem;border-radius:12px;
                       background:rgba(124,77,255,0.14);
                       border:1px solid rgba(124,77,255,0.35);font-size:0.82rem;">
-            💎 <strong>Elite Signing Bonus</strong> — buy ${offer.min_rating}+ and get
-            ${offer.percent}% of what you pay back in gems · ${left}
+            💎 <strong>Elite Signing Bonus</strong> — sign a ${offer.min_rating}+ player and get
+            ${offer.percent}% back in gems on your first purchase per listing · ${left}
           </div>`;
 }
 
@@ -6295,7 +6369,7 @@ async function openPlayer(id) {
   modal.classList.add('open');
   const { ok, data } = await api('/api/webapp/player/' + id);
   if (!ok) {
-    body.innerHTML = `<div class="empty">❌ ${data.message || 'Failed to load'}</div>`;
+    body.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Failed to load')}</div>`;
     return;
   }
   const p = data.player;
@@ -6372,18 +6446,24 @@ function toggleSquadSelectMode() {
   squadSelectMode = !squadSelectMode;
   squadSelected.clear();
   document.getElementById('squad-select-toggle').textContent =
-    squadSelectMode ? '✕ Cancel select' : '☑️ Select';
+    squadSelectMode ? 'Cancel selection' : 'Sell multiple';
   renderSquadList();
 }
 
 function clearSquadSelection() {
   squadSelectMode = false;
   squadSelected.clear();
-  document.getElementById('squad-select-toggle').textContent = '☑️ Select';
+  document.getElementById('squad-select-toggle').textContent = 'Sell multiple';
   renderSquadList();
 }
 
-function toggleSquadSelection(rosterId, sellValue) {
+function toggleSquadSelection(rosterId) {
+  const player = cachedRoster?.find(r => r.roster_id === rosterId);
+  if (!player || player.is_career || player.is_captain) return;
+  if (!squadSelected.has(rosterId) && squadSelected.size >= 25) {
+    toast('Select up to 25 players per sale.', 'info');
+    return;
+  }
   if (squadSelected.has(rosterId)) {
     squadSelected.delete(rosterId);
   } else {
@@ -6414,47 +6494,74 @@ async function loadRoster() {
   el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
   const { ok, data } = await api('/api/webapp/roster');
   if (!ok) {
-    el.innerHTML = `<div class="empty">❌ ${data.message || 'Failed to load'}</div>`;
+    el.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Failed to load')}</div>`;
     return;
   }
   document.getElementById('roster-count').textContent = `${data.count}/${data.max}`;
+  const capacity = document.getElementById('roster-capacity');
+  capacity.max = data.max || 1;
+  capacity.value = data.count;
   cachedRoster = data.roster;
+  const role = document.getElementById('roster-role');
+  const selectedRole = role.value;
+  const roles = [...new Set(cachedRoster.map(row => row.category).filter(Boolean))].sort();
+  role.replaceChildren(new Option('All roles', ''), ...roles.map(name => new Option(name, name)));
+  if (roles.includes(selectedRole)) role.value = selectedRole;
+  squadSelected = new Set([...squadSelected].filter(id =>
+    cachedRoster.some(row => row.roster_id === id && !row.is_captain && !row.is_career)));
   renderSquadList();
 }
 
 function renderSquadList() {
   const el = document.getElementById('roster-list');
   if (!cachedRoster) return;
-  if (!cachedRoster.length) {
-    el.innerHTML = `<div class="empty"><div class="icon">👥</div>No players yet — head to Browse!</div>`;
-    return;
-  }
-  el.innerHTML = `<div class="roster-grid">${cachedRoster.map(r => `
-    <div class="roster-item ${r.is_captain ? 'captain' : ''} ${squadSelected.has(r.roster_id) ? 'selected' : ''}"
-         ${squadSelectMode ? `onclick="toggleSquadSelection(${r.roster_id})"` : `onclick="openPlayerDetail(${r.roster_id})"`}
-         style="cursor:pointer;">
-      ${r.is_captain ? '<div class="captain-tag">CAPT</div>' : ''}
-      ${squadSelectMode ? `<div class="select-mark">${squadSelected.has(r.roster_id) ? '✅' : '⬜'}</div>` : ''}
-      <div class="roster-item-main">
-        ${cardImg(r.card_url || playerCardUrl(r.player_id), `${r.name} card`, 'player-card-thumb roster')}
-        <div style="flex:1;">
-          <div class="pos">#${r.position} · ${ratingBadge(r.rating)}</div>
-          <div class="name">${escapeHtml(r.name)}</div>
-          <div class="meta">${escapeHtml(r.category)} · ${escapeHtml(r.country)}${r.version && r.version !== 'Base' ? ` · <span style="color:var(--accent);">${escapeHtml(r.version)}</span>` : ''}</div>
+  const query = document.getElementById('roster-search').value.trim().toLowerCase();
+  const role = document.getElementById('roster-role').value;
+  const visible = cachedRoster.filter(r => (!role || r.category === role) &&
+    [r.name, r.country, r.version].some(value => String(value || '').toLowerCase().includes(query)));
+  const card = r => {
+    const selectable = !r.is_captain && !r.is_career;
+    const selected = squadSelected.has(r.roster_id);
+    return `<article class="hub-roster-row ${selected ? 'selected' : ''}">
+      ${cardImg(r.card_url || playerCardUrl(r.player_id), '', 'hub-player-card')}
+      <div><h3>${escapeHtml(r.name)}</h3>
+        <p>${r.xi_slot ? '#' + r.xi_slot + ' · ' : ''}${r.rating} OVR · ${escapeHtml(r.category)} · ${escapeHtml(r.country)}</p>
+        <p>${r.is_captain ? 'Captain' : r.is_career ? 'Career player' : (r.version !== 'Base' ? escapeHtml(r.version) + ' · ' : '') + r.sell_value.toLocaleString() + ' coins to sell'}</p>
+        <div class="hub-actions">
+          ${squadSelectMode ? (selectable ? `<button type="button" class="hub-button" aria-pressed="${selected}" onclick="toggleSquadSelection(${r.roster_id})">${selected ? 'Selected' : 'Select'}</button>` : '') :
+            `<button type="button" class="hub-button" onclick="openPlayerDetail(${r.roster_id})">Details</button>
+             ${r.xi_slot && !r.is_captain ? `<button type="button" class="hub-button" onclick="setSquadCaptain(${r.roster_id}, this)">Set captain</button>` : ''}
+             ${selectable ? `<button type="button" class="release-btn hub-button" onclick="releaseOne(${r.roster_id})">Release</button>` : ''}`}
         </div>
-        ${!squadSelectMode ? '<div class="roster-chevron">›</div>' : ''}
-      </div>
-      ${!squadSelectMode ? `<div class="sell-row">
-        <span class="sell-val">Sell +${r.sell_value.toLocaleString()} 🪙</span>
-        ${!r.is_captain ? `<button class="release-btn" onclick="event.stopPropagation(); releaseOne(${r.roster_id}, '${escapeHtmlAttr(r.name)}', ${r.sell_value})">✕ Release</button>` : ''}
-      </div>` : ''}
-    </div>
-  `).join('')}</div>`;
+      </div></article>`;
+  };
+  const shown = [[true, 'Playing XI'], [false, 'Reserves']].map(([starter, label]) => {
+    const rows = visible.filter(r => Boolean(r.xi_slot) === starter);
+    return rows.length ? `<h3 class="hub-section-title">${label} · ${rows.length}</h3>` + rows.map(card).join('') : '';
+  }).join('');
+  el.innerHTML = shown || `<div class="empty">${cachedRoster.length ? 'No players match these filters.' : 'Your squad is empty.'}</div>`;
   updateSquadBulkBar();
 }
 
-async function releaseOne(rosterId, name, sellValue) {
-  if (!confirm(`Release ${name} for ${sellValue.toLocaleString()} 🪙?`)) return;
+async function setSquadCaptain(rosterId, button) {
+  const row = cachedRoster?.find(r => r.roster_id === rosterId);
+  if (!row) return;
+  button.disabled = true;
+  try {
+    if (!await askConfirm(`Make ${row.name} your captain?`)) return;
+    const {ok, data} = await api('/api/webapp/roster/captain', {roster_id: rosterId});
+    toast(ok ? `${data.name} is now your captain.` : (data.message || 'Could not set captain.'), ok ? 'success' : 'error');
+    if (ok) await loadRoster();
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function releaseOne(rosterId) {
+  const row = cachedRoster?.find(r => r.roster_id === rosterId);
+  if (!row || row.is_captain || row.is_career) return;
+  const {name, sell_value: sellValue} = row;
+  if (!await askConfirm(`Release ${name} for ${sellValue.toLocaleString()} 🪙?`)) return;
   haptic('medium');
   const { ok, data } = await api(`/api/webapp/release/${rosterId}`, {});
   if (!ok) {
@@ -6473,7 +6580,7 @@ async function releaseSquadSelection() {
   const ids = Array.from(squadSelected);
   let total = 0;
   if (cachedRoster) cachedRoster.forEach(r => { if (squadSelected.has(r.roster_id)) total += r.sell_value; });
-  if (!confirm(`Release ${ids.length} players for ${total.toLocaleString()} 🪙?`)) return;
+  if (!await askConfirm(`Release ${ids.length} players for ${total.toLocaleString()} 🪙?`)) return;
   haptic('medium');
   const { ok, data } = await api('/api/webapp/release_multi', { roster_ids: ids });
   if (!ok) {
@@ -6489,7 +6596,7 @@ async function releaseSquadSelection() {
 }
 
 async function releaseDailyReward(rosterId, btn, name, sellValue) {
-  if (!confirm(`Release ${name} for ${sellValue.toLocaleString()} 🪙?`)) return;
+  if (!await askConfirm(`Release ${name} for ${sellValue.toLocaleString()} 🪙?`)) return;
   haptic('medium');
   const { ok, data } = await api(`/api/webapp/release/${rosterId}`, {});
   if (!ok) {
@@ -6510,7 +6617,7 @@ async function releaseDailyReward(rosterId, btn, name, sellValue) {
 }
 
 function escapeHtmlAttr(s) {
-  return String(s).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+  return escapeHtml(s);
 }
 
 function ratingBadge(r) {
@@ -6525,71 +6632,115 @@ function ratingColor(r) {
 }
 
 // ════════════════ Market ════════════════
+let marketData = null;
+let marketLoad = 0;
+let marketSigning = false;
+const marketEl = id => document.getElementById('market-' + id);
+
 async function loadMarket() {
-  const list = document.getElementById('market-list');
-  list.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  const load = ++marketLoad;
+  marketData = null;
+  marketEl('list').innerHTML = '<div class="empty" role="status">Loading listings…</div>';
+  for (const id of ['offer', 'count', 'balance', 'capacity']) marketEl(id).textContent = '';
   const { ok, data } = await api('/api/webapp/market', {});
+  if (load !== marketLoad) return;
   if (!ok) {
-    list.innerHTML = `<div class="empty">❌ ${data.message || 'Market unavailable'}</div>`;
+    marketEl('list').innerHTML = '<div class="empty">Market unavailable. <button type="button" class="link-btn" data-reload>Try again</button></div>';
     return;
   }
-  const bal = document.getElementById('market-balance');
-  if (data.balance) bal.textContent = `${data.balance.coins.toLocaleString()} 🪙 · ${data.balance.roster_count}/${data.balance.roster_max}`;
-  // The refresh cadence is an admin setting — say what it actually is.
-  const every = data.refresh_interval_hours;
-  const cadence = document.getElementById('market-cadence');
-  if (cadence && every) {
-    cadence.textContent = every >= 24
-      ? "Today's market. Refreshes daily. Prices include discounts."
-      : `The current market. Refreshes every ${every}h. Prices include discounts.`;
-  }
-  const banner = gemBonusBanner(data.gem_bonus_offer);
-  if (!data.slots.length) {
-    list.innerHTML = banner +
-      `<div class="empty"><div class="icon">🌟</div>Market is empty — try again soon</div>`;
-    return;
-  }
-  list.innerHTML = banner + data.slots.map(s => marketRow(s)).join('');
+  marketData = data;
+  marketEl('balance').textContent = data.balance.coins.toLocaleString() + ' coins';
+  marketEl('capacity').textContent = data.balance.roster_count + ' / ' + data.balance.roster_max;
+  marketEl('cadence').textContent = data.refresh_interval_hours === 24
+    ? 'Listings refresh daily' : 'Listings refresh every ' + data.refresh_interval_hours + ' hours';
+  marketEl('offer').innerHTML = gemBonusBanner(data.gem_bonus_offer);
+  const role = marketEl('role'), selected = role.value;
+  const roles = [...new Set(data.slots.map(slot => slot.category).filter(Boolean))].sort();
+  role.replaceChildren(new Option('All roles', ''), ...roles.map(r => new Option(r, r)));
+  if (roles.includes(selected)) role.value = selected;
+  renderMarket();
 }
 
-function marketRow(s) {
-  const sold = s.sold_out;
-  const owned = s.is_owned;
-  const disabled = sold || owned;
-  const btnLabel = sold ? '❌ Sold out' : (owned ? '✓ Owned' : `Buy · ${s.final_price.toLocaleString()} 🪙`);
-  const priceLine = s.discount_pct > 0
-    ? `<span style="text-decoration:line-through;color:var(--muted);font-size:0.72rem;">${s.base_price.toLocaleString()}</span> <span style="color:var(--green);font-weight:700;">-${s.discount_pct}%</span>`
-    : '';
-  return `
-    <div class="market-row">
-      <div class="market-info">
-        <div class="market-name">${escapeHtml(s.name)} <span style="color:${ratingColor(s.rating)};font-weight:800;">${s.rating}</span>${s.version !== 'Base' ? ` <span class="ver-badge">${escapeHtml(s.version)}</span>` : ''}</div>
-        <div class="market-meta">${escapeHtml(s.category)} · ${escapeHtml(s.country)} ${priceLine ? '· ' + priceLine : ''}${s.unlimited ? ' · ♾️ always in stock' : ''}${s.gem_bonus > 0 ? ` · <span style="color:var(--text);font-weight:700;">+${s.gem_bonus.toLocaleString()} 💎</span>` : ''}</div>
-      </div>
-      <button class="market-buy-btn ${disabled ? 'disabled' : ''}"
-              ${disabled ? 'disabled' : ''}
-              onclick="buyFromMarket(${s.slot_id}, '${escapeHtmlAttr(s.name)}', ${s.final_price})">
-        ${btnLabel}
-      </button>
-    </div>
-  `;
+function signingBlock(slot, balance) {
+  if (slot.is_owned) return 'Owned';
+  if (slot.sold_out) return 'Sold out';
+  if (balance.roster_count >= balance.roster_max) return 'Squad full';
+  if (balance.coins < slot.final_price) return 'Over budget';
+  return '';
 }
 
-async function buyFromMarket(slotId, name, price) {
-  if (!confirm(`Buy ${name} for ${price.toLocaleString()} 🪙?`)) return;
-  haptic('medium');
-  const { ok, data } = await api(`/api/webapp/market/buy/${slotId}`, {});
-  if (!ok) {
-    toast(data.message || 'Buy failed', 'error');
-    hapticNotif('error');
-    return;
-  }
-  toast(`Bought ${data.player_name}!` +
-        (data.gem_bonus ? ` +${formatNum(data.gem_bonus)} 💎` : ''), 'success');
-  hapticNotif('success');
-  loadMarket();
-  refreshDashboard();
+function renderMarket() {
+  if (!marketData) return;
+  const {slots, balance} = marketData;
+  const query = marketEl('search').value.trim().toLowerCase();
+  const role = marketEl('role').value;
+  const available = marketEl('available').checked;
+  const visible = slots.filter(s =>
+    (!role || s.category === role) && (!available || !signingBlock(s, balance)) &&
+    (s.name + ' ' + s.country).toLowerCase().includes(query));
+  const sort = marketEl('sort').value;
+  if (sort === 'price') visible.sort((a, b) => a.final_price - b.final_price);
+  if (sort === 'rating') visible.sort((a, b) => b.rating - a.rating);
+  marketEl('count').textContent = visible.length + ' of ' + slots.length + ' listings';
+  marketEl('list').innerHTML = visible.map(s => marketRow(s, balance)).join('') ||
+    (slots.length ? '<div class="empty">No matching players. <button class="link-btn" data-reset>Clear filters</button></div>'
+                  : '<div class="empty">The next market rotation will appear here.</div>');
 }
+
+function marketRow(s, balance) {
+  const blocked = signingBlock(s, balance);
+  const stock = s.unlimited ? 'Unlimited stock' : Math.max(0, s.quantity - s.purchased_count) + ' left';
+  const discount = s.discount_pct > 0 ? ' · ' + s.discount_pct + '% off' : '';
+  const bonus = s.gem_bonus > 0 ? ' · +' + s.gem_bonus.toLocaleString() + ' gems' : '';
+  return `<article class="market-row">
+    <div class="market-art"><span>${s.rating}<br>OVR</span>${cardImg(s.card_url, '')}</div>
+    <div><h3 class="market-name">${escapeHtml(s.name)}</h3>
+    <p class="market-meta">${s.rating} OVR · ${escapeHtml(s.category)} · ${escapeHtml(s.country || '—')}</p>
+    <p class="market-stock">${escapeHtml(s.version || 'Base')} · ${stock}${discount}${bonus}</p>
+    <div class="market-price-line"><strong>${s.final_price.toLocaleString()} coins</strong>
+    <button class="market-buy-btn ${blocked ? 'disabled' : ''}" data-sign="${s.slot_id}"
+      ${blocked || marketSigning ? 'disabled' : ''}>${blocked || 'Sign player'}</button></div></div></article>`;
+}
+
+async function buyFromMarket(slotId) {
+  if (marketSigning || !marketData) return;
+  const slot = marketData.slots.find(s => s.slot_id === slotId);
+  if (!slot || signingBlock(slot, marketData.balance)) return;
+  const remaining = marketData.balance.coins - slot.final_price;
+  marketSigning = true;
+  renderMarket();
+  try {
+    if (!await askConfirm(`Sign ${slot.name} for ${slot.final_price.toLocaleString()} coins? You’ll have ${remaining.toLocaleString()} coins left.`)) return;
+    const {ok, data} = await api('/api/webapp/market/buy/' + slotId, {
+      expected_player_id: slot.player_id, expected_price: slot.final_price,
+    });
+    marketEl('receipt').textContent = ok
+      ? `Signed ${data.player_name} for ${data.spent.toLocaleString()} coins. Balance ${data.balance.coins.toLocaleString()} coins.` +
+        (data.gem_bonus ? ` Signing bonus +${data.gem_bonus.toLocaleString()} gems.` : '')
+      : (data.message || 'Purchase could not be confirmed. Check your squad before trying again.');
+    hapticNotif(ok ? 'success' : 'error');
+    await loadMarket();
+    if (ok) refreshDashboard();
+  } finally {
+    marketSigning = false;
+    renderMarket();
+  }
+}
+
+marketEl('search').addEventListener('input', renderMarket);
+for (const id of ['role', 'sort', 'available']) marketEl(id).addEventListener('change', renderMarket);
+marketEl('list').addEventListener('click', event => {
+  const button = event.target.closest('button');
+  if (!button || button.disabled) return;
+  if (button.hasAttribute('data-reload')) loadMarket();
+  if (button.hasAttribute('data-sign')) buyFromMarket(Number(button.dataset.sign));
+  if (button.hasAttribute('data-reset')) {
+    marketEl('search').value = '';
+    marketEl('role').value = '';
+    marketEl('available').checked = false;
+    renderMarket();
+  }
+});
 
 // ════════════════ XI ════════════════
 let xiSortable = null;
@@ -6638,7 +6789,7 @@ async function loadXi() {
   document.getElementById('xi-chemistry-suggestions').textContent = '';
   const { ok, data } = await api('/api/webapp/xi', {});
   if (!ok) {
-    list.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
+    list.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Failed')}</div>`;
     return;
   }
   cachedXi = data.xi;
@@ -6744,7 +6895,7 @@ function renderBenchGrouped() {
     out.push(`<div class="bench-group-label">${XI_CATEGORY_LABEL[cat] || cat} <span style="color:var(--muted);font-weight:400;">(${grouped[cat].length})</span></div>`);
     grouped[cat].forEach(r => {
       out.push(`
-        <div class="bench-row" onclick="swapBenchPlayer(${r.roster_id}, '${escapeHtmlAttr(r.name)}', '${escapeHtmlAttr(r.category)}')">
+        <div class="bench-row" data-name="${escapeHtmlAttr(r.name)}" data-role="${escapeHtmlAttr(r.category)}" onclick="swapBenchPlayer(${r.roster_id}, this.dataset.name, this.dataset.role)">
           ${cardImg(r.card_url || playerCardUrl(r.player_id), `${r.name} card`, 'player-card-thumb xi')}
           <div class="xi-info">
             <div class="xi-name">${escapeHtml(r.name)} ${ratingBadge(r.rating)}</div>
@@ -6952,7 +7103,7 @@ async function loadInvite() {
   el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
   const { ok, data } = await api('/api/webapp/invite', {});
   if (!ok) {
-    el.innerHTML = `<div class="empty">❌ ${data.message || 'Invite system unavailable'}</div>`;
+    el.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Invite system unavailable')}</div>`;
     return;
   }
   if (!data.bot_configured) {
@@ -7047,7 +7198,7 @@ async function loadInvite() {
                style="flex:1;background:var(--input-bg);color:var(--text);border:1px solid var(--border);padding:0.5rem;border-radius:6px;font-family:monospace;font-size:0.78rem;">
         <button class="spin-button" style="padding:0.5rem 0.9rem;font-size:0.78rem;width:auto;" onclick="copyInviteLink()">📋 Copy</button>
       </div>
-      <button class="spin-button" style="margin-top:0.5rem;width:100%;" onclick="shareInviteLink('${escapeHtmlAttr(link)}')">
+      <button class="spin-button" style="margin-top:0.5rem;width:100%;" data-link="${escapeHtmlAttr(link)}" onclick="shareInviteLink(this.dataset.link)">
         📤 Share via Telegram
       </button>
       <p style="color:var(--muted);font-size:0.75rem;margin-top:0.5rem;line-height:1.5;">
@@ -7218,6 +7369,11 @@ function questRewardLabel(q) {
   return 'Reward';
 }
 
+function openHomeQuestPeriod() {
+  switchQuestTab(currentHomeQuestTab);
+  navigate('quests');
+}
+
 function renderHomeQuests() {
   const el = document.getElementById('home-quest-list');
   if (!el || !cachedQuests) return;
@@ -7226,16 +7382,19 @@ function renderHomeQuests() {
   const sub = document.getElementById('mission-hub-sub');
   const footer = document.getElementById('home-quest-footer');
   title.textContent = currentHomeQuestTab === 'daily' ? "Today's quests" : 'Monthly quests';
-  sub.textContent = currentHomeQuestTab === 'daily' ? 'Finish today’s missions before they refresh.' : 'Bigger goals. Bigger rewards. All month long.';
+  const ready = list.filter(q => q.completed && !q.claimed).length;
+  sub.textContent = ready ? `${ready} reward${ready === 1 ? '' : 's'} ready to claim` : '';
   if (!list.length) {
     el.innerHTML = `<div class="mission-loading">🎯 No ${currentHomeQuestTab} quests right now.</div>`;
     footer.textContent = 'Check back soon for new missions.';
     return;
   }
   const done = list.filter(q => q.completed).length;
-  footer.textContent = `${done}/${list.length} complete · Tap a quest to see details.`;
-  el.innerHTML = list.map(q => `
-    <button class="home-quest" onclick="navigate('quests')">
+  footer.textContent = `${done}/${list.length} complete`;
+  const priority = q => q.claimed ? -1 : q.completed ? 101 : q.percent;
+  const ranked = [...list].sort((a, b) => priority(b) - priority(a));
+  el.innerHTML = ranked.map(q => `
+    <button class="home-quest" onclick="openHomeQuestPeriod()">
       <div class="home-quest-icon">${escapeHtml(q.emoji)}</div>
       <div>
         <div class="home-quest-title">${escapeHtml(q.title)}</div>
@@ -7244,7 +7403,7 @@ function renderHomeQuests() {
           <span class="home-quest-count">${q.progress}/${q.target}</span>
         </div>
       </div>
-      <div class="home-quest-reward">${questRewardLabel(q)}</div>
+      <div class="home-quest-reward">${q.claimed ? 'Claimed' : questRewardLabel(q)}</div>
     </button>
   `).join('');
 }
@@ -7262,7 +7421,7 @@ async function loadQuests() {
   el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
   const { ok, data } = await api('/api/webapp/quests', { type: 'all' });
   if (!ok) {
-    el.innerHTML = `<div class="empty">❌ ${data.message || 'Quests unavailable'}</div>`;
+    el.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Quests unavailable')}</div>`;
     return;
   }
   cachedQuests = data.groups || {};
@@ -7742,7 +7901,7 @@ async function loadFreePack() {
   card.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
   const { ok, data } = await api('/api/webapp/freepack/status', {});
   if (!ok) {
-    card.innerHTML = `<div class="empty">❌ ${data.message || 'Unavailable'}</div>`;
+    card.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Unavailable')}</div>`;
     return;
   }
   freePackState = data;
@@ -7925,7 +8084,7 @@ async function loadPacks() {
   el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
   const { ok, data } = await api('/api/webapp/packs', {});
   if (!ok) {
-    el.innerHTML = `<div class="empty">❌ ${data.message || 'Failed to load packs'}</div>`;
+    el.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Failed to load packs')}</div>`;
     return;
   }
   packsData = data;
@@ -7949,25 +8108,23 @@ function renderPacks() {
       return;
     }
     el.innerHTML = packsData.packs.map(p => {
-      const costParts = [];
-      if (p.cost_coins) costParts.push(`${formatNum(p.cost_coins)} 🪙`);
-      if (p.cost_gems) costParts.push(`${p.cost_gems} 💎`);
-      if (p.cost_quest_points) costParts.push(`${p.cost_quest_points} ⭐`);
-      const cost = costParts.join(' + ') || 'Free';
+      const prices = [['coins', p.cost_coins, 'coins'], ['quest_points', p.cost_quest_points, 'QP'],
+                      ['gems', p.cost_gems, 'gems']].filter(([,cost]) => cost > 0);
+      if (!prices.length) prices.push(['free', 0, '']);
 
       const contents = [];
       if (p.main_count) contents.push(`<span class="pack-content-chip">${p.main_count}× main (${p.main_min_rating}-${p.main_max_rating})</span>`);
       if (p.bonus_count) contents.push(`<span class="pack-content-chip">${p.bonus_count}× bonus (${p.bonus_min_rating}-${p.bonus_max_rating})</span>`);
 
-      let btnLabel, btnDisabled = '';
-      if (p.sold_out_today) {
-        btnLabel = `Sold out today (${p.bought_today}/${p.daily_limit})`;
-        btnDisabled = 'disabled data-locked="1"';
-      } else {
-        btnLabel = `Buy · ${cost}`;
-        if (p.daily_limit > 0) btnLabel += ` (${p.bought_today}/${p.daily_limit})`;
-      }
-
+      const buyButtons = p.sold_out_today
+        ? `<button class="pack-buy-btn" disabled data-locked="1">Sold out today (${p.bought_today}/${p.daily_limit})</button>`
+        : prices.map(([payment, cost, unit]) => {
+            const affordable = !cost || packsData.balance[payment] >= cost;
+            const price = cost ? cost.toLocaleString() + ' ' + unit : 'Free';
+            return `<button class="pack-buy-btn" data-payment="${payment}" data-cost="${cost}"
+              ${affordable ? '' : 'disabled data-locked="1"'} onclick="buyPack(${p.id}, this)">
+              ${affordable ? 'Buy' : 'Need'} · ${price}</button>`;
+          }).join('');
       return `
         <div class="pack-shop-card">
           <div class="pack-shop-head">
@@ -7978,7 +8135,8 @@ function renderPacks() {
             </div>
           </div>
           <div class="pack-shop-contents">${contents.join('')}</div>
-          <button class="pack-buy-btn" ${btnDisabled} onclick="buyPack(${p.id}, this)">${btnLabel}</button>
+          ${p.daily_limit > 0 && !p.sold_out_today ? `<div class="pack-shop-desc">${p.daily_limit - p.bought_today} purchases left today</div>` : ''}
+          ${buyButtons}
         </div>
       `;
     }).join('');
@@ -8008,6 +8166,8 @@ function renderPacks() {
   }
 }
 
+const pendingPackOrders = new Map();
+
 async function buyPack(packId, btn) {
   // Drop every tap after the first until this purchase resolves. The flag
   // catches clicks queued before the button was disabled; the disabled
@@ -8021,7 +8181,22 @@ async function buyPack(packId, btn) {
   if (btn) btn.innerHTML = '<span class="spinner"></span> Buying…';
 
   try {
-    const { ok, data } = await api('/api/webapp/packs/buy', { pack_id: packId });
+    const payment = btn.dataset.payment;
+    const storageKey = ['pack-order', userData?.telegram_id, packId, payment].join('-');
+    let order = pendingPackOrders.get(storageKey);
+    try { order ||= sessionStorage.getItem(storageKey); } catch {}
+    if (!order) {
+      order = Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, '0')).join('');
+      pendingPackOrders.set(storageKey, order);
+      try { sessionStorage.setItem(storageKey, order); } catch {}
+    }
+    const { ok, data, status } = await api('/api/webapp/packs/buy', {
+      pack_id: packId, request_id: order, payment, expected_cost: Number(btn.dataset.cost),
+    });
+    if (ok || (status >= 400 && status < 500 && status !== 429 && data.error !== 'in_progress')) {
+      pendingPackOrders.delete(storageKey);
+      try { sessionStorage.removeItem(storageKey); } catch {}
+    }
     if (!ok) {
       // 409 = the server's own duplicate guard caught a request this client
       // let slip. Not the user's fault, so don't shout about it.
@@ -8033,6 +8208,7 @@ async function buyPack(packId, btn) {
       }
       if (btn) btn.innerHTML = label;
       setPackButtonsBusy(false);
+      if (data.error === 'price_changed') await loadPacks();
       return;
     }
     toast('✅ Pack added to your inventory!', 'success');
@@ -8269,53 +8445,6 @@ async function claimLoginReward() {
 }
 
 // ════════════════ Achievements ════════════════
-const ACH_CATEGORY_ORDER = ['Collection', 'Matches', 'Economy', 'Social', 'Traits', 'Packs', 'Other'];
-
-async function loadAchievements() {
-  const el = document.getElementById('achievements-content');
-  el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
-  const { ok, data } = await api('/api/webapp/achievements', {});
-  if (!ok) {
-    el.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
-    return;
-  }
-  // Progress bar
-  const pct = data.total ? Math.round(data.unlocked * 100 / data.total) : 0;
-  document.getElementById('ach-progress-text').textContent =
-    `${data.unlocked} / ${data.total} unlocked (${pct}%)`;
-  document.getElementById('ach-progress-bar').style.width = pct + '%';
-
-  // Order categories
-  const cats = Object.keys(data.groups);
-  cats.sort((a, b) => {
-    const ia = ACH_CATEGORY_ORDER.indexOf(a); const ib = ACH_CATEGORY_ORDER.indexOf(b);
-    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
-  });
-
-  el.innerHTML = cats.map(cat => {
-    const items = data.groups[cat];
-    // Unlocked first within category
-    items.sort((a, b) => (b.unlocked ? 1 : 0) - (a.unlocked ? 1 : 0));
-    const rows = items.map(a => {
-      const rewardBits = [];
-      if (a.coins) rewardBits.push(`${formatNum(a.coins)}🪙`);
-      if (a.gems) rewardBits.push(`${a.gems}💎`);
-      return `
-        <div class="ach-row ${a.unlocked ? 'unlocked' : 'locked'}">
-          <div class="ach-emoji">${escapeHtml(a.emoji)}</div>
-          <div class="ach-info">
-            <div class="ach-name">${escapeHtml(a.name)}</div>
-            <div class="ach-desc">${escapeHtml(a.desc)}</div>
-          </div>
-          ${a.unlocked
-            ? `<div class="ach-reward">✓</div>`
-            : (rewardBits.length ? `<div class="ach-reward">${rewardBits.join(' ')}</div>` : `<div class="ach-lock">🔒</div>`)}
-        </div>
-      `;
-    }).join('');
-    return `<div class="ach-category-label">${escapeHtml(cat)}</div>${rows}`;
-  }).join('');
-}
 
 // ════════════════ Season ════════════════
 async function loadSeason() {
@@ -8323,7 +8452,7 @@ async function loadSeason() {
   board.innerHTML = `<div class="empty" style="padding:0.5rem;"><div class="spinner"></div></div>`;
   const { ok, data } = await api('/api/webapp/season', {});
   if (!ok) {
-    board.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
+    board.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Failed')}</div>`;
     return;
   }
   const season = data.season;
@@ -8391,7 +8520,7 @@ async function openUpgrade(rosterId, name) {
   body.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
   const { ok, data } = await api('/api/webapp/upgrade/options', { roster_id: rosterId });
   if (!ok) {
-    body.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
+    body.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Failed')}</div>`;
     return;
   }
   renderUpgradeOptions(data);
@@ -8465,7 +8594,7 @@ async function loadClubs() {
   el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
   const { ok, data } = await api('/api/webapp/clubs', {});
   if (!ok) {
-    el.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
+    el.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Failed')}</div>`;
     return;
   }
   clubsData = data;
@@ -8489,7 +8618,7 @@ function renderMyClub(el, d) {
     <div class="club-member ${m.is_me ? 'me' : ''}">
       <div class="club-member-name">${escapeHtml(m.name)}${m.is_founder ? '<span class="founder-badge">FOUNDER</span>' : ''}${m.is_me ? ' <span style="color:var(--accent);font-size:0.7rem;">(you)</span>' : ''}</div>
       <div class="club-member-pts">${formatNum(m.season_points)} pts</div>
-      ${(c.is_founder && !m.is_me) ? `<button class="club-kick-btn" onclick="kickMember(${m.user_id}, '${escapeHtmlAttr(m.name)}')">Kick</button>` : ''}
+      ${(c.is_founder && !m.is_me) ? `<button class="club-kick-btn" data-name="${escapeHtmlAttr(m.name)}" onclick="kickMember(${m.user_id}, this.dataset.name)">Kick</button>` : ''}
     </div>
   `).join('');
 
@@ -8667,7 +8796,7 @@ async function openPlayerDetail(rosterId) {
   el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
   const { ok, data } = await api('/api/webapp/player-detail', { roster_id: rosterId });
   if (!ok) {
-    el.innerHTML = `<div class="empty">❌ ${data.message || 'Failed'}</div>`;
+    el.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Failed')}</div>`;
     return;
   }
   pdData = data;
@@ -8691,7 +8820,7 @@ function renderPlayerDetail() {
     </div>
     ${d.upgrade_available ? `
       <button class="spin-button" style="width:100%;margin-bottom:0.9rem;background:linear-gradient(135deg,#a78bfa,#7c5ce0);"
-              onclick="openUpgrade(${p.roster_id}, '${escapeHtmlAttr(p.name)}')">
+              data-name="${escapeHtmlAttr(p.name)}" onclick="openUpgrade(${p.roster_id}, this.dataset.name)">
         ⬆️ Upgrade this player (higher version available)
       </button>` : ''}
   `;
@@ -9278,19 +9407,19 @@ function bowlingControlsHtml(s) {
   const opts = window._lmBowlOpts;
   if (opts.is_spinner) {
     const btns = opts.deliveries.map(d =>
-      `<button class="lm-opt-btn" onclick="lmDeliver('${escapeHtmlAttr(d)}')">${escapeHtml(d)}</button>`).join('');
+      `<button class="lm-opt-btn" data-delivery="${escapeHtmlAttr(d)}" onclick="lmDeliver(this.dataset.delivery)">${escapeHtml(d)}</button>`).join('');
     return `<div class="lm-panel"><div class="lm-panel-title">Pick your delivery</div>
       <div class="lm-opt-grid">${btns}</div></div>`;
   }
   // Pacer: variation first, then length
   if (!lmSelectedVariation) {
     const btns = opts.variations.map(v =>
-      `<button class="lm-opt-btn" onclick="lmPickVariation('${escapeHtmlAttr(v)}')">${escapeHtml(v)}</button>`).join('');
+      `<button class="lm-opt-btn" data-variation="${escapeHtmlAttr(v)}" onclick="lmPickVariation(this.dataset.variation)">${escapeHtml(v)}</button>`).join('');
     return `<div class="lm-panel"><div class="lm-panel-title">Step 1: Pick a variation</div>
       <div class="lm-opt-grid">${btns}</div></div>`;
   }
   const lenBtns = opts.lengths.map(l =>
-    `<button class="lm-opt-btn" onclick="lmDeliver('${escapeHtmlAttr(lmSelectedVariation)}','${escapeHtmlAttr(l)}')">${escapeHtml(l)}</button>`).join('');
+    `<button class="lm-opt-btn" data-variation="${escapeHtmlAttr(lmSelectedVariation)}" data-length="${escapeHtmlAttr(l)}" onclick="lmDeliver(this.dataset.variation,this.dataset.length)">${escapeHtml(l)}</button>`).join('');
   return `<div class="lm-panel">
     <div class="lm-panel-title">Step 2: Pick a length — <b style="color:var(--accent);">${escapeHtml(lmSelectedVariation)}</b></div>
     <div class="lm-opt-grid">${lenBtns}</div>
@@ -9389,13 +9518,18 @@ async function lmNewBowler(rid) {
 let lmScorecardData = null;
 let lmScorecardTab = null;
 
-async function openScorecard() {
+let scorecardRequest = 0;
+
+async function openScorecard(matchId = lmMatchId) {
+  const request = ++scorecardRequest;
+  document.getElementById('lm-drawer-tabs').replaceChildren();
   haptic('light');
   document.getElementById('lm-drawer-backdrop').style.display = 'block';
   const drawer = document.getElementById('lm-drawer');
   drawer.classList.add('open');
   document.getElementById('lm-drawer-body').innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
-  const { ok, data } = await api('/api/webapp/match/scorecard', { match_id: lmMatchId });
+  const { ok, data } = await api('/api/webapp/match/scorecard', { match_id: matchId });
+  if (request !== scorecardRequest) return;
   if (!ok) {
     document.getElementById('lm-drawer-body').innerHTML = `<div class="empty">Scorecard unavailable</div>`;
     return;
@@ -9414,6 +9548,7 @@ async function openScorecardOnly(matchId) {
 }
 
 function closeScorecard() {
+  scorecardRequest++;
   document.getElementById('lm-drawer').classList.remove('open');
   document.getElementById('lm-drawer-backdrop').style.display = 'none';
 }
@@ -9482,12 +9617,15 @@ async function lmAbandon() {
 }
 
 // ════════════════ Tournament tab (live competition) ════════════════
-// The tab only exists while a tournament is live: /api/webapp/init says which
-// ones are, and the screen follows one of them (chip switcher when there are two).
+// The tab opens the directory outside a live competition. Only live detail views poll.
 const TN_SUBS = [
   ['overview', '📋 Overview'], ['table', '📊 Table'], ['matches', '🏏 Matches'],
-  ['stats', '📈 Stats'], ['mvp', '🏅 MVP'], ['injuries', '🩹 Injuries'],
+  ['stats', '📈 Stats'], ['mvp', '🏅 MVP'], ['teams', 'Teams'], ['injuries', '🩹 Injuries'],
 ];
+let tnDirectoryOpen = false;
+let tnArchive = false;
+let tnDirectoryFilter = 'current';
+let tnDirectoryData = null;
 let tnLive = [];            // [{id, name, kind, kind_label}]
 let tnId = null;            // tournament being viewed
 let tnData = null;          // /api/webapp/tournament payload
@@ -9524,30 +9662,29 @@ function tnCanRefresh() {
 
 function scheduleTournamentPolling() {
   clearTimeout(tnPollTimer);
-  tnPollTimer = tnCanRefresh() ? setTimeout(() => loadTournament(false, true), TN_REFRESH_MS) : null;
+  tnPollTimer = tnCanRefresh() && !tnDirectoryOpen && !tnArchive ? setTimeout(() => loadTournament(false, true), TN_REFRESH_MS) : null;
 }
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) stopTournamentPolling();
-  else if (currentScreen === 'tournament') loadTournament(false, true);
+  else if (currentScreen === 'tournament' && !tnDirectoryOpen && !tnArchive) loadTournament(false, true);
 });
 window.addEventListener('offline', stopTournamentPolling);
 window.addEventListener('online', () => {
-  if (currentScreen === 'tournament') loadTournament(false, true);
+  if (currentScreen === 'tournament' && !tnDirectoryOpen && !tnArchive) loadTournament(false, true);
 });
 
 function updateTournamentTab(info) {
   tnLive = (info && info.live && info.tournaments) ? info.tournaments : [];
-  const tab = document.getElementById('tab-tournament');
-  if (tab) tab.style.display = tnLive.length ? '' : 'none';
-  if (tnId && !tnLive.some(t => t.id === tnId)) { tnId = null; tnData = null; tnInvalidateStats(); }
-  // Tournament ended while the screen was open: back home.
-  if (!tnLive.length && currentScreen === 'tournament') navigate('home');
+  const dot = document.getElementById('tn-live-dot');
+  if (dot) dot.hidden = !tnLive.length;
+  if (!tnArchive && tnId && !tnLive.some(t => t.id === tnId)) { tnId = null; tnData = null; tnInvalidateStats(); }
+
 }
 
 function renderTnSwitch() {
   const el = document.getElementById('tn-switch');
-  if (tnLive.length < 2) { el.style.display = 'none'; return; }
+  if (tnArchive || tnLive.length < 2) { el.style.display = 'none'; return; }
   el.style.display = 'flex';
   el.innerHTML = tnLive.map(t => `
     <button class="chip ${t.id === tnId ? 'active' : ''}" onclick="tnSelect(${t.id})">
@@ -9559,6 +9696,7 @@ function tnSelect(id) {
   if (id === tnId) return;
   haptic('light');
   stopTournamentPolling();
+  tnDirectoryOpen = false; tnArchive = false;
   tnId = id; tnData = null; tnInvalidateStats();
   loadTournament();
 }
@@ -9566,7 +9704,9 @@ function tnSelect(id) {
 async function loadTournament(force = false, background = false) {
   clearTimeout(tnPollTimer);
   tnPollTimer = null;
-  if (!tnCanRefresh()) return;
+  if (!tnCanRefresh() || tnDirectoryOpen) return;
+  const back = document.getElementById('tn-directory-back');
+  if (back) back.hidden = false;
   const el = document.getElementById('tn-content');
   if (!tnId && tnLive.length) tnId = tnLive[0].id;
   renderTnSwitch();
@@ -9580,16 +9720,16 @@ async function loadTournament(force = false, background = false) {
     if (cached) {
       if (!background) renderTournament();
     } else el.innerHTML = `<div class="empty"><div class="spinner"></div><div style="margin-top:0.6rem;">Loading tournament…</div></div>`;
-    const { ok, data } = await api('/api/webapp/tournament', id ? { tournament_id: id } : {});
+    const { ok, data } = await api('/api/webapp/tournament', id ? { tournament_id: id, archive: tnArchive } : {});
     if (request !== tnRequest || id !== tnId || currentScreen !== 'tournament') return;
     if (!ok) throw new Error(data.message || 'Could not load the tournament');
     if (Array.isArray(data.live_tournaments)) {
       updateTournamentTab({ live: data.live_tournaments.length > 0, tournaments: data.live_tournaments });
     }
     if (currentScreen !== 'tournament') return;
-    if (!data.live) {
+    if (!data.live && !data.archive) {
       tnData = null;
-      el.innerHTML = `<div class="empty"><div class="icon">🏟️</div>No tournament is live right now.</div>`;
+      el.innerHTML = `<div class="empty"><div class="icon">🏟️</div>This tournament has ended. <button class="hub-button" onclick="showTournamentDirectory()">Browse results</button></div>`;
       return;
     }
     if (!data.tournament || !Array.isArray(data.table) || !Array.isArray(data.fixtures)) {
@@ -9627,7 +9767,7 @@ async function loadTnStats() {
   const id = tnId;
   const version = tnStatsVersion;
   tnStatsLoadingVersion = version;
-  const { ok, data } = await api('/api/webapp/tournament/stats', { tournament_id: id });
+  const { ok, data } = await api('/api/webapp/tournament/stats', { tournament_id: id, archive: tnArchive });
   if (id !== tnId || version !== tnStatsVersion) return;
   tnStatsLoadingVersion = null;
   tnStats = ok ? data : { tournament_id: id, error: data.message || 'Could not load stats', boards: [], mvp: [] };
@@ -9642,6 +9782,97 @@ function tnSetSub(sub) {
 }
 function tnSetSeg(seg) { haptic('light'); tnSeg = seg; tnRemember('tn_seg', seg); renderTournament(); }
 function tnSetBoard(b) { haptic('light'); tnBoard = b; tnRemember('tn_board', b); renderTournament(); }
+
+function openTournamentDirectory() {
+  tnDirectoryOpen = true;
+  navigate('tournament');
+}
+
+async function showTournamentDirectory() {
+  stopTournamentPolling();
+  tnDirectoryOpen = true;
+  tnArchive = false;
+  tnId = null;
+  tnData = null;
+  tnInvalidateStats();
+  document.getElementById('tn-switch').style.display = 'none';
+  document.getElementById('tn-directory-back').hidden = true;
+  const root = document.getElementById('tn-content');
+  root.innerHTML = '<div class="empty">Loading competitions…</div>';
+  const request = ++tnRequest;
+  const {ok, data} = await api('/api/webapp/tournament/directory', {});
+  if (request !== tnRequest || currentScreen !== 'tournament' || !tnDirectoryOpen) return;
+  if (!ok) {
+    root.innerHTML = '<div class="empty">Could not load competitions. <button class="hub-button" onclick="showTournamentDirectory()">Retry</button></div>';
+    return;
+  }
+  tnDirectoryData = data;
+  renderTnDirectory();
+}
+
+function renderTnDirectory(filter = tnDirectoryFilter) {
+  if (!tnDirectoryData) return;
+  tnDirectoryFilter = filter;
+  const archive = filter === 'archive';
+  const rows = tnDirectoryData[filter];
+  const cards = rows.map(t => `<button type="button" class="hub-panel hub-tournament-card" onclick="openDirectoryTournament(${t.id}, ${archive})">
+    <div class="hub-between"><h3>${escapeHtml(t.name)}</h3><span class="hub-label">${escapeHtml(t.status)}</span></div>
+    <p>${escapeHtml(t.kind_label)} · ${escapeHtml(t.format)} · ${t.played}/${t.total} matches</p>
+    ${t.champion ? `<p>Champion · ${escapeHtml(t.champion.name)}</p>` : ''}
+    ${t.my_team ? '<p>Your team is entered</p>' : ''}
+  </button>`).join('');
+  document.getElementById('tn-content').innerHTML = `
+    <div class="hub-hero">
+      <h2>Competitions</h2>
+      <div class="hub-actions">
+        <button class="hub-button" aria-pressed="${!archive}" onclick="renderTnDirectory('current')">Live</button>
+        <button class="hub-button" aria-pressed="${archive}" onclick="renderTnDirectory('archive')">Completed</button>
+        <button class="hub-button" onclick="navigate('auction')">Franchise auction</button>
+      </div>
+    </div>${cards || '<div class="empty">' + (archive ? 'No completed tournaments yet.' : 'No tournaments are live right now.') + '</div>'}`;
+}
+
+function openDirectoryTournament(id, archive) {
+  stopTournamentPolling();
+  tnDirectoryOpen = false;
+  tnArchive = archive;
+  tnId = id;
+  tnData = null;
+  tnSub = 'overview';
+  tnInvalidateStats();
+  loadTournament();
+}
+
+function tnTeamsView(data) {
+  const teams = data.teams || [];
+  return teams.map(team => `<article class="hub-panel">
+    <div class="hub-between"><div class="tn-team">${tnLogo(team)} <h3>${escapeHtml(team.name)}</h3></div>
+      ${team.mine ? '<span class="tn-badge">Your team</span>' : ''}</div>
+    <p>${team.played} played · ${team.won} wins · ${team.points} pts</p>
+    ${team.stadium ? `<p>${escapeHtml(team.stadium)}</p>` : ''}
+    ${team.has_roster ? `<button class="hub-button" onclick="tnOpenTeam(${team.id})">View squad</button>` : ''}
+  </article>`).join('') || '<div class="empty">No teams entered.</div>';
+}
+
+async function tnOpenTeam(teamId) {
+  const team = tnData?.teams?.find(row => row.id === teamId);
+  if (!team) return;
+  const request = ++scorecardRequest;
+  const tabs = document.getElementById('lm-drawer-tabs');
+  const body = document.getElementById('lm-drawer-body');
+  tabs.replaceChildren();
+  body.textContent = 'Loading squad…';
+  document.getElementById('lm-drawer-backdrop').style.display = 'block';
+  document.getElementById('lm-drawer').classList.add('open');
+  const {ok, data} = await api('/api/webapp/tournament/team', {tournament_id: tnId, team_id: teamId});
+  if (request !== scorecardRequest || currentScreen !== 'tournament') return;
+  body.innerHTML = `<h3>${escapeHtml(team.name)}</h3>` + (ok && data.players.length
+    ? `<table class="lm-sc-table"><thead><tr><th>Player</th><th>Role</th><th>OVR</th></tr></thead><tbody>${
+        data.players.map(player => `<tr><td>${escapeHtml(player.name)}${player.overseas ? ' *' : ''}</td>
+        <td>${escapeHtml(player.role)}</td><td>${player.rating ?? '—'}</td></tr>`).join('')
+      }</tbody></table>${data.players.some(player => player.overseas) ? '<p>* Overseas player</p>' : ''}`
+    : '<p>' + (ok ? 'This team has no registered players.' : 'Could not load team squad.') + '</p>');
+}
 
 function tnLogo(team) {
   if (!team) return `<span class="tn-logo">?</span>`;
@@ -9682,6 +9913,7 @@ function renderTournament() {
   else if (tnSub === 'matches') body = tnMatchesView(d);
   else if (tnSub === 'stats') body = tnStatsView();
   else if (tnSub === 'mvp') body = tnMvpView();
+  else if (tnSub === 'teams') body = tnTeamsView(d);
   else if (tnSub === 'injuries') body = tnInjuriesView(d);
   el.innerHTML = head + tabs + body;
 }
@@ -9899,7 +10131,9 @@ async function openTournamentScorecard(fixtureId) {
   document.getElementById('lm-drawer').classList.add('open');
   document.getElementById('lm-drawer-tabs').innerHTML = '';
   document.getElementById('lm-drawer-body').innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
-  const { ok, data } = await api('/api/webapp/tournament/match', { tournament_id: tnId, fixture_id: fixtureId });
+  const request = ++scorecardRequest;
+  const { ok, data } = await api('/api/webapp/tournament/match', { tournament_id: tnId, fixture_id: fixtureId, archive: tnArchive });
+  if (request !== scorecardRequest || currentScreen !== 'tournament') return;
   if (!ok || !data.innings || !data.innings.length) {
     document.getElementById('lm-drawer-body').innerHTML = `<div class="empty">${escapeHtml((data && data.message) || 'Scorecard unavailable')}</div>`;
     return;
@@ -9979,7 +10213,7 @@ function maybeFantasyRedirect() {
 
 // (2) Telegram start_param (?startapp=spin) used by group t.me deep links.
 function handleHashDeepLink() {
-  const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'season', 'clubs', 'playerdetail', 'livematch', 'auction', 'tournament'];
+  const validScreens = ['home', 'matchcentre', 'wallet', 'rewards', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'profile', 'season', 'clubs', 'playerdetail', 'livematch', 'auction', 'tournament'];
   const alias = {
     // 'wheel' and 'gspin' stay mapped: deep links to the old prize wheel are
     // already out there in group chats and still belong on this screen.
@@ -10052,5 +10286,7 @@ function handleHashDeepLink() {
 })();
 
 </script>
+<script src="{{ url_for('static', filename='js/miniapp_clubhouse.js', v='2') }}"></script>
+<script src="{{ url_for('static', filename='js/miniapp_player_hub.js', v='1') }}"></script>
 </body>
 </html>

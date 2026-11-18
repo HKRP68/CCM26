@@ -67,7 +67,7 @@ def is_rookie_mode_active(cfg=None) -> bool:
     return bool((cfg or {}).get("rookie_mode"))
 
 
-def has_access(user) -> bool:
+def has_access(user, *, strict=False) -> bool:
     """True if ``user`` holds an active tier of at least Rookie.
 
     ``user`` is a ``models.User`` row (or None for someone who has never run
@@ -80,6 +80,8 @@ def has_access(user) -> bool:
         from services import subscription_service
         return subscription_service.has_tier_at_least(user, ROOKIE_TIER)
     except Exception:
+        if strict:
+            raise
         # A broken tier lookup must never lock the whole bot out.
         logger.exception("Rookie access check failed — failing open")
         return True

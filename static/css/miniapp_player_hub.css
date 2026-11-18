@@ -1,0 +1,60 @@
+.hub-screen { --hub-panel: #142332; --hub-line: #344b5a; --hub-mint: #b9f2db; --hub-secondary: #b7c9d7; }
+.hub-title { margin: 0 0 12px; font: 800 clamp(1.2rem, 5vw, 1.55rem)/1.15 var(--font-display); }
+.hub-hero {
+  padding: 16px; margin-bottom: 12px;
+  background: linear-gradient(130deg, #1b493e, #15313b 66%, #1d2940);
+  border: 1px solid #3c6260; border-radius: 16px;
+}
+.hub-hero h2 { margin: 0; font: 800 clamp(1.2rem, 5vw, 1.5rem)/1.15 var(--font-display); }
+.hub-hero p, .hub-roster-row p, .hub-panel p { margin: 5px 0; font-size: .82rem; color: var(--hub-secondary); }
+.hub-between { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.hub-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.hub-button, .hub-filters input, .hub-filters select {
+  background: #1e3445; color: #e9f4fb; border: 1px solid #415969;
+  border-radius: 8px; font: 700 .79rem var(--font-family); min-height: 40px;
+  padding: 6px 10px;
+}
+.hub-button { cursor: pointer; }
+.hub-button.primary, .hub-button[aria-pressed="true"] { background: #b9f2db; color: #12392f; border-color: #b9f2db; }
+.hub-button:disabled { opacity: .65; cursor: wait; }
+.hub-filters { margin: 8px 0 12px; }
+.hub-filters input, .hub-filters select { flex: 1 1 110px; min-width: 0; max-width: 100%; }
+.hub-progress { width: 100%; height: 7px; margin: 10px 0 0; border: none; border-radius: 20px; appearance: none; background: #253b47; overflow: hidden; }
+.hub-progress::-webkit-progress-bar { background: #253b47; }
+.hub-progress::-webkit-progress-value { background: #8ce0bd; }
+.hub-progress::-moz-progress-bar { background: #8ce0bd; }
+.hub-section-title { margin: 15px 0 7px; font: 800 .95rem var(--font-display); }
+.hub-panel, .hub-roster-row {
+  padding: 11px; border: 1px solid var(--hub-line); border-radius: 12px;
+  background: var(--hub-panel); margin-bottom: 7px; min-width: 0;
+}
+.hub-panel h3, .hub-roster-row h3 { margin: 0; font: 800 .95rem/1.25 var(--font-display); overflow-wrap: anywhere; }
+.hub-roster-row { display: grid; grid-template-columns: minmax(62px, 22%) minmax(0, 1fr); align-items: center; gap: 10px; }
+.hub-roster-row.selected { border-color: var(--hub-mint); }
+.hub-player-card { width: 100%; max-height: 105px; object-fit: contain; border-radius: 7px; }
+.hub-avatar {
+  display: grid; place-items: center; position: relative; flex: 0 0 64px; height: 64px;
+  background: #326459; border: 2px solid #a3cfbf; border-radius: 50%; overflow: hidden;
+  font: 800 1.2rem var(--font-display); color: #e4f8ee;
+}
+.hub-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.hub-identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.hub-identity h2 { overflow-wrap: anywhere; }
+.hub-profile-link { background: transparent; border: 0; color: inherit; padding: 0; width: 100%;
+  display: flex; gap: 8px; justify-content: space-between; align-items: center; text-align: left; cursor: pointer; }
+.hub-open-profile { color: #b9f2db; font: 700 .81rem var(--font-family); flex-shrink: 0; }
+.hub-metrics { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px; margin-bottom: 10px; }
+.hub-metric { margin: 0; }
+.hub-metric span { display: block; color: var(--hub-secondary); font-size: .76rem; }
+.hub-metric strong { display: block; margin: 3px 0 0; font: 800 1.14rem var(--font-display); overflow-wrap: anywhere; }
+.hub-ach-next { margin-top: 10px; padding-top: 9px; border-top: 1px solid #4b6666; }
+.hub-ach-next strong { color: var(--hub-mint); }
+.hub-ach-row { display: grid; grid-template-columns: 25px minmax(0,1fr); gap: 8px; }
+.hub-ach-row.earned { border-left: 3px solid #8ce0bd; }
+.hub-ach-meta { color: var(--hub-mint); font-size: .78rem; margin-top: 6px; }
+.hub-tournament-head { margin-bottom: 10px; }
+.hub-tournament-head h2 { margin: 0; }
+.hub-tournament-card { display: block; text-align: left; width: 100%; color: var(--text); cursor: pointer; }
+.hub-tournament-card .hub-label { color: var(--hub-mint); font-size: .73rem; flex-shrink: 0; }
+.hub-screen [hidden] { display: none !important; }
+.hub-screen :focus-visible, .hub-profile-link:focus-visible { outline: 2px solid #b9f2db; outline-offset: 2px; }

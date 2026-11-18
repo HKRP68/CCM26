@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from config import MAX_ROSTER, get_buy_value, get_sell_value
 from models import (
     ActivityLog, GlobalPlayerMarket, MarketPurchase, PendingUndo,
-    Player, User, UserRoster,
+    Player, Trade, User, UserRoster,
 )
 from services import global_market as gm
 
@@ -34,7 +34,7 @@ class MarketTransactionIntegrityTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine("sqlite://")
         for model in (User, Player, UserRoster, GlobalPlayerMarket,
-                      MarketPurchase, ActivityLog, PendingUndo):
+                      MarketPurchase, ActivityLog, PendingUndo, Trade):
             model.__table__.create(self.engine)
         self.Session = sessionmaker(bind=self.engine, autoflush=False)
         self.session = self.Session()
@@ -121,6 +121,35 @@ class MarketTransactionIntegrityTests(unittest.TestCase):
         self.assertEqual(self.persisted(GlobalPlayerMarket)[0].purchased_count, 0)
         self.assertEqual(self.persisted(MarketPurchase), [])
         self.assertEqual(self.persisted(UserRoster), [])
+
+    def test_stale_market_quote_never_debits_or_reserves_stock(self):
+        body, status = self.route("webapp_market_buy", {"expected_price": 1})(self.slot_id)
+        self.assertEqual((status, body["error"]), (409, "listing_changed"))
+        self.assertEqual(self.persisted(User)[0].total_coins, 10_000_000)
+        self.assertEqual(self.persisted(GlobalPlayerMarket)[0].purchased_count, 0)
+
+    def test_mixed_sale_is_rejected_as_one_transaction(self):
+        roster_id = self.add_roster()
+        body, status = self.route("webapp_release_multi", {"roster_ids": [roster_id, 999]})()
+        self.assertEqual(status, 409)
+        self.assertFalse(body["ok"])
+        self.assertEqual(len(self.persisted(UserRoster)), 1)
+        self.assertEqual(self.persisted(User)[0].total_coins, 10_000_000)
+
+    def test_resigning_from_same_listing_skips_rebate(self):
+        self.slot.quantity = 0
+        self.session.commit()
+        with patch("services.buy_bonus.award_buy_gem_bonus", return_value=25) as award:
+            self.assertEqual(gm.buy_player(self.session, self.user, 0)[2], 25)
+            self.session.commit()
+            row = self.session.query(UserRoster).one()
+            with patch("services.trait_service.return_traits_to_inventory", return_value=0):
+                self.assertTrue(self.route("webapp_release")(row.id)["ok"])
+            user = self.session.get(User, self.user_id)
+            ok, _, gems = gm.buy_player(self.session, user, 0)
+            self.assertTrue(ok)
+            self.assertEqual(gems, 0)
+            award.assert_called_once()
 
     def test_market_reroll_cannot_substitute_a_different_slot_id(self):
         self.assertFalse(gm.buy_player(

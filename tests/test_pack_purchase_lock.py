@@ -219,13 +219,12 @@ class BuyPackRowLockTests(unittest.TestCase):
     def test_lock_is_the_first_thing_buy_pack_does(self):
         src = _read("services/pack_service.py")
         body = src[src.index("def buy_pack("):src.index("def list_user_inventory(")]
-        self.assertLess(body.index("_lock_buyer_row(session, user)"),
-                        body.index("pack.cost_coins and user.total_coins"),
+        self.assertLess(body.index("lock_user_for_update(session, user)"),
+                        body.index("prices = {currency:"),
                         "the balance is checked before the buyer row is locked")
 
     def test_lock_helper_uses_for_update_and_refreshes_the_row(self):
-        src = _read("services/pack_service.py")
-        helper = src[src.index("def _lock_buyer_row("):src.index("def buy_pack(")]
+        helper = _read("services/economy_transactions.py")
         self.assertIn("with_for_update()", helper)
         self.assertIn("populate_existing()", helper,
                       "an identity-mapped User would keep the stale balance")
@@ -233,15 +232,16 @@ class BuyPackRowLockTests(unittest.TestCase):
                       "autoflush is off — pending writes must be flushed first")
 
     @unittest.skipUnless(_HAVE_SQLALCHEMY, "sqlalchemy not installed")
-    def test_lock_failure_does_not_break_buying(self):
-        """A session that can't lock (test double, odd backend) still sells."""
+    def test_lock_failure_stops_buying(self):
+        """A lock failure must occur before a purchase changes anything."""
         from services import pack_service
 
         class _Boom:
             def flush(self):
                 raise RuntimeError("no locking here")
 
-        pack_service._lock_buyer_row(_Boom(), type("U", (), {"id": 1})())
+        with self.assertRaisesRegex(RuntimeError, "no locking here"):
+            pack_service.buy_pack(_Boom(), type("U", (), {"id": 1})(), None)
 
 
 if __name__ == "__main__":

@@ -227,7 +227,7 @@ def init_db():
         FantasyLeague, FantasyMatch, FantasyPlayerScore,
         FantasyEntry, FantasyPick, FantasyLeaguePlayer, FantasyCountryRule,
         FantasyRoleRule, EventMedia,
-        Giveaway, GiveawayEntry,
+        Giveaway, GiveawayEntry, MiniappGift,
         StoredAsset,
         PlayerDraft, DraftTeam, DraftPlayer, DraftPick,
         AuctionSeason, AuctionFranchise, AuctionLot, AuctionBid,
@@ -650,6 +650,7 @@ def _migrate_add_columns():
     """
     existing = _load_existing_columns()
     new_user_cols = {
+        "miniapp_economy_next": "TIMESTAMP",
         "matches_played": "INTEGER DEFAULT 0",
         "matches_won": "INTEGER DEFAULT 0",
         "matches_lost": "INTEGER DEFAULT 0",
@@ -713,6 +714,13 @@ def _migrate_add_columns():
                 return  # success
             except Exception:
                 continue  # try next form, or just give up
+
+    _try_add("pack_purchases", "request_id", "VARCHAR(64)")
+    _try_add("pack_purchases", "inventory_id", "INTEGER")
+    if existing is None or "pack_purchases" in existing:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_pack_order_request "
+                              "ON pack_purchases (user_id, request_id)"))
 
     # Draft clocks and skipped-pick queues survive a restart or upgrade.
     for col, coltype in (

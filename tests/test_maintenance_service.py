@@ -107,16 +107,15 @@ class MiniAppMaintenanceTests(unittest.TestCase):
     def test_live_match_endpoints_stay_open_so_matches_can_finish(self):
         for path in ("/api/webapp/match/init", "/api/webapp/match/deliver",
                      "/api/webapp/match/play-shot", "/api/webapp/match/scorecard",
+                     "/api/match/state", "/api/match/action",
                      "/api/webapp/quickmatch/phase",
                      "/api/webapp/quickmatch/abandon"):
             with self.subTest(path=path):
                 self.assertFalse(should_block_miniapp_path(path, 123, MAINTENANCE_ON))
 
     def test_non_miniapp_paths_are_never_blocked_here(self):
-        # The bot's own REST match API, the admin panel, and static assets are
-        # outside this gate: /api/match/* is live-match play, and the admin
-        # panel must stay reachable to turn maintenance back off.
-        for path in ("/api/match/state", "/api/match/action", "/webapp",
+        # The admin panel stays reachable to turn maintenance back off.
+        for path in ("/webapp",
                      "/webapp/player-card/12", "/card-template", "/cricket",
                      "/api/event-media/3", "/health"):
             with self.subTest(path=path):

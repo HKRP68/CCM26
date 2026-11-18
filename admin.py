@@ -4321,33 +4321,13 @@ _WEBAPP_CLAIM_GUARD_TTL = 15.0
 
 
 def _lock_user_row(db, user_id):
-    """Serialize one user's reward claims at the database.
+    from services.economy_transactions import lock_user_for_update
+    return lock_user_for_update(db, db.get(User, user_id))
 
-    The same `SELECT … FOR UPDATE` the pack shop takes on the buyer before
-    validating (see ``services.pack_service._lock_buyer_row``), for the same
-    reason: every claim endpoint reads a balance and a "have you already had
-    this" flag, then writes both, and two requests that overlap otherwise read
-    the same pre-payout snapshot and both pay.
 
-    ``populate_existing`` is not optional. Without it SQLAlchemy answers the
-    locked re-read out of the identity map without refreshing attributes this
-    session already loaded, so the lock blocks and then hands back exactly the
-    stale values it was taken to avoid.
-
-    Best-effort, like the pack shop's: a session that cannot lock (a test
-    double, an exotic backend) must never block a legitimate claim — the
-    in-flight guard and the services' compare-and-set still stand.
-    """
-    from models import User as _User
-    try:
-        db.flush()   # autoflush is off; don't let populate_existing drop writes
-        (db.query(_User)
-         .filter(_User.id == user_id)
-         .populate_existing()
-         .with_for_update()
-         .first())
-    except Exception:
-        logger.debug("claim: user row lock unavailable", exc_info=True)
+def webapp_test_mode():
+    """Unsigned fixtures are available only in a Flask test application."""
+    return app.testing and os.getenv("WEBAPP_DEV_MODE") == "1"
 
 
 def _init_data_telegram_id():
@@ -4362,7 +4342,7 @@ def _init_data_telegram_id():
         init_data = init_data[4:]
     if not init_data:
         return None
-    if init_data.startswith("DEV_") and os.getenv("WEBAPP_DEV_MODE") == "1":
+    if init_data.startswith("DEV_") and webapp_test_mode():
         try:
             return int(init_data[4:])
         except ValueError:
@@ -4401,6 +4381,13 @@ def _block_banned_miniapp_user():
         return banned_error(user)
 
 
+def _miniapp_access_config():
+    from services.config_service import get_config
+    if "miniapp_access_config" not in g:
+        g.miniapp_access_config = get_config(fresh=True, strict=True)
+    return g.miniapp_access_config
+
+
 @app.before_request
 def _block_miniapp_during_maintenance():
     """Lock the Mini App while maintenance mode is on.
@@ -4416,17 +4403,17 @@ def _block_miniapp_during_maintenance():
     """
     try:
         from services.maintenance_service import (is_maintenance_active,
-                                                  is_miniapp_live_match_path,
+                                                  is_miniapp_live_match_path, is_ad_postback_path,
                                                   is_miniapp_path,
                                                   should_block_miniapp_path,
                                                   get_maintenance_message)
         # Cheapest checks first: the common case is maintenance off, and this
         # hook runs on every request. Only verify initData (an HMAC) once we
         # know a real lock is in play and the path isn't already exempt.
-        if not is_miniapp_path(request.path) or is_miniapp_live_match_path(request.path):
+        if (not is_miniapp_path(request.path) or is_miniapp_live_match_path(request.path)
+                or is_ad_postback_path(request.path)):
             return None
-        from services.config_service import get_config
-        cfg = get_config()
+        cfg = _miniapp_access_config()
         if not is_maintenance_active(cfg):
             return None
         if not should_block_miniapp_path(request.path,
@@ -4440,9 +4427,8 @@ def _block_miniapp_during_maintenance():
             "until": until.isoformat() if hasattr(until, "isoformat") else None,
         }, 503
     except Exception:
-        # A broken maintenance check must never take the Mini App down.
-        logger.exception("maintenance gate failed (non-fatal)")
-        return None
+        logger.exception("maintenance gate unavailable")
+        return {"ok": False, "error": "access_unavailable", "message": "Please try again shortly."}, 503
 
 
 def _rookie_has_membership(telegram_id):
@@ -4459,7 +4445,7 @@ def _rookie_has_membership(telegram_id):
     try:
         user = (db.query(_User)
                 .filter(_User.telegram_id == int(telegram_id)).first())
-        return rookie_gate.has_access(user)
+        return rookie_gate.has_access(user, strict=True)
     finally:
         db.close()
 
@@ -4478,13 +4464,12 @@ def _block_miniapp_without_membership():
     """
     try:
         from services import rookie_gate
-        from services.maintenance_service import is_miniapp_path
+        from services.maintenance_service import is_ad_postback_path, is_miniapp_path
         # Cheapest checks first — this hook runs on every request, and the
         # common case is Rookie mode off.
-        if not is_miniapp_path(request.path):
+        if not is_miniapp_path(request.path) or is_ad_postback_path(request.path):
             return None
-        from services.config_service import get_config
-        cfg = get_config()
+        cfg = _miniapp_access_config()
         if not rookie_gate.is_rookie_mode_active(cfg):
             return None
         telegram_id = _init_data_telegram_id()
@@ -4504,9 +4489,19 @@ def _block_miniapp_without_membership():
             "message": rookie_gate.rookie_required_message(cfg),
         }, 403
     except Exception:
-        # A broken gate must never take the Mini App down.
-        logger.exception("rookie gate failed (non-fatal)")
-        return None
+        logger.exception("membership gate unavailable")
+        return {"ok": False, "error": "access_unavailable", "message": "Please try again shortly."}, 503
+
+
+_PACED_MINIAPP_ACTIONS = {
+    "webapp_buy", "webapp_market_buy", "webapp_release", "webapp_release_multi",
+    "webapp_packs_buy", "webapp_packs_open", "webapp_freepack_open",
+    "webapp_daily", "webapp_spin", "webapp_ad_unavailable", "webapp_redeem",
+    "webapp_quest_claim", "webapp_quest_claim_all", "webapp_login_streak_claim",
+    "webapp_roster_overflow_release", "webapp_roster_overflow_replace",
+    "webapp_upgrade_apply", "webapp_trait_upgrade", "webapp_career_upgrade",
+    "webapp_gift_claim", "webapp_giveaway_join", "webapp_set_captain",
+}
 
 
 def _webapp_auth(allow_not_debuted=False):
@@ -4527,8 +4522,8 @@ def _webapp_auth(allow_not_debuted=False):
         init_data = init_data[4:]
 
     _start_param = None
-    # Dev/test bypass: only honored when WEBAPP_DEV_MODE=1
-    if init_data.startswith("DEV_") and _os.getenv("WEBAPP_DEV_MODE") == "1":
+    # The test client may opt into fixtures without signed Telegram data.
+    if init_data.startswith("DEV_") and webapp_test_mode():
         try:
             tg_id = int(init_data[4:])
         except ValueError:
@@ -4562,41 +4557,45 @@ def _webapp_auth(allow_not_debuted=False):
         db.close()
         return None, tg_id, blocked
 
+    if user is not None and request.endpoint in _PACED_MINIAPP_ACTIONS:
+        from services.economy_transactions import reserve_miniapp_action
+        try:
+            wait = reserve_miniapp_action(db, user)
+            if wait:
+                db.close()
+                return None, tg_id, ({"ok": False, "error": "rate_limited",
+                                      "message": f"Try again in {wait}s."}, 429, {"Retry-After": str(wait)})
+            db.commit()
+        except Exception:
+            db.rollback()
+            db.close()
+            logger.exception("Could not reserve Mini App economy action")
+            return None, tg_id, ({"ok": False, "error": "economy_unavailable",
+                                  "message": "Please try again shortly."}, 503)
+
     # Heal any drift in the denormalized roster_count cache so every Mini App
     # surface (Home, Squad, Roster, packs) reports the same size as the live
-    # UserRoster rows — the same number chat's /myroster shows. Best-effort:
-    # a reconcile failure must never block an API request.
+    # UserRoster rows — the same number chat's /myroster shows.
     if user is not None:
         try:
-            from services.roster_service import reconcile_roster_count
-            before = user.roster_count
-            if reconcile_roster_count(db, user) != (before or 0):
+            from services.roster_service import get_roster_count, reconcile_roster_count
+            if get_roster_count(db, user.id) != (user.roster_count or 0):
+                _lock_user_row(db, user.id)
+                reconcile_roster_count(db, user)
                 db.commit()
         except Exception:
             db.rollback()
-            logger.exception("roster_count reconcile failed (non-fatal)")
+            logger.exception("roster_count reconcile failed")
+            if request.endpoint in _PACED_MINIAPP_ACTIONS:
+                db.close()
+                return None, tg_id, ({"ok": False, "error": "squad_unavailable",
+                                      "message": "Please try again shortly."}, 503)
 
-    # Remember the group the Mini App was launched from so later activity echoes
-    # back there even if a subsequent launch (e.g. the persistent menu button)
-    # carries no param.
-    #   1. Prefer the start_param inside the SIGNED initData (trusted).
-    #   2. Otherwise fall back to the X-Tg-Start-Param header the frontend sends
-    #      from initDataUnsafe.start_param — some Telegram clients deliver the
-    #      launch param only as a URL fragment and omit it from the signed
-    #      initData. That header is unsigned, so it is honoured ONLY after
-    #      confirming this user is actually a member of that group.
+    # A start parameter can come from a shared deep link. Check the user's
+    # membership before storing a group as their activity destination.
     if user is not None:
-        origin = _parse_origin_chat(_start_param)
-        trusted = origin is not None
-        if origin is None:
-            client_origin = _parse_origin_chat(
-                request.headers.get("X-Tg-Start-Param"))
-            if (client_origin is not None
-                    and user.last_miniapp_chat_id != client_origin
-                    and _user_in_chat(client_origin, tg_id)):
-                origin = client_origin  # membership-verified
-                trusted = True
-        if trusted and origin is not None and user.last_miniapp_chat_id != origin:
+        origin = _parse_origin_chat(_start_param) or _parse_origin_chat(request.headers.get("X-Tg-Start-Param"))
+        if origin and user.last_miniapp_chat_id != origin and _user_in_chat(origin, tg_id):
             try:
                 user.last_miniapp_chat_id = origin
                 db.commit()
@@ -4838,6 +4837,207 @@ def _render_player_card(player_id):
         db.close()
 
 
+@app.route("/api/webapp/profile", methods=["POST"])
+@csrf_exempt
+def webapp_profile():
+    from services.miniapp_clubhouse import profile
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, user, _ = auth
+    try:
+        return profile(db, user)
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/profile/photo", methods=["POST"])
+@csrf_exempt
+def webapp_profile_photo():
+    from services.miniapp_avatar import profile_photo
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, _, telegram_id = auth
+    db.close()
+    image = profile_photo(telegram_id)
+    return Response(image or b"", status=200 if image else 204,
+                    mimetype="image/jpeg", headers={"Cache-Control": "private, no-store",
+                                                    "X-Content-Type-Options": "nosniff"})
+
+
+def _clubhouse_page():
+    body = request.get_json(silent=True)
+    if body is None:
+        body = {}
+    if not isinstance(body, dict):
+        return None, None
+    before = body.get("before")
+    if before is not None and (type(before) is not int or not 0 < before < 2**31):
+        return None, None
+    return body, before
+
+
+@app.route("/api/webapp/clubhouse/matches", methods=["POST"])
+@csrf_exempt
+def webapp_match_centre():
+    from services import miniapp_clubhouse
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, user, _ = auth
+    try:
+        body, before = _clubhouse_page()
+        if body is None or body.get("view", "matches") not in ("matches", "quick"):
+            return {"ok": False, "error": "invalid_page"}, 400
+        if body.get("view") == "quick":
+            return miniapp_clubhouse.quick_results(db, user.id, before)
+        return miniapp_clubhouse.matches(db, user, before)
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/clubhouse/wallet", methods=["POST"])
+@csrf_exempt
+def webapp_wallet():
+    from services import miniapp_clubhouse
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, user, _ = auth
+    try:
+        body, before = _clubhouse_page()
+        if body is None or body.get("currency", "all") not in ("all", "coins", "gems"):
+            return {"ok": False, "error": "invalid_page"}, 400
+        return miniapp_clubhouse.wallet(db, user, before, body.get("currency", "all"))
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/clubhouse/rewards", methods=["POST"])
+@csrf_exempt
+def webapp_rewards_hub():
+    from services import miniapp_clubhouse
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, user, _ = auth
+    try:
+        return miniapp_clubhouse.rewards(db, user.id)
+    finally:
+        db.close()
+
+
+_GIFT_WALLETS = {"coins": "total_coins", "gems": "total_gems", "quest_points": "quest_points"}
+_GIFT_ITEM_TYPES = ("player", "pack")
+
+
+@app.route("/api/webapp/clubhouse/gifts/<int:gift_id>/claim", methods=["POST"])
+@csrf_exempt
+def webapp_gift_claim(gift_id):
+    from models import MiniappGift
+    from services.activity_service import log_activity
+    from services.miniapp_clubhouse import gift_payload
+    from datetime import datetime
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, user, _ = auth
+    try:
+        _lock_user_row(db, user.id)
+        gift = db.query(MiniappGift).filter_by(id=gift_id, user_id=user.id).first()
+        if gift is None:
+            return {"ok": False, "message": "Gift unavailable."}, 404
+        if gift.claimed_at:
+            return {"ok": True, "gift": gift_payload(gift), "already_claimed": True}
+        wallet = _GIFT_WALLETS.get(gift.currency)
+        if wallet:
+            balance = (getattr(user, wallet) or 0) + gift.amount
+            if gift.amount <= 0 or balance >= 2**31:
+                return {"ok": False, "message": "This gift could not be added to your balance."}, 409
+            setattr(user, wallet, balance)
+        elif gift.currency == "player" and gift.player and gift.player.is_active and not gift.player.is_career:
+            from models import UserRoster
+            blocked = _team_locked_response(db, user, "add a player")
+            if blocked:
+                return blocked
+            if (user.roster_count or 0) >= MAX_ROSTER:
+                return {"ok": False, "message": "Free a squad spot and claim this gift again."}, 409
+            user.roster_count = (user.roster_count or 0) + 1
+            db.add(UserRoster(user_id=user.id, player_id=gift.player.id, order_position=user.roster_count))
+        elif gift.currency == "pack" and gift.pack:
+            from models import UnopenedPack
+            from services.pack_service import MAX_INVENTORY, grant_pack
+            if db.query(UnopenedPack).filter_by(user_id=user.id).count() >= MAX_INVENTORY:
+                return {"ok": False, "message": "Open a pack first to free an inventory spot."}, 409
+            grant_pack(db, user.id, gift.pack_id, source="miniapp_gift")
+        else:
+            return {"ok": False, "message": "This gift is unavailable. Contact an admin."}, 409
+        gift.claimed_at = datetime.utcnow()
+        log_activity(db, user.id, "miniapp_gift", detail=f"Claimed {gift.title}",
+                     coins_change=gift.amount if gift.currency == "coins" else 0,
+                     gems_change=gift.amount if gift.currency == "gems" else 0)
+        db.commit()
+        return {"ok": True, "gift": gift_payload(gift)}
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/clubhouse/giveaways/<int:giveaway_id>/join", methods=["POST"])
+@csrf_exempt
+def webapp_giveaway_join(giveaway_id):
+    from datetime import datetime
+    from models import GameConfig, Giveaway, GiveawayEntry
+    from services import giveaway_service
+
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, user, telegram_id = auth
+    try:
+        user_id = user.id
+        giveaway = db.get(Giveaway, giveaway_id)
+        now = datetime.utcnow()
+        if giveaway is None or giveaway.status != "running" or not giveaway.start_time <= now < giveaway.end_time:
+            return {"ok": False, "message": "Entries are closed for this giveaway."}, 409
+        if db.query(GiveawayEntry.id).filter_by(giveaway_id=giveaway_id, user_id=user_id).first():
+            return {"ok": True, "joined": True}
+        cfg = db.query(GameConfig).first()
+        if not cfg or not cfg.official_group_id:
+            return {"ok": False, "message": "The official group is unavailable."}, 503
+        group_id = cfg.official_group_id
+        db.rollback()
+        if not _user_in_chat(group_id, telegram_id, use_cache=False):
+            return {"ok": False, "message": "Join the official Telegram group and try again."}, 403
+
+        # Refresh after talking to Telegram. Use the same lock as the draw.
+        query = db.query(Giveaway).filter_by(id=giveaway_id).populate_existing().with_for_update()
+        if db.get_bind().dialect.name == "sqlite":
+            player = _lock_user_row(db, user_id)
+            giveaway = query.first()
+        else:
+            giveaway = query.first()
+            player = _lock_user_row(db, user_id)
+        now = datetime.utcnow()
+        if not giveaway or giveaway.status != "running" or not giveaway.start_time <= now < giveaway.end_time:
+            return {"ok": False, "message": "Entries are closed for this giveaway."}, 409
+        if player.is_banned or player.needs_debut:
+            return {"ok": False, "message": "This account cannot enter."}, 403
+        if giveaway.require_min_activity and (player.matches_played or 0) < 1:
+            return {"ok": False, "message": "Complete an eligible match before entering."}, 403
+        cfg = db.query(GameConfig).populate_existing().first()
+        if not cfg or cfg.official_group_id != group_id:
+            return {"ok": False, "message": "Group settings changed. Try again."}, 409
+        status = giveaway_service.record_entry(db, giveaway, player, telegram_id)
+        if status == "error":
+            return {"ok": False, "message": "Could not enter the giveaway."}, 503
+        if status == "joined":
+            db.commit()
+        return {"ok": True, "joined": True}
+    finally:
+        db.close()
+
+
 @app.route("/api/webapp/init", methods=["POST"])
 @csrf_exempt
 def webapp_init():
@@ -4863,6 +5063,9 @@ def webapp_init():
         from models import UserStats
         from services import ad_service, quota_service as _quota_service
         stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
+        if stats is None:
+            stats = _locked_stats(db, user.id)
+            db.commit()
         from config import GSPIN_COOLDOWN, DAILY_COOLDOWN
         from services.command_config_service import get_user_cooldown
         gspin_quota = _quota_service.get_quota_status(stats, "spin", session=db, user=user)
@@ -4899,9 +5102,12 @@ def webapp_init():
                                   "bowl_team": st.get("bowl_team_name", "")}
         except Exception:
             logger.exception("live_match lookup failed (non-fatal)")
+        from models import MiniappGift
+        unclaimed_gifts = db.query(MiniappGift).filter_by(user_id=user.id, claimed_at=None).count()
         return {
             "ok": True,
             "live_match": live_match,
+            "unclaimed_gifts": unclaimed_gifts,
             "user": {
                 "user_id": user.id,
                 "telegram_id": user.telegram_id,
@@ -5097,6 +5303,42 @@ def _get_live_tournament_safe(db):
         return {"live": False, "tournaments": []}
 
 
+@app.route("/api/webapp/tournament/directory", methods=["POST"])
+@csrf_exempt
+def webapp_tournament_directory():
+    from services.tournament_webapp import directory
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, _, telegram_id = auth
+    try:
+        return directory(db, telegram_id)
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/tournament/team", methods=["POST"])
+@csrf_exempt
+def webapp_tournament_team():
+    from services import tournament_webapp as tw
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, _, _ = auth
+    try:
+        data = request.get_json(silent=True)
+        if (not isinstance(data, dict) or any(type(data.get(k)) is not int or not 0 < data[k] < 2**31
+                                               for k in ("tournament_id", "team_id"))):
+            return {"ok": False, "message": "Select a valid tournament team."}, 400
+        tour = tw.resolve_visible(db, data["tournament_id"], include_completed=True)
+        roster = tw.team_roster(db, tour, data["team_id"]) if tour else None
+        if roster is None:
+            return {"ok": False, "message": "Team unavailable."}, 404
+        return {"ok": True, "players": roster}
+    finally:
+        db.close()
+
+
 @app.route("/api/webapp/tournament", methods=["POST"])
 @csrf_exempt
 def webapp_tournament():
@@ -5112,13 +5354,14 @@ def webapp_tournament():
         from services import tournament_webapp as tw
         data = request.get_json(silent=True) or {}
         live = tw.live_summary(db)
-        tour = tw.resolve_live(db, data.get("tournament_id"))
+        tour = tw.resolve_visible(db, data.get("tournament_id"), data.get("archive") is True)
         if tour is None:
             return {"ok": True, "live": False, "live_tournaments": live["tournaments"]}
         # Results persist standings and player stats when recorded. Opening a
         # read view must not rebuild them or reconcile record publications.
         payload = tw.tournament_payload(db, tour, tg_id=tg_id)
-        return {"ok": True, "live": True, "live_tournaments": live["tournaments"],
+        archived = tour.status == "completed"
+        return {"ok": True, "live": not archived, "archive": archived, "live_tournaments": live["tournaments"],
                 **payload}
     except Exception as e:
         db.rollback()
@@ -5139,7 +5382,7 @@ def webapp_tournament_stats():
     try:
         from services import tournament_webapp as tw
         data = request.get_json(silent=True) or {}
-        tour = tw.resolve_live(db, data.get("tournament_id"))
+        tour = tw.resolve_visible(db, data.get("tournament_id"), data.get("archive") is True)
         if tour is None:
             return {"ok": False, "live": False,
                     "message": "This tournament is not live."}, 404
@@ -5163,7 +5406,7 @@ def webapp_tournament_match():
     try:
         from services import tournament_webapp as tw
         data = request.get_json(silent=True) or {}
-        tour = tw.resolve_live(db, data.get("tournament_id"))
+        tour = tw.resolve_visible(db, data.get("tournament_id"), data.get("archive") is True)
         if tour is None:
             return {"ok": False, "message": "This tournament is not live."}, 404
         out = tw.fixture_scorecard(db, tour, data.get("fixture_id"), user.id)
@@ -5353,7 +5596,7 @@ def webapp_search():
         min_r = int(data.get("min_rating") or 0)
         max_r = int(data.get("max_rating") or 100)
         category = (data.get("category") or "").strip()
-        limit = min(50, int(data.get("limit") or 20))
+        limit = max(1, min(50, int(data.get("limit") or 20)))
 
         query = not_career(db.query(Player).filter(Player.is_active == True))
         if q:
@@ -5456,7 +5699,7 @@ def _team_locked_response(db, user, action="change your Playing XI", market=Fals
     the error code to buying/selling.
     """
     from services.roster_lock import active_match_for
-    if not active_match_for(db, user.id):
+    if not active_match_for(db, user.id, strict=True):
         return None
     error = "market_locked" if market else "match_in_progress"
     return {"ok": False, "error": error,
@@ -5562,7 +5805,7 @@ def _release_prompt_open(tg_id):
             return None
     except Exception:
         logger.exception("webapp release: pending-prompt check failed")
-        return None
+        return {"ok": False, "error": "release_unavailable", "message": "Try selling again shortly."}, 503
     return {"ok": False, "error": "release_pending",
             "message": "You already have a release waiting for confirmation in "
                        "chat. Confirm or cancel it first."}, 409
@@ -5617,31 +5860,11 @@ def webapp_release(roster_id):
         player_name = player.name
         player_rating = player.rating
 
-        # Selling a player never destroys the traits equipped on them — each one
-        # goes back to this user's inventory at its current level (same rule as
-        # the chat /release), so they can be re-applied via /traitapply.
-        from services.trait_service import return_traits_to_inventory
-        traits_returned = return_traits_to_inventory(db, row.id)
-
-        # Remove from roster
-        db.delete(row)
-        user.total_coins = (user.total_coins or 0) + sell_value
-        user.roster_count = max(0, (user.roster_count or 0) - 1)
-
-        # Activity log + undo
-        try:
-            from services.activity_service import log_activity
-            log_activity(db, user.id, "release",
-                         f"[MiniApp] Released {player_name} ({player_rating})",
-                         coins_change=sell_value,
-                         player_name=player_name, player_rating=player_rating)
-        except Exception:
-            pass
-        from services.undo_service import record_release
-        record_release(db, user.id, items=[{
-            "player_id": player.id, "player_name": player_name,
-            "rating": player_rating, "price": sell_value,
-        }], total_refund=sell_value)
+        from handlers.release import _do_release
+        result = _do_release(db, user, [(row, player)])
+        if not result["success"]:
+            return {"ok": False, "error": result["error"], "message": result["message"]}, 409
+        traits_returned = result["traits_returned"]
 
         db.commit()
         post_miniapp_activity(user, "sell_player",
@@ -5690,22 +5913,19 @@ def webapp_release_multi():
         from config import get_sell_value
 
         data = request.get_json(silent=True) or {}
-        ids = data.get("roster_ids") or []
-        if not isinstance(ids, list) or not ids:
-            return {"ok": False, "error": "no_ids",
-                    "message": "No players selected."}, 400
-        # Sanitize
-        try:
-            ids = [int(x) for x in ids][:25]  # cap at 25 to prevent abuse
-        except (ValueError, TypeError):
-            return {"ok": False, "error": "bad_ids"}, 400
-
+        ids = data.get("roster_ids") if isinstance(data, dict) else None
+        if not isinstance(ids, list) or not 1 <= len(ids) <= 25:
+            return {"ok": False, "error": "bad_ids",
+                    "message": "Select between 1 and 25 players."}, 400
+        if any(type(value) is not int or not 0 < value < 2**63 for value in ids):
+            return {"ok": False, "error": "bad_ids", "message": "Invalid roster selection."}, 400
+        ids = set(ids)
         rows = (db.query(UserRoster)
                 .filter(UserRoster.user_id == user.id,
                         UserRoster.id.in_(ids)).all())
-        if not rows:
+        if len(rows) != len(ids):
             return {"ok": False, "error": "not_found",
-                    "message": "None of those players are in your roster."}, 404
+                    "message": "Your selection changed. Refresh your squad and select again."}, 409
 
         # Bail if captain is in the selection
         if user.captain_roster_id and any(r.id == user.captain_roster_id for r in rows):
@@ -5717,53 +5937,17 @@ def webapp_release_multi():
         players = {p.id: p for p in
                    db.query(Player).filter(Player.id.in_(player_ids)).all()}
 
-        # Career Players can't be sold. Refuse the whole selection rather than
-        # silently selling everything else the user ticked.
-        career = next((p for p in players.values()
-                       if getattr(p, "is_career", False)), None)
-        if career is not None:
-            from services.career_service import CAREER_LOCKED_MESSAGE
-            return {"ok": False, "error": "career_player",
-                    "message": f"{CAREER_LOCKED_MESSAGE} Deselect "
-                               f"{career.name} and try again."}, 400
+        if len(players) != len(set(player_ids)):
+            return {"ok": False, "error": "player_missing", "message": "Refresh your squad and try again."}, 409
 
-        # Traits equipped on any of the sold players return to the user's
-        # inventory at their current level before the rows are deleted.
-        from services.trait_service import return_traits_to_inventory
-        traits_returned = return_traits_to_inventory(db, [r.id for r in rows])
-
-        total_coins = 0
-        released = []
-        for r in rows:
-            p = players.get(r.player_id)
-            if not p: continue
-            sv = get_sell_value(p.rating)
-            total_coins += sv
-            released.append({
-                "roster_id": r.id,
-                "name": p.name,
-                "rating": p.rating,
-                "sell_value": sv,
-            })
-            db.delete(r)
-
-        from services.undo_service import record_release
-        record_release(db, user.id, items=[{
-            "player_id": r.player_id, "player_name": players[r.player_id].name,
-            "rating": players[r.player_id].rating,
-            "price": get_sell_value(players[r.player_id].rating),
-        } for r in rows if r.player_id in players], total_refund=total_coins)
-
-        user.total_coins = (user.total_coins or 0) + total_coins
-        user.roster_count = max(0, (user.roster_count or 0) - len(released))
-
-        try:
-            from services.activity_service import log_activity
-            log_activity(db, user.id, "release_multi",
-                         f"[MiniApp] Released {len(released)} players",
-                         coins_change=total_coins)
-        except Exception:
-            pass
+        from handlers.release import _do_release
+        result = _do_release(db, user, [(r, players[r.player_id]) for r in rows])
+        if not result["success"]:
+            return {"ok": False, "error": result["error"], "message": result["message"]}, 400
+        total_coins = result["total_coins"]
+        traits_returned = result["traits_returned"]
+        released = [{"roster_id": row.id, "name": item["name"], "rating": item["rating"],
+                     "sell_value": item["value"]} for row, item in zip(rows, result["released"])]
 
         db.commit()
         post_miniapp_activity(user, "sell_multi",
@@ -5795,17 +5979,15 @@ def webapp_roster():
         return err
     db, user, tg_id = auth
     try:
-        from models import UserRoster
         from config import get_sell_value
-        rows = (db.query(UserRoster, Player)
-                .join(Player, UserRoster.player_id == Player.id)
-                .filter(UserRoster.user_id == user.id)
-                .order_by(UserRoster.order_position.asc()).all())
+        from services.roster_service import get_roster_ordered
+        rows = get_roster_ordered(db, user.id)
         return {
             "ok": True,
             "roster": [{
                 "roster_id": r.id,
                 "position": r.order_position,
+                "xi_slot": position if position <= 11 else None,
                 "player_id": p.id,
                 "card_url": _player_card_url(p.id),
                 "name": p.name,
@@ -5818,7 +6000,7 @@ def webapp_roster():
                 # sold — the UI uses this to badge the card and hide Sell.
                 "is_career": bool(getattr(p, "is_career", False)),
                 "sell_value": get_sell_value(p.rating),
-            } for r, p in rows],
+            } for position, (r, p) in enumerate(rows, 1)],
             "captain_roster_id": user.captain_roster_id,
             "count": len(rows),
             "max": MAX_ROSTER,
@@ -5826,6 +6008,38 @@ def webapp_roster():
     except Exception as e:
         logger.exception("webapp_roster failed")
         return {"ok": False, "error": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/roster/captain", methods=["POST"])
+@csrf_exempt
+def webapp_set_captain():
+    from services.roster_service import get_roster_ordered
+    from services.activity_service import log_activity
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, user, _ = auth
+    try:
+        data = request.get_json(silent=True)
+        roster_id = data.get("roster_id") if isinstance(data, dict) else None
+        if type(roster_id) is not int or not 0 < roster_id < 2**31:
+            return {"ok": False, "message": "Choose a player from your Playing XI."}, 400
+        user = _lock_user_row(db, user.id)
+        blocked = _team_locked_response(db, user, "change your captain")
+        if blocked:
+            return blocked
+        row = next(((entry, player) for entry, player in get_roster_ordered(db, user.id)[:11]
+                    if entry.id == roster_id and player.is_active), None)
+        if row is None:
+            return {"ok": False, "message": "Choose a player from your Playing XI."}, 404
+        _, player = row
+        if user.captain_roster_id != roster_id:
+            user.captain_roster_id = roster_id
+            log_activity(db, user.id, "captain", f"Captain: {player.name}", player_name=player.name)
+            db.commit()
+        return {"ok": True, "captain_roster_id": roster_id, "name": player.name}
     finally:
         db.close()
 
@@ -5993,7 +6207,7 @@ def webapp_spin():
         data = request.get_json(silent=True) or {}
         ad_token = (data.get("ad_token") or "").strip()
         request_id = (str(data.get("request_id") or "")).strip()[:64]
-        dev_mode = (_os.getenv("WEBAPP_DEV_MODE") == "1")
+        dev_mode = (webapp_test_mode())
         ads_configured = ad_service.is_configured()
 
         # A client that retries after a dropped response gets the reward it was
@@ -6005,10 +6219,7 @@ def webapp_spin():
                 return dict(cached, replayed=True)
 
         # ── Load stats first to check quota ──
-        stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
-        if not stats:
-            stats = UserStats(user_id=user.id)
-            db.add(stats); db.flush()
+        stats = _locked_stats(db, user.id)
 
         # ── Which slot is this spin spending? ──
         # The free one is decided without touching any ad evidence: claiming a
@@ -6030,11 +6241,7 @@ def webapp_spin():
 
         ad_provided = bool(verified_via)
 
-        # Track ad_watched for the daily quest — ONLY for postback/mock.
-        # client_token (CT-) ads were already tracked at /ad-completed, a
-        # no-fill pass means no ad was ever shown, and a credit was counted when
-        # it was banked.
-        if verified_via in ("server_postback", "mock"):
+        if verified_via == "mock":
             try:
                 from services.quest_service import safe_track
                 safe_track(db, user.id, "ad_watched", 1)
@@ -6116,6 +6323,7 @@ def webapp_spin():
             pass
 
         db.commit()
+        reward_committed = True
         post_miniapp_activity(user, "gspin", reward=result)
         payload = {
             "ok": True,
@@ -6149,7 +6357,7 @@ def webapp_spin():
         # the ad has been verified, so a failure before that banks nothing.
         banked = False
         try:
-            verified = locals().get("verified_via")
+            verified = None if locals().get("reward_committed") else locals().get("verified_via")
             banked = _bank_if_spendable(db, tg_id, bool(verified), verified,
                                         f"spin error: {e}")
         except Exception:
@@ -6166,42 +6374,15 @@ def webapp_spin():
 @app.route("/api/webapp/ad-completed", methods=["POST"])
 @csrf_exempt
 def webapp_ad_completed():
-    """Called by client after the ad SDK's show() promise resolves.
-
-    Returns a single-use token the client immediately passes to /api/webapp/spin.
-    This is the client-side verification fallback used when server-side
-    postback isn't available (small apps, dev mode, etc).
-
-    The ad is also written to the ledger here, and the token addresses that row
-    rather than standing in for it. That is what makes a watched ad survive a
-    restart, an expired token, a lost response or a refused reward — see
-    ``ad_service.register_client_ad``.
-    """
+    """Report whether a server-confirmed reward is available for this account."""
     auth, tg_id, err = _webapp_auth()
     if err:
         return err
     db, user, tg_id = auth
     try:
         from services import ad_service
-        token = ad_service.issue_client_token(tg_id, session=db)
-        # Track for the "watch N ads" daily quest. This endpoint fires once per
-        # completed ad (the SDK promise resolves only on a full view).
-        try:
-            from services.quest_service import safe_track
-            safe_track(db, user.id, "ad_watched", 1)
-            db.commit()
-        except Exception:
-            db.rollback()
-        try:
-            from services.activity_service import log_activity
-            log_activity(db, user.id, "ad_watched", "Completed rewarded ad in Mini App")
-            db.commit()
-        except Exception:
-            db.rollback()
-        # ads_saved lets the client tell the player their ad is banked even if
-        # this response is the last thing that reaches them.
-        return {"ok": True, "ad_token": token,
-                "ads_saved": ad_service.count_credits(db, tg_id)}
+        saved = ad_service.count_credits(db, tg_id)
+        return {"ok": True, "confirmed": saved > 0, "ads_saved": saved}
     finally:
         db.close()
 
@@ -6237,17 +6418,7 @@ def webapp_ad_unavailable():
         data = request.get_json(silent=True) or {}
         kind = "daily" if (data.get("kind") or "spin") == "daily" else "spin"
 
-        # Lock the row for the read-check-increment below. Without it two
-        # concurrent calls both read the same remaining grace and both get a
-        # token, so one pass pays for two spins. Ignored on SQLite, which has no
-        # row locks and doesn't need them (single writer).
-        stats = (db.query(UserStats)
-                 .filter(UserStats.user_id == user.id)
-                 .with_for_update()
-                 .first())
-        if not stats:
-            stats = UserStats(user_id=user.id)
-            db.add(stats); db.flush()
+        stats = _locked_stats(db, user.id)
 
         granted, status = quota_service.claim_nofill_pass(
             stats, kind, session=db, user=user)
@@ -6282,26 +6453,8 @@ def webapp_ad_unavailable():
 
 
 def _locked_stats(db, user_id):
-    """Re-read a UserStats row with the DB row lock held (Postgres).
-
-    Deciding a quota slot and consuming it must be one step, or two concurrent
-    requests both read the same free/ad/gap state and both spend it. Callers
-    take this immediately before ``can_use`` — ad verification runs earlier and
-    commits, which would release a lock taken any sooner.
-
-    ``with_for_update`` is a no-op on SQLite, which needs no row locks (single
-    writer); same reasoning as /api/webapp/ad-unavailable.
-
-    ``populate_existing`` is what makes the lock mean anything, and leaving it
-    out was the multi-claim bug: this request already loaded the same UserStats
-    row a few lines earlier, so SQLAlchemy answered the locked re-read out of
-    the identity map WITHOUT overwriting the attributes it had. The FOR UPDATE
-    did block until the other request committed — and then handed back the
-    pre-commit values anyway, so a second rapid tap read ``daily_free_used ==
-    False``, was granted the free slot again, and claimed a second lot of coins
-    and gems. ``populate_existing`` forces the refresh, so the decision is made
-    on what is actually in the row.
-    """
+    """Lock the wallet first, including when a new stats row must be created."""
+    _lock_user_row(db, user_id)
     from models import UserStats
     stats = (db.query(UserStats)
              .filter(UserStats.user_id == user_id)
@@ -6327,8 +6480,7 @@ def _bank_if_spendable(db, tg_id, ad_provided, verified_via, reason):
     """
     if ad_provided and verified_via != "nofill_pass":
         from services import ad_service
-        ad_service.bank_credit(db, tg_id, reason)
-        return True
+        return ad_service.bank_credit(db, tg_id, reason) is not None
     return False
 
 
@@ -6374,7 +6526,7 @@ def _verify_ad_for_action(db, tg_id, ad_token, dev_mode, ads_configured,
         if ad_service.consume_nofill_token(ad_token, tg_id, nofill_kind):
             return "nofill_pass"
     if ad_token and ad_token.startswith("MOCK-"):
-        if dev_mode or not ads_configured:
+        if dev_mode:
             return "mock"
     if allow_credit and ad_service.claim_credit(db, tg_id):
         return "ad_credit"
@@ -6415,13 +6567,10 @@ def webapp_daily():
 
         data = request.get_json(silent=True) or {}
         ad_token = (data.get("ad_token") or "").strip()
-        dev_mode = (_os.getenv("WEBAPP_DEV_MODE") == "1")
+        dev_mode = (webapp_test_mode())
         ads_configured = ad_service.is_configured()
 
-        stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
-        if not stats:
-            stats = UserStats(user_id=user.id)
-            db.add(stats); db.flush()
+        stats = _locked_stats(db, user.id)
 
         # ── Verify ad (so we know which slot is available) ──
         # Only when the free claim is gone: verifying first would consume a
@@ -6435,10 +6584,7 @@ def webapp_daily():
                 nofill_kind="daily")
         ad_provided = bool(verified_via)
 
-        # Track ad_watched for daily quest — postback/mock only
-        # (CT- tracked at /ad-completed, a no-fill pass showed no ad, and a
-        # credit was counted when it was banked).
-        if verified_via in ("server_postback", "mock"):
+        if verified_via == "mock":
             try:
                 from services.quest_service import safe_track
                 safe_track(db, user.id, "ad_watched", 1)
@@ -6504,6 +6650,7 @@ def webapp_daily():
 
         quota_service.consume_slot(stats, "daily", slot_type, session=db, user=user)
         db.commit()
+        reward_committed = True
         post_miniapp_activity(user, "daily",
                               coins=result.get("coins"), gems=result.get("gems"),
                               streak=result.get("streak"),
@@ -6544,7 +6691,7 @@ def webapp_daily():
         # rather than lost when the claim falls over mid-flight.
         banked = False
         try:
-            verified = locals().get("verified_via")
+            verified = None if locals().get("reward_committed") else locals().get("verified_via")
             banked = _bank_if_spendable(db, tg_id, bool(verified), verified,
                                         f"daily error: {e}")
         except Exception:
@@ -7149,7 +7296,7 @@ def webapp_freepack_open():
         data = request.get_json(silent=True) or {}
         ad_token = (data.get("ad_token") or "").strip()
 
-        dev_mode = os.getenv("WEBAPP_DEV_MODE") == "1"
+        dev_mode = webapp_test_mode()
         ads_configured = ad_service.is_configured()
 
         # Locked + refreshed so the cooldown is judged on the committed
@@ -7188,9 +7335,10 @@ def webapp_freepack_open():
                     "ads_saved": ad_service.count_credits(db, tg_id),
                     "ads_configured": ads_configured}, 400
 
-        # Track ad_watched for the daily quest — ONLY postback/mock
-        # (CT- already tracked at /ad-completed).
-        if verified_via in ("server_postback", "mock"):
+        # Spending a receipt commits its claim, releasing the first lock.
+        stats = _locked_stats(db, user.id)
+
+        if verified_via == "mock":
             try:
                 from services.quest_service import safe_track
                 safe_track(db, user.id, "ad_watched", 1)
@@ -7211,6 +7359,7 @@ def webapp_freepack_open():
             return result, 400
 
         db.commit()
+        reward_committed = True
         post_miniapp_activity(user, "open_pack", pack_name="Free Pack",
                               players=[result.get("player")] if result.get("player") else [])
         result["balance"] = {
@@ -7229,7 +7378,7 @@ def webapp_freepack_open():
         # cannot bring it back, because claiming the evidence commits.
         banked = False
         try:
-            verified = locals().get("verified_via")
+            verified = None if locals().get("reward_committed") else locals().get("verified_via")
             banked = _bank_if_spendable(db, tg_id, bool(verified), verified,
                                         f"free pack error: {e}")
         except Exception:
@@ -7335,31 +7484,39 @@ def webapp_packs_buy():
                 "message": "A pack purchase is already going through — hang tight."}, 409
     try:
         from models import Pack
-        from services.pack_service import buy_pack, get_user_pack_purchases_today
-        data = request.get_json(silent=True) or {}
-        try:
-            pack_id = int(data.get("pack_id") or 0)
-        except (ValueError, TypeError):
+        from services.pack_service import buy_pack
+        import re
+        data = request.get_json(silent=True)
+        if (not isinstance(data, dict) or type(data.get("pack_id")) is not int
+                or not 0 < data["pack_id"] < 2**31):
             return {"ok": False, "error": "bad_id"}, 400
-        pack = db.query(Pack).filter(Pack.id == pack_id, Pack.is_active == True).first()
+        request_id = data.get("request_id")
+        if "request_id" in data and (not isinstance(request_id, str)
+                or not re.fullmatch(r"[a-zA-Z0-9_-]{12,64}", request_id)):
+            return {"ok": False, "error": "bad_request_id"}, 400
+        pack = db.get(Pack, data["pack_id"])
         if not pack:
             return {"ok": False, "error": "not_found", "message": "Pack not found."}, 404
-
-        # Daily limit check
-        if pack.daily_limit and pack.daily_limit > 0:
-            bought = get_user_pack_purchases_today(db, user.id, pack.id)
-            if bought >= pack.daily_limit:
-                return {"ok": False, "error": "daily_limit",
-                        "message": f"Daily limit reached for {pack.name} ({pack.daily_limit}/day)."}, 400
-
-        result = buy_pack(db, user, pack)
+        payment = data.get("payment")
+        if "payment" in data and payment not in ("coins", "quest_points", "gems", "free"):
+            return {"ok": False, "error": "bad_payment"}, 400
+        expected_cost = data.get("expected_cost")
+        if "expected_cost" in data and type(expected_cost) is not int:
+            return {"ok": False, "error": "bad_quote"}, 400
+        result = buy_pack(db, user, pack, request_id=request_id, payment=payment, expected_cost=expected_cost)
         if not result.get("success"):
             db.rollback()
-            return {"ok": False, "error": "buy_failed",
+            return {"ok": False, "error": result.get("error", "buy_failed"),
                     "message": result.get("message", "Could not buy pack.")}, 400
-
+        if not result.get("replayed"):
+            from services.activity_service import log_activity
+            amount, paid_in = result["cost_paid"], result["currency"]
+            log_activity(db, user.id, "buy_pack", f"Bought {pack.name}",
+                         coins_change=-amount if paid_in == "coins" else 0,
+                         gems_change=-amount if paid_in == "gems" else 0)
         db.commit()
-        post_miniapp_activity(user, "buy_pack", pack_name=pack.name)
+        if not result.get("replayed"):
+            post_miniapp_activity(user, "buy_pack", pack_name=pack.name)
         return {
             "ok": True,
             "inventory_id": result.get("inventory_id"),
@@ -7475,7 +7632,7 @@ def webapp_market():
         return err
     db, user, tg_id = auth
     try:
-        from models import GlobalPlayerMarket, UserRoster
+        from models import GlobalPlayerMarket
         from services.global_market import (
             ensure_player_market_fresh, is_sold_out, is_unlimited,
         )
@@ -7492,10 +7649,8 @@ def webapp_market():
         players = {p.id: p for p in
                    db.query(Player).filter(Player.id.in_(pids)).all()} if pids else {}
 
-        # Pull owned player ids
-        owned = {pid for (pid,) in
-                 db.query(UserRoster.player_id)
-                   .filter(UserRoster.user_id == user.id).all()}
+        from services.version_service import user_owns_any_version
+        from services.global_market import first_signing_available
 
         # Free, Bronze and Silver see and pay the slot's sell price (== base
         # price); the discount is a membership perk (Platinum 5%, Diamond 10%).
@@ -7506,7 +7661,8 @@ def webapp_market():
         results = []
         for s in slots:
             p = players.get(s.player_id)
-            if not p: continue
+            if not p or not p.is_active or p.is_career:
+                continue
             # Floored at resale value — see global_market.player_slot_prices.
             sell_price, eff_price = player_slot_prices(user, s, p)
             # Struck-through original + "-N%" badge, shown only to tiers that
@@ -7528,14 +7684,15 @@ def webapp_market():
                 "discount_pct": disc,
                 # Gems paid back on purchase, sized on what this buyer pays.
                 # 0 while the Elite Signing Bonus offer isn't running.
-                "gem_bonus": offer.gems_for(p.rating, eff_price),
+                "gem_bonus": (offer.gems_for(p.rating, eff_price)
+                              if offer.active and first_signing_available(db, user.id, s) else 0),
                 "quantity": s.quantity,
                 "purchased_count": s.purchased_count,
                 # quantity 0 = unlimited stock, so this is never True for the
                 # default listing — see services.global_market.is_sold_out.
                 "sold_out": is_sold_out(s),
                 "unlimited": is_unlimited(s),
-                "is_owned": p.id in owned,
+                "is_owned": user_owns_any_version(db, user.id, p.id),
             })
         # How often this market turns over is an admin setting, so the Mini App
         # is told rather than left saying "daily" over a 6-hourly shop.
@@ -7596,11 +7753,20 @@ def webapp_market_buy(slot_id):
 
         # Use the same locked wallet, ownership checks, atomic stock claim and
         # MarketPurchase receipt as the chat market.
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return {"ok": False, "error": "bad_quote"}, 400
+        for field in ("expected_price", "expected_player_id"):
+            if field in data and type(data[field]) is not int:
+                return {"ok": False, "error": "bad_quote"}, 400
         balance_before = user.total_coins or 0
         ok, message, gem_bonus = buy_player(
-            db, user, slot.slot_index, expected_slot_id=slot_id)
+            db, user, slot.slot_index, expected_slot_id=slot_id,
+            expected_price=data.get("expected_price"), expected_player_id=data.get("expected_player_id"))
         if not ok:
             db.rollback()
+            if message == "Listing changed. Review the new offer.":
+                return {"ok": False, "error": "listing_changed", "message": message}, 409
             error = "purchase_failed"
             if "already own" in message:
                 error = "already_owned"
@@ -8261,12 +8427,14 @@ def webapp_achievements():
         from services import achievement_service
         # Opportunistically check for newly-met achievements (auto-awards)
         try:
+            user = _lock_user_row(db, user.id)
             achievement_service.safe_check_and_award(db, user.id)
             db.commit()
         except Exception:
             db.rollback()
 
         items = achievement_service.get_user_achievements_with_progress(db, user.id)
+        progress = achievement_service.progress_snapshot(db, user)
         # Group by category
         groups = {}
         unlocked_count = 0
@@ -8284,6 +8452,7 @@ def webapp_achievements():
                 "coins": a.get("coins", 0),
                 "gems": a.get("gems", 0),
                 "unlocked": a["unlocked"],
+                "progress": progress.get(a["key"]),
                 "unlocked_at": a["unlocked_at"].isoformat() if a.get("unlocked_at") else None,
             })
         return {
@@ -10489,19 +10658,8 @@ def _tg_call(method, json_body=None, params=None, timeout=8):
         return None
 
 
-def _user_in_chat(chat_id, user_tg_id):
-    """Return True if ``user_tg_id`` may be echoed to group ``chat_id``.
-
-    Validates an UNSIGNED launch-origin hint before trusting it. Results are
-    cached briefly so repeated Mini App actions don't hammer getChatMember.
-
-    FAIL-OPEN: this only returns False when Telegram EXPLICITLY reports the user
-    is not in the chat (``left``/``kicked``, or a definitive "not found"/"not a
-    member" API error). On a transport error / timeout / unknown response it
-    returns True, so a flaky membership check can never be the reason a real
-    activity message fails to post. The worst case is a rate-limited, benign
-    activity line echoed to a group the bot is already in.
-    """
+def _user_in_chat(chat_id, user_tg_id, *, use_cache=True):
+    """Check group membership before relaying a player’s activity to that group."""
     import os as _os
     import time as _time
     if not chat_id or not user_tg_id:
@@ -10514,22 +10672,16 @@ def _user_in_chat(chat_id, user_tg_id):
     now = _time.time()
     with _CHAT_MEMBER_CACHE_LOCK:
         hit = _CHAT_MEMBER_CACHE.get(key)
-        if hit and (now - hit[1]) < _CHAT_MEMBER_TTL:
+        if use_cache and hit and (now - hit[1]) < _CHAT_MEMBER_TTL:
             return hit[0]
     j = _tg_call("getChatMember",
                  params={"chat_id": chat_id, "user_id": user_tg_id}, timeout=6)
-    ok = True  # fail-open default (no/unknown response → allow)
-    if j and j.get("ok"):
-        status = (j.get("result") or {}).get("status")
-        # Definitive membership answer — block only the clear non-members.
-        ok = status not in ("left", "kicked")
-    elif j:
-        desc = (j.get("description") or "").lower()
-        # Definitive "this user isn't here" → block; anything else → allow.
-        if ("not found" in desc or "user not found" in desc
-                or "member list is inaccessible" in desc
-                or "user_not_participant" in desc):
-            ok = False
+    if not j or not j.get("ok"):
+        return False
+    member = j.get("result") or {}
+    status = member.get("status")
+    ok = status in {"creator", "administrator", "member"} or (
+        status == "restricted" and member.get("is_member") is True)
     with _CHAT_MEMBER_CACHE_LOCK:
         if len(_CHAT_MEMBER_CACHE) > 5000:
             _CHAT_MEMBER_CACHE.clear()
@@ -10674,23 +10826,10 @@ def _parse_origin_chat(start_param):
 
 
 def _origin_group_chat_id():
-    """Return the group/supergroup chat id the Mini App was launched from, or
-    None for private DM / unknown launches.
-
-    Resolution order (mirrors UnderCover's Drop flow, which reads start_param
-    client-side and forwards the chat id to the backend):
-      1. ``start_param`` inside the HMAC-signed initData (trusted).
-      2. The ``X-Tg-Start-Param`` request header the frontend forwards from
-         ``initDataUnsafe.start_param`` — some Telegram clients deliver the launch
-         param only as a URL fragment and omit it from the signed initData. This
-         is unsigned, so it is honoured only after a fail-open membership check
-         (``_user_in_chat``) confirms the user isn't an obvious outsider.
-    Only negative (group/supergroup) ids are returned. In dev mode an
-    ``origin_chat_id`` request-body override is accepted for testing.
-    """
+    """Read the launch destination. The sender checks membership before posting."""
     import os as _os
 
-    if _os.getenv("WEBAPP_DEV_MODE") == "1":
+    if webapp_test_mode():
         try:
             data = request.get_json(silent=True) or {}
             dev_cid = int(data.get("origin_chat_id") or 0)
@@ -10712,18 +10851,8 @@ def _origin_group_chat_id():
     if not verified:
         return None
 
-    # 1. Trusted: signed initData start_param.
-    signed = _parse_origin_chat(verified.get("start_param"))
-    if signed is not None:
-        return signed
-
-    # 2. Unsigned client hint, membership-gated (fail-open).
-    client = _parse_origin_chat(request.headers.get("X-Tg-Start-Param"))
-    if client is not None:
-        tg_id = get_user_id(verified)
-        if tg_id and _user_in_chat(client, tg_id):
-            return client
-    return None
+    return (_parse_origin_chat(verified.get("start_param"))
+            or _parse_origin_chat(request.headers.get("X-Tg-Start-Param")))
 
 
 def _miniapp_activity_keyboard(chat_id):
@@ -10774,6 +10903,8 @@ def post_miniapp_activity(user, action, **ctx):
         import time as _time
         now = _time.time()
         tg_id = getattr(user, "telegram_id", None)
+        if not _user_in_chat(chat_id, tg_id):
+            return
         key = (chat_id, tg_id)
         with _ACTIVITY_THROTTLE_LOCK:
             last = _ACTIVITY_THROTTLE.get(key, 0)
@@ -12481,24 +12612,10 @@ def ads_config():
 @app.route("/api/adsgram/reward", methods=["GET"])
 @csrf_exempt
 def ads_postback():
-    """Adsgram server-to-server postback endpoint.
-
-    Adsgram fires a GET here after a user finishes watching a rewarded ad.
-    We log it; the spin/daily endpoint claims it later (within
-    ``POSTBACK_WINDOW_SECONDS``).
-
-    Configure the reward URL in your network's dashboard as:
-
-      https://your-app.example.com/api/ads/reward?userid=[userId]
-
-    Adsgram substitutes ``[userId]`` with the Telegram id before making the
-    request. ``/api/adsgram/reward`` points here too, so a block configured
-    with the older URL keeps working untouched.
-
-    No auth — Adsgram doesn't sign these requests; the security model is
-    "obscurity of the URL + the per-cycle ad quota", and a postback only ever
-    unlocks a slot the user already had.
-    """
+    """Accept reward callbacks bearing the secret configured in the ad unit."""
+    from services import ad_service
+    if not ad_service.postback_authorized(request.args.get("secret", "")):
+        return {"ok": False, "error": "unauthorized"}, 403
     try:
         userid_raw = ""
         for param in _POSTBACK_ID_PARAMS:
@@ -12512,6 +12629,9 @@ def ads_postback():
         except ValueError:
             return {"ok": False, "error": "bad_userid"}, 400
 
+        if not 0 < telegram_id < 2**63:
+            return {"ok": False, "error": "bad_userid"}, 400
+
         # Optional: only accept postbacks for users that actually exist
         db = get_session()
         try:
@@ -12521,12 +12641,18 @@ def ads_postback():
                 logger.warning(f"Adsgram postback for unknown user {telegram_id}")
                 return {"ok": True, "note": "user_not_found"}, 200
 
-            from services import ad_service
-            ad_service.record_postback(
-                db, telegram_id,
-                source_ip=request.remote_addr,
-                query_string=request.query_string.decode("utf-8", errors="ignore"),
-            )
+            from models import AdReward
+            from datetime import datetime, timedelta
+            _lock_user_row(db, user.id)
+            recent = datetime.utcnow() - timedelta(seconds=ad_service.MIN_CLIENT_AD_INTERVAL_SECONDS)
+            if db.query(AdReward.id).filter(AdReward.telegram_id == telegram_id,
+                    AdReward.provider == "adsgram", AdReward.received_at >= recent).first():
+                return {"ok": True}
+            receipt = ad_service.record_postback(db, telegram_id, source_ip=request.remote_addr)
+            if receipt.consumed_at is None:
+                from services.quest_service import safe_track
+                safe_track(db, user.id, "ad_watched", 1)
+                db.commit()
             logger.info(f"Adsgram postback recorded for {telegram_id}")
             return {"ok": True}
         finally:
@@ -21598,7 +21724,11 @@ def admin_giveaways():
         from services.giveaway_service import tier_table_text
         auto_cfg = giveaway_auto.get_config(db)
         db.commit()
+        from uuid import uuid4
+        from services.pack_service import list_packs
         return render_template("admin_giveaways.html",
+                               gift_packs=list_packs(db),
+                               gift_request_key=str(uuid4()),
                                giveaways=giveaways, counts=counts,
                                dropdown_options=dropdown_options,
                                auto_cfg=auto_cfg,
@@ -21608,6 +21738,64 @@ def admin_giveaways():
                                tier_table=tier_table_text())
     finally:
         db.close()
+
+
+@app.route("/giveaways/gifts", methods=["POST"])
+@login_required
+def admin_miniapp_gift():
+    from models import MiniappGift, Pack
+    from uuid import UUID
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        recipient = int(request.form.get("telegram_id", ""))
+        currency = request.form.get("currency", "")
+        amount = 1 if currency in _GIFT_ITEM_TYPES else int(request.form.get("amount", ""))
+        item_id = int(request.form.get(f"{currency}_id", "")) if currency in _GIFT_ITEM_TYPES else None
+        request_key = str(UUID(request.form.get("request_key", "")))
+        title = request.form.get("title", "").strip()
+        if not (0 < recipient < 2**63 and 0 < amount < 2**31 and (currency in _GIFT_WALLETS or currency in _GIFT_ITEM_TYPES)
+                and (item_id is None or 0 < item_id < 2**31)
+                and 1 <= len(title) <= 120):
+            raise ValueError
+    except ValueError:
+        flash("Enter a Telegram user ID, title and positive gift amount.", "error")
+        return redirect(url_for("admin_giveaways"))
+
+    db = get_session()
+    try:
+        if db.query(MiniappGift.id).filter_by(request_key=request_key).first():
+            flash("This gift was already sent.", "success")
+            return redirect(url_for("admin_giveaways"))
+        user = db.query(User).filter_by(telegram_id=recipient, is_banned=False, needs_debut=False).first()
+        if user is None:
+            flash("Choose an active player who has completed debut.", "error")
+            return redirect(url_for("admin_giveaways"))
+        if currency in _GIFT_ITEM_TYPES:
+            item = db.get(Player if currency == "player" else Pack, item_id)
+            if not item or not item.is_active or getattr(item, "is_career", False):
+                flash("Choose an active card or pack.", "error")
+                return redirect(url_for("admin_giveaways"))
+        gift = MiniappGift(user_id=user.id, request_key=request_key, title=title,
+                           currency=currency, amount=amount,
+                           player_id=item_id if currency == "player" else None,
+                           pack_id=item_id if currency == "pack" else None)
+        db.add(gift)
+        db.flush()
+        log_admin(db, "send_miniapp_gift", "miniapp_gift", gift.id, title,
+                  f"Telegram user {recipient} · {amount} {currency}")
+        db.commit()
+        flash("Gift sent to the player's Rewards inbox.", "success")
+    except IntegrityError:
+        db.rollback()
+        if db.query(MiniappGift.id).filter_by(request_key=request_key).first():
+            flash("This gift was already sent.", "success")
+        else:
+            logger.exception("miniapp gift send failed")
+            flash("Could not send the gift.", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_giveaways"))
 
 
 @app.route("/giveaways/auto-settings", methods=["POST"])

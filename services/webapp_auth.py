@@ -13,7 +13,7 @@ import hmac
 import json
 import logging
 import time
-from urllib.parse import parse_qsl, unquote
+from urllib.parse import parse_qsl
 
 logger = logging.getLogger(__name__)
 
@@ -32,26 +32,24 @@ def verify_init_data(init_data: str, bot_token: str) -> dict | None:
       A dict with parsed fields (including 'user' as a sub-dict) if valid.
       None if signature is invalid, malformed, or stale.
     """
-    if not init_data or not bot_token:
+    if not init_data or len(init_data) > 16384 or not bot_token:
         return None
 
     try:
         # Parse the query-string-style initData
-        parsed = dict(parse_qsl(init_data, keep_blank_values=True))
-        received_hash = parsed.pop("hash", None)
-        if not received_hash:
+        fields = parse_qsl(init_data, keep_blank_values=True, max_num_fields=64)
+        if any(not key.isidentifier() or "\n" in value for key, value in fields):
             return None
-
-        # Reject stale initData (replay protection)
-        auth_date = parsed.get("auth_date")
-        if auth_date:
-            try:
-                age = time.time() - int(auth_date)
-                if age > MAX_AGE_SECONDS:
-                    logger.warning(f"initData too old: {age:.0f}s")
-                    return None
-            except ValueError:
-                return None
+        parsed = dict(fields)
+        received_hash = parsed.pop("hash", None)
+        if len(fields) != len(parsed) + 1 or not received_hash or not received_hash.isascii():
+            return None
+        auth_date = parsed.get("auth_date", "")
+        if not auth_date.isascii() or not auth_date.isdecimal() or len(auth_date) > 12:
+            return None
+        age = time.time() - int(auth_date)
+        if not -30 <= age <= MAX_AGE_SECONDS:
+            return None
 
         # Build data-check-string per Telegram spec:
         # sorted key=value pairs joined by \n
@@ -92,10 +90,10 @@ def get_user_id(verified_data: dict) -> int | None:
     user = verified_data.get("user")
     if isinstance(user, dict):
         uid = user.get("id")
-        if isinstance(uid, int):
+        if type(uid) is int and 0 < uid < 2**63:
             return uid
-        try:
-            return int(uid)
-        except (ValueError, TypeError):
-            pass
+        if isinstance(uid, str) and uid.isascii() and uid.isdecimal() and len(uid) < 20:
+            value = int(uid)
+            if 0 < value < 2**63:
+                return value
     return None
