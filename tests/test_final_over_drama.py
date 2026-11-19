@@ -332,27 +332,108 @@ def test_fallback_finishing_edge_preserves_all_outcomes():
 
 
 @pytest.mark.parametrize("app", [False, True])
-def test_bowler_prompt_sends_advice_only_to_the_bowling_captain(monkeypatch, app):
-    state = _make_state()
+@pytest.mark.parametrize("bonus_active", [False, True])
+def test_bowler_prompt_sends_advice_only_to_the_bowling_captain(monkeypatch, app, bonus_active):
+    state = _make_state(overs=20)
+    over = 5 if bonus_active else 3
     state.update(chat_id=-901, bowl_user_tg=200, bat_user_tg=300,
-                 play_mode="app" if app else "chat")
-    send = AsyncMock(side_effect=RuntimeError("DM unavailable"))
+                 play_mode="app" if app else "chat", current_over=over,
+                 partnership_runs=62 if bonus_active else 26,
+                 partnership_balls=24 if bonus_active else 12,
+                 over_runs=[18, 18, 14, 12] if bonus_active else [14, 12])
+    if bonus_active:
+        striker = bot_tactics.striker(state)
+        state["bat_stats"][str(striker["roster_id"])].update(runs=50, balls=19)
+    saved, attempted = [], []
+
+    async def save(context, mid, state, **kwargs):
+        saved.append(json.loads(json.dumps(state)))
+
+    async def failed_dm(**kwargs):
+        attempted.append(saved[-1].get("bowling_advice"))
+        raise RuntimeError("DM unavailable")
+
+    send = AsyncMock(side_effect=failed_dm)
     context = SimpleNamespace(bot_data={}, bot=SimpleNamespace(send_message=send))
     public = AsyncMock()
-    monkeypatch.setattr(cp, "_prompt_in_app" if app else "_new_action_message", public)
-    monkeypatch.setattr(cp, "_mark_prompt_delivered", AsyncMock())
+    monkeypatch.setattr(cp, "_new_action_message", public)
+    monkeypatch.setattr(cp, "_ss", save)
+    monkeypatch.setattr(cp, "_arm_timer", lambda *args: None)
     monkeypatch.setattr(cp, "_delete_prev_over", AsyncMock())
     monkeypatch.setattr(bot_tactics, "bowler_edge", lambda state, p: -p["bowl_rating"])
 
     async def prompt_twice():
         await cp._prompt_bowler(context, 1, state)
-        await cp._prompt_bowler(context, 1, state)
+        # A resumed prompt uses the durable reservation from the saved game.
+        resumed = SimpleNamespace(bot_data={}, bot=context.bot)
+        await cp._prompt_bowler(resumed, 1, saved[-1])
 
     asyncio.run(prompt_twice())
     send.assert_awaited_once()
+    assert attempted == [{"innings": 1, "last_over": over, "stands": [0]}]
     assert send.call_args.kwargs["chat_id"] == state["bowl_user_tg"]
-    assert "Bowling advice" in send.call_args.kwargs["text"]
+    text = send.call_args.kwargs["text"]
+    assert "🥶 " in text and "26 runs in the last 2 overs" in text
+    assert ("✨ Partnership bonus +3% scoring" in text) == bonus_active
+    assert ("against 🔥 " in text) == bonus_active
     assert "Bowling advice" not in str(public.call_args_list)
+    assert "26 runs in the last 2 overs" not in str(public.call_args_list)
+
+
+def test_bowling_advice_is_quiet_until_the_current_pair_scores_quickly(monkeypatch):
+    state = _make_state()
+    eligible = cm.eligible_bowlers
+    spy = []
+
+    def checked(state):
+        spy.append(state["current_over"])
+        return eligible(state)
+
+    monkeypatch.setattr(cm, "eligible_bowlers", checked)
+    assert cp._reserve_bowling_matchup_dm(state) is None
+    state.update(current_over=3, partnership_runs=23, partnership_balls=12, over_runs=[11, 12])
+    assert cp._reserve_bowling_matchup_dm(state) is None
+    state.update(partnership_runs=4, partnership_balls=2, over_runs=[14, 12])
+    assert cp._reserve_bowling_matchup_dm(state) is None
+    assert not spy
+
+
+def test_bowling_advice_requires_a_choice_of_bowlers(monkeypatch):
+    state = _make_state()
+    state.update(current_over=3, partnership_runs=26, partnership_balls=12, over_runs=[14, 12])
+    only_bowler = cm.eligible_bowlers(state)[0]
+    monkeypatch.setattr(cm, "eligible_bowlers", lambda state: [only_bowler])
+    assert cp._reserve_bowling_matchup_dm(state) is None
+    assert "bowling_advice" not in state
+
+
+def test_bowling_advice_is_limited_per_stand_and_innings():
+    state = _make_state(overs=20)
+    state.update(current_over=6, partnership_runs=49, partnership_balls=30, over_runs=[7, 8])
+    assert cp._reserve_bowling_matchup_dm(state) is None
+    state["partnership_runs"] = 50
+    assert cp._reserve_bowling_matchup_dm(state)[-1] == "50-run partnership"
+    state.update(current_over=10, partnership_runs=85)
+    assert cp._reserve_bowling_matchup_dm(state) is None
+
+    state.update(current_over=9, partnership_runs=70, partnership_history=[{"runs": 50}])
+    assert cp._reserve_bowling_matchup_dm(state) is None
+    state["current_over"] = 10
+    assert cp._reserve_bowling_matchup_dm(state)[-1] == "70-run partnership"
+    state.update(current_over=14, partnership_history=[{"runs": 50}, {"runs": 70}])
+    assert cp._reserve_bowling_matchup_dm(state) is None
+    state.update(innings=2, current_over=6, partnership_history=[])
+    assert cp._reserve_bowling_matchup_dm(state)[-1] == "70-run partnership"
+
+
+@pytest.mark.parametrize("fmt,overs,runs,balls,reason", [
+    ("The100", 20, 20, 10, "20 runs in the last 10 balls"),
+    ("T20", 10, 30, 20, "30-run partnership"),
+])
+def test_bowling_advice_uses_the_match_format(fmt, overs, runs, balls, reason):
+    state = _make_state(overs=overs, ball_format=fmt)
+    state.update(current_over=5, partnership_runs=runs, partnership_balls=balls, over_runs=[10, 10])
+    assert cp._reserve_bowling_matchup_dm(state)[-1] == reason
 
 
 def test_live_reveals_save_before_send_and_delete_previous_ball(monkeypatch):

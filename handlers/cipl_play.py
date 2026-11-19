@@ -64,7 +64,7 @@ from services import concussion_substitute as medical
 from services import milestones
 from services import rich_message as R
 from engine.approach_modifiers import (
-    BATTING_APPROACHES, BOWLING_APPROACHES,
+    BATTING_APPROACHES, BOWLING_APPROACHES, partnership_scoring_factor,
 )
 from handlers.match import BOT_TG_ID_, _mention
 
@@ -1090,10 +1090,14 @@ async def _mark_prompt_delivered(context, mid, state, delivered, action):
     still rescue.
     """
     state["prompt_delivered"] = bool(delivered)
+    advice = (_reserve_bowling_matchup_dm(state)
+              if delivered and action == A_PICK_CIPL_BOWLER else None)
     await _ss(context, mid, state, next_action=action)
     _arm_timer(context, mid, action)
     if not delivered:
         _schedule_cipl_recovery(context, mid)
+    if advice:
+        await _send_bowling_matchup_dm(context, mid, state, advice)
 
 
 async def _recover_from_error(context, mid, where):
@@ -2492,33 +2496,72 @@ async def _prompt_in_app(context, mid, state, action, actor_tg, lead="",
     await _mark_prompt_delivered(context, mid, state, delivered, action)
 
 
-async def _send_bowling_matchup_dm(context, mid, state):
-    """Send advice to the bowling captain's Telegram user ID."""
+_BOWLING_ADVICE_COOLDOWN = 4  # completed overs or sets between tips
+_BOWLING_ADVICE_PER_INNINGS = 2
+
+
+def _reserve_bowling_matchup_dm(state):
+    """Record an actionable tip in the prompt snapshot before sending it."""
     captain_id = state.get("bowl_user_tg")
     if not isinstance(captain_id, int) or captain_id <= 0 or _bot_bowls(state):
-        return
+        return None
+    over, innings = state["current_over"], state["innings"]
+    if over < 3:
+        return None
+
+    record = state.get("bowling_advice") or {}
+    if record.get("innings") != innings:
+        record = {"innings": innings, "stands": [], "last_over": 0}
+    stand = len(state.get("partnership_history") or [])
+    if (stand in record["stands"] or len(record["stands"]) >= _BOWLING_ADVICE_PER_INNINGS
+            or (record["last_over"] and over - record["last_over"] < _BOWLING_ADVICE_COOLDOWN)):
+        return None
+
+    bpu = cipl_match.balls_per_unit(state)
+    stand_runs = state.get("partnership_runs") or 0
+    milestone = 30 if cipl_match.total_balls(state) <= 60 else 50
+    recent = (state.get("over_runs") or [])[-2:]
+    recent_runs = sum(recent)
+    reasons = []
+    if stand_runs >= milestone:
+        reasons.append(f"{stand_runs}-run partnership")
+    # Measure runs actually scored by the active pair over two full units.
+    if (len(recent) == 2 and (state.get("partnership_balls") or 0) >= 2 * bpu
+            and recent_runs >= 4 * bpu):
+        window = f"{2 * bpu} balls" if cipl_match.is_hundred(state) else "2 overs"
+        reasons.append(f"{recent_runs} runs in the last {window}")
+    if not reasons:
+        return None
+
     from services import bot_tactics
 
     batter = bot_tactics.striker(state)
     candidates = cipl_match.eligible_bowlers(state)
     if not batter or len(candidates) < 2:
-        return
-    seen = context.bot_data.setdefault("cipl_bowling_matchup_dms", {})
-    turn = (state["innings"], state["current_over"], captain_id)
-    if seen.get(mid) == turn:
-        return
-    seen.pop(mid, None)
-    seen[mid] = turn
-    if len(seen) > 256:
-        del seen[next(iter(seen))]
+        return None
+    state["bowling_advice"] = {"innings": innings, "last_over": over,
+                               "stands": [*record["stands"], stand]}
+    return captain_id, batter, candidates, " · ".join(reasons)
+
+
+async def _send_bowling_matchup_dm(context, mid, state, advice):
+    """Send the matchup suggestion directly to the bowling captain."""
+    from services import bot_tactics
+
+    captain_id, batter, candidates, reason = advice
     try:
         pick = await asyncio.to_thread(min, candidates, key=lambda p: bot_tactics.bowler_edge(state, p))
+        bonus = _partnership_bonus(state)
+        bonus_line = f"\n✨ Partnership bonus {bonus} scoring" if bonus else ""
+        stats = state["bat_stats"].get(str(batter["roster_id"]), {})
+        batter_name = _batting_display_name(batter, stats)
         await context.bot.send_message(
             chat_id=captain_id,
             text=(f"🎳 Bowling advice · {state['bowl_team_name']} · "
                   f"{_unit_word(state).title()} {state['current_over']}\n"
-                  f"Try {pick['name']} against {batter['name']} on strike. "
-                  "This pick weighs the matchup, pitch and spell workload."),
+                  f"🥶 {reason}{bonus_line}\n"
+                  f"Try {pick['name']} ({cipl_match.approach_bowling_type(pick)}) "
+                  f"against {batter_name} on strike."),
             connect_timeout=3, read_timeout=3, write_timeout=3)
     except Exception:
         logger.debug("cipl: private bowling advice unavailable for match %s", mid, exc_info=True)
@@ -2543,7 +2586,6 @@ async def _prompt_bowler(context, mid, state=None, first=False):
     if _app_mode(state):
         await _prompt_in_app(context, mid, state, A_PICK_CIPL_BOWLER,
                              state["bowl_user_tg"], fresh=True)
-        await _send_bowling_matchup_dm(context, mid, state)
         return
     elig = cipl_match.eligible_bowlers(state)
     # When the front-line attack is exhausted, eligible_bowlers falls back to
@@ -2582,8 +2624,6 @@ async def _prompt_bowler(context, mid, state=None, first=False):
         delivered = False
     await _mark_prompt_delivered(context, mid, state, delivered,
                                  A_PICK_CIPL_BOWLER)
-    if delivered:
-        await _send_bowling_matchup_dm(context, mid, state)
 
 
 async def _bot_consider_impact(context, mid, state):
@@ -4527,9 +4567,11 @@ def _render_over_summary(state, summary):
         f"({_progress(state)})",
         f"• {s_line}",
         f"• {n_line}",
-        f"🎳 {summary['bowler']['name']}: {summary['bowler_figures']}",
-        f"{arrow} Momentum: {state['bat_team_name']}",
     ]
+    if _partnership_bonus(state):
+        lines.append(_partnership_line(state))
+    lines.extend([f"🎳 {summary['bowler']['name']}: {summary['bowler_figures']}",
+                  f"{arrow} Momentum: {state['bat_team_name']}"])
     # Approach Interaction System flavour — the name of the special combination
     # the two picks made, or the match-up's one-line character.
     #
@@ -4650,11 +4692,26 @@ def _sym_key(s):
         return s
 
 
+def _batting_display_name(player, stats):
+    """Prefix a high score or a quick start with its strongest badge."""
+    runs, balls = stats.get("runs") or 0, stats.get("balls") or 0
+    name = impact_player.display_name(player)
+    if runs >= 100:
+        return f"💯 {name}"
+    if runs >= 75:
+        return f"🚀 {name}"
+    if runs >= 50:
+        return f"🔥 {name}"
+    if runs >= 30 and balls and runs * 100 >= balls * 180:
+        return f"⚡ {name}"
+    return name
+
+
 def _bat_line(player, bat_stats):
     st = bat_stats.get(str(player["roster_id"]), {})
     star = "" if st.get("out") else "*"
     # Escaped: this goes into an HTML message, and a player name is user-set.
-    name = html.escape(impact_player.display_name(player))
+    name = html.escape(_batting_display_name(player, st))
     retired = (' · Retired — can return' if st.get('retired') else
                ' · retired hurt (concussion)' if st.get('retired_hurt') else '')
     return (f"{name} {st.get('runs', 0)}{star} "
@@ -4685,7 +4742,7 @@ def _compact_bat_line(player, bat_stats):
     """``Rohit Sharma 56(27)*`` — runs(balls), trailing ``*`` while not out."""
     st = bat_stats.get(str(player["roster_id"]), {})
     star = "" if st.get("out") else "*"
-    return (f"{html.escape(impact_player.display_name(player))} "
+    return (f"{html.escape(_batting_display_name(player, st))} "
             f"{st.get('runs', 0)}({st.get('balls', 0)}){star}")
 
 
@@ -4842,7 +4899,18 @@ def _partnership(state):
 def _partnership_line(state):
     """``🤝 Partnership: 34 (22)`` for the approach card."""
     runs, balls = _partnership(state)
-    return f"🤝 Partnership: <b>{runs}</b> ({balls})"
+    return f"🤝 Partnership: <b>{runs}</b> ({balls}){_partnership_bonus_suffix(state)}"
+
+
+def _partnership_bonus(state):
+    balls = state.get("partnership_balls") or 0
+    factor = partnership_scoring_factor(balls / cipl_match.balls_per_unit(state))
+    return f"{factor - 1:+.0%}" if factor > 1.0 else ""
+
+
+def _partnership_bonus_suffix(state):
+    bonus = _partnership_bonus(state)
+    return f" · ✨ {bonus} scoring bonus" if bonus else ""
 
 
 def _approach_card(state):
@@ -4976,7 +5044,7 @@ def _build_approach_card_blocks(state, prompt):
         player = state["batting_order"][state[idx_key]]
         st = bs.get(str(player["roster_id"]), {})
         runs, balls = st.get("runs", 0), st.get("balls", 0)
-        name = impact_player.display_name(player)
+        name = _batting_display_name(player, st)
         bat_rows.append([
             R.cell(R.bold(f"🔹 {name}") if on_strike else f"     {name}"),
             R.cell(R.bold(str(runs)), align="right"),
@@ -4989,7 +5057,7 @@ def _build_approach_card_blocks(state, prompt):
                           caption=R.bold(f"{bat_emoji} {bat_code} · Bat")))
     p_runs, p_balls = _partnership(state)
     partnership = ["🤝 ", R.bold("Partnership"), "  ",
-                   R.bold(str(p_runs)), f" ({p_balls})"]
+                   R.bold(str(p_runs)), f" ({p_balls}){_partnership_bonus_suffix(state)}"]
     blocks.append(R.paragraph(partnership))
 
     # ── The attack ──

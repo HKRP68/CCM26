@@ -528,6 +528,12 @@ def batting_matchup_delta(batter, bowling_type):
 CHEMISTRY_OVERS = 4                # overs together before a pair is humming
 CHEMISTRY_BAT = 1.03               # → +3% runs
 
+
+def partnership_scoring_factor(partnership_overs):
+    """Run-weight multiplier for the current batting partnership."""
+    return CHEMISTRY_BAT if partnership_overs >= CHEMISTRY_OVERS else 1.0
+
+
 # ── Predictability: doing the same thing over after over ─────────────
 #
 # The mind game above is priced one over at a time — a read is a coin that lands
@@ -756,8 +762,9 @@ def _situational_multipliers(bat, bowl, context):
     if over_index >= 3:
         tables.append(FATIGUE[min(over_index, max(FATIGUE))])
 
-    if float(context.get("partnership_overs") or 0.0) >= CHEMISTRY_OVERS:
-        tables.append(_runs_factor(CHEMISTRY_BAT))
+    partnership_factor = partnership_scoring_factor(float(context.get("partnership_overs") or 0.0))
+    if partnership_factor > 1.0:
+        tables.append(_runs_factor(partnership_factor))
 
     # Predictability. Applied last, and outside the mind_games switch: reading a
     # pattern over four overs is not the same skill as guessing one hidden pick,

@@ -91,6 +91,39 @@ class ApproachCardBlocksTests(unittest.TestCase, BlockTreeAssertions):
             self.assertIn(f"{st['runs']}({st['balls']})", html_card)
             self.assertIn(f"{player['name']} {st['runs']} {st['balls']}", text)
 
+    def test_batting_badges_are_shared_by_telegram_cards(self):
+        s = _state()
+        player = s["batting_order"][s["striker_idx"]]
+        stats = s["bat_stats"][str(player["roster_id"])]
+        for runs, balls, badge in ((49, 30, ""), (30, 16, "⚡ "), (50, 29, "🔥 "),
+                                   (75, 52, "🚀 "), (100, 69, "💯 ")):
+            with self.subTest(runs=runs):
+                stats.update(runs=runs, balls=balls)
+                name = f"{badge}{player['name']}"
+                self.assertTrue(cp._bat_line(player, s["bat_stats"]).startswith(name))
+                self.assertIn(f"🔹 {name}", cp._approach_card(s))
+                self.assertIn(f"🔹 {name}", flatten(cp._approach_card_blocks(s)))
+
+    def test_partnership_bonus_uses_four_units_in_t20_and_the_hundred(self):
+        for fmt, threshold in (("T20", 24), ("The100", 20)):
+            with self.subTest(fmt=fmt):
+                s = _state()
+                s.update(ball_format=fmt, partnership_runs=62, partnership_balls=threshold - 1)
+                self.assertNotIn("scoring bonus", cp._approach_card(s))
+                self.assertNotIn("scoring bonus", flatten(cp._approach_card_blocks(s)))
+                s["partnership_balls"] = threshold
+                self.assertIn("✨ +3% scoring bonus", cp._approach_card(s))
+                self.assertIn("✨ +3% scoring bonus", flatten(cp._approach_card_blocks(s)))
+
+    def test_over_recap_shows_the_active_partnership_bonus(self):
+        s = _state()
+        s.update(partnership_runs=62, partnership_balls=24)
+        summary = {"over_no": 4, "over_timeline": ["1"] * 6, "over_runs": 6,
+                   "over_wickets": 0, "momentum_shift": 0,
+                   "bowler": s["current_bowler"], "bowler_figures": "0/6"}
+        self.assertIn("🤝 Partnership: <b>62</b> (24) · ✨ +3% scoring bonus",
+                      cp._render_over_summary(s, summary))
+
     def test_chase_is_a_pullquote_matching_html(self):
         s = _state(innings=2, overs_played=1)
         c = cm.chase(s)
