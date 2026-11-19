@@ -604,12 +604,15 @@ also answer in DM. Full guides: `docs/Franchise-Auction-Guide-Users.pdf`.
 <!-- topic: rcpl auction-league solo career al -->
 
 **Group multiplayer.** Open `/rcpl` in the group and choose a league. Each
-manager can claim one franchise. The host starts the auction and AI managers
-take the open teams. Bid on the shared player card, inspect the squads and
-check what each team can still spend. Send `/rcpl` again to reopen the board.
-The host can finish early to award the high bid and fill short squads. The bot
-simulates season fixtures when their human managers are ready. AI-only
-fixtures advance automatically.
+manager can claim one franchise. The host starts a 45-second countdown
+and AI managers take the open teams. Send `/bid` or tap the quoted price.
+Each bid resets the 30-second clock. Use `/auction` to reopen the live
+board, purses and squads.
+
+The host can pause, resume or end bidding. Selected unsold players return
+for one accelerated round. Ending early honours the high bid and fills
+any gaps in the squads. The bot simulates season fixtures when their
+human managers are ready. AI-only fixtures advance automatically.
 
 **Solo career.** In a private chat, you run one franchise for an IPL-style
 season against AI managers.

@@ -6,7 +6,7 @@ import logging
 import time
 
 from telegram.error import BadRequest, TelegramError
-from telegram.ext import CallbackQueryHandler
+from telegram.ext import CallbackQueryHandler, CommandHandler
 
 from handlers import auction_league as solo
 from services import auction_league_service as AL
@@ -32,38 +32,93 @@ def _team_picker(room):
     return [buttons[i:i + 4] for i in range(0, len(buttons), 4)] + [_navigation(room)]
 
 
+def _sale(room):
+    state = room.state
+    lot = state.get("last_lot")
+    if not lot:
+        return ""
+    player = AL.card(state, lot["pid"])
+    player_line = solo._card_line(player)
+    if lot["status"] != "sold":
+        return (f"○ <b>Unsold · Lot {lot['seq']}</b>\n{player_line}\n"
+                f"Base price {AL.money(lot['base'])}")
+    winner = lot["winner"]
+    team = state["teams"][winner]
+    return (f"🔨 <b>Sold · Lot {lot['seq']}</b>\n{player_line}\n"
+            f"<b>{solo._esc(winner)}</b> signed the player for <b>{AL.money(lot['price'])}</b>.\n"
+            f"{AL.money(team['purse'])} left · {len(team['squad'])}/{AL.SQUAD_MAX} players")
+
+
 def _board(room):
     state, rid = room.state, room.id
-    last = state.get("last_lot")
-    recent = f"\n{AL.lot_result_line({**state, 'user_team': None}, last)}\n" if last else ""
-    if state["phase"] != AL.PHASE_AUCTION:
-        if state["phase"] == AL.PHASE_ABANDONED:
-            return "This RCPL room has closed. Send /rcpl to open a new room.", []
-        return ("🏏 <b>RCPL auction complete</b>" + recent +
-                "\nThe squads are ready. Open the season to see fixtures and standings.",
+    phase = state["phase"]
+    if phase == AL.PHASE_ABANDONED:
+        return "This RCPL room has closed. Send /rcpl to open a new room.", []
+    if phase != AL.PHASE_AUCTION:
+        return ("🏏 <b>RCPL auction complete</b>\n"
+                "The squads are ready. Open the season to see fixtures and standings.",
                 [[("Season", f"rcpl:s:{rid}:home"), ("Squads", f"rcpl:a:{rid}:teams")]])
 
-    lot = state["lot"]
-    player = AL.card(state, lot["pid"])
-    leader = lot["leader"]
-    if leader:
-        manager = state["managers"].get(leader)
-        owner = manager["name"] if manager else "AI"
-        high_bid = f"<b>{solo._esc(leader)}</b> ({solo._esc(owner)}) · {AL.money(lot['price'])}"
+    lot = state.get("lot")
+    paused = state.get("paused_at") is not None
+    clock_at = lot["deadline"] if lot else state["next_lot_at"]
+    clock = datetime.fromtimestamp(clock_at, timezone.utc).strftime("%H:%M:%S UTC")
+    total = sum(len(group["pids"]) for group in state["sets"])
+    text = f"🔨 <b>{solo._esc(state['league']['name'])} · RCPL auction</b>"
+    rows = [[("Squads", f"rcpl:a:{rid}:teams"), ("Purses", f"rcpl:a:{rid}:purses")]]
+    if lot is None and state.get("last_lot") is None:
+        managers = len(state["managers"])
+        rules = " · ".join(f"{minimum} {AL.ROLE_SHORT[role]}" for role, minimum in AL.ROLE_MIN.items())
+        text += (f"\n\n<b>Auction starts at {clock}</b>" if not paused else "\n\n<b>Start paused</b>")
+        text += (f"\n{total} players across {len(state['sets'])} sets"
+                 f"\n{managers} human managers · {len(state['team_order']) - managers} AI managers"
+                 f"\n{AL.money(AL.PURSE_LAKH)} per franchise · up to {AL.SQUAD_MAX} players"
+                 f"\nSquad minimums · {rules}\n"
+                 f"\nBid with /bid or tap the quoted price once bidding opens."
+                 f"\nEach accepted bid resets the {auction.LOT_SECONDS}s clock.")
+    elif lot is None:
+        text += "\n\n" + _sale(room)
+        text += "\n\n<b>Paused between lots</b>" if paused else f"\n\nNext lot opens at {clock}."
     else:
-        high_bid = "Awaiting opening bid"
-    deadline = datetime.fromtimestamp(lot["deadline"], timezone.utc).strftime("%H:%M:%S UTC")
-    price = AL.next_price(lot)
-    seq = lot["seq"]
-    text = (f"🔨 <b>{solo._esc(state['league']['name'])} · RCPL auction</b>\n"
-            f"Lot {seq} · {solo._esc(lot['set_name'])}\n{recent}\n"
-            f"{solo._card_line(player)}\n{high_bid}\n"
-            f"Closes at {deadline}. A new bid resets the {auction.LOT_SECONDS}s clock.")
-    rows = [[(f"Bid {AL.money(price)}", f"rcpl:a:{rid}:bid:{seq}:{price}")],
-            [("Squads", f"rcpl:a:{rid}:teams"), ("Purses", f"rcpl:a:{rid}:purses")],
-            [("Finish auction", f"rcpl:a:{rid}:finish:{seq}:{price}"),
-             ("Close room", f"rcpl:close:{rid}")]]
+        player = AL.card(state, lot["pid"])
+        price = AL.next_price(lot)
+        text += (f"\nLot {lot['seq']}/{total} · {solo._esc(lot['set_name'])}"
+                 f"\n\n<b>{solo._card_line(player)}</b>"
+                 f"\nBat {player['bat_rating']} · Bowl {player['bowl_rating']}"
+                 f"\nBase {AL.money(lot['base'])}")
+        if lot["leader"]:
+            leader = lot["leader"]
+            manager = state["managers"].get(leader)
+            owner = manager["name"] if manager else "AI"
+            text += (f"\nLeading · <b>{solo._esc(leader)}</b> ({solo._esc(owner)})"
+                     f" · <b>{AL.money(lot['price'])}</b>")
+        else:
+            text += "\nWaiting for the opening bid."
+        if lot["trail"]:
+            trail = " · ".join(f"{solo._esc(solo._short(state, team))} {AL.money(amount)}"
+                               for team, amount in lot["trail"][-3:])
+            text += f"\nRecent bids · {trail}"
+        if paused:
+            text += "\n\n<b>Auction paused by the host.</b>"
+        else:
+            call = {10: "Going once", 3: "Going twice"}.get(lot.get("closing_call"))
+            if call:
+                text += f"\n\n<b>{call} · {lot['closing_call']}s or less</b>"
+            text += f"\nCloses at {clock} · /bid raises to {AL.money(price)}"
+            rows.insert(0, [(f"Bid {AL.money(price)}", f"rcpl:a:{rid}:bid:{lot['seq']}:{price}")])
+    action, label = ("resume", "Resume") if paused else ("pause", "Pause")
+    rows.append([(label, f"rcpl:a:{rid}:{action}"), ("End auction", f"rcpl:a:{rid}:finish")])
     return text, rows
+
+
+async def _pin(context, chat_id, message_id, *, live):
+    try:
+        if live:
+            await context.bot.pin_chat_message(chat_id, message_id, disable_notification=True)
+        else:
+            await context.bot.unpin_chat_message(chat_id, message_id)
+    except TelegramError:
+        logger.debug("RCPL board pin could not be updated for %s", chat_id, exc_info=True)
 
 
 async def _publish(context, room, *, repost=False):
@@ -79,6 +134,8 @@ async def _publish(context, room, *, repost=False):
             try:
                 await context.bot.edit_message_text(text, chat_id=room.chat_id, message_id=message_id,
                                                     parse_mode="HTML", reply_markup=solo._kb(rows))
+                if current.state["phase"] != AL.PHASE_AUCTION:
+                    await _pin(context, room.chat_id, message_id, live=False)
                 return
             except BadRequest as exc:
                 reason = str(exc).lower()
@@ -91,8 +148,12 @@ async def _publish(context, room, *, repost=False):
             return
         saved = await asyncio.to_thread(MP.set_board_message, room.chat_id, room.id,
                                         message.message_id, expected_old=message_id)
+        if saved and current.state["phase"] == AL.PHASE_AUCTION:
+            await _pin(context, room.chat_id, message.message_id, live=True)
         retired = message_id if saved else message.message_id
         if retired and retired != (message.message_id if saved else message_id):
+            if saved:
+                await _pin(context, room.chat_id, retired, live=False)
             try:
                 await context.bot.edit_message_reply_markup(chat_id=room.chat_id, message_id=retired,
                                                            reply_markup=None)
@@ -142,40 +203,100 @@ async def auction_callback(update, context):
             await q.answer()
             await _publish(context, room, repost=True)
             return
-        seq, price = int(parts[4]), int(parts[5])
         if action == "bid":
-            room = await asyncio.to_thread(MP.bid, chat.id, rid, q.from_user.id, seq, price)
+            room = await asyncio.to_thread(MP.bid, chat.id, rid, q.from_user.id, int(parts[4]), int(parts[5]))
+            feedback = "Bid accepted."
+        elif action in ("pause", "resume"):
+            room = await asyncio.to_thread(MP.control_auction, chat.id, rid, q.from_user.id, action)
+            feedback = "Auction paused." if action == "pause" else "Auction resumed."
         elif action == "finish":
             if q.from_user.id != room.host_id:
-                raise AL.AuctionLeagueError("Only the host can finish the auction.")
+                raise AL.AuctionLeagueError("Only the host can end the auction.")
+            if state["phase"] != AL.PHASE_AUCTION:
+                raise AL.AuctionLeagueError("The auction has finished.")
             await q.answer()
             await solo._send(context, chat.id,
-                             "Finish bidding now? The current high bid stands and remaining squad places "
-                             "are filled from available players.",
-                             [[("Confirm finish", f"rcpl:a:{rid}:end:{seq}:{price}"), *_navigation(room)]])
+                             "End the auction? The current high bid stands. The remaining lots close "
+                             "and the bot fills any gaps in the squads.",
+                             [[("Confirm end", f"rcpl:a:{rid}:end"), *_navigation(room)]])
             return
         elif action == "end":
-            room = await asyncio.to_thread(MP.finish_auction, chat.id, rid, q.from_user.id, seq, price)
+            # Older boards included a quote with the end confirmation.
+            quote = (int(parts[4]), int(parts[5])) if len(parts) > 4 else ()
+            room = await asyncio.to_thread(MP.finish_auction, chat.id, rid, q.from_user.id, *quote)
+            feedback = "Auction finished."
         else:
             raise ValueError
     except (ValueError, IndexError):
-        await q.answer("This button is out of date. Open /rcpl.", show_alert=True)
+        await q.answer("This button is out of date. Open /auction.", show_alert=True)
         return
     except AL.AuctionLeagueError as exc:
         await q.answer(str(exc)[:195], show_alert=True)
         return
-    await q.answer("Bid placed." if action == "bid" else "Auction finished.")
+    await q.answer(feedback)
+    await _show_update(context, state, room)
+
+
+async def _show_update(context, before, room):
+    previous = before.get("last_lot") or {}
+    latest = room.state.get("last_lot") or {}
+    if latest and latest.get("seq") != previous.get("seq"):
+        await solo._send(context, room.chat_id, _sale(room))
     await _publish(context, room)
+
+
+async def auction_command(update, context):
+    chat = update.effective_chat
+    if chat is None:
+        return
+    room = await asyncio.to_thread(MP.get_room, chat.id) if chat.type in ("group", "supergroup") else None
+    if room is None:
+        await solo._send(context, chat.id, "Open /rcpl in your group to host or join an auction.")
+        return
+    from handlers.rcpl_multiplayer import _show
+    await _show(update, context, room)
+
+
+async def bid_command(update, context):
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or chat.type not in ("group", "supergroup") or not user or user.is_bot:
+        return
+    room = await asyncio.to_thread(MP.get_room, chat.id)
+    if room is None or room.state["phase"] != AL.PHASE_AUCTION:
+        return
+    if context.args:
+        await update.effective_message.reply_text("Send /bid without an amount to take the next price.")
+        return
+    try:
+        updated = await asyncio.to_thread(MP.bid, chat.id, room.id, user.id)
+    except AL.AuctionLeagueError as exc:
+        await update.effective_message.reply_text(str(exc))
+        return
+    lot = updated.state["lot"]
+    team = updated.state["teams"][lot["leader"]]["short"]
+    await update.effective_message.reply_text(f"Bid accepted · {team} leads at {AL.money(lot['price'])}.")
+    await _publish(context, updated)
 
 
 async def _clock(context):
     rooms = await asyncio.to_thread(MP.active_auctions, due_before=time.time())
     for room in rooms:
+        before = None
+
+        def advance(current):
+            nonlocal before
+            last_lot = current.state.get("last_lot")
+            changed = auction.tick(current.state, now=time.time())
+            if changed:
+                before = {"last_lot": last_lot}
+            return changed
+
         try:
-            updated = await asyncio.to_thread(
-                MP.change_room, room.chat_id, room.id,
-                lambda current: auction.tick(current.state, now=time.time()))
-            if updated.version != room.version or not updated.board_message_id:
+            updated = await asyncio.to_thread(MP.change_room, room.chat_id, room.id, advance)
+            if before is not None:
+                await _show_update(context, before, updated)
+            elif not updated.board_message_id:
                 await _publish(context, updated)
         except AL.AuctionLeagueError:
             continue
@@ -184,6 +305,8 @@ async def _clock(context):
 
 
 def register_auction_handlers(app):
+    app.add_handler(CommandHandler("auction", auction_command))
+    app.add_handler(CommandHandler("bid", bid_command))
     app.add_handler(CallbackQueryHandler(auction_callback, pattern=r"^rcpl:a:"))
     if getattr(app, "job_queue", None):
         app.job_queue.run_repeating(_clock, interval=1.5, first=1, name="rcpl_auction_clock")

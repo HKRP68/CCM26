@@ -22,8 +22,9 @@ def group_help():
         "2. Tap a franchise to manage it. Each manager can take one team. "
         "Use <b>Release my team</b> to give up your seat before the auction.\n"
         "3. The host taps <b>Start auction</b> and confirms. AI managers take every open franchise.\n"
-        "4. Use the live lot's bid button to bid from your franchise purse. "
-        "The winning team signs the player. Open <b>Squads</b> or <b>Purses</b> to follow the auction.\n"
+        "4. Send /bid or tap the price to bid from your franchise purse. Each bid resets the 30-second clock. "
+        "The host can pause, resume or end the auction. Unsold players may return in one accelerated round. "
+        "Use /auction to reopen the board and check squads and purses.\n"
         "5. Follow the season with your auction squad. Tap <b>Ready to play</b> on your fixtures "
         "to simulate them. AI-only fixtures run automatically.\n\n"
         "Send /rcpl again to return to the group’s lobby, auction or season. "
@@ -72,7 +73,7 @@ async def _show(update, context, room, *, edit=False):
                     return
                 logger.info("RCPL lobby %s could not be edited: %s", room.id, exc)
         await solo._send(context, room.chat_id, text, rows)
-    elif phase == AL.PHASE_AUCTION:
+    elif phase == AL.PHASE_AUCTION or (phase == AL.PHASE_ABANDONED and room.board_message_id):
         from handlers.rcpl_multiplayer_auction import show_auction
         await show_auction(update, context, room)
     elif phase in (AL.PHASE_SEASON, AL.PHASE_COMPLETED):
@@ -151,8 +152,8 @@ async def lobby_callback(update, context):
                     raise AL.AuctionLeagueError("At least one manager must claim a franchise first.")
                 ai = len(room.state["team_order"]) - managers
                 text = (f"<b>Start the auction?</b>\nCurrently {managers} human-managed and {ai} AI-managed franchises. "
-                        "Confirm to lock the team choices and open bidding.")
-                button = ("Start now", f"rcpl:go:{rid}")
+                        "Confirm to lock the teams and start the 45-second countdown.")
+                button = ("Start countdown", f"rcpl:go:{rid}")
             else:
                 text = "<b>Close this RCPL room?</b> This ends the group’s league."
                 button = ("Yes, close room", f"rcpl:cancel:{rid}")
@@ -168,7 +169,7 @@ async def lobby_callback(update, context):
             toast = "Your franchise is open again."
         elif action == "go":
             room = await asyncio.to_thread(MP.start_room, chat.id, rid, user.id)
-            toast = "Auction started."
+            toast = "Auction countdown started."
         elif action == "cancel":
             room = await asyncio.to_thread(MP.cancel_room, chat.id, rid, user.id)
             toast = "Room closed."

@@ -542,6 +542,12 @@ def _leaves_enough_for_others(state, team, c):
         # A side already at its overseas cap can only fill a role it owes
         # with a domestic player — keep enough of those for it.
         checks.append(("domestic_role", role))
+    # In a group, an extra player must leave enough cards for every team's
+    # remaining places. Role and domestic reserves alone can overlap.
+    if "managers" in state and owed_slots(state, team, extra=c) == owed_slots(state, team):
+        remaining = len(state["pool"]) - len(taken_pids(state)) - 1
+        if remaining < sum(owed_slots(state, name) for name in state["team_order"]):
+            return False
     if not checks:
         return True
     taken = taken_pids(state)
@@ -860,14 +866,14 @@ def next_price(lot):
     return int(lot["price"]) + increment(lot["price"])
 
 
-def _advance_cursor(state):
+def _advance_cursor(state, *, nominate=True):
     """Move to the next queued player; returns its pid or None at the end."""
     while True:
         s = current_set(state)
         if s is None:
             # Out of sets: one accelerated round — of the unsold players the
             # franchises nominate, as at the IPL — then stop.
-            if state.get("unsold") and not state.get("accelerated_done"):
+            if nominate and state.get("unsold") and not state.get("accelerated_done"):
                 if state.get("autopilot") or not state.get("nominations_by_hand", True):
                     _build_accelerated_round(state, ai_nominations(state, state["user_team"]))
                     continue
@@ -1464,32 +1470,42 @@ def autofill(state):
     taken = taken_pids(state)
     spare = sorted((c for c in state["pool"].values() if c["id"] not in taken),
                    key=lambda c: -c["rating"])
-    for name in state["team_order"]:
-        guard = 0
-        while owed_slots(state, name) > 0 and guard < 40:
-            guard += 1
-            owed = owed_roles(state, name)
-            need_dom = (required_domestic(state) - sum(
-                1 for e in state["teams"][name]["squad"]
-                if not card(state, e["pid"]).get("is_overseas"))) > 0
-            pick = None
-            for c in spare:
-                if not can_add(state, name, c):
-                    continue
-                if need_dom and c.get("is_overseas"):
-                    continue
-                if any(owed.values()) and not owed.get(c["category"]):
-                    continue
-                pick = c
+    def fill_one(name):
+        owed = owed_roles(state, name)
+        need_dom = _domestic_owed(state, name) > 0
+        need_roles = any(owed.values())
+        pick = next((c for c in spare if (not need_roles or owed.get(c["category"]))
+                     and (not need_dom or not c.get("is_overseas")) and can_add(state, name, c)), None)
+        if pick is None and "managers" in state:
+            # Prioritize a missing role even when there is no domestic card
+            # for it. The next round can fill remaining domestic places.
+            pick = next((c for c in spare if (not need_roles or owed.get(c["category"]))
+                         and can_add(state, name, c)), None)
+        if pick is None:
+            pick = next((c for c in spare if can_add(state, name, c)), None)
+        if pick is None:
+            return False
+        price = min(base_price(pick["rating"]), max(0, state["teams"][name]["purse"]))
+        _sign(state, name, pick["id"], price, HOW_AUTOFILL)
+        spare.remove(pick)
+        made.append((name, pick["id"], price))
+        return True
+
+    if "managers" in state:
+        # Give every team one signing per pass so a short squad does not
+        # take all the available domestic cards before the others can sign.
+        for _ in range(SQUAD_MAX):
+            progressed = False
+            for name in state["team_order"]:
+                if owed_slots(state, name) > 0 and fill_one(name):
+                    progressed = True
+            if not progressed:
                 break
-            if pick is None:
-                pick = next((c for c in spare if can_add(state, name, c)), None)
-            if pick is None:
-                break
-            price = min(base_price(pick["rating"]), max(0, state["teams"][name]["purse"]))
-            _sign(state, name, pick["id"], price, HOW_AUTOFILL)
-            spare.remove(pick)
-            made.append((name, pick["id"], price))
+    else:
+        for name in state["team_order"]:
+            for _ in range(SQUAD_MAX):
+                if not owed_slots(state, name) or not fill_one(name):
+                    break
     # The AI sides also complete the shape of the XI they field (4/1/3/3),
     # then fill out to the squad size they planned, with base-price signings
     # from the unsold players while they have room and the money.

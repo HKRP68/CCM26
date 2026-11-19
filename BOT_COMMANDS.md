@@ -453,14 +453,20 @@ board**; bids are announced as one short line per burst.
 
 ## 13a. RCPL Auction League
 
-**Group multiplayer.** Send `/rcpl` in the group, select a Challenge League
-and invite the managers to pick their franchises. The host starts the auction
-when the group is ready. AI managers take any unclaimed teams. Each manager
-bids with their own franchise's ₹120 Cr purse. Reopen the group board with
-`/rcpl` to see the current lot, check the purses or inspect the squads. The
-host can finish early to award the current high bid and fill short squads.
-During the season, human managers mark themselves ready to simulate their
-fixtures. AI-only fixtures advance automatically.
+**Group multiplayer.** Send `/rcpl`, select a Challenge League and let each
+manager claim a franchise. The host starts a 45-second countdown and AI
+managers take any open teams. Each franchise starts with ₹120 Cr.
+
+- Send `/bid` in the group or tap the quoted price. Each accepted bid resets
+  the 30-second clock. The board shows the high bid and calls going once and
+  going twice before the hammer.
+- Use `/auction` to bring up the live board, purses and squads. The bot pins
+  the board when it has permission and posts each sold or unsold result.
+- The host can pause, resume or end the auction. Eligible unsold players can
+  return for one accelerated round. Ending early honours the high bid and
+  fills any gaps in the squads.
+- During the season, human managers mark themselves ready to simulate their
+  fixtures. AI-only fixtures advance automatically.
 
 **Solo career.** Send `/rcpl` in a private chat with the bot to run one
 franchise against the AI for a season.

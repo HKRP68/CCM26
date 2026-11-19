@@ -106,7 +106,8 @@ class GroupBot:
         queue = NS(run_repeating=schedule)
         auction_league.register(NS(add_handler=self.handlers.append, job_queue=queue, bot_data={}))
         self.bot = NS(id=1000, username="testbot", send_message=self.send,
-                      edit_message_text=self.send, edit_message_reply_markup=AsyncMock())
+                      edit_message_text=self.send, edit_message_reply_markup=AsyncMock(),
+                      pin_chat_message=AsyncMock(), unpin_chat_message=AsyncMock())
         self.context = NS(bot=self.bot, bot_data={}, user_data={}, args=[], job_queue=None)
 
     async def send(self, *args, text="", reply_markup=None, **kwargs):
@@ -154,21 +155,46 @@ def test_group_command_to_live_auction(league):
         assert mp.get_room(chat).state["phase"] == "lobby"
         await bot.act(host, button=confirm)
         assert mp.get_room(chat).state["phase"] == al.PHASE_AUCTION
-        # A fresh process/context knows the same owners and lot from the DB.
+        assert mp.get_room(chat).state["lot"] is None
+        assert "Auction starts at" in bot.messages[-1][0]
+        bot.bot.pin_chat_message.assert_awaited_once()
+        # Reopen from a fresh process and drive the persisted clock through the intro.
         reopened = GroupBot(chat)
-        await reopened.act(guest, command="rcpl")
-        assert reopened.messages
+        await reopened.act(guest, command="auction")
+        assert "Auction starts at" in reopened.messages[-1][0]
+        clock = reopened.jobs["rcpl_auction_clock"]
         assert set(x["id"] for x in mp.get_room(chat).state["managers"].values()) == {host, guest}
-        await reopened.act(guest, button=reopened.callback(f"rcpl:a:{room.id}:bid:"))
+
+        def open_next(current):
+            current.state["next_lot_at"] = time.time() - 1
+        mp.change_room(chat, room.id, open_next)
+        await clock(reopened.context)
+        first_bid = reopened.callback(f"rcpl:a:{room.id}:bid:")
+        pause = reopened.callback(f"rcpl:a:{room.id}:pause")
+        await reopened.act(guest, button=pause)
+        assert mp.get_room(chat).state.get("paused_at") is None
+        await reopened.act(host, button=pause)
+        await reopened.act(guest, command="bid")
+        assert "paused" in reopened.messages[-1][0].lower()
+        assert mp.get_room(chat).state["lot"]["leader"] is None
+        await reopened.act(host, button=reopened.callback(f"rcpl:a:{room.id}:resume"))
+        await reopened.act(guest, command="bid")
         leading = mp.get_room(chat).state["lot"]
         assert mp.get_room(chat).state["managers"][leading["leader"]]["id"] == guest
+        await reopened.act(host, button=first_bid)
+        assert mp.get_room(chat).state["lot"]["leader"] == leading["leader"]
 
         def expire_lot(current):
             current.state["lot"]["deadline"] = time.time() - 1
         mp.change_room(chat, room.id, expire_lot)
-        await reopened.jobs["rcpl_auction_clock"](reopened.context)
+        await clock(reopened.context)
         updated = mp.get_room(chat)
         assert updated.state["last_lot"]["winner"] == leading["leader"]
+        assert updated.state["lot"] is None
+        assert any("Sold" in txt for txt, _ in reopened.messages)
+        mp.change_room(chat, room.id, open_next)
+        await clock(reopened.context)
+        updated = mp.get_room(chat)
         assert updated.state["lot"]["seq"] == leading["seq"] + 1
         await reopened.act(guest, button=reopened.callback(f"rcpl:a:{room.id}:teams"))
         await reopened.act(guest, button=reopened.callback(f"rcpl:a:{room.id}:squad:1"))
@@ -188,7 +214,12 @@ def test_bids_build_both_human_and_ai_squads_and_playoffs(league):
     rid = room.id
     mp.claim_team(chat, rid, host, "Host", 0)
     mp.claim_team(chat, rid, guest, "Guest", 1)
-    started = mp.start_room(chat, rid, host)
+    mp.start_room(chat, rid, host)
+
+    def next_lot(current):
+        auction.tick(current.state, now=current.state["next_lot_at"])
+
+    started = mp.change_room(chat, rid, next_lot)
     names = started.state["team_order"]
     lot = started.state["lot"]
     price = al.next_price(lot)
@@ -210,6 +241,7 @@ def test_bids_build_both_human_and_ai_squads_and_playoffs(league):
 
     # The next open lot gives AI franchises a chance to put in their own bids.
     for _ in range(20):
+        timed = mp.change_room(chat, rid, next_lot)
         current = timed.state["lot"]
         if current["ai_at"] is not None:
             timed = mp.change_room(chat, rid, lambda r: auction.tick(r.state, now=current["ai_at"]))
@@ -245,3 +277,78 @@ def test_bids_build_both_human_and_ai_squads_and_playoffs(league):
     assert room.state["champion"] in names
     assert all(fx["status"] == "done" for fx in room.state["fixtures"])
     assert mp.get_room(chat) is None
+
+
+def test_clock_and_accelerated_round(league):
+    from services import auction_league_service as al, rcpl_multiplayer_service as mp
+    from services import rcpl_multiplayer_auction as clock
+
+    room = mp.create_room(-405, 71, "Host", league)
+    mp.claim_team(room.chat_id, room.id, 71, "Host", 0)
+    state = mp.get_room(room.chat_id).state
+    clock.start(state, now=100)
+    first_lot_at = 100 + clock.INTRO_SECONDS
+    assert clock.next_event_at(state) == first_lot_at
+    assert not clock.tick(state, now=first_lot_at - 1)
+    with pytest.raises(al.AuctionLeagueError, match="next lot"):
+        clock.bid(state, 71, now=first_lot_at - 1)
+
+    # Use one lot to exercise the transition into and out of the second round.
+    pid = state["sets"][0]["pids"][0]
+    state["sets"] = [{"name": "Test set", "pids": [pid], "accelerated": False}]
+    assert clock.tick(state, now=first_lot_at)
+    lot = state["lot"]
+    lot["ai_at"] = None
+    first_call_at = clock.next_event_at(state)
+    assert first_call_at == lot["deadline"] - 10
+    assert clock.tick(state, now=first_call_at)
+    assert lot["closing_call"] == 10
+    assert clock.tick(state, now=lot["deadline"] - 3)
+    assert lot["closing_call"] == 3
+
+    clock.pause(state, now=lot["deadline"] - 2)
+    assert clock.next_event_at(state) is None
+    assert not clock.tick(state, now=200)
+    clock.resume(state, now=200)
+    assert lot["deadline"] == 200 + clock.MIN_RESUME_SECONDS
+    assert clock.tick(state, now=lot["deadline"])
+    assert state["last_lot"]["status"] == "unsold"
+    assert clock.tick(state, now=state["next_lot_at"])
+    assert state["lot"]["accelerated"]
+    assert state["lot"]["pid"] == pid
+    assert clock.tick(state, now=state["lot"]["deadline"])
+    assert clock.tick(state, now=state["next_lot_at"])
+    assert state["phase"] == al.PHASE_SEASON
+    assert state["lot_seq"] == 2
+
+
+def test_full_auction_keeps_enough_players_for_each_squad():
+    import random
+    from services import auction_league_service as al
+    from services import rcpl_multiplayer_auction as clock
+
+    rng = random.Random(1)
+    roles = [role for role in al.ROLES for _ in range(al.ROLE_MIN[role] + 1)]
+    teams = []
+    for number in range(10):
+        name = f"F{number + 1}"
+        players = [
+            al.make_card(number * 100 + index + 1, f"Player {number}-{index}",
+                         category=role, rating=rng.randrange(67, 99), is_overseas=index % 4 == 0)
+            for index, role in enumerate(roles)
+        ]
+        teams.append({"name": name, "short": name, "players": players})
+
+    state = al.new_state({"name": "IPL", "home_country": "India", "overseas_max": 4},
+                         teams, "F1", ai_retain=False, seed=1)
+    state["managers"] = {"F1": {"id": 1, "name": "Host"}, "F2": {"id": 2, "name": "Guest"}}
+    clock.start(state, now=100)
+    for _ in range(1000):
+        if state["phase"] != al.PHASE_AUCTION:
+            break
+        assert clock.tick(state, now=clock.next_event_at(state))
+
+    assert state["phase"] == al.PHASE_SEASON
+    assert sum(group["accelerated"] for group in state["sets"]) == 1
+    assert all(al.squad_is_legal(state, team) for team in state["team_order"])
+    assert len(al.taken_pids(state)) == sum(len(team["squad"]) for team in state["teams"].values())

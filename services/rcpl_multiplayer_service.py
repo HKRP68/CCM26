@@ -214,12 +214,23 @@ def start_room(chat_id, room_id, user_id):
     return change_room(chat_id, room_id, start)
 
 
-def bid(chat_id, room_id, user_id, seq, expected_price):
+def bid(chat_id, room_id, user_id, seq=None, expected_price=None):
     from services import rcpl_multiplayer_auction as auction
     return change_room(chat_id, room_id, lambda room: auction.bid(room.state, user_id, seq, expected_price))
 
 
-def finish_auction(chat_id, room_id, user_id, seq, expected_price):
+def control_auction(chat_id, room_id, user_id, action):
+    from services import rcpl_multiplayer_auction as auction
+    control = {"pause": auction.pause, "resume": auction.resume}[action]
+
+    def change(room):
+        _require_host(room, user_id)
+        control(room.state, now=time.time())
+
+    return change_room(chat_id, room_id, change)
+
+
+def finish_auction(chat_id, room_id, user_id, seq=None, expected_price=None):
     from services import rcpl_multiplayer_auction as auction
     def finish(room):
         _require_host(room, user_id)
