@@ -1095,14 +1095,10 @@ async def _mark_prompt_delivered(context, mid, state, delivered, action):
     still rescue.
     """
     state["prompt_delivered"] = bool(delivered)
-    advice = (_reserve_bowling_matchup_dm(state)
-              if delivered and action == A_PICK_CIPL_BOWLER else None)
     await _ss(context, mid, state, next_action=action)
     _arm_timer(context, mid, action)
     if not delivered:
         _schedule_cipl_recovery(context, mid)
-    if advice:
-        await _send_bowling_matchup_dm(context, mid, state, advice)
 
 
 async def _recover_from_error(context, mid, where):
@@ -2511,77 +2507,6 @@ async def _prompt_in_app(context, mid, state, action, actor_tg, lead="",
         logger.exception("cipl: Mini App turn note failed for match %s", mid)
         delivered = False
     await _mark_prompt_delivered(context, mid, state, delivered, action)
-
-
-_BOWLING_ADVICE_COOLDOWN = 4  # completed overs or sets between tips
-_BOWLING_ADVICE_PER_INNINGS = 2
-
-
-def _reserve_bowling_matchup_dm(state):
-    """Record an actionable tip in the prompt snapshot before sending it."""
-    captain_id = state.get("bowl_user_tg")
-    if not isinstance(captain_id, int) or captain_id <= 0 or _bot_bowls(state):
-        return None
-    over, innings = state["current_over"], state["innings"]
-    if over < 3:
-        return None
-
-    record = state.get("bowling_advice") or {}
-    if record.get("innings") != innings:
-        record = {"innings": innings, "stands": [], "last_over": 0}
-    stand = len(state.get("partnership_history") or [])
-    if (stand in record["stands"] or len(record["stands"]) >= _BOWLING_ADVICE_PER_INNINGS
-            or (record["last_over"] and over - record["last_over"] < _BOWLING_ADVICE_COOLDOWN)):
-        return None
-
-    bpu = cipl_match.balls_per_unit(state)
-    stand_runs = state.get("partnership_runs") or 0
-    milestone = 30 if cipl_match.total_balls(state) <= 60 else 50
-    recent = (state.get("over_runs") or [])[-2:]
-    recent_runs = sum(recent)
-    reasons = []
-    if stand_runs >= milestone:
-        reasons.append(f"{stand_runs}-run partnership")
-    # Measure runs actually scored by the active pair over two full units.
-    if (len(recent) == 2 and (state.get("partnership_balls") or 0) >= 2 * bpu
-            and recent_runs >= 4 * bpu):
-        window = f"{2 * bpu} balls" if cipl_match.is_hundred(state) else "2 overs"
-        reasons.append(f"{recent_runs} runs in the last {window}")
-    if not reasons:
-        return None
-
-    from services import bot_tactics
-
-    batter = bot_tactics.striker(state)
-    candidates = cipl_match.eligible_bowlers(state)
-    if not batter or len(candidates) < 2:
-        return None
-    state["bowling_advice"] = {"innings": innings, "last_over": over,
-                               "stands": [*record["stands"], stand]}
-    return captain_id, batter, candidates, " · ".join(reasons)
-
-
-async def _send_bowling_matchup_dm(context, mid, state, advice):
-    """Send the matchup suggestion directly to the bowling captain."""
-    from services import bot_tactics
-
-    captain_id, batter, candidates, reason = advice
-    try:
-        pick = await asyncio.to_thread(min, candidates, key=lambda p: bot_tactics.bowler_edge(state, p))
-        bonus = _partnership_bonus(state)
-        bonus_line = f"\n✨ Partnership bonus {bonus} scoring" if bonus else ""
-        stats = state["bat_stats"].get(str(batter["roster_id"]), {})
-        batter_name = _batting_display_name(batter, stats)
-        await context.bot.send_message(
-            chat_id=captain_id,
-            text=(f"🎳 Bowling advice · {state['bowl_team_name']} · "
-                  f"{_unit_word(state).title()} {state['current_over']}\n"
-                  f"🥶 {reason}{bonus_line}\n"
-                  f"Try {pick['name']} ({cipl_match.approach_bowling_type(pick)}) "
-                  f"against {batter_name} on strike."),
-            connect_timeout=3, read_timeout=3, write_timeout=3)
-    except Exception:
-        logger.debug("cipl: private bowling advice unavailable for match %s", mid, exc_info=True)
 
 
 async def _prompt_bowler(context, mid, state=None, first=False):
