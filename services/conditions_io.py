@@ -34,7 +34,6 @@ import io
 import json
 from datetime import datetime
 
-from engine import pitch_registry
 from engine.sim import config as sim_config, stadium as stadium_mod, store
 from engine.sim.models import BOUNDARY_REGIONS
 
@@ -134,12 +133,8 @@ def clean_stadium(raw, cfg=None):
         if k not in BOUNDARY_REGIONS:
             warns.append(f"{label}: unknown boundary region {k!r} ignored")
 
-    pitch = str(raw.get("typicalPitch") or "Even").strip()
-    match = next((p for p in pitch_registry.PITCHES if p.lower() == pitch.lower()), None)
-    if match is None:
-        warns.append(f"{label}: unknown pitch {pitch!r}, using Even")
-        match = "Even"
-    out["typicalPitch"] = match
+    # Older exports carried a typicalPitch field. Accept it without assigning
+    # a surface to the venue, including when restoring older stadium lists.
     out["slope"] = _bool(raw.get("slope", False))
 
     climate = raw.get("climate") or {}
@@ -276,7 +271,7 @@ def export_bundle(what="all", stadium_rows=None, cfg=None):
 CSV_COLUMNS = (
     ["name", "aliases", "city", "country", "altitudeMeters"]
     + [f"boundary_{r}" for r in BOUNDARY_REGIONS]
-    + ["outfieldSpeed", "dewFactor", "typicalPitch", "avgFirstInningsScore", "slope"]
+    + ["outfieldSpeed", "dewFactor", "avgFirstInningsScore", "slope"]
     + [f"climate_{k}" for k in _CLIMATE]
     + [f"mod_{k}" for k in stadium_mod.MODIFIER_CHANNELS]
 )
@@ -292,7 +287,7 @@ def stadiums_to_csv(rows=None):
         row = {"name": s["name"], "aliases": "|".join(s["aliases"]), "city": s["city"],
                "country": s["country"], "altitudeMeters": s["altitudeMeters"],
                "outfieldSpeed": s["outfieldSpeed"], "dewFactor": s["dewFactor"],
-               "typicalPitch": s["typicalPitch"], "avgFirstInningsScore": s["avgFirstInningsScore"],
+               "avgFirstInningsScore": s["avgFirstInningsScore"],
                "slope": "yes" if s["slope"] else "no"}
         for r in BOUNDARY_REGIONS:
             row[f"boundary_{r}"] = s["boundaryM"][r]
@@ -313,8 +308,9 @@ def csv_to_stadiums(text):
         line = {(k or "").strip(): (v or "").strip() for k, v in line.items()}
         if not line.get("name"):
             continue
-        d = {"name": line["name"], "aliases": line.get("aliases", ""),
-             "boundaryM": {}, "climate": {}, "modifiers": {}}
+        d = {"name": line["name"], "boundaryM": {}, "climate": {}, "modifiers": {}}
+        if "aliases" in line:
+            d["aliases"] = line["aliases"]
         for k, v in line.items():
             if v == "":
                 continue

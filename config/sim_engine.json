@@ -17,7 +17,7 @@
 
   "pitches": {
     "Dusty":  {"paceHelp": 0.75, "seamHelp": 0.70, "swingHelp": 0.85, "spinTurn": 2.00, "bounce": 0.80, "battingEase": 0.58, "paceWicketChance": 0.72, "spinWicketChance": 1.85, "crackRate": 1.80},
-    "Green":  {"paceHelp": 1.30, "seamHelp": 1.80, "swingHelp": 1.40, "spinTurn": 0.60, "bounce": 1.15, "battingEase": 1.00, "paceWicketChance": 1.55, "spinWicketChance": 0.60, "crackRate": 0.40},
+    "Green":  {"paceHelp": 1.30, "seamHelp": 1.80, "swingHelp": 1.40, "spinTurn": 0.60, "bounce": 1.15, "battingEase": 0.97, "paceWicketChance": 1.30, "spinWicketChance": 0.56, "crackRate": 0.40},
     "Dry":    {"paceHelp": 0.90, "seamHelp": 0.80, "swingHelp": 0.90, "spinTurn": 1.50, "bounce": 0.85, "battingEase": 0.74, "paceWicketChance": 0.85, "spinWicketChance": 1.45, "crackRate": 1.40},
     "Bouncy": {"paceHelp": 1.50, "seamHelp": 1.10, "swingHelp": 1.00, "spinTurn": 0.90, "bounce": 1.80, "battingEase": 1.15, "paceWicketChance": 1.45, "spinWicketChance": 0.85, "crackRate": 0.50},
     "Even":   {"paceHelp": 1.05, "seamHelp": 1.05, "swingHelp": 1.05, "spinTurn": 1.05, "bounce": 1.05, "battingEase": 1.12, "paceWicketChance": 1.00, "spinWicketChance": 1.00, "crackRate": 0.70},

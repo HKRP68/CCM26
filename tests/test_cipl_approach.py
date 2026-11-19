@@ -109,7 +109,9 @@ class ApproachBalanceTests(unittest.TestCase):
         from tests.test_bot_captain import _player
         out = []
         for over in (3, 9, 18):
-            for bat_r, bowl_r in ((70, 70), (85, 60), (55, 85)):
+            # Include a tougher specialist matchup and a tailender facing an
+            # elite bowler so the on-field choices survive a pitch retune.
+            for bat_r, bowl_r in ((70, 70), (85, 60), (68, 82), (55, 85), (35, 95)):
                 for pitch, faced in (("Hard", 10), ("Flat", 0), ("Green", 10)):
                     order = [_player(100 + i, f"B{i}", "Batsman", 20, bat_r)
                              for i in range(11)]

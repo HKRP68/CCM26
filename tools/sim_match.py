@@ -33,7 +33,7 @@ def main(argv=None):
     ap.add_argument("--team1", default="India")
     ap.add_argument("--team2", default="Australia")
     ap.add_argument("--stadium", default="Wankhede Stadium")
-    ap.add_argument("--pitch", default=None, help="Dry/Dusty/Bouncy/Flat/Hard/Even/Green (default: the ground's)")
+    ap.add_argument("--pitch", default=None, help="Dry/Dusty/Bouncy/Flat/Hard/Even/Green (default: Even)")
     ap.add_argument("--grass", default=None, choices=[None, "Heavy", "Medium", "Little", "No Grass"])
     ap.add_argument("--seed", default=None)
     ap.add_argument("--session", default=None, choices=["Morning", "Afternoon", "Evening", "Night"])

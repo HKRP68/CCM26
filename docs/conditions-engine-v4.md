@@ -23,6 +23,11 @@ to rebalance.
 
 ## Playing a match
 
+The match selects the pitch independently of the stadium. An omitted pitch in
+the standalone simulator uses Even. The venue supplies its boundaries, outfield,
+climate, and ground modifiers. Older stadium imports can still contain
+`typicalPitch`, which is ignored.
+
 ```
 python -m tools.sim_match --format T20 --stadium Wankhede --seed 7
 python -m tools.sim_match --format ODI --stadium "Eden Gardens" --session Afternoon --daynight --seed 42

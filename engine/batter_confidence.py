@@ -99,3 +99,20 @@ def rotate_after_long_innings(weights, balls_faced, required_rate=0.0):
     out["Single"] = out.get("Single", 0.0) + (four + six) * 0.8
     out["Double"] = out.get("Double", 0.0) + (four + six) * 0.2
     return out
+
+
+def maiden_pressure_hook(legal_balls, bowler_runs, balls_per_unit=6):
+    """Look for a single in the last two balls of a scoreless bowling unit."""
+    remaining = balls_per_unit - legal_balls
+    share = {2: 0.22, 1: 0.36}.get(remaining)
+    if bowler_runs or share is None:
+        return None
+
+    def hook(weights):
+        out = dict(weights)
+        moved = out.get("Dot", 0.0) * share
+        out["Dot"] = out.get("Dot", 0.0) - moved
+        out["Single"] = out.get("Single", 0.0) + moved
+        return out
+
+    return hook

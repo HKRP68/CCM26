@@ -13,7 +13,7 @@ import unittest
 
 import yaml
 
-from engine import ball_outcome as bo
+from engine import ball_outcome as bo, batter_confidence
 import services.cipl_match as cm
 
 
@@ -110,10 +110,33 @@ class BoundaryBalanceTests(unittest.TestCase):
             self.assertAlmostEqual(sum(profile["scoring_matrix"].values()), 1.0,
                                    delta=0.006, msg=name)
 
+    def test_green_still_squeezes_runs_and_favours_seam_over_spin(self):
+        green, even = self.profiles["Green"], self.profiles["Even"]
+        g, e = green["scoring_matrix"], even["scoring_matrix"]
+        self.assertGreater(g["Dot"], e["Dot"])
+        self.assertLess(g["Wicket"], e["Wicket"])
+        self.assertLess(4 * g["Four"] + 6 * g["Six"], 4 * e["Four"] + 6 * e["Six"])
+        self.assertGreater(green["wicket_factors"]["Fast-medium"], green["wicket_factors"]["Leg spin"])
+
 
 class DotPressureTests(unittest.TestCase):
     """A batter who cannot get the ball away goes looking for the boundary.
     Without it, dots cluster and maidens become routine."""
+
+    def test_maiden_pressure_moves_dots_to_singles_only_late_and_at_zero_cost(self):
+        weights = {"Dot": 0.4, "Single": 0.35, "Four": 0.15, "Wicket": 0.05, "Extras": 0.05}
+        for balls_per_unit in (5, 6):
+            with self.subTest(balls_per_unit=balls_per_unit):
+                last = balls_per_unit - 1
+                self.assertIsNone(batter_confidence.maiden_pressure_hook(last - 2, 0, balls_per_unit))
+                self.assertIsNone(batter_confidence.maiden_pressure_hook(last, 1, balls_per_unit))
+                early = batter_confidence.maiden_pressure_hook(last - 1, 0, balls_per_unit)(weights)
+                late = batter_confidence.maiden_pressure_hook(last, 0, balls_per_unit)(weights)
+                self.assertLess(late["Dot"], early["Dot"])
+                self.assertGreater(late["Single"], early["Single"])
+                self.assertAlmostEqual(sum(late.values()), sum(weights.values()))
+                for key in ("Four", "Wicket", "Extras"):
+                    self.assertEqual(late[key], weights[key])
 
     def test_dots_are_counted_only_while_unbroken(self):
         self.assertEqual(cm._trailing_dots(["0", "0", "0"]), 3)

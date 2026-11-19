@@ -2315,6 +2315,8 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             # A batter who has been tied down for three or more balls starts
             # looking for the boundary — the reason maidens are rare in T20.
             dot_hook = _make_dot_pressure_hook(bs.get("dot_streak", 0), _trailing_dots(over_timeline))
+            maiden_hook = batter_confidence.maiden_pressure_hook(
+                balls_this_over, bws["this_over_runs"], bpu)
             # Per-batter recent rhythm. Rebuilt for each delivery so an over
             # can respond to its own events, including after a wicket/resume.
             # Distinct from permanent settling and team-wide momentum/MPI.
@@ -2358,7 +2360,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                                          ceiling_hook, contest_hook,
                                          dps_hook, mpi_hook, pitch_hook, dot_hook,
                                          confidence_hook,
-                                         bat_p_hook, bowl_p_hook, sledge_hook,
+                                         bat_p_hook, bowl_p_hook, sledge_hook, maiden_hook,
                                          clutch_hook, chase_hook, finisher_hook)
             delivery_ctx = dict(approach_ctx, partnership_overs=state.get("partnership_balls", 0) / bpu)
             oc = _normalize_outcome(calculate_outcome(

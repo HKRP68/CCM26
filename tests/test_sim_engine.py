@@ -114,7 +114,6 @@ def test_seeded_grounds_resolve_by_alias():
     assert stadium.find("Wankhede Stadium").dew_factor == 85
     assert stadium.find("Lord's").slope is True
     assert stadium.find("Eden Gardens").avg_first_innings == 165
-    assert stadium.find("Newlands").typical_pitch == "Green"
     assert stadium.find("Nowhere Park") is None
 
 
@@ -357,6 +356,19 @@ def _play(fmt, seed, a=None, b=None, **kw):
     return simulate_match(MatchSetup(fmt=fmt, team1=a or _xi("A", 80, 80), team2=b or _xi("B", 80, 80),
                                      seed=seed, stadium=stadium.find(kw.pop("ground", "MCG")),
                                      commentary=kw.pop("commentary", False), **kw))
+
+
+def test_wankhede_plays_the_match_pitch_and_falls_back_to_even(cfg):
+    green = _play("T20", 27, ground="Wankhede", pitch="Green", overs=5)
+    even = _play("T20", 27, ground="Wankhede", overs=5)
+    assert green["pitch"] == "Green" and even["pitch"] == "Even"
+    assert green["stadium"]["name"] == even["stadium"]["name"] == "Wankhede Stadium"
+
+    state = {"overs": 20, "pitch_type": "Green", "stadium": "Wankhede",
+             "conditions": {"match_time": "3:00 PM"}}
+    conditions, _ = hook.conditions_for(state, 0, 1, cfg)
+    assert conditions.pitch == "Green"
+    assert conditions.stadium.avg_boundary == pytest.approx(62.75)
 
 
 @pytest.mark.parametrize("fmt", ["T20", "ODI", "Test"])

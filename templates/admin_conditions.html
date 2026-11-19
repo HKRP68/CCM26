@@ -43,14 +43,13 @@
 <div class="table-wrap">
 <table>
   <thead><tr>
-    <th>Stadium</th><th>Pitch</th><th>Boundaries (SL/FL/LOn/LOff)</th><th>Six ×</th>
+    <th>Stadium</th><th>Boundaries (SL/FL/LOn/LOff)</th><th>Six ×</th>
     <th>Outfield</th><th>Dew</th><th>Altitude</th><th>Own modifiers</th><th></th>
   </tr></thead>
   <tbody>
   {% for s in rows %}
     <tr>
-      <td><strong>{{ s.name }}</strong><div style="font-size:.75rem; color:var(--muted);">{{ s.city }}{% if s.country %}, {{ s.country }}{% endif %}{% if s.aliases %} · {{ s.aliases|join(', ') }}{% endif %}</div></td>
-      <td>{{ s.typicalPitch }}{% if s.slope %} · slope{% endif %}</td>
+      <td><strong>{{ s.name }}</strong><div style="font-size:.75rem; color:var(--muted);">{{ s.city }}{% if s.country %}, {{ s.country }}{% endif %}{% if s.aliases %} · {{ s.aliases|join(', ') }}{% endif %}{% if s.slope %} · slope{% endif %}</div></td>
       <td style="white-space:nowrap;">{{ s.boundaryM.squareLeg }}/{{ s.boundaryM.fineLeg }}/{{ s.boundaryM.longOn }}/{{ s.boundaryM.longOff }} m</td>
       <td>×{{ s.report.six }}</td>
       <td>{{ s.outfieldSpeed }}</td>
@@ -68,7 +67,7 @@
       </td>
     </tr>
   {% else %}
-    <tr><td colspan="9" style="color:var(--muted);">No stadiums match.</td></tr>
+    <tr><td colspan="8" style="color:var(--muted);">No stadiums match.</td></tr>
   {% endfor %}
   </tbody>
 </table>

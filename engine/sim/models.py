@@ -58,7 +58,6 @@ class Stadium:
         ("squareLeg", 70.0), ("fineLeg", 66.0), ("longOn", 75.0), ("longOff", 74.0))
     outfield_speed: float = 65.0    # 0 mud .. 100 lightning
     dew_factor: float = 0.0         # 0..100
-    typical_pitch: str = "Even"
     avg_first_innings: int = 170
     slope: bool = False
     climate: Tuple[Tuple[str, float], ...] = ()

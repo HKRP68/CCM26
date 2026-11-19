@@ -118,7 +118,7 @@ def pitch_character(pitch, phase, innings, bowling_type, over_frac):
         if innings == 2:
             fade *= 0.6
         if pace:
-            m = {"Wicket": 1.0 + 0.25 * fade, "Four": 1.0 + 0.08 * fade,
+            m = {"Wicket": 1.0 + 0.13 * fade, "Four": 1.0 + 0.08 * fade,
                  "Single": 1.0 - 0.06 * fade}
             strength = fade
         else:

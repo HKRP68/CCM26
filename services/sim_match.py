@@ -22,6 +22,7 @@ import random
 from datetime import datetime
 
 from engine.ball_outcome import calculate_outcome
+from engine.batter_confidence import maiden_pressure_hook
 from engine.pressure_engine import PressureEngine
 from engine.game_state_engine import (
     make_ball_event,
@@ -616,6 +617,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 pitch_wear=pitch_wear,
                 batting_position=batting_position,
                 format_config=engine_fmt,
+                weight_hook=maiden_pressure_hook(balls_this_over, over_bowler_runs),
             ))
 
             otype = oc.get("type")        # "run" | "wicket" | "extra"

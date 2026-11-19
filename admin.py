@@ -26842,7 +26842,7 @@ def _cond_form_to_raw(form):
     from engine.sim.models import BOUNDARY_REGIONS
     from engine.sim.stadium import MODIFIER_CHANNELS
     raw = {k: form.get(k, "") for k in ("name", "aliases", "city", "country", "altitudeMeters",
-                                        "outfieldSpeed", "dewFactor", "typicalPitch",
+                                        "outfieldSpeed", "dewFactor",
                                         "avgFirstInningsScore")}
     raw["slope"] = bool(form.get("slope"))
     raw["boundaryM"] = {r: form.get(f"boundary_{r}", "") for r in BOUNDARY_REGIONS}
@@ -26855,7 +26855,6 @@ def _cond_form_to_raw(form):
 @app.route("/conditions")
 @login_required
 def admin_conditions():
-    from engine import pitch_registry
     from engine.sim import stadium as sim_stadium, store as sim_store
     from engine.sim.config import get_config
     from services import conditions_io
@@ -26880,7 +26879,7 @@ def admin_conditions():
             overrides=conditions_io._flatten(overrides),
             history_stadiums=sim_store.history("stadiums", db, limit=10),
             history_modifiers=sim_store.history("modifiers", db, limit=10),
-            warnings=cfg.get("_warnings") or [], pitches=pitch_registry.PITCHES)
+            warnings=cfg.get("_warnings") or [])
     finally:
         db.close()
 
@@ -26969,7 +26968,6 @@ def admin_conditions_import():
 @app.route("/conditions/stadium", methods=["GET", "POST"])
 @login_required
 def admin_conditions_stadium():
-    from engine import pitch_registry
     from engine.sim import stadium as sim_stadium
     from engine.sim.models import BOUNDARY_REGIONS
     from services import conditions_io
@@ -26987,7 +26985,7 @@ def admin_conditions_stadium():
             db.rollback()
             flash(f"Not saved: {exc}", "error")
             return render_template("admin_conditions_stadium.html", s=raw, original=original,
-                                   regions=BOUNDARY_REGIONS, pitches=pitch_registry.PITCHES,
+                                   regions=BOUNDARY_REGIONS,
                                    modifiers=sim_stadium.MODIFIER_CHANNELS)
         finally:
             db.close()
@@ -27007,7 +27005,7 @@ def admin_conditions_stadium():
             flash(f"No stadium called {original!r}.", "error")
             return redirect(url_for("admin_conditions"))
     return render_template("admin_conditions_stadium.html", s=s, original=original,
-                           regions=BOUNDARY_REGIONS, pitches=pitch_registry.PITCHES,
+                           regions=BOUNDARY_REGIONS,
                            modifiers=sim_stadium.MODIFIER_CHANNELS)
 
 

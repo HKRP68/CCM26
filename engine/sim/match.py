@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from engine import pitch_registry
+from engine.batter_confidence import maiden_pressure_hook
 from engine.sim import (ball_aging, commentary, drama, factors, outcome,
                         rain_dls, situation, stadium as stadium_mod, weather as weather_mod)
 from engine.sim.config import get_config
@@ -33,7 +34,7 @@ class MatchSetup:
     fmt: str = "T20"                        # T20 | ODI | Test
     team1: Optional[Team] = None
     team2: Optional[Team] = None
-    pitch: Optional[str] = None             # None → the stadium's typical pitch
+    pitch: Optional[str] = None             # None → the neutral Even pitch
     stadium: Optional[Stadium] = None
     weather: Optional[Weather] = None       # None → from the stadium's climate
     time: Optional[MatchTime] = None        # None → format default
@@ -117,7 +118,7 @@ class _Match:
         self.rng = SimRng(seed)
         self.seed = self.rng.seed
         self.stadium = setup.stadium or stadium_mod.neutral(cfg)
-        self.pitch = pitch_registry.normalise(setup.pitch or self.stadium.typical_pitch)
+        self.pitch = pitch_registry.normalise(setup.pitch)
         wrng = self.rng.derive("weather-init")
         self.weather = setup.weather or weather_mod.from_climate(dict(self.stadium.climate), wrng)
         fcfg = cfg["formats"][self.fmt]
@@ -397,9 +398,11 @@ class _Match:
                 if sixes_forced == 0:
                     ev_text = event.text
             if res is None:
+                rotation = (maiden_pressure_hook(legal, bowler_runs_this_over)
+                            if self.fmt != "Test" else None)
                 res = outcome.resolve(cfg["outcome"]["base"][self._base_key()], mults, brng, cfg,
                                       bowler=bowler, fs=fs, shot_quality=shot_q, drop_chance=drop,
-                                      free_hit=inn.free_hit)
+                                      free_hit=inn.free_hit, weight_hook=rotation)
             if ev_text:
                 self.drama_events.append({"innings": inn.number, "over": over_idx + 1,
                                           "kind": event.kind, "text": ev_text})

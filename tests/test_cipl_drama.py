@@ -41,7 +41,8 @@ class PitchCharacterTests(unittest.TestCase):
     def test_green_seams_early_and_burns_off(self):
         early, s_early = md.pitch_character("Green", "powerplay", 1, "Fast", 0.05)
         late, s_late = md.pitch_character("Green", "death", 1, "Fast", 0.9)
-        self.assertGreater(early["Wicket"], 1.15)
+        self.assertGreater(early["Wicket"], 1.0)
+        self.assertLess(early["Wicket"], 1.15)
         self.assertGreater(s_early, s_late)
         self.assertAlmostEqual(late.get("Wicket", 1.0), 1.0)
 

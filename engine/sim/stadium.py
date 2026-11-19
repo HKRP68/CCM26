@@ -51,7 +51,6 @@ def from_dict(d):
         boundary_m=bm,
         outfield_speed=float(d.get("outfieldSpeed", 65)),
         dew_factor=float(d.get("dewFactor", 0)),
-        typical_pitch=d.get("typicalPitch", "Even"),
         avg_first_innings=int(d.get("avgFirstInningsScore", 170)),
         slope=bool(d.get("slope", False)),
         climate=tuple(sorted((d.get("climate") or {}).items())),
@@ -66,7 +65,7 @@ def to_dict(s):
         "name": s.name, "city": s.city, "country": s.country,
         "altitudeMeters": s.altitude_m, "boundaryM": s.boundaries,
         "outfieldSpeed": s.outfield_speed, "dewFactor": s.dew_factor,
-        "typicalPitch": s.typical_pitch, "avgFirstInningsScore": s.avg_first_innings,
+        "avgFirstInningsScore": s.avg_first_innings,
         "slope": s.slope, "climate": dict(s.climate),
         "aliases": list(s.aliases), "modifiers": dict(s.modifiers),
     }

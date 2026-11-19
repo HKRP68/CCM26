@@ -48,13 +48,13 @@ pitch_profiles:
   Green:
     description: "Green seaming top — the seam and swing bowler's pitch; nick off or cash in (par ~181)"
     scoring_matrix:
-      Dot: 0.3919
-      Single: 0.2966
+      Dot: 0.4099
+      Single: 0.3026
       Double: 0.0551
       Three: 0.0051
-      Four: 0.1215
-      Six: 0.0445
-      Wicket: 0.026
+      Four: 0.1075
+      Six: 0.0385
+      Wicket: 0.022
       Extras: 0.0593
     run_factor: 0.900
     wicket_factors:

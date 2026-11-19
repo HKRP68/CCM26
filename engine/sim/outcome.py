@@ -179,7 +179,7 @@ def _wicket_type(bowler, fs, rng, cfg):
 
 
 def resolve(base, mults, rng, cfg, *, bowler=None, fs=None, shot_quality=1.0,
-            drop_chance=0.0, bounds=None, free_hit=False):
+            drop_chance=0.0, bounds=None, free_hit=False, weight_hook=None):
     """Draw one delivery from ``base`` scaled by ``mults``."""
     lo, hi = bounds or (cfg["meta"]["standalone_bounds"]["min"],
                         cfg["meta"]["standalone_bounds"]["max"])
@@ -189,6 +189,8 @@ def resolve(base, mults, rng, cfg, *, bowler=None, fs=None, shot_quality=1.0,
         for bucket, multiplier in cfg["outcome"].get("freeHit", {}).items():
             mults[bucket] = mults.get(bucket, 1.0) * multiplier
     weights = apply_mults(base, mults)
+    if weight_hook is not None:
+        weights = weight_hook(weights)
     bucket = rng.weighted(weights)
 
     if bucket == "Extras":

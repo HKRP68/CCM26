@@ -49,6 +49,17 @@ def test_csv_is_detected_without_an_extension():
     assert parsed["stadiums"][0]["name"] == "Perth Stadium"
 
 
+def test_legacy_stadium_pitch_in_csv_is_ignored():
+    current = _rows()
+    upload = cio.parse_upload("name,typicalPitch,dewFactor\nWankhede Stadium,Flat,50\n", "s.csv")
+    plan = cio.plan_import(upload, current_rows=current)
+    assert not plan["errors"]
+    assert plan["stadiums"]["changed"][0]["fields"] == [["dewFactor", 85.0, 50.0]]
+    rows = plan["stadiums"]["result"]
+    assert all("typicalPitch" not in row for row in rows)
+    assert "typicalPitch" not in cio.stadiums_to_csv(rows)
+
+
 def test_merge_adds_and_updates_keeping_the_rest():
     edited = dict(_rows()[0], dewFactor=99)
     plan = cio.plan_import({"stadiums": [edited, GROUND]}, current_rows=_rows())
@@ -85,10 +96,10 @@ def test_validation_clamps_fills_and_drops_with_warnings():
     assert clean["outfieldSpeed"] == 100
     assert clean["boundaryM"]["squareLeg"] == 40
     assert clean["boundaryM"]["longOn"] == 55  # filled with the mean of what was given
-    assert clean["typicalPitch"] == "Even"
+    assert "typicalPitch" not in clean
     assert clean["modifiers"] == {"sixes": 2}   # clamped; 1.0 dropped as "no effect"
     text = " ".join(warns)
-    for bit in ("outfieldSpeed", "longOn", "concrete", "nonsense", "sixes"):
+    for bit in ("outfieldSpeed", "longOn", "nonsense", "sixes"):
         assert bit in text
 
 
@@ -259,11 +270,15 @@ class ConditionsAdminTests(unittest.TestCase):
         r = self.client.get("/conditions")
         self.assertEqual(r.status_code, 200)
         self.assertIn(b"Melbourne Cricket Ground", r.data)
+        form = self.client.get("/conditions/stadium?name=Wankhede%20Stadium")
+        self.assertEqual(form.status_code, 200)
+        self.assertNotIn(b'name="typicalPitch"', form.data)
         j = self.client.get("/conditions/export?what=all")
         self.assertEqual(j.status_code, 200)
         self.assertIn("attachment", j.headers["Content-Disposition"])
         body = json.loads(j.data)
         self.assertEqual(body["format"], cio.FORMAT)
+        self.assertTrue(all("typicalPitch" not in ground for ground in body["stadiums"]))
         c = self.client.get("/conditions/export?fmt=csv")
         self.assertTrue(c.data.decode().startswith("name,aliases"))
 

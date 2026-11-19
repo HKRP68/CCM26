@@ -39,8 +39,6 @@
       <input name="altitudeMeters" type="number" min="0" max="5000" value="{{ s.get('altitudeMeters', 0) }}"></div>
     <div class="form-group"><label>Avg first-innings score (T20)</label>
       <input name="avgFirstInningsScore" type="number" min="60" max="350" value="{{ s.get('avgFirstInningsScore', 170) }}"></div>
-    <div class="form-group"><label>Typical pitch</label>
-      <select name="typicalPitch">{% for p in pitches %}<option value="{{ p }}" {{ 'selected' if s.get('typicalPitch', 'Even') == p }}>{{ p }}</option>{% endfor %}</select></div>
     <div class="form-group"><label>Slope (Lord's style: seam ×1.05)</label>
       <input type="checkbox" name="slope" value="1" {{ 'checked' if s.get('slope') }} style="width:auto;"></div>
   </div>

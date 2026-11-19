@@ -225,13 +225,13 @@ PITCH_SCORING_MATRIX = {
         "Extras":   0.0453,
     },
     "Green": {  # Boom or bust — you cannot rotate, so the runs are fours
-        "Dot":      0.3919,
-        "Single":   0.2966,
+        "Dot":      0.4099,
+        "Single":   0.3026,
         "Double":   0.0551,
         "Three":    0.0051,
-        "Four":     0.1215,
-        "Six":      0.0445,
-        "Wicket":   0.0260,
+        "Four":     0.1075,
+        "Six":      0.0385,
+        "Wicket":   0.0220,
         "Extras":   0.0593,
     },
     "Dry": {    # Nudge and work; the big shot is a mug's game
