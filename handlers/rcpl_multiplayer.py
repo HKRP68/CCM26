@@ -3,7 +3,7 @@
 import asyncio
 import logging
 
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import CallbackQueryHandler
 
 from handlers import auction_league as solo
@@ -11,6 +11,14 @@ from services import auction_league_service as AL
 from services import rcpl_multiplayer_service as MP
 
 logger = logging.getLogger(__name__)
+
+
+async def clear_action_buttons(query):
+    """Retire a one-shot prompt once its state change has committed."""
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except TelegramError:
+        logger.debug("RCPL action keyboard could not be removed", exc_info=True)
 
 
 def group_help():
@@ -22,11 +30,11 @@ def group_help():
         "2. Tap a franchise to manage it. Each manager can take one team. "
         "Use <b>Release my team</b> to give up your seat before the auction.\n"
         "3. The host taps <b>Start auction</b> and confirms. AI managers take every open franchise.\n"
-        "4. Send /bid or tap the price to bid from your franchise purse. Each bid resets the 30-second clock. "
+        "4. Send /rcplbid or tap the price to bid from your franchise purse. Each bid resets the 30-second clock. "
         "The host can pause, resume or end the auction. Unsold players may return in one accelerated round. "
         "Use /auction to reopen the board and check squads and purses.\n"
-        "5. Follow the season with your auction squad. Tap <b>Ready to play</b> on your fixtures "
-        "to simulate them. AI-only fixtures run automatically.\n\n"
+        "5. Send <code>/rcpl play</code> or tap <b>Ready to play</b> to start a live fixture with your auction squad. "
+        "Both human managers must be ready. AI-only fixtures run automatically.\n\n"
         "Send /rcpl again to return to the group’s lobby, auction or season. "
         "For a solo career, send /rcpl in a private chat with the bot.\n\n"
         + solo.HELP_LINE
@@ -72,6 +80,7 @@ async def _show(update, context, room, *, edit=False):
                 if "not modified" in str(exc).lower():
                     return
                 logger.info("RCPL lobby %s could not be edited: %s", room.id, exc)
+                await clear_action_buttons(update.callback_query)
         await solo._send(context, room.chat_id, text, rows)
     elif phase == AL.PHASE_AUCTION or (phase == AL.PHASE_ABANDONED and room.board_message_id):
         from handlers.rcpl_multiplayer_auction import show_auction
@@ -86,6 +95,10 @@ async def _show(update, context, room, *, edit=False):
 async def group_command(update, context, args):
     chat_id = update.effective_chat.id
     room = await asyncio.to_thread(MP.get_room, chat_id)
+    if args and args[0].lower() == "play":
+        from handlers.rcpl_season import play_command
+        await play_command(update, context, room)
+        return
     if room:
         await _show(update, context, room)
         return
@@ -158,7 +171,9 @@ async def lobby_callback(update, context):
                 text = "<b>Close this RCPL room?</b> This ends the group’s league."
                 button = ("Yes, close room", f"rcpl:cancel:{rid}")
             await q.answer()
-            await solo._send(context, chat.id, text, [[button, ("Back to room", f"rcpl:lobby:{rid}")]])
+            await q.message.reply_text(
+                text, parse_mode="HTML", reply_to_message_id=q.message.message_id,
+                reply_markup=solo._kb([[button, ("Back to room", f"rcpl:lobby:{rid}")]]))
             return
         if action == "claim":
             idx = int(parts[3])
@@ -182,6 +197,15 @@ async def lobby_callback(update, context):
         await q.answer(str(exc)[:195], show_alert=True)
         return
     await q.answer(toast[:195])
+    if action in ("go", "cancel"):
+        await clear_action_buttons(q)
+        parent = getattr(q.message, "reply_to_message", None)
+        if parent is not None:
+            try:
+                await context.bot.edit_message_reply_markup(chat_id=chat.id, message_id=parent.message_id,
+                                                            reply_markup=None)
+            except TelegramError:
+                logger.debug("RCPL parent keyboard could not be removed", exc_info=True)
     await _show(update, context, room, edit=True)
 
 

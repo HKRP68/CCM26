@@ -2318,24 +2318,13 @@ async def launch_cl_tour_match(context, *, message_obj, chat_id, host, target,
     return True, None
 
 
-async def launch_auction_league_match(context, *, chat_id, host, bot_user,
+async def launch_auction_league_match(context, *, chat_id, host, opponent,
                                      league_record, league_key, league_name,
                                      host_team, target_team, host_squad,
                                      target_squad, tag, home_team=None,
                                      team_codes=None, session=None,
-                                     pitch=None, venue=None):
-    """Open an Auction League fixture against the AI.
-
-    Both squads were bought at auction, so they ride on the draft
-    (``inline_squads``, mode ``auction_league``) exactly as a /cdraft squad
-    does, and the rest is the ordinary /ciplbot flow: the bot's XI → your XI →
-    toss → ball by ball. The fixture's pitch (drawn at random when the season
-    was scheduled) and venue are fixed, so nobody picks the surface.
-    ``tag`` (save id, fixture number, your user id, the opponent's name) rides
-    through to the match state so the result is written back into the season.
-
-    Returns ``(ok, error_message)``.
-    """
+                                     pitch=None, venue=None, vs_bot=True):
+    """Open a live Auction League fixture using both auction-built squads."""
     if _active_draft_in_chat(context.bot_data, chat_id) or _waiting_cm_lobby_in_chat(context.bot_data, chat_id):
         return False, ("⚠️ A match setup is already in progress in this chat. "
                        "Finish or cancel it first.")
@@ -2343,10 +2332,12 @@ async def launch_auction_league_match(context, *, chat_id, host, bot_user,
         busy = _active_match_in_chat(session, chat_id) or _active_cric_match_in_chat(session, chat_id)
         if busy:
             return False, _chat_busy_message(busy)
-        if _active_match_for_user(session, host.id) or _active_cric_match_for_user(session, host.id):
-            return False, "⚠️ You already have an active match — finish it first."
-    if _cric_lobby_for_user(context.bot_data, host.id) or _cm_user_lobby(context.bot_data, host.id):
-        return False, "⚠️ You already have a waiting match lobby — finish it first."
+        if any(_active_match_for_user(session, player.id) or _active_cric_match_for_user(session, player.id)
+               for player in ((host,) if vs_bot else (host, opponent))):
+            return False, "A manager is already playing another match. Try again when it ends."
+    if any(_cric_lobby_for_user(context.bot_data, player.id) or _cm_user_lobby(context.bot_data, player.id)
+           for player in ((host,) if vs_bot else (host, opponent))):
+        return False, "A manager already has a match lobby. Close it before playing this fixture."
 
     draft_id = random.randint(100000, 999999)
     while context.bot_data.get(_challenge_team_draft_key(draft_id)):
@@ -2357,8 +2348,8 @@ async def launch_auction_league_match(context, *, chat_id, host, bot_user,
         "mode": "auction_league",
         "host_user_id": host.id,
         "host_tg_id": host.telegram_id,
-        "target_user_id": bot_user.id,
-        "target_tg_id": bot_user.telegram_id,
+        "target_user_id": opponent.id,
+        "target_tg_id": opponent.telegram_id,
         "league_key": league_key,
         "league_name": league_name,
         "is_tournament": False,
@@ -2366,7 +2357,7 @@ async def launch_auction_league_match(context, *, chat_id, host, bot_user,
         "owner_locked": False,
         "host_allowed_teams": None,
         "target_allowed_teams": None,
-        "vs_bot": True,
+        "vs_bot": vs_bot,
         "overs": None,
         "teams": [host_team, target_team],
         "team_codes": dict(team_codes or {}),
@@ -2375,8 +2366,8 @@ async def launch_auction_league_match(context, *, chat_id, host, bot_user,
         "target_team": target_team,
         "host": {"user_id": host.id, "tg_id": host.telegram_id,
                  "name": _user_label(host)},
-        "target": {"user_id": bot_user.id, "tg_id": bot_user.telegram_id,
-                   "name": "🤖 Bot"},
+        "target": {"user_id": opponent.id, "tg_id": opponent.telegram_id,
+                   "name": "🤖 Bot" if vs_bot else _user_label(opponent)},
         "inline_squads": {"host": list(host_squad), "target": list(target_squad)},
         "auction_league": dict(tag),
         "overseas_min": 0,

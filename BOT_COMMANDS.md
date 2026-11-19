@@ -457,7 +457,7 @@ board**; bids are announced as one short line per burst.
 manager claim a franchise. The host starts a 45-second countdown and AI
 managers take any open teams. Each franchise starts with ₹120 Cr.
 
-- Send `/bid` in the group or tap the quoted price. Each accepted bid resets
+- Send `/rcplbid` in the group or tap the quoted price. Each accepted bid resets
   the 30-second clock. The board shows the high bid and calls going once and
   going twice before the hammer.
 - Use `/auction` to bring up the live board, purses and squads. The bot pins
@@ -465,8 +465,11 @@ managers take any open teams. Each franchise starts with ₹120 Cr.
 - The host can pause, resume or end the auction. Eligible unsold players can
   return for one accelerated round. Ending early honours the high bid and
   fills any gaps in the squads.
-- During the season, human managers mark themselves ready to simulate their
-  fixtures. AI-only fixtures advance automatically.
+- During the season, reply to another manager with `/rcpl play` to open the
+  scheduled fixture between your claimed franchises. Both managers must be
+  ready before the toss and Playing XI selection.
+- Send `/rcpl play` directly when your fixture is against AI. The bot controls
+  the opposition using its auction squad. AI-only fixtures simulate automatically.
 
 **Solo career.** Send `/rcpl` in a private chat with the bot to run one
 franchise against the AI for a season.

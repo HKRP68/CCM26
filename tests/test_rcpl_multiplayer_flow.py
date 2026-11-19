@@ -99,6 +99,7 @@ class GroupBot:
 
         self.chat = NS(id=chat, type="supergroup", title="RCPL test group")
         self.messages = []
+        self.replies = {}
         self.handlers = []
         self.jobs = {}
         def schedule(callback, *, interval, first, name):
@@ -115,16 +116,20 @@ class GroupBot:
             text = args[-1]
         buttons = [b.callback_data for row in getattr(reply_markup, "inline_keyboard", ()) for b in row]
         self.messages.append((text, buttons))
+        if kwargs.get("reply_to_message_id"):
+            for data in buttons:
+                self.replies[data] = NS(message_id=kwargs["reply_to_message_id"])
         return NS(chat_id=self.chat.id, chat=self.chat, message_id=len(self.messages),
                   reply_text=self.send, edit_text=self.send)
 
     def callback(self, prefix):
         return next(data for _, rows in reversed(self.messages) for data in rows if data.startswith(prefix))
 
-    async def act(self, uid, *, command=None, args=(), button=None):
+    async def act(self, uid, *, command=None, args=(), button=None, reply_to=None):
         tg = NS(id=uid, first_name=f"Manager {uid}", username=f"user{uid}", is_bot=False)
+        reply = NS(from_user=NS(id=reply_to, is_bot=False)) if reply_to is not None else self.replies.get(button)
         message = NS(chat=self.chat, chat_id=self.chat.id, message_id=1, text=command,
-                     reply_text=self.send, edit_text=self.send)
+                     reply_text=self.send, edit_text=self.send, reply_to_message=reply)
         q = NS(data=button, from_user=tg, message=message, answer=AsyncMock(),
                edit_message_text=self.send, edit_message_reply_markup=AsyncMock()) if button else None
         upd = NS(effective_chat=self.chat, effective_message=message, message=message, effective_user=tg, callback_query=q)
@@ -134,6 +139,7 @@ class GroupBot:
         else:
             handler = next(h for h in self.handlers if command in getattr(h, "commands", ()))
         await handler.callback(upd, self.context)
+        return q
 
 
 def test_group_command_to_live_auction(league):
@@ -153,7 +159,9 @@ def test_group_command_to_live_auction(league):
         confirm = bot.callback(f"rcpl:go:{room.id}")
         await bot.act(guest, button=confirm)
         assert mp.get_room(chat).state["phase"] == "lobby"
-        await bot.act(host, button=confirm)
+        started = await bot.act(host, button=confirm)
+        started.edit_message_reply_markup.assert_awaited_once_with(reply_markup=None)
+        bot.bot.edit_message_reply_markup.assert_awaited_once()
         assert mp.get_room(chat).state["phase"] == al.PHASE_AUCTION
         assert mp.get_room(chat).state["lot"] is None
         assert "Auction starts at" in bot.messages[-1][0]
@@ -174,11 +182,11 @@ def test_group_command_to_live_auction(league):
         await reopened.act(guest, button=pause)
         assert mp.get_room(chat).state.get("paused_at") is None
         await reopened.act(host, button=pause)
-        await reopened.act(guest, command="bid")
+        await reopened.act(guest, command="rcplbid")
         assert "paused" in reopened.messages[-1][0].lower()
         assert mp.get_room(chat).state["lot"]["leader"] is None
         await reopened.act(host, button=reopened.callback(f"rcpl:a:{room.id}:resume"))
-        await reopened.act(guest, command="bid")
+        await reopened.act(guest, command="rcplbid")
         leading = mp.get_room(chat).state["lot"]
         assert mp.get_room(chat).state["managers"][leading["leader"]]["id"] == guest
         await reopened.act(host, button=first_bid)
@@ -272,8 +280,13 @@ def test_bids_build_both_human_and_ai_squads_and_playoffs(league):
             mp.change_room(chat, rid, lambda r: season.play(r.state, 999, fixture["no"]))
         for index, uid in enumerate(captains):
             room = mp.change_room(chat, rid, lambda r: season.play(r.state, uid, fixture["no"]))
-            if index == 0 and len(captains) == 2:
-                assert al.pending_fixtures(room.state)[0]["no"] == fixture["no"]
+            assert al.fixture_by_no(room.state, fixture["no"])["status"] == "pending"
+            assert season.ready_to_start(room.state, al.fixture_by_no(room.state, fixture["no"])) == (index == len(captains) - 1)
+
+        def simulate_test_result(current):
+            al.simulate_fixture(current.state, al.fixture_by_no(current.state, fixture["no"]))
+            season.prepare(current.state)
+        room = mp.change_room(chat, rid, simulate_test_result)
     assert room.state["champion"] in names
     assert all(fx["status"] == "done" for fx in room.state["fixtures"])
     assert mp.get_room(chat) is None
@@ -352,3 +365,80 @@ def test_full_auction_keeps_enough_players_for_each_squad():
     assert sum(group["accelerated"] for group in state["sets"]) == 1
     assert all(al.squad_is_legal(state, team) for team in state["team_order"])
     assert len(al.taken_pids(state)) == sum(len(team["squad"]) for team in state["teams"].values())
+
+
+def test_rcpl_play_uses_claimed_teams_and_real_match_setup(league):
+    from database import get_session
+    from handlers.challenge import _active_draft_in_chat, _challenge_xi_selection
+    from handlers.cipl_play import _launch_after_toss
+    from models import Match, User
+    from services import auction_league_service as al, rcpl_multiplayer_service as mp, rcpl_season as season
+
+    async def run():
+        host, guest, chat = 601, 602, -406
+        bot = GroupBot(chat)
+        with get_session() as session:
+            session.add_all([User(telegram_id=host, first_name="Host"), User(telegram_id=guest, first_name="Guest")])
+            session.commit()
+        room = mp.create_room(chat, host, "Host", league)
+        mp.claim_team(chat, room.id, host, "Host", 0)
+        mp.claim_team(chat, room.id, guest, "Guest", 1)
+        mp.start_room(chat, room.id, host)
+        room = mp.finish_auction(chat, room.id, host)
+        names = room.state["team_order"]
+        fixture = season.next_fixture(room.state, host, guest)
+        await bot.act(host, command="rcpl", args=["Play"], reply_to=9)
+        assert "Reply to the RCPL manager" in bot.messages[-1][0]
+        await bot.act(host, command="rcpl", args=["Play"], reply_to=guest)
+        assert _active_draft_in_chat(bot.context.bot_data, chat) is None
+        button = bot.callback(f"rcpl:s:{room.id}:play:{fixture['no']}")
+        await bot.act(guest, button=button)
+        assert button not in bot.messages[-1][1]
+
+        draft = _active_draft_in_chat(bot.context.bot_data, chat)
+        assert draft and not draft["vs_bot"]
+        assert {draft["host_team"], draft["target_team"]} == set(names[:2])
+        assert {draft["host_tg_id"], draft["target_tg_id"]} == {host, guest}
+        claimed = mp.get_room(chat, room.id).state
+        for side, team_key in (("host", "host_team"), ("target", "target_team")):
+            assert {c["id"] for c in draft["inline_squads"][side]} == {
+                c["id"] for c in al.match_cards(claimed, draft[team_key])
+            }
+
+        tag = draft["auction_league"]
+        for side in ("host", "target"):
+            selection = _challenge_xi_selection(draft, side)
+            cards = draft["inline_squads"][side]
+            selection["player_ids"] = [p["id"] for p in al.ai_playing_xi(cards, 4)]
+            selection["confirmed"] = True
+        q = NS(answer=AsyncMock(), edit_message_text=AsyncMock(), message=NS(message_id=30))
+        with patch("handlers.cipl_play.begin_cipl_match", new_callable=AsyncMock) as handoff:
+            await _launch_after_toss(bot.context, q, draft, draft["draft_id"], "bat", "host")
+            handoff.assert_awaited_once()
+        match_id = draft["match_id"]
+        with get_session() as session:
+            assert session.get(Match, match_id).status == "active"
+            with pytest.raises(al.AuctionLeagueError, match="no longer available"):
+                season.bind_match(session, chat, tag, match_id)
+        result = {"auction_league": tag, "match_id": match_id, "innings": 2,
+                  "inn1_bat_team": tag["user_team"], "inn1_runs": 140, "inn1_wickets": 6, "inn1_balls": 120,
+                  "bat_team_name": tag["opp_team"], "total_runs": 120, "total_wickets": 8, "balls": 120}
+        with get_session() as session:
+            al.record_user_result(session, result, tag["user_id"])
+            al.record_user_result(session, result, tag["user_id"])
+            session.get(Match, match_id).status = "completed"
+            session.commit()
+
+        stamped = mp.get_room(chat, room.id).state
+        assert al.fixture_by_no(stamped, fixture["no"])["result"]["winner"] == tag["user_team"]
+        assert stamped["table"][tag["user_team"]]["p"] == 1
+
+        # With a fresh context, the next fixture for this manager is against AI.
+        reopened = GroupBot(chat)
+        await reopened.act(host, command="rcpl", args=["play"])
+        draft = _active_draft_in_chat(reopened.context.bot_data, chat)
+        assert draft and draft["vs_bot"] and draft["host_team"] == names[0]
+        assert draft["target_team"] not in names[:2]
+        assert _challenge_xi_selection(draft, "target")["confirmed"]
+
+    asyncio.run(run())

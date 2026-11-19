@@ -3066,6 +3066,9 @@ def record_user_result(session, match_state, winner_user_id=None):
     """
     from models import AuctionLeagueSave
     tag = (match_state or {}).get("auction_league") or {}
+    if tag.get("room_id"):
+        from services import rcpl_season
+        return rcpl_season.record_match(session, match_state, tag, winner_user_id)
     save_id = tag.get("save_id")
     if not save_id:
         return None

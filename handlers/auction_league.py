@@ -1766,7 +1766,7 @@ async def _launch_fixture(q, context, car, no):
            "user_team": me, "opp_team": opp}
     stage = AL.STAGE_LABEL[fx["stage"]]
     ok, err = await launch_auction_league_match(
-        context, chat_id=q.message.chat_id, host=host, bot_user=bot_user,
+        context, chat_id=q.message.chat_id, host=host, opponent=bot_user,
         league_record=league, league_key=state["league"].get("key"),
         league_name=f"{state['league']['name']} Auction League · {stage}",
         host_team=me, target_team=opp,

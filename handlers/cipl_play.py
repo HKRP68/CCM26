@@ -697,7 +697,12 @@ def _rematch_row(state):
     rematch reopens the same competition instead of silently dropping to IPL.
     """
     if state.get("auction_league"):
-        save_id = (state.get("auction_league") or {}).get("save_id")
+        tag = state["auction_league"]
+        if tag.get("room_id"):
+            room_id = tag["room_id"]
+            return [[InlineKeyboardButton("Next RCPL fixture", callback_data=f"rcpl:s:{room_id}:home"),
+                     InlineKeyboardButton("Standings", callback_data=f"rcpl:s:{room_id}:table")]]
+        save_id = tag.get("save_id")
         return [[InlineKeyboardButton("▶️ Next fixture",
                                       callback_data=f"al:play:{save_id}"),
                  InlineKeyboardButton("📊 Table",
@@ -2057,6 +2062,16 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         if draft.get("reserved_fixture_id"):
             from services import league_schedule_service as _lss
             _lss.bind_fixture_match(session, draft["reserved_fixture_id"], match.id)
+        auction_tag = draft.get("auction_league") or {}
+        if auction_tag.get("room_id"):
+            from services import rcpl_season
+            from services.auction_league_service import AuctionLeagueError
+            try:
+                rcpl_season.bind_match(session, draft["chat_id"], auction_tag, match.id)
+            except AuctionLeagueError as exc:
+                session.rollback()
+                await _fail(str(exc))
+                return
         session.commit()
         launch_committed = True
         # The live Match row now exists — only now does the chat belong to an
@@ -2307,6 +2322,8 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
     # Set after mark_bot_match, which clears every other competition tag.
     if draft and draft.get("auction_league"):
         state["auction_league"] = dict(draft["auction_league"])
+        if state["auction_league"].get("room_id"):
+            state["stats_disabled"] = True
     await _ss(context, match.id, state, next_action=A_PICK_CIPL_BOWLER,
               force=True)
     # Clear the pre-match setup chatter (keep the toss result) and pin a polished
@@ -5359,7 +5376,7 @@ async def _complete_match(context, mid, state):
                        f"by {result['margin']} {result['margin_type']}!")
     try:
         miniapp_row = list(_miniapp_row(state) or [])
-        if _is_bot_match(state):
+        if _is_bot_match(state) or (state.get("auction_league") or {}).get("room_id"):
             miniapp_row += _rematch_row(state)
     except Exception:
         logger.exception("cipl end-of-match keyboard build failed for match %s", mid)

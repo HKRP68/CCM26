@@ -23,7 +23,7 @@ playmatch pm match wpm sim simmatch testwpm pbo bowlout catch cm
 cdraft challengedraft letsplay lp lpbot lpb letsplaybot ciplbot ciplb
 challengeiplbot lpmulti lpm letsplaymulti superover pso vsbot vsb wpmbot wpmb
 botvsbot bvb botmatch spectate cmtours createtour cltour cltours cmulti
-auctionleague al rcpl bid alplay simtolast alsim simset alresume skipplayer altrade
+auctionleague al rcpl rcplbid bid alplay simtolast alsim simset alresume skipplayer altrade
 unscramble u ju su lucky7 powerplay pp score21 s21 wordchase wc bluff mole
 cartel fantasy fl ipl160 16o iplsim 16-0ipl wsp wspbot wspb
 """.split())

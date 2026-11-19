@@ -74,7 +74,7 @@ def _board(room):
                  f"\n{managers} human managers · {len(state['team_order']) - managers} AI managers"
                  f"\n{AL.money(AL.PURSE_LAKH)} per franchise · up to {AL.SQUAD_MAX} players"
                  f"\nSquad minimums · {rules}\n"
-                 f"\nBid with /bid or tap the quoted price once bidding opens."
+                 f"\nBid with /rcplbid or tap the quoted price once bidding opens."
                  f"\nEach accepted bid resets the {auction.LOT_SECONDS}s clock.")
     elif lot is None:
         text += "\n\n" + _sale(room)
@@ -104,7 +104,7 @@ def _board(room):
             call = {10: "Going once", 3: "Going twice"}.get(lot.get("closing_call"))
             if call:
                 text += f"\n\n<b>{call} · {lot['closing_call']}s or less</b>"
-            text += f"\nCloses at {clock} · /bid raises to {AL.money(price)}"
+            text += f"\nCloses at {clock} · /rcplbid raises to {AL.money(price)}"
             rows.insert(0, [(f"Bid {AL.money(price)}", f"rcpl:a:{rid}:bid:{lot['seq']}:{price}")])
     action, label = ("resume", "Resume") if paused else ("pause", "Pause")
     rows.append([(label, f"rcpl:a:{rid}:{action}"), ("End auction", f"rcpl:a:{rid}:finish")])
@@ -234,6 +234,9 @@ async def auction_callback(update, context):
         await q.answer(str(exc)[:195], show_alert=True)
         return
     await q.answer(feedback)
+    if action == "end":
+        from handlers.rcpl_multiplayer import clear_action_buttons
+        await clear_action_buttons(q)
     await _show_update(context, state, room)
 
 
@@ -260,13 +263,18 @@ async def auction_command(update, context):
 async def bid_command(update, context):
     chat = update.effective_chat
     user = update.effective_user
-    if not chat or chat.type not in ("group", "supergroup") or not user or user.is_bot:
+    if not chat or not user or user.is_bot:
+        return
+    message = update.effective_message
+    if chat.type not in ("group", "supergroup"):
+        await message.reply_text("Send /rcplbid in the group hosting the auction.")
         return
     room = await asyncio.to_thread(MP.get_room, chat.id)
     if room is None or room.state["phase"] != AL.PHASE_AUCTION:
+        await message.reply_text("There is no live RCPL auction in this group. Use /rcpl to see the room.")
         return
     if context.args:
-        await update.effective_message.reply_text("Send /bid without an amount to take the next price.")
+        await message.reply_text("Send /rcplbid without an amount to take the next price.")
         return
     try:
         updated = await asyncio.to_thread(MP.bid, chat.id, room.id, user.id)
@@ -306,7 +314,7 @@ async def _clock(context):
 
 def register_auction_handlers(app):
     app.add_handler(CommandHandler("auction", auction_command))
-    app.add_handler(CommandHandler("bid", bid_command))
+    app.add_handler(CommandHandler(["rcplbid", "bid"], bid_command))
     app.add_handler(CallbackQueryHandler(auction_callback, pattern=r"^rcpl:a:"))
     if getattr(app, "job_queue", None):
         app.job_queue.run_repeating(_clock, interval=1.5, first=1, name="rcpl_auction_clock")
