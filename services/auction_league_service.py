@@ -101,8 +101,8 @@ def _price_scale(state):
     the auction *and* in line with what the franchises can still afford."""
     key = (id(state), len(state.get("sold_log") or []), len(state.get("unsold") or []))
     hit = _SCALE_CACHE.get(key)
-    if hit is not None:
-        return hit
+    if hit is not None and hit[0] is state:
+        return hit[1]
     taken = taken_pids(state)
     pool = sorted((c["rating"] for c in state["pool"].values() if c["id"] not in taken),
                   reverse=True)
@@ -112,7 +112,8 @@ def _price_scale(state):
     value = sum(_fair_raw(r) for r in pool[:max(1, wanted)])
     scale = (money * FAIR_SPEND_SHARE) / max(1e-9, value)
     _SCALE_CACHE.clear()
-    _SCALE_CACHE[key] = scale
+    # A reloaded auction can reuse a discarded snapshot's Python id.
+    _SCALE_CACHE[key] = (state, scale)
     return scale
 
 
@@ -1492,9 +1493,7 @@ def autofill(state):
     # The AI sides also complete the shape of the XI they field (4/1/3/3),
     # then fill out to the squad size they planned, with base-price signings
     # from the unsold players while they have room and the money.
-    for name in state["team_order"]:
-        if name == state["user_team"]:
-            continue
+    for name in _ai_names(state):
         for role, want in XI_TARGET.items():
             while role_counts(state, name)[role] < want:
                 purse = int(state["teams"][name]["purse"])
@@ -1532,7 +1531,8 @@ def finish_auction(state):
     assign_grounds(state)
     state["fixtures"] = build_league_fixtures(state)
     state["table"] = {n: _empty_row() for n in state["team_order"]}
-    open_trade_window(state)
+    if "managers" not in state:
+        open_trade_window(state)
     return filled
 
 
@@ -1757,6 +1757,8 @@ def trade_legal(state, team_a, pid_a, team_b, pid_b):
 
 
 def _ai_names(state):
+    if "managers" in state:
+        return [name for name in state["team_order"] if name not in state["managers"]]
     return [n for n in state["team_order"] if n != state["user_team"]]
 
 

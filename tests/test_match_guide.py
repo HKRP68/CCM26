@@ -13,6 +13,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from handlers import match_guide as mg
+from services.franchise_bot_registry import COMMANDS as FRANCHISE_COMMANDS
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -24,7 +25,8 @@ DYNAMIC = re.compile(r"^(cipl|cbbl|cint|cmulti|challenge\w*|tipl\w*)$", re.I)
 
 
 def _registered():
-    names = set()
+    # The guide also lists group auctions served by the dedicated franchise bot.
+    names = {name for _, aliases, _ in FRANCHISE_COMMANDS for name in aliases}
     for path in [ROOT / "bot.py", *sorted((ROOT / "handlers").glob("*.py"))]:
         src = path.read_text(encoding="utf-8")
         for entry in re.findall(r'CommandHandler\(\s*(\[[^\]]*\]|"[a-z0-9_]+")', src):

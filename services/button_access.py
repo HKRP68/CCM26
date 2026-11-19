@@ -36,6 +36,8 @@ _current_button_owner: contextvars.ContextVar[Optional[int]] = contextvars.Conte
 # second participant, and match-control buttons where the match state itself
 # validates whose turn/action it is.
 SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
+    # Group RCPL checks room, host and franchise ownership for each action.
+    "rcpl:",
     # Franchise draft handlers persist the confirmation's actor and check
     # current team authority; navigation and controls carry their own actor.
     "fd_",

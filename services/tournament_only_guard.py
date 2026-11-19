@@ -50,7 +50,7 @@ GAME_CALLBACK_PREFIXES = (
     "matchacc_", "oversset_", "overscustom_", "toss_", "op1_", "op2_",
     "selbowl_", "bvar_", "blen_", "bspin_", "bshot_", "nbowl_", "newbat_",
     "pboacc_", "bopick_", "cdj_", "cdp_", "vsb_", "wpmb_", "bvb_",
-    "botmatch_", "botdiff_", "botplay_", "mtp_", "cltplay_", "al:",
+    "botmatch_", "botdiff_", "botplay_", "mtp_", "cltplay_", "al:", "rcpl:",
     "us_ans_", "l7_", "s21_", "bm_", "mh_", "ct_",
     "ctm_", "cto_", "tac_", "clt_acc_", "cltset_",
 )
@@ -149,6 +149,13 @@ def _draft_action(draft, *, lp=False):
 def _callback_action(data, context, chat_id):
     if data in SAFE_CALLBACKS or data.startswith(SAFE_CALLBACK_PREFIXES):
         return None
+    # A restricted account can still browse or release its RCPL seat.
+    if data.startswith(("rcpl:lobby:", "rcpl:leave:", "rcpl:close:", "rcpl:cancel:")):
+        return None
+    if data.startswith(("rcpl:a:", "rcpl:s:")):
+        parts = data.split(":", 4)
+        if len(parts) > 3 and parts[3] in {"board", "teams", "squad", "purses", "home", "table", "fixtures"}:
+            return None
     if data == "us_join":
         return Action()
     if not data.startswith(GAME_CALLBACK_PREFIXES):

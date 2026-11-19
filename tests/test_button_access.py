@@ -54,9 +54,10 @@ class ButtonAccessTests(unittest.TestCase):
 
     def test_shared_button_ignores_registered_owner(self):
         button_access.register_button_owner(100, 200, 111)
-        update = DummyUpdate(DummyQuery(222, "cric_join_123"))
-
-        self.assertTrue(button_access.check_callback_owner(update))
+        for data in ("cric_join_123", "rcpl:claim:7:1", "rcpl:a:bid:7:4:50"):
+            with self.subTest(data=data):
+                self.assertTrue(button_access.check_callback_owner(
+                    DummyUpdate(DummyQuery(222, data))))
 
     def test_super_over_invitation_buttons_allow_the_guest(self):
         button_access.register_button_owner(100, 200, 111)

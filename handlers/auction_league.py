@@ -5,7 +5,7 @@ AI franchises in a set-by-set auction, then play the season — a round robin
 and the IPL playoffs — against them. The rules and the AI live in
 ``services.auction_league_service``; this module is the Telegram face of it.
 
-Commands (all DM-only):
+Commands (solo in DM, multiplayer lobby in groups):
   /auctionleague /al /rcpl   the hub — start, continue or review a career;
                              /rcpl IPL goes straight to that league's teams
   /rcpl help  /alhelp        the full guide (works in groups too)
@@ -1015,15 +1015,22 @@ async def _send_help(context, chat_id):
 
 async def alhelp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/alhelp — the Auction League guide (works anywhere)."""
-    await _send_help(context, update.effective_chat.id)
+    if update.effective_chat.type in ("group", "supergroup") and not context.bot_data.get("franchise_dedicated"):
+        from handlers.rcpl_multiplayer import group_help
+        await _send(context, update.effective_chat.id, group_help())
+    else:
+        await _send_help(context, update.effective_chat.id)
 
 
 async def auction_league_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/auctionleague — the hub; ``/rcpl help`` for the guide."""
     args = [a for a in (context.args or []) if a]
     if args and args[0].lower() in HELP_WORDS:
-        # The guide works anywhere — it only explains. The mode itself is DM-only.
-        await _send_help(context, update.effective_chat.id)
+        await alhelp_handler(update, context)
+        return
+    if update.effective_chat.type in ("group", "supergroup") and not context.bot_data.get("franchise_dedicated"):
+        from handlers.rcpl_multiplayer import group_command
+        await group_command(update, context, args)
         return
     if not await _require_dm(update, context):
         return
@@ -1118,29 +1125,28 @@ INTRO = (
     "playoffs 4,000). Matches themselves are unranked practice.\n"
     f"🎟 Entry fee: <b>{ENTRY_FEE_GEMS} 💎</b>, paid when you start the career.\n\n"
     "💡 Tip: <code>/rcpl IPL</code> jumps straight to a league's teams · "
-    "<code>/rcpl help</code> for the full guide.\n"
+    "<code>/rcpl help</code> for the full guide. Send <code>/rcpl</code> in a group to play together.\n"
     f"{HELP_LINE}\n\n"
     "Choose your league:"
 )
 
 
+def _league_options():
+    from models import ChallengeLeague
+    with get_session() as session:
+        leagues = (session.query(ChallengeLeague).filter(ChallengeLeague.is_active.is_(True))
+                   .order_by(ChallengeLeague.sort_order, ChallengeLeague.name).all())
+        return [(league.id, league.name) for league in leagues if _auction_enabled(league)][:12]
+
+
 async def _start_new(chat_id, context):
-    session = get_session()
-    try:
-        from models import ChallengeLeague
-        leagues = [lg for lg in (session.query(ChallengeLeague)
-                                 .filter(ChallengeLeague.is_active.is_(True))
-                                 .order_by(ChallengeLeague.sort_order,
-                                           ChallengeLeague.name).all())
-                   if _auction_enabled(lg)]
-        if not leagues:
-            await _send(context, chat_id, "❌ No leagues are set up yet.")
-            return
-        rows = [[(f"🏆 {lg.name}", f"al:lg:{lg.id}")] for lg in leagues[:12]]
-        rows.append([("❓ How it works", "al:help")])
-        await _send(context, chat_id, INTRO, rows)
-    finally:
-        session.close()
+    leagues = _league_options()
+    if not leagues:
+        await _send(context, chat_id, "❌ No leagues are set up yet.")
+        return
+    rows = [[(f"🏆 {name}", f"al:lg:{league_id}")] for league_id, name in leagues]
+    rows.append([("❓ How it works", "al:help")])
+    await _send(context, chat_id, INTRO, rows)
 
 
 def _league_key(session, league):
@@ -2332,3 +2338,5 @@ def register(app):
     app.add_handler(CommandHandler("alcard", alcard_handler))
     app.add_handler(CommandHandler(["alhof", "rcplhof"], alhof_handler))
     app.add_handler(CallbackQueryHandler(auction_league_callback, pattern=r"^al:"))
+    from handlers.rcpl_multiplayer import register_multiplayer
+    register_multiplayer(app)

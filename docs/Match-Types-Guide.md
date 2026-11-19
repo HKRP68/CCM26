@@ -37,7 +37,7 @@ chat with `/matchguide <topic>` — e.g. `/matchguide letsplay`.
 | 19 | [Challenge League Tournament](#-19-challenge-league-tournament) | `ctour` |
 | 20 | [Tournament Draft](#-20-tournament-draft) | `draft` |
 | 21 | [Franchise Auction](#-21-franchise-auction) | `auction` |
-| 22 | [Auction League — solo career](#-22-auction-league--solo-career) | `rcpl` |
+| 22 | [RCPL Auction League](#-22-rcpl-auction-league) | `rcpl` |
 | 23 | [League Seasons](#-23-league-seasons) | `seasons` |
 | 24 | [Fantasy League](#-24-fantasy-league) | `fantasy` |
 | 25 | [Ranked ladder, rivalries & rewards](#-25-ranked-ladder-rivalries--rewards) | `ranked` |
@@ -118,6 +118,7 @@ message.
 | A **best-of series** vs one friend | `/cltour` | fixed league teams | 20 | ✅ | ✅ |
 | A **competition** with a table & playoffs | `/lptour`, `/ctour` | roster / franchise | 20 | ✅ | ✅ |
 | Run a franchise for a **whole season**, solo | `/rcpl` 💬 | auctioned squad | 20 | ❌ | season prizes |
+| Bid against friends and AI managers in a group | `/rcpl` 👥 | auctioned squad | 20 | ❌ | group standings |
 
 **Short version:** new → `/lpbot`. With a friend → `/letsplay`. Franchise
 cricket → `/cipl`. In a hurry → `/sim`. Competitive → tournaments (§18–19).
@@ -599,11 +600,19 @@ also answer in DM. Full guides: `docs/Franchise-Auction-Guide-Users.pdf`.
 
 ---
 
-## 💼 22. Auction League — solo career
+## 💼 22. RCPL Auction League
 <!-- topic: rcpl auction-league solo career al -->
 
-**Run one franchise for a whole IPL-style season, alone, in DM** — the AI runs
-everyone else. 💬
+**Group multiplayer.** Open `/rcpl` in the group and choose a league. Each
+manager can claim one franchise. The host starts the auction and AI managers
+take the open teams. Bid on the shared player card, inspect the squads and
+check what each team can still spend. Send `/rcpl` again to reopen the board.
+The host can finish early to award the high bid and fill short squads. The bot
+simulates season fixtures when their human managers are ready. AI-only
+fixtures advance automatically.
+
+**Solo career.** In a private chat, you run one franchise for an IPL-style
+season against AI managers.
 
 ```text
 /rcpl            ← the hub: start, continue, or see the last career

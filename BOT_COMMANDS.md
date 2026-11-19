@@ -32,7 +32,7 @@ the exact ones the bot answers to.
 | 11 | [Challenge League Tournament](#11-challenge-league-tournament) |
 | 12 | [Tournament Draft](#12-tournament-draft) |
 | 13 | [Franchise Auction](#13-franchise-auction) |
-| 13a | [Auction League (solo career)](#13a-auction-league-solo-career) |
+| 13a | [RCPL Auction League](#13a-rcpl-auction-league) |
 | 14 | [Fantasy league](#14-fantasy-league) |
 | 15 | [Mini games & social games](#15-mini-games--social-games) |
 | 16 | [Quests, achievements & referrals](#16-quests-achievements--referrals) |
@@ -451,11 +451,19 @@ team's retention list.
 Every new player is announced with his **player card** and a fresh **pinned
 board**; bids are announced as one short line per burst.
 
-## 13a. Auction League (solo career)
+## 13a. RCPL Auction League
 
-A single-player, RCPL-style career in a Challenge League (IPL by default),
-played **in a DM with the bot**. You run one franchise; every other franchise
-is run by the AI.
+**Group multiplayer.** Send `/rcpl` in the group, select a Challenge League
+and invite the managers to pick their franchises. The host starts the auction
+when the group is ready. AI managers take any unclaimed teams. Each manager
+bids with their own franchise's ₹120 Cr purse. Reopen the group board with
+`/rcpl` to see the current lot, check the purses or inspect the squads. The
+host can finish early to award the current high bid and fill short squads.
+During the season, human managers mark themselves ready to simulate their
+fixtures. AI-only fixtures advance automatically.
+
+**Solo career.** Send `/rcpl` in a private chat with the bot to run one
+franchise against the AI for a season.
 
 1. **Pick your franchise** — `/rcpl IPL` (any league's name) goes straight to
    its teams; plain `/rcpl` lists the leagues. Choose whether the AI retains
@@ -537,7 +545,7 @@ most one paid season every 48 hours, and not if you conceded a match.
 
 | Command | Aliases | What it does |
 |---------|---------|--------------|
-| `/rcpl [league]` 💬 | `/auctionleague` `/al` | The hub — start a career (`/rcpl IPL` goes straight to that league's teams), continue it, or see how the last one ended |
+| `/rcpl [league]` | `/auctionleague` `/al` | Open multiplayer in a group or your solo career in a DM. Use `/rcpl IPL` to select the league directly. |
 | `/rcpl help` | `/alhelp` `/rcplhelp` | The full Auction League guide — rules, buttons, rewards and commands. Works in groups too, and from the ❓ Help button |
 | `/skipplayer` 💬 | — | Decide the player on the block at once — your side bids on autopilot, and you see who bought him |
 | `/alpause` 💬 | — | Pause the auction: no clock, nothing moves |
@@ -767,7 +775,7 @@ Available in the dedicated Franchise Auction bot; website features are retained.
 | dot shortcuts | `.bid` · `.bid 2cr` · `.purse` · `.squad` · `.board` · `.lb` |
 | `/anextplayer [n]` | `/anextplayer 10` |
 
-**Auction League (solo):**
+**RCPL Auction League**
 
 | Usage | Example |
 |-------|---------|

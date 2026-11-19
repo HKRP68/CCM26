@@ -5507,6 +5507,29 @@ class SimEngineSetting(Base):
 # AUCTION LEAGUE — a solo, RCPL-style career: retain, auction, season
 # ══════════════════════════════════════════════════════════════════════
 
+class AuctionLeagueRoom(Base):
+    """A group's RCPL lobby, auction and season, stored separately from solo careers."""
+    __tablename__ = "auction_league_rooms"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chat_id = Column(BigInteger, nullable=False)
+    host_id = Column(BigInteger, nullable=False)
+    host_name = Column(String(150), nullable=False)
+    status = Column(String(20), nullable=False)
+    state_json = Column(Text, nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    next_event_at = Column(Float, nullable=True)
+    board_message_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    __table_args__ = (
+        Index("uq_rcpl_active_chat", "chat_id", unique=True,
+              sqlite_where=text("status IN ('lobby','auction','season')"),
+              postgresql_where=text("status IN ('lobby','auction','season')")),
+        Index("ix_rcpl_auction_clock", "status", "next_event_at"),
+    )
+
+
 class AuctionLeagueSave(Base):
     """One player's Auction League career (``/auctionleague``).
 
