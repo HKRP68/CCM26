@@ -265,7 +265,7 @@
   {% for fixture in series.fixtures %}
   <details>
     <summary>
-      Match {{ fixture.number }} · #{{ fixture.id }} · {{ cup.STATUS[cup.fixture_status(championship, fixture, next_by_team)] }}
+      {{ cup.match_reference(fixture) }} · Match {{ fixture.number }} · #{{ fixture.id }} · {{ cup.STATUS[cup.fixture_status(championship, fixture, next_by_team)] }}
       {% if result_label(fixture) %} · {{ result_label(fixture) }}{% endif %}
       {% if fixture.match and fixture.match.pitch_type %} · {{ fixture.match.pitch_type }}
       {% elif fixture.random_pitch and championship.pitch_mode == "random" %} · {{ fixture.random_pitch }}{% endif %}

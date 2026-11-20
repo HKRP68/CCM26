@@ -16395,10 +16395,11 @@ def _apply_tournament_view_commands(db, league):
     warning — the rest still save."""
     import json as _json
     from services import tournament_service as _ts
+    from services.t20_championship import GLOBAL_COMMANDS
     from models import T20ChampionshipCommand
     from handlers.challenge import normalize_challenge_league
     norm = _ts.normalize_command
-    championship_commands = {cmd for cmd, in db.query(T20ChampionshipCommand.command)}
+    championship_commands = {cmd for cmd, in db.query(T20ChampionshipCommand.command)} | GLOBAL_COMMANDS
     taken = dict.fromkeys(championship_commands, "World T20 Championships")
     for other in db.query(ChallengeLeague).filter(ChallengeLeague.id != league.id).all():
         for raw in (other.command, other.tournament_command, other.fixtures_command):

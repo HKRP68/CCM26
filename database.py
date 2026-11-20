@@ -776,6 +776,7 @@ def _migrate_add_columns():
     _try_add("t20_championship_teams", "home_stadium", "VARCHAR(120)")
     _try_add("t20_championship_series", "semifinal_no", "INTEGER")
     _try_add("t20_championship_fixtures", "random_pitch", "VARCHAR(20)")
+    _try_add("t20_championship_fixtures", "last_reminded_at", "TIMESTAMP")
 
     # League Tournament Structure: league formats, groups, schedule + knockouts.
     # New table ``tournament_groups`` is created by create_all above; these add the

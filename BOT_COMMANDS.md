@@ -449,11 +449,14 @@ Championship commands send rich Telegram replies with an HTML fallback.
 
 | Example command | What it does |
 |-----------------|--------------|
-| `/wt20c` · `/wt20cplay [fixture ID]` | Play the next fixture as a reply. The bare command opens the overview when sent on its own |
+| `/wt20c` · `/wt20cplay [fixture ID]` | Play the next fixture as a reply. Accepts a numeric fixture ID or a reference like `S1M1`. The bare command opens the overview when sent on its own |
 | `/wt20cinfo` · `/wt20chelp` | Overview and command reference |
 | `/wt20ctable` | PCT table, series bonus points and home/away series records |
 | `/wt20cfixtures [team=ID]` | Expand a series to see match IDs, playing windows, statuses and results. Use Previous and Next to browse a long schedule |
 | `/wt20cteamfix [team]` | Your team's fixtures. Supply a team name, short name or ID to look up another team |
+| `/wtctoday [championship prefix]` · `/wt20c today [team]` | See matches opening or due today in IST. Owners and co-owners see their team's fixtures by default |
+| `/wt20c deadline S1M1 YYYY-MM-DD [HH:MM]` 🔒 | Extend one scheduled or postponed match by its displayed reference or numeric ID. Date only means end of day in IST |
+| `/matchremind today [championship prefix]` 🔒 | Preview reminders for pending matches opening or due today in IST. Accepts `YYYY-MM-DD` for another date. Confirm to post in the group and DM both teams' owners and co-owners |
 | `/wt20cteams` | Teams, squad versions, owners and team IDs |
 | `/wt20cseries [series ID]` | Tour results and Player of the Series |
 | `/wt20c playoffs` | Semifinal and final bracket, fixtures and results |
@@ -461,7 +464,7 @@ Championship commands send rich Telegram replies with an HTML fallback.
 | `/wt20cstats [team=ID] [series=ID]` | Batting, bowling, fielding and awards statistics |
 | `/wt20cplayer <name> [team=ID] [series=ID]` | One player's statistics |
 | `/wt20cawards` | Championship award leaders and final awards |
-| `/wt20cscorecard <fixture ID>` | Archived innings and player figures |
+| `/wt20cscorecard <fixture ID>` | Archived innings and player figures. Accepts a numeric fixture ID or a reference like `S1M1` |
 
 Space-separated commands such as `/wt20c teamfixtures`, `/wt20c table` and
 `/wt20c scorecard 42` work too.

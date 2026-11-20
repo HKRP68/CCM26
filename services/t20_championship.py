@@ -3,7 +3,7 @@ import json
 import random
 import re
 from collections import defaultdict, deque
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from fractions import Fraction
 
 from sqlalchemy import update
@@ -16,7 +16,7 @@ from models import (
     T20ChampionshipTeam as Team,
 )
 from services import t20_championship_schedule
-from utils.tournament_time import IST_OFFSET
+from utils.tournament_time import IST_OFFSET, parse_ist_deadline
 
 ROSTER_MODE = "World T20 Championship squads"
 POINTS = {"win": 2, "tie": 1, "no_result": 1, "loss": 0, "forfeit": 0, "series_win_bonus": 0}
@@ -29,7 +29,8 @@ MATCH_COUNTS = {"single": 1, "best_of_3": 3, "best_of_5": 5, "five_matches": 5}
 CLINCH_WINS = {"best_of_3": 2, "best_of_5": 3}
 VIEWS = ("info", "help", "table", "fixtures", "teams", "series", "final", "stats", "player",
          "awards", "scorecard", "play", "teamfix")
-SUBCOMMANDS = (*VIEWS, "playoffs", "teamfixtures")
+SUBCOMMANDS = (*VIEWS, "playoffs", "teamfixtures", "today", "deadline")
+GLOBAL_COMMANDS = {"wtctoday", "matchremind"}
 TERMINAL = {"completed", "forfeited", "cancelled"}
 STATUS = {"upcoming": "Upcoming", "available": "Available to Play", "live": "In Progress",
           "completed": "Completed", "postponed": "Postponed", "forfeited": "Forfeited",
@@ -60,7 +61,7 @@ def create(db, name, command, reserved=()):
     if not re.fullmatch(r"[a-z0-9_]{1,23}", command):
         raise ValueError("Enter a command prefix of 1–23 letters, digits or underscores.")
     championship = Championship(name=name, command=command, points=json.dumps(POINTS))
-    taken = set(reserved)
+    taken = set(reserved) | GLOBAL_COMMANDS
     commands = all_commands(championship)
     taken.update(command for command, in
                  db.query(Command.command).filter(Command.command.in_(commands)))
@@ -121,6 +122,69 @@ def lock(db, championship_id):
 def day_window(day):
     opens = datetime.combine(day, datetime.min.time()) - IST_OFFSET
     return opens, opens + timedelta(days=1, seconds=-1)
+
+
+def match_reference(fixture):
+    return f"S{fixture.series_id}M{fixture.number}"
+
+
+def find_fixture(rows, reference):
+    match = re.fullmatch(r"S([0-9]{1,10})M([0-9]{1,10})", reference, re.IGNORECASE)
+    if match:
+        series_id, number = map(int, match.groups())
+        return next((f for series in rows if series.id == series_id
+                     for f in series.fixtures if f.number == number), None)
+    numeric = reference.removeprefix("#")
+    if re.fullmatch(r"[0-9]{1,10}", numeric):
+        return next((f for series in rows for f in series.fixtures if f.id == int(numeric)), None)
+    return None
+
+
+def extend_deadline(db, championship_id, reference, value, now=None):
+    now = now or datetime.utcnow()
+    if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+        try:
+            deadline = day_window(date.fromisoformat(value))[1]
+        except (ValueError, OverflowError) as exc:
+            raise ValueError("Enter a valid date in YYYY-MM-DD format.") from exc
+    else:
+        deadline = parse_ist_deadline(value)
+    championship = lock(db, championship_id)
+    if championship is None or championship.completed_at:
+        raise ValueError("This championship is closed for deadline changes.")
+    fixture = find_fixture(series_list(db, championship, refresh=True), reference)
+    if fixture is None:
+        raise ValueError("Fixture not found. Copy its S…M… reference or numeric ID from the schedule.")
+    if fixture.status not in ("scheduled", "postponed"):
+        raise ValueError("Only scheduled or postponed fixtures can have their deadline extended.")
+    if not is_postseason(fixture.series):
+        editable_schedule(championship)
+    if deadline <= max(now, fixture.deadline) or deadline < fixture.opens_at:
+        raise ValueError("Choose a future deadline later than the current one.")
+    previous = fixture.deadline
+    fixture.deadline, fixture.status = deadline, "scheduled"
+    if not is_postseason(fixture.series):
+        championship.end_at = max(championship.end_at or deadline, deadline)
+    return fixture, previous
+
+
+def fixtures_on_day(rows, day):
+    return [f for series in rows for f in series.fixtures
+            if day in ((f.opens_at + IST_OFFSET).date(), (f.deadline + IST_OFFSET).date())]
+
+
+def command_championships(db, prefix="", *, viewer_id=None, active_only=False):
+    query = db.query(Championship).order_by(Championship.id.desc())
+    if prefix:
+        query = query.filter(Championship.command == prefix.lower().removeprefix("/"))
+    candidates = query.all()
+    if prefix:
+        return [c for c in candidates if not active_only or (c.started_at and not c.completed_at)]
+    active = [c for c in candidates if c.started_at and not c.completed_at]
+    candidates = active if active or active_only else candidates
+    assigned_cups = [c for c in candidates if viewer_id is not None and
+                     any(assigned(t, viewer_id) for t in c.teams)]
+    return assigned_cups or candidates
 
 
 def _series(championship, home, away, position, windows, **settings):

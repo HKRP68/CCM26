@@ -1663,7 +1663,8 @@ def main():
         app.add_handler(CommandHandler(["ctinjuries", "ctinjury"],
                                        ctinjuries_handler))
         app.add_handler(CallbackQueryHandler(ct_view_callback, pattern=r"^ctv_"))
-        from handlers.t20_championship import fixture_page_callback
+        from handlers.t20_championship import fixture_page_callback, today_handler
+        app.add_handler(CommandHandler("wtctoday", today_handler))
         app.add_handler(CallbackQueryHandler(fixture_page_callback, pattern=r"^wt20f:"))
         # /clsd <TEAM NAME> — one team's schedule: where they stand, their form,
         # what they play next and every result so far. Takes the team NAME (not
@@ -1718,6 +1719,9 @@ def main():
             remindmatch_handler))
         app.add_handler(CallbackQueryHandler(remindmatch_callback,
                                              pattern=r"^mrem_"))
+        from handlers.t20_match_reminders import matchremind_callback, matchremind_handler
+        app.add_handler(CommandHandler("matchremind", matchremind_handler))
+        app.add_handler(CallbackQueryHandler(matchremind_callback, pattern=r"^wt20r:"))
         app.add_handler(CommandHandler(["cmuleaderboard", "leaderboard", "lb", "top"], leaderboard_handler))
         app.add_handler(CommandHandler(["myprofile", "profile", "me"], myprofile_handler))
         app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))

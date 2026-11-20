@@ -2908,6 +2908,7 @@ class T20ChampionshipFixture(Base):
     winner_id = Column(Integer, ForeignKey("t20_championship_teams.id"))
     captain_id = Column(BigInteger)
     random_pitch = Column(String(20))
+    last_reminded_at = Column(DateTime)
     match_id = Column(Integer, ForeignKey("matches.id", ondelete="SET NULL"), unique=True)
     scorecard = Column(Text)
 

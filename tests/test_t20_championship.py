@@ -673,6 +673,150 @@ def test_championship_commands_produce_rich_replies(competition, monkeypatch):
             assert "<blockquote expandable>" in fallback
 
 
+def test_admin_can_extend_a_postponed_fixture_by_reference(competition, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from handlers import t20_championship as commands
+    from services import t20_championship as cup
+
+    db, championship = competition
+    today = (datetime.utcnow() + cup.IST_OFFSET).date()
+    series = cup.add_series(db, championship, *championship.teams[:2], 3, today - timedelta(days=2))
+    db.flush()
+    first, second, _ = series.fixtures
+    old_open, old_deadline = first.opens_at, first.deadline
+    first.status = "postponed"
+    second.status = "completed"
+    db.commit()
+    tomorrow = today + timedelta(days=1)
+    reference = cup.match_reference(first)
+    assert cup.find_fixture([series], reference.lower()) is first
+    assert cup.find_fixture([series], f"#{first.id}") is first
+
+    send = AsyncMock()
+    monkeypatch.setattr(commands.R, "reply_rich", send)
+    monkeypatch.setattr(commands, "is_admin", lambda uid: uid == 99)
+    message = SimpleNamespace(text=f"/wt20c deadline {reference} {tomorrow}")
+    update = SimpleNamespace(effective_message=message, effective_user=SimpleNamespace(id=1))
+    assert asyncio.run(commands.dispatch(update, None, db, "wt20c"))
+    assert "Only bot admins" in send.await_args.args[-1]
+    assert first.deadline == old_deadline and first.status == "postponed"
+
+    update.effective_user.id = 99
+    assert asyncio.run(commands.dispatch(update, None, db, "wt20c"))
+    assert "New deadline" in send.await_args.args[-1] and reference in send.await_args.args[-1]
+    assert first.deadline == cup.day_window(tomorrow)[1] and first.opens_at == old_open
+    assert first.status == "scheduled" and championship.end_at == first.deadline
+    message.text = f"/wt20c deadline {cup.match_reference(second)} {tomorrow} 13:00"
+    assert asyncio.run(commands.dispatch(update, None, db, "wt20c"))
+    assert "Only scheduled or postponed" in send.await_args.args[-1]
+    message.text = f"/wt20c deadline {reference} {today} 10:00"
+    assert asyncio.run(commands.dispatch(update, None, db, "wt20c"))
+    assert "later than the current one" in send.await_args.args[-1]
+    following_day = tomorrow + timedelta(days=1)
+    message.text = f"/wt20c deadline #{first.id} {following_day} 15:30"
+    assert asyncio.run(commands.dispatch(update, None, db, "wt20c"))
+    assert first.deadline == datetime.combine(following_day, datetime.min.time()) + timedelta(hours=10)
+
+
+def test_today_command_shows_owned_team_matches_opening_or_due_in_ist(competition, monkeypatch):
+    import asyncio
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from handlers import t20_championship as commands
+    from services import t20_championship as cup
+
+    db, championship = competition
+    utc_now = datetime(2026, 11, 19, 20)
+    today = date(2026, 11, 20)
+    monkeypatch.setattr(commands, "datetime", SimpleNamespace(utcnow=lambda: utc_now))
+    india, australia, england = championship.teams
+    australia.co_owner_id = 88
+    home = cup.add_series(db, championship, australia, india, 3, today - timedelta(days=1))
+    other = cup.add_series(db, championship, india, england, 3, today)
+    home.fixtures[0].deadline = cup.day_window(today)[1]
+    db.flush()
+    send = AsyncMock()
+    monkeypatch.setattr(commands.R, "reply_rich", send)
+    monkeypatch.setattr(commands, "get_session", lambda: nullcontext(db))
+    update = SimpleNamespace(effective_message=SimpleNamespace(), effective_user=SimpleNamespace(id=88))
+    asyncio.run(commands.today_handler(update, SimpleNamespace(args=[])))
+    text = send.await_args.args[-1]
+    assert "Australia fixtures" in text and "20 Nov 2026" in text
+    assert all(cup.match_reference(f) in text for f in home.fixtures[:2])
+    assert cup.match_reference(home.fixtures[2]) not in text
+    assert cup.match_reference(other.fixtures[0]) not in text
+
+
+def test_today_reminder_previews_rechecks_and_sends_once_per_captain(competition, monkeypatch):
+    import asyncio
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from handlers import t20_match_reminders as reminders
+    from services import t20_championship as cup
+
+    db, championship = competition
+    utc_now = datetime(2026, 11, 19, 20)
+    today = date(2026, 11, 20)
+    india, australia, england = championship.teams
+    australia.co_owner_id = 88
+    first = cup.add_series(db, championship, india, australia, 3, today)
+    second = cup.add_series(db, championship, england, australia, 3, today)
+    cup.start(championship, utc_now)
+    db.commit()
+    monkeypatch.setattr(reminders, "datetime", SimpleNamespace(utcnow=lambda: utc_now))
+    monkeypatch.setattr(reminders, "is_admin", lambda uid: uid in (99, 100))
+    monkeypatch.setattr(reminders, "get_session", lambda: nullcontext(db))
+    send, edit, reply = AsyncMock(), AsyncMock(), AsyncMock()
+    monkeypatch.setattr(reminders.R, "send_rich_message", send)
+    monkeypatch.setattr(reminders.R, "edit_rich", edit)
+    monkeypatch.setattr(reminders.R, "reply_rich", reply)
+    monkeypatch.setattr(reminders, "SEND_GAP_SECONDS", 0)
+    opener = SimpleNamespace(id=99)
+    message = SimpleNamespace(message_thread_id=321)
+    chat = SimpleNamespace(id=-123, type="supergroup")
+    update = SimpleNamespace(effective_message=message, effective_user=opener, effective_chat=chat)
+    context = SimpleNamespace(args=["today"], bot=object())
+
+    def preview():
+        asyncio.run(reminders.matchremind_handler(update, context))
+        button = reply.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
+        return SimpleNamespace(data=button.callback_data, from_user=opener, answer=AsyncMock(), message=message)
+
+    update.callback_query = preview()
+    send.assert_not_awaited()
+    update.callback_query.from_user = SimpleNamespace(id=100)
+    asyncio.run(reminders.matchremind_callback(update, context))
+    send.assert_not_awaited()
+    update.callback_query.from_user = opener
+    second.fixtures[0].status = "postponed"
+    db.commit()
+    asyncio.run(reminders.matchremind_callback(update, context))
+    send.assert_not_awaited()
+    assert "pending fixtures have changed" in edit.await_args.args[-1]
+    second.fixtures[0].status = "scheduled"
+    db.commit()
+
+    update.callback_query = preview()
+    asyncio.run(reminders.matchremind_callback(update, context))
+    deliveries = {call.args[1]: call for call in send.await_args_list}
+    assert send.await_count == len(deliveries) == 5
+    assert set(deliveries) == {-123, 1, 2, 3, 88}
+    assert deliveries[-123].kwargs["message_thread_id"] == 321
+    assert 'href="tg://user?id=88"' in deliveries[-123].args[-1]
+    assert all(cup.match_reference(series.fixtures[0]) in deliveries[88].args[-1] for series in (first, second))
+    assert first.fixtures[0].last_reminded_at == second.fixtures[0].last_reminded_at == utc_now
+
+    asyncio.run(reminders.matchremind_callback(update, context))
+    assert send.await_count == 5
+
+
 def test_admin_home_stadium_and_pitch_settings(roster_admin):
     from services import t20_championship_io as roster_io
 
