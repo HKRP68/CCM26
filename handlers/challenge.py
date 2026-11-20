@@ -814,9 +814,9 @@ def _pitch_prompt(draft):
     host = draft.get("host") or {}
     mention = _mention(host.get("tg_id"), host.get("name") or "Host")
     lines = [
-        f"🏆 <b>{_league_battle_title(draft.get('league_name'), draft.get('mode'))}</b>",
+        f"🏆 <b>{_esc(_league_battle_title(draft.get('league_name'), draft.get('mode')))}</b>",
         "═════════════════════════════",
-        f"🟢 {draft.get('host_team')}  🆚  {draft.get('target_team')}",
+        f"🟢 {_esc(draft.get('host_team'))}  🆚  {_esc(draft.get('target_team'))}",
         "",
         "🌱 <b>Choose the pitch</b>",
     ]
@@ -903,12 +903,14 @@ def _apply_pitch(draft, pitch):
         report_text = None
 
     header = (
-        f"🏆 <b>{_league_battle_title(draft.get('league_name'), draft.get('mode'))}</b>\n"
+        f"🏆 <b>{_esc(_league_battle_title(draft.get('league_name'), draft.get('mode')))}</b>\n"
         "═════════════════════════════\n"
-        f"🟢 {draft.get('host_team')}  🆚  {draft.get('target_team')}\n"
+        f"🟢 {_esc(draft.get('host_team'))}  🆚  {_esc(draft.get('target_team'))}\n"
     )
     locked_note = ""
-    if draft.get("pitch_locked"):
+    if (draft.get("t20_championship") or {}).get("pitch_mode") == "random":
+        locked_note = "\n🎲 <i>Random pitch for this fixture.</i>"
+    elif draft.get("pitch_locked"):
         home = draft.get("home_team")
         locked_note = ("\n🔒 <i>Fixed by the tournament fixture"
                        + (f" — {_esc(home)} are at home" if home else "")
@@ -2304,13 +2306,17 @@ async def launch_cl_tour_match(context, *, message_obj, chat_id, host, target,
         if fixed_pitch:
             draft["pitch_locked"] = True
             text = _apply_pitch(draft, fixed_pitch)
-            sent = await R.send_rich_message(
-                context.bot, chat_id, draft.pop("_pitch_card_blocks", None), text)
+            blocks = draft.pop("_pitch_card_blocks", None)
+            markup = None
         else:
-            sent = await R.send_rich_message(
-                context.bot, chat_id, _pitch_prompt_blocks(draft),
-                _pitch_prompt(draft),
-                reply_markup=_pitch_keyboard(draft_id, allow_deny=False))
+            blocks, text = _pitch_prompt_blocks(draft), _pitch_prompt(draft)
+            markup = _pitch_keyboard(draft_id, allow_deny=False)
+        if championship:
+            stadium_line = f"🏟 {championship['stadium']}"
+            text = f"<b>{_esc(stadium_line)}</b>\n{text}"
+            if blocks:
+                blocks.insert(1, R.paragraph(R.bold(stadium_line)))
+        sent = await R.send_rich_message(context.bot, chat_id, blocks, text, reply_markup=markup)
     except Exception:
         logger.exception("Failed to send CL tour pitch prompt; releasing draft lock")
         _release_draft_chat_lock(context.bot_data, draft)
@@ -2688,26 +2694,27 @@ async def _handle_tournament_command(update, context, session, league):
         guest_teams=sorted(guest_owned) if guest_owned is not None else None)
 
 
-async def _resolve_challenge_pair(update, session):
+async def _resolve_challenge_pair(update, session, *, reply=None):
     """The ``(challenger, target)`` for a reply challenge, or ``(None, None)``
     after telling the user what is wrong."""
+    reply = reply or update.message.reply_text
     target_tg = _reply_target_telegram_user(update)
     if not target_tg:
-        await update.message.reply_text(CHALLENGE_REPLY_REQUIRED_MESSAGE)
+        await reply(CHALLENGE_REPLY_REQUIRED_MESSAGE)
         return None, None
     if getattr(target_tg, "is_bot", False):
-        await update.message.reply_text("❌ Bot accounts cannot be challenged.")
+        await reply("❌ Bot accounts cannot be challenged.")
         return None, None
     if update.effective_user and target_tg.id == update.effective_user.id:
-        await update.message.reply_text("❌ You cannot challenge yourself.")
+        await reply("❌ You cannot challenge yourself.")
         return None, None
     target = sync_telegram_user(session, target_tg)
     if not target:
-        await update.message.reply_text("❌ User not found. They need to use /debut first.")
+        await reply("❌ User not found. They need to use /debut first.")
         return None, None
     challenger = sync_telegram_user(session, update.effective_user)
     if not challenger:
-        await update.message.reply_text("❌ Use /debut first.")
+        await reply("❌ Use /debut first.")
         return None, None
     return challenger, target
 

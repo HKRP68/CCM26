@@ -2817,6 +2817,7 @@ class T20Championship(Base):
     matches_per_series = Column(Integer, nullable=False, default=3)
     max_matches_per_series = Column(Integer, default=5)
     rest_days = Column(Integer, nullable=False, default=0)
+    pitch_mode = Column(String(12), nullable=False, default="home", server_default="home")
     points = Column(Text, nullable=False)
     playoff_format = Column(String(12), nullable=False, default="none", server_default="none")
     playoff_deadline = Column(DateTime)
@@ -2847,6 +2848,7 @@ class T20ChampionshipTeam(Base):
     owner_id = Column(BigInteger, nullable=False)
     co_owner_id = Column(BigInteger)
     is_participating = Column(Boolean, nullable=False, default=True)
+    home_stadium = Column(String(120))
 
     championship = relationship("T20Championship", back_populates="teams",
                                 foreign_keys=[championship_id])
@@ -2905,6 +2907,7 @@ class T20ChampionshipFixture(Base):
     result = Column(String(14))
     winner_id = Column(Integer, ForeignKey("t20_championship_teams.id"))
     captain_id = Column(BigInteger)
+    random_pitch = Column(String(20))
     match_id = Column(Integer, ForeignKey("matches.id", ondelete="SET NULL"), unique=True)
     scorecard = Column(Text)
 

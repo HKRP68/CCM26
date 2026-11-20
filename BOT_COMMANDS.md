@@ -397,7 +397,7 @@ running. When several are running, they list each tournament's own commands.
 
 In the admin site, open **World T20 Championships** and create a championship with
 a name and an unused command prefix such as `/wt20c`. Add teams with their logo,
-colours, owner and co-owner. Paste one player name per line to select the
+colours, owner, co-owner and home stadium from Stadium Data. Paste one player name per line to select the
 highest-rated active version of each player. Participating teams need at least
 11 squad members to start.
 
@@ -411,8 +411,13 @@ imports before starting the championship. Exports are available throughout.
 
 In **Schedule**, select the participating teams, opponent count, series length
 range, dates and minimum rest. Enter a range such as 3–5 or 4–7 matches. The
-generator varies series lengths within the range as the calendar allows and
-schedules one match per day in IST.
+generator randomly varies individual series lengths as the calendar allows,
+keeps the largest and smallest team match totals within five, and schedules
+one match per day in IST.
+Use **Regenerate schedule** to rebuild a draft with the current form settings.
+During the league stage, **Regenerate upcoming series** updates dates and
+lengths for untouched series and keeps the existing home and away pairings.
+It schedules around retained series and their rest windows.
 With 10 teams and six opponents, each team hosts three series and tours three
 opponents. When an odd number of teams each requests an odd number of opponents,
 one team plays one fewer series. Admins can edit or reorder future series, add
@@ -431,12 +436,16 @@ best of three, best of five, or five matches with every fixture played. Best-of
 series close when a team clinches. Use **Schedule → Add decider** if a
 postseason series finishes level. With semifinals off, the top two go directly
 to the final, or select **No Final** to award the title to the table leader.
-Set the semifinal deadline and the final's neutral venue, stadium, pitch and
-deadline in **Settings & commands**.
+Set the semifinal deadline and the final's deadline in **Settings & commands**.
+An explicitly configured neutral final uses its selected stadium. Other
+matches use the assigned home team's ground. Choose **Home team chooses** to
+give the home captain the pitch picker, even when the touring captain starts
+the fixture, or **Random per match** to give each fixture its own pitch draw.
 
 Reply to an owner or co-owner of the opposing team in a group with `/wt20c`.
 Both teams must have the same next fixture, and it must be inside its playing
 window. An overdue unplayed fixture can be rescheduled or resolved by an admin.
+Championship commands send rich Telegram replies with an HTML fallback.
 
 | Example command | What it does |
 |-----------------|--------------|

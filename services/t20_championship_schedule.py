@@ -2,6 +2,9 @@
 from collections import defaultdict
 from datetime import date, timedelta
 from itertools import islice
+import random
+
+MAX_TEAM_MATCH_GAP = 5
 
 
 def _pairings(count, opponents):
@@ -61,8 +64,8 @@ def _round_robin(count):
         ring = [ring[0], ring[-1], *ring[1:-1]]
 
 
-def _pack(ordered, duration, rest):
-    free = defaultdict(int)
+def _pack(ordered, duration, rest, ready_days=None):
+    free = defaultdict(int, ready_days or {})
     dates = []
     for home, away in ordered:
         start = max(free[home], free[away])
@@ -71,31 +74,65 @@ def _pack(ordered, duration, rest):
     return sorted(dates)
 
 
-def _slot_windows(count, minimum, maximum, rest, spare_days):
-    """Vary round lengths within the range while keeping parallel series equal."""
-    if count == 1:
-        return [(0, minimum + min(maximum - minimum, spare_days))]
-    width = maximum - minimum + 1
-    windows = []
-    offset = 0
-    for slot in range(count):
-        # Alternate from the ends of the range so short and long series both
-        # appear even when there are fewer rounds than possible lengths.
-        index = slot % width
-        extra = index // 2 if index % 2 == 0 else width - 1 - index // 2
-        extra = min(extra, spare_days)
-        duration = minimum + extra
-        windows.append((offset, duration))
-        offset += duration + rest
-        spare_days -= extra
-    return windows
+def _series_lengths(pairs, slots, totals, minimum, maximum, spare_days, rng):
+    lengths = [minimum] * len(pairs)
+    slot_lengths = [minimum] * (max(slots) + 1)
+    totals = list(totals)
+    for home, away in pairs:
+        totals[home] += minimum
+        totals[away] += minimum
+    order = list(range(len(pairs)))
+    rng.shuffle(order)
+
+    def capacity(i):
+        return min(maximum, slot_lengths[slots[i]] + spare_days)
+
+    def extend(i, length):
+        nonlocal spare_days
+        extra = length - lengths[i]
+        home, away = pairs[i]
+        totals[home] += extra
+        totals[away] += extra
+        lengths[i] = length
+        slot = slots[i]
+        if length > slot_lengths[slot]:
+            spare_days -= length - slot_lengths[slot]
+            slot_lengths[slot] = length
+
+    # With odd teams and odd opponent counts, one team can start a series
+    # short. Give its tours first access to extra days if the gap is too wide.
+    while max(totals) - min(totals) > MAX_TEAM_MATCH_GAP:
+        team = totals.index(min(totals))
+        eligible = [i for i in order if team in pairs[i] and lengths[i] < capacity(i)]
+        if not eligible:
+            raise ValueError("The settings put team match totals more than five apart. "
+                             "Allow more dates or change the opponents or series lengths.")
+        i = min(eligible, key=lambda index: lengths[index])
+        extend(i, lengths[i] + 1)
+
+    def balanced_capacity(i):
+        home, away = pairs[i]
+        other_min = min((total for j, total in enumerate(totals) if j not in (home, away)),
+                        default=None)
+        ceiling = capacity(i)
+        if other_min is not None:
+            ceiling = min(ceiling, other_min + MAX_TEAM_MATCH_GAP - max(totals[home], totals[away])
+                          + lengths[i])
+        return ceiling
+
+    # Keep one short series when possible and randomly extend the others.
+    randomizable = order[:-1] if len(order) > 1 else order
+    for i in randomizable:
+        extend(i, rng.randint(lengths[i], balanced_capacity(i)))
+    if len(set(lengths)) == 1:
+        for i in order:
+            if balanced_capacity(i) > lengths[i]:
+                extend(i, lengths[i] + 1)
+                break
+    return lengths, slot_lengths
 
 
-def plan(teams, opponents, duration, start, end, rest, *, max_duration=None):
-    """Return (home, away, first day, match count) tuples."""
-    count = len(teams)
-    if not 1 <= opponents < count:
-        raise ValueError("Each team needs between 1 and the number of teams minus 1 opponents.")
+def _validate_window(duration, max_duration, start, end, rest):
     max_duration = duration if max_duration is None else max_duration
     if not 3 <= duration <= max_duration:
         raise ValueError("Enter at least 3 matches per series and a maximum at or above the minimum.")
@@ -103,6 +140,34 @@ def plan(teams, opponents, duration, start, end, rest, *, max_duration=None):
         raise ValueError("The maximum series length exceeds the supported calendar.")
     if rest < 0 or end < start:
         raise ValueError("Use nonnegative rest days and an end date on or after the start.")
+    return max_duration
+
+
+def _dated_series(teams, dates, totals, duration, maximum, start, end, rng):
+    required = dates[-1][0] + duration
+    window_days = (end - start).days + 1
+    if required > window_days:
+        raise ValueError(f"These settings need {required} calendar days. Extend the date range or reduce the schedule.")
+    starts = sorted({offset for offset, _, _ in dates})
+    index = {offset: slot for slot, offset in enumerate(starts)}
+    slots = [index[offset] for offset, _, _ in dates]
+    ordered_pairs = [(home, away) for _, home, away in dates]
+    lengths, slot_lengths = _series_lengths(ordered_pairs, slots, totals, duration, maximum,
+                                          window_days - required, rng or random)
+    offsets, extra_days = [], 0
+    for original_start, slot_length in zip(starts, slot_lengths):
+        offsets.append(original_start + extra_days)
+        extra_days += slot_length - duration
+    return [(teams[home], teams[away], start + timedelta(days=offsets[slot]), matches)
+            for (home, away), slot, matches in zip(ordered_pairs, slots, lengths)]
+
+
+def plan(teams, opponents, duration, start, end, rest, *, max_duration=None, rng=None):
+    """Return (home, away, first day, match count) tuples."""
+    count = len(teams)
+    if not 1 <= opponents < count:
+        raise ValueError("Each team needs between 1 and the number of teams minus 1 opponents.")
+    maximum = _validate_window(duration, max_duration, start, end, rest)
     pairs = _orient(count, _pairings(count, opponents))
     round_keys = (frozenset(edge) for edge in _round_robin(count))
     round_order = [pairs[edge] for edge in round_keys if edge in pairs]
@@ -110,15 +175,15 @@ def plan(teams, opponents, duration, start, end, rest, *, max_duration=None):
     schedules = [_pack(order, duration, rest)
                  for order in (round_order, round_order[::-1], edge_order, edge_order[::-1])]
     dates = min(schedules, key=lambda rows: rows[-1][0])
-    required = dates[-1][0] + duration
-    window_days = (end - start).days + 1
-    if required > window_days:
-        raise ValueError(f"These settings need {required} calendar days. Extend the date range or reduce the schedule.")
-    unit = duration + rest
-    windows = _slot_windows(dates[-1][0] // unit + 1, duration, max_duration, rest,
-                            window_days - required)
-    series = []
-    for first_day, home, away in dates:
-        offset, matches = windows[first_day // unit]
-        series.append((teams[home], teams[away], start + timedelta(days=offset), matches))
-    return series
+    return _dated_series(teams, dates, [0] * count, duration, maximum, start, end, rng)
+
+
+def plan_remaining(teams, matchups, totals, ready_on, duration, maximum, start, end, rest):
+    """Fit the remaining pairings around each team's retained tours."""
+    maximum = _validate_window(duration, maximum, start, end, rest)
+    indices = {team: i for i, team in enumerate(teams)}
+    pairs = [(indices[home], indices[away]) for home, away in matchups]
+    ready_days = {indices[team]: max(0, (day - start).days) for team, day in ready_on.items()}
+    schedules = [_pack(order, duration, rest, ready_days) for order in (pairs, pairs[::-1])]
+    dates = min(schedules, key=lambda rows: rows[-1][0])
+    return _dated_series(teams, dates, [totals[team] for team in teams], duration, maximum, start, end, None)

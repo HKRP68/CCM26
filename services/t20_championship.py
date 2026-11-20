@@ -1,7 +1,8 @@
 """World T20 Championship rules and fixture lifecycle."""
 import json
+import random
 import re
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from fractions import Fraction
 
@@ -19,6 +20,7 @@ from utils.tournament_time import IST_OFFSET
 
 ROSTER_MODE = "World T20 Championship squads"
 POINTS = {"win": 2, "tie": 1, "no_result": 1, "loss": 0, "forfeit": 0, "series_win_bonus": 0}
+PITCH_MODES = {"home": "Home team chooses", "random": "Random per match"}
 SERIES_FORMATS = {"single": "Single T20", "best_of_3": "Best of 3", "best_of_5": "Best of 5",
                   "five_matches": "Five matches (play all five)"}
 PLAYOFFS = {"none": "Off", **SERIES_FORMATS}
@@ -88,11 +90,15 @@ def point_system(championship):
     return {**POINTS, **json.loads(championship.points)}
 
 
-def series_list(db, championship):
-    return (db.query(Series).filter_by(championship_id=championship.id)
+def series_list(db, championship, *, refresh=False):
+    query = (db.query(Series).filter_by(championship_id=championship.id)
             .options(joinedload(Series.home).joinedload(Team.team),
-                     joinedload(Series.away).joinedload(Team.team), selectinload(Series.fixtures))
-            .order_by(Series.position).all())
+                     joinedload(Series.away).joinedload(Team.team),
+                     selectinload(Series.fixtures).joinedload(Fixture.match).load_only(
+                         Match.pitch_type, Match.stadium, Match.margin_type, Match.margin_value,
+                         Match.completed_at))
+            .order_by(Series.position))
+    return (query.populate_existing() if refresh else query).all()
 
 
 def lock(db, championship_id):
@@ -138,11 +144,84 @@ def generate(db, championship, *, team_count, opponents, matches, start, end, re
     championship.start_at, championship.end_at = day_window(start)[0], day_window(end)[1]
     championship.opponents, championship.matches_per_series, championship.rest_days = opponents, matches, rest
     championship.max_matches_per_series = maximum
+    return {count for _, _, _, count in schedule}
 
 
 def editable_schedule(championship):
     if championship.completed_at or any(is_postseason(series) for series in championship.series):
         raise ValueError("The league schedule is locked once the postseason starts or the championship ends.")
+
+
+def regenerable_series(series):
+    return (not is_postseason(series) and
+            all(fixture.status in ("scheduled", "postponed") and not fixture.match_id
+                for fixture in series.fixtures))
+
+
+def regenerate_remaining(db, championship, *, matches, max_matches, start, end, rest, now=None):
+    """Rebuild untouched tours in place while preserving the league's pairings and results."""
+    editable_schedule(championship)
+    if not championship.started_at:
+        raise ValueError("Generate the draft schedule first.")
+    today = ((now or datetime.utcnow()) + IST_OFFSET).date()
+    if start < today:
+        raise ValueError("Choose today or a later date for the unplayed schedule.")
+    if rest < 0:
+        raise ValueError("Use nonnegative rest days.")
+    rows = series_list(db, championship)
+    upcoming = [series for series in rows if regenerable_series(series)]
+    if not upcoming:
+        raise ValueError("There are no untouched league series to regenerate.")
+    kept = [series for series in rows if not regenerable_series(series)]
+    teams = [team.id for team in championship.teams if team.is_participating]
+    totals = dict.fromkeys(teams, 0)
+    ready_on = {}
+    last_kept_deadline = None
+    for series in kept:
+        fixtures = [fixture for fixture in series.fixtures if fixture.status != "cancelled"]
+        for team in (series.home_id, series.away_id):
+            totals[team] += len(fixtures)
+        if not fixtures:
+            continue
+        last = max(max(fixture.deadline,
+                       (fixture.match.completed_at if fixture.match else None) or fixture.deadline)
+                   for fixture in fixtures)
+        last_kept_deadline = max(last_kept_deadline or last, last)
+        ready = (last + IST_OFFSET).date() + timedelta(days=rest + 1)
+        for team in (series.home_id, series.away_id):
+            ready_on[team] = max(ready_on.get(team, start), ready)
+
+    by_pair = defaultdict(deque)
+    matchups = []
+    for series in upcoming:
+        pair = (series.home_id, series.away_id)
+        matchups.append(pair)
+        by_pair[pair].append(series)
+    schedule = t20_championship_schedule.plan_remaining(
+        teams, matchups, totals, ready_on, matches, max_matches, start, end, rest)
+
+    # Clear the affected sort positions before assigning the new order.
+    for series in upcoming:
+        series.position = -series.id
+    db.flush()
+    next_position = max((series.position for series in kept), default=0) + 1
+    for position, (home, away, day, count) in enumerate(schedule, next_position):
+        series = by_pair[home, away].popleft()
+        series.position = position
+        del series.fixtures[count:]
+        for index in range(count):
+            opens, deadline = day_window(day + timedelta(days=index))
+            if index < len(series.fixtures):
+                fixture = series.fixtures[index]
+                fixture.opens_at, fixture.deadline, fixture.status = opens, deadline, "scheduled"
+            else:
+                series.fixtures.append(Fixture(number=index + 1, opens_at=opens, deadline=deadline))
+    end_at = day_window(end)[1]
+    championship.end_at = max(end_at, last_kept_deadline or end_at)
+    championship.matches_per_series = matches
+    championship.max_matches_per_series = max_matches
+    championship.rest_days = rest
+    return {count for _, _, _, count in schedule}
 
 
 def league_series_limit(championship):
@@ -182,6 +261,8 @@ def start(championship, now=None):
     for team in teams:
         if len(team.team.players) < 11:
             raise ValueError(f"{team.name} needs at least 11 squad members.")
+        if not team.home_stadium:
+            raise ValueError(f"Set a home stadium for {team.name} on the Teams tab before starting.")
     championship.started_at = now or datetime.utcnow()
 
 
@@ -271,18 +352,72 @@ def meeting(fixture, host_telegram, target_telegram):
     return None
 
 
-def bind(db, tag, match, host, target):
-    """Re-check the exact fixture at kickoff and link it in the Match transaction."""
-    championship = lock(db, tag["championship_id"])
-    rows = series_list(db, championship)
-    fixture = next((f for row in rows for f in row.fixtures if f.id == tag["fixture_id"]), None)
+def validate_stadium(name):
+    from services.tournament_stadiums import resolve
+
+    if name is not None and not isinstance(name, str):
+        raise ValueError("Enter a stadium name from Stadium Data.")
+    name = (name or "").strip()
+    if not name:
+        return None
+    stadium = resolve(name)
+    if not stadium:
+        raise ValueError(f"“{name}” was not found in Stadium Data.")
+    return stadium
+
+
+def series_stadium(series):
+    if series.is_final and series.stadium:
+        return series.stadium
+    return series.home.home_stadium
+
+
+def _available_fixture(db, championship_id, fixture_id):
+    championship = lock(db, championship_id)
+    if championship is None:
+        raise FixtureUnavailable("This championship no longer exists.")
+    rows = series_list(db, championship, refresh=True)
+    fixture = next((f for row in rows for f in row.fixtures if f.id == fixture_id), None)
     if fixture is None or fixture_status(championship, fixture, next_fixtures(rows)) != "available":
         raise FixtureUnavailable("This championship fixture is no longer available.")
-    teams = meeting(fixture, host.telegram_id, target.telegram_id)
-    if not teams or [t.id for t in teams] != tag["teams"]:
-        raise FixtureUnavailable("Team assignments changed. Start the fixture again.")
+    return championship, fixture
+
+
+def prepare_conditions(db, championship_id, fixture_id):
+    """Keep a random draw on its fixture across setup retries."""
+    from services.match_constants import PITCH_TYPES
+
+    championship, fixture = _available_fixture(db, championship_id, fixture_id)
     series = fixture.series
-    if series.pitch != tag["pitch"] or series.stadium != tag["stadium"]:
+    stadium = series_stadium(series)
+    if not stadium:
+        raise FixtureUnavailable(f"Set a home stadium for {series.home.name} in the championship Teams tab.")
+    try:
+        validate_stadium(stadium)
+    except ValueError as exc:
+        raise FixtureUnavailable(str(exc)) from exc
+    pitch = None
+    if championship.pitch_mode == "random":
+        if fixture.random_pitch not in PITCH_TYPES:
+            fixture.random_pitch = random.choice(PITCH_TYPES)
+            db.flush()
+        pitch = fixture.random_pitch
+    return fixture, championship.pitch_mode, stadium, pitch
+
+
+def bind(db, tag, match, host, target):
+    """Re-check the exact fixture at kickoff and link it in the Match transaction."""
+    from services.match_constants import PITCH_TYPES
+
+    championship, fixture = _available_fixture(db, tag["championship_id"], tag["fixture_id"])
+    teams = meeting(fixture, host.telegram_id, target.telegram_id)
+    if not teams or teams[0].id != fixture.series.home_id or [t.id for t in teams] != tag["teams"]:
+        raise FixtureUnavailable("Team assignments changed. Start the fixture again.")
+    stadium = series_stadium(fixture.series)
+    pitch = fixture.random_pitch if championship.pitch_mode == "random" else match.pitch_type
+    if (not stadium or stadium != tag.get("stadium") or stadium != match.stadium
+            or championship.pitch_mode != tag.get("pitch_mode")
+            or pitch not in PITCH_TYPES or match.pitch_type != pitch):
         raise FixtureUnavailable("The fixture's conditions changed. Start the fixture again.")
     fixture.status, fixture.match_id = "live", match.id
 
@@ -302,6 +437,16 @@ def heal_abandoned(db):
     return (db.query(Fixture).filter(Fixture.status == "live", Fixture.match_id.in_(
         db.query(Match.id).filter(Match.status.in_(("abandoned", "cancelled", "completed")))))
         .update({Fixture.status: "scheduled", Fixture.match_id: None}, synchronize_session=False))
+
+
+def league_match_totals(championship, series_rows):
+    totals = {team.id: 0 for team in championship.teams if team.is_participating}
+    for series in series_rows:
+        if not is_postseason(series):
+            count = sum(fixture.status != "cancelled" for fixture in series.fixtures)
+            totals[series.home_id] += count
+            totals[series.away_id] += count
+    return [(team.name, totals[team.id]) for team in championship.teams if team.is_participating]
 
 
 def standings(championship, rows):
@@ -440,7 +585,7 @@ def advance(db, championship, now=None):
     windows = _round_windows(championship, now, championship.final_deadline, championship.final_format)
     db.add(_series(championship, *finalists, rows[-1].position + 1,
                    windows, is_final=True, venue=championship.final_venue,
-                   stadium=championship.final_stadium, pitch=championship.final_pitch))
+                   stadium=championship.final_stadium))
 
 
 def set_result(db, championship, fixture, result, winner_id=None, captain_id=None):

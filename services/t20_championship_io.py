@@ -15,18 +15,18 @@ from services.player_query import challenge_details_json
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 MIMETYPES = {"csv": "text/csv", "json": "application/json"}
 COLUMNS = ("team_name", "short_name", "logo_url", "primary_color", "secondary_color",
-           "owner", "co_owner", "player_name")
+           "home_stadium", "owner", "co_owner", "player_name")
 CSV_ALIASES = {"name": "team_name", "logo": "logo_url", "team_logo": "logo_url",
                "primary_colour": "primary_color", "secondary_colour": "secondary_color",
                "team_owner": "owner", "owner_id": "owner",
-               "team_co_owner": "co_owner", "co_owner_id": "co_owner"}
+               "team_co_owner": "co_owner", "co_owner_id": "co_owner", "stadium": "home_stadium"}
 TEMPLATE = [
     {"team_name": "India", "short_name": "IND", "primary_color": "#1d4ed8",
      "secondary_color": "#facc15", "owner": "@owner_username",
-     "co_owner": "@co_owner_username", "logo_url": "",
+     "co_owner": "@co_owner_username", "logo_url": "", "home_stadium": "Eden Gardens",
      "players": ["Virat Kohli", "Jasprit Bumrah"]},
     {"team_name": "Australia", "short_name": "AUS", "primary_color": "#ffcd00",
-     "secondary_color": "#006341", "owner": "@another_owner",
+     "secondary_color": "#006341", "owner": "@another_owner", "home_stadium": "Melbourne Cricket Ground",
      "players": ["Glenn Maxwell"]},
 ]
 
@@ -138,6 +138,7 @@ def export_teams(entries):
         players = sorted(entry.team.players, key=lambda member: (member.sort_order, member.id))
         row.update(owner=str(entry.owner_id),
                    co_owner=str(entry.co_owner_id) if entry.co_owner_id else "",
+                   home_stadium=entry.home_stadium,
                    players=[member.name for member in players])
     return rows
 
@@ -223,6 +224,7 @@ def add_players_by_name(db, team, names):
 def import_teams(db, championship, rows):
     """Validate the file together, then merge by team name without deleting squad members."""
     from models import ChallengeTeam, T20ChampionshipTeam
+    from services.t20_championship import validate_stadium
 
     if championship.started_at:
         raise ValueError("Import squads before the championship starts.")
@@ -256,6 +258,9 @@ def import_teams(db, championship, rows):
                     raise ValueError("Use a public HTTP(S) logo URL or a logo under /static/.")
 
             entry = existing.get(key)
+            stadium = validate_stadium(row.get("home_stadium"))
+            if not stadium and entry:
+                stadium = entry.home_stadium
             owner = row.get("owner", row.get("owner_id"))
             co_owner = row.get("co_owner", row.get("co_owner_id"))
             owner = owner.strip() if isinstance(owner, str) else owner
@@ -272,7 +277,7 @@ def import_teams(db, championship, rows):
             team = entry.team if entry else None
             cards, player_errors = _squad_changes(team, names, resolve)
             errors.extend(f"{label} · {message}" for message in player_errors)
-            plans.append((name, entry, values, owner_id, co_owner_id, cards))
+            plans.append((name, entry, values, owner_id, co_owner_id, stadium, cards))
         except ValueError as exc:
             errors.append(f"{label} · {exc}")
 
@@ -280,18 +285,20 @@ def import_teams(db, championship, rows):
         raise SquadImportError(errors)
 
     created = updated = added = 0
-    for name, entry, values, owner_id, co_owner_id, cards in plans:
+    for name, entry, values, owner_id, co_owner_id, stadium, cards in plans:
         if entry is None:
             team = ChallengeTeam(league=championship.league, name=name, **values)
             db.add(T20ChampionshipTeam(championship=championship, team=team,
-                                       owner_id=owner_id, co_owner_id=co_owner_id))
+                                       owner_id=owner_id, co_owner_id=co_owner_id, home_stadium=stadium))
             created += 1
         else:
             team = entry.team
             if (cards or entry.owner_id != owner_id or entry.co_owner_id != co_owner_id
+                    or entry.home_stadium != stadium
                     or any(getattr(team, key) != value for key, value in values.items())):
                 updated += 1
             entry.owner_id, entry.co_owner_id = owner_id, co_owner_id
+            entry.home_stadium = stadium
             for key, value in values.items():
                 setattr(team, key, value)
         _append_players(team, cards)

@@ -1,11 +1,21 @@
 """Telegram commands scoped to a World T20 Championship."""
 import json
+from functools import partial
 
 from models import User
+from services import rich_message as R
+from services.rich_message_html import inline
 from services import t20_championship as cup
 from services import t20_championship_stats as stats
 from utils.message_chunks import chunk_blocks
 from utils.tournament_time import format_ist
+
+VIEW_TITLES = {
+    "help": "Commands", "info": "Overview", "table": "Standings",
+    "fixtures": "Match schedule", "teams": "Teams and squads", "series": "Series",
+    "playoffs": "Playoffs", "final": "Championship final", "stats": "Player statistics",
+    "player": "Player statistics", "awards": "Awards", "scorecard": "Scorecard",
+}
 
 
 def command_help(prefix):
@@ -61,6 +71,9 @@ def scorecard(fixture):
             result += f" by {fixture.match.margin_value} {fixture.match.margin_type}"
     lines = [f"{cup.series_name(fixture.series)} · Match {fixture.number} · #{fixture.id}",
              result or cup.STATUS.get(fixture.status, "Upcoming")]
+    if fixture.match:
+        lines.append(" · ".join(value for value in (fixture.match.stadium, fixture.match.pitch_type)
+                                if value))
     if not fixture.scorecard:
         return lines + ["No innings figures are available."]
     packet = json.loads(fixture.scorecard)
@@ -115,15 +128,16 @@ def _fixture_blocks(championship, rows, selected):
     next_by_team = cup.next_fixtures(rows)
     for series in selected:
         header = f"\nSeries #{series.id} · {cup.series_name(series)}\n{series_summary(series)}"
-        place = " · ".join(value for value in (series.venue, series.stadium, series.pitch) if value)
-        if place:
-            header += "\n" + place
+        stadium = cup.series_stadium(series)
+        header += "\n" + (" · ".join(filter(None, (stadium, series.venue))) or "Home stadium needed")
         yield header
         for fixture in series.fixtures:
             status = cup.STATUS[cup.fixture_status(championship, fixture, next_by_team)]
             result = result_label(fixture)
-            yield (f"Match {fixture.number} · #{fixture.id} · {status}"
-                   f"{' · ' + result if result else ''}\n"
+            pitch = fixture.match.pitch_type if fixture.match else (
+                fixture.random_pitch if championship.pitch_mode == "random" else None)
+            details = " · ".join(filter(None, (status, result, pitch)))
+            yield (f"Match {fixture.number} · #{fixture.id} · {details}\n"
                    f"Opens {format_ist(fixture.opens_at)} · Deadline {format_ist(fixture.deadline)}")
 
 
@@ -142,6 +156,18 @@ def _player_block(row):
     )
 
 
+def _standing_tables(table):
+    return [
+        ("Championship points", ("Pos", "Team", "P", "W", "L", "T", "NR", "Bonus", "Pts", "PCT", "NRR"),
+         [(i, row["team"].name, row["played"], row["won"], row["lost"], row["tied"], row["nr"],
+           row["bonus"], row["points"], f'{float(row["pct"]):.2f}%', f'{float(row["nrr"]):+.3f}')
+          for i, row in enumerate(table, 1)]),
+        ("Series records", ("Team", "Played", "Won", "Lost", "Drawn", "Home wins", "Away wins"),
+         [(row["team"].name, row["series_played"], row["series_won"], row["series_lost"],
+           row["series_drawn"], row["home_wins"], row["away_wins"]) for row in table]),
+    ]
+
+
 def render(db, championship, view, args):
     prefix = championship.command
     if view == "help":
@@ -153,20 +179,15 @@ def render(db, championship, view, args):
         active = sum(team.is_participating for team in championship.teams)
         return [f"{status} · {active} teams · {len(rows)} series",
                 f"Final · {cup.FINALS[championship.final_format]}",
+                f"Pitch selection · {cup.PITCH_MODES[championship.pitch_mode]}",
                 f"Semifinals · {cup.PLAYOFFS[championship.playoff_format]} · /{prefix} playoffs"
                 if championship.playoff_format != "none" else "",
                 f"Champion · {champion.name}" if champion else "",
                 f"/{prefix}table · /{prefix}fixtures · /{prefix}teams · /{prefix}help"]
     if view == "table":
-        table = cup.standings(championship, rows)
-        return ["Pos · Team · P · W · L · T · NR · Bonus · Total Pts · PCT · NRR",
-                *(f'{i} · {row["team"].name} · {row["played"]} · {row["won"]} · {row["lost"]} · '
-                  f'{row["tied"]} · {row["nr"]} · {row["bonus"]} · {row["points"]} · {float(row["pct"]):.2f}% · '
-                  f'{float(row["nrr"]):+.3f}' for i, row in enumerate(table, 1)),
-                "\nSeries · Played · Won · Lost · Drawn · Home wins · Away wins",
-                *(f'{row["team"].name} · {row["series_played"]} · {row["series_won"]} · '
-                  f'{row["series_lost"]} · {row["series_drawn"]} · {row["home_wins"]} · '
-                  f'{row["away_wins"]}' for row in table)]
+        return [" · ".join(map(str, row))
+                for _, headers, values in _standing_tables(cup.standings(championship, rows))
+                for row in (headers, *values)]
     if view == "teams":
         names = person_names(db, (uid for team in championship.teams
                                  for uid in (team.owner_id, team.co_owner_id)))
@@ -175,6 +196,7 @@ def render(db, championship, view, args):
             reserve = " · Reserve team" if not team.is_participating else ""
             lines.append(f"\n#{team.id} · {team.name}{reserve} · Owner {names.get(team.owner_id, team.owner_id)}"
                          + (f" · Co-owner {names.get(team.co_owner_id, team.co_owner_id)}" if team.co_owner_id else ""))
+            lines.append(f"Home stadium · {team.home_stadium or 'Needs a stadium'}")
             lines.extend(f"{p.name} · {p.source_player.version or 'Base'}"
                          if p.source_player else p.name for p in team.team.players)
         return lines or ["No teams have been added."]
@@ -231,6 +253,45 @@ def render(db, championship, view, args):
     return [_player_block(row) for row in totals] or ["No player figures for this selection yet."]
 
 
+async def _reply(message, title, content):
+    lines = [content] if isinstance(content, str) else content
+    for chunk in chunk_blocks(lines):
+        blocks = [R.heading(title)]
+        fallback = [inline(R.bold(title))]
+        after_blank = False
+        for line in chunk.splitlines():
+            if not line.strip():
+                after_blank = True
+                fallback.append("")
+                continue
+            label, separator, body = line.partition(" — " if line.startswith("/") else " · ")
+            if after_blank:
+                block, formatted = R.heading(line, size=5), R.bold(line)
+            elif separator:
+                mark = R.code if line.startswith("/") else R.bold
+                formatted = [mark(label), separator, body]
+                block = R.paragraph(formatted)
+            else:
+                block, formatted = R.paragraph(line), line
+            blocks.append(block)
+            fallback.append(inline(formatted))
+            after_blank = False
+        await R.reply_rich(message, blocks, "\n".join(fallback))
+
+
+async def _reply_standings(message, championship, table):
+    for title, headers, rows in _standing_tables(table):
+        for start in range(0, max(1, len(rows)), 10):
+            page = rows[start:start + 10]
+            cells = [[R.cell(value, header=True) for value in headers]]
+            cells.extend([[R.cell(str(value)) for value in row] for row in page])
+            header = f"{championship.name} · {title}"
+            blocks = [R.heading(header), R.table(cells, compact=True, striped=True)]
+            fallback = [inline(R.bold(header)), inline(R.bold(" · ".join(headers)))]
+            fallback.extend(inline(" · ".join(map(str, row))) for row in page)
+            await R.reply_rich(message, blocks, "\n".join(fallback))
+
+
 async def dispatch(update, context, db, command):
     found = cup.find_command(db, command)
     if not found:
@@ -245,13 +306,16 @@ async def dispatch(update, context, db, command):
         bare = False
     if view == "play" and (not bare or challenge._reply_target_telegram_user(update)):
         await _play(update, context, db, championship, args)
+    elif view == "table":
+        table = cup.standings(championship, cup.series_list(db, championship))
+        await _reply_standings(message, championship, table)
     else:
+        view = "info" if view == "play" else view
         try:
-            blocks = render(db, championship, "info" if view == "play" else view, args)
+            content = render(db, championship, view, args)
         except ValueError as exc:
-            blocks = [str(exc)]
-        for text in chunk_blocks(blocks, header=championship.name):
-            await message.reply_text(text)
+            content = str(exc)
+        await _reply(message, f"{championship.name} · {VIEW_TITLES[view]}", content)
     return True
 
 
@@ -259,23 +323,24 @@ async def _play(update, context, db, championship, args):
     from handlers import challenge
     from services import tournament_only_service
     message = update.effective_message
+    reply = partial(_reply, message, f"{championship.name} · Match setup")
     if not championship.started_at or championship.completed_at:
-        await message.reply_text("This championship has no matches open for play.")
+        await reply("This championship has no matches open for play.")
         return
     if update.effective_chat.id > 0:
-        await message.reply_text("Play in a group by replying to your opponent's message.")
+        await reply("Play in a group by replying to your opponent's message.")
         return
-    host, target = await challenge._resolve_challenge_pair(update, db)
+    host, target = await challenge._resolve_challenge_pair(update, db, reply=reply)
     if not host or not target:
         return
     if any(tournament_only_service.is_restricted(user, session=db) for user in (host, target)):
-        await message.reply_text("One captain is restricted to their assigned fixtures in another tournament.")
+        await reply("One captain is restricted to their assigned fixtures in another tournament.")
         return
     rows = cup.series_list(db, championship)
     next_by_team = cup.next_fixtures(rows)
     eligible = []
     if len(args) > 1 or (args and not args[0].isdecimal()):
-        await message.reply_text(f"Use /{championship.command}play [fixture ID] as a reply to your opponent.")
+        await reply(f"Use /{championship.command}play [fixture ID] as a reply to your opponent.")
         return
     for series in rows:
         for fixture in series.fixtures:
@@ -285,22 +350,35 @@ async def _play(update, context, db, championship, args):
                 continue
             teams = cup.meeting(fixture, host.telegram_id, target.telegram_id)
             if teams:
-                eligible.append((fixture, teams))
+                eligible.append(fixture)
     if not eligible:
-        await message.reply_text(
+        await reply(
             f"No fixture between your assigned teams is available now. Check /{championship.command}fixtures.")
         return
     if len(eligible) > 1:
-        ids = ", ".join(str(fixture.id) for fixture, _ in eligible)
-        await message.reply_text(
+        ids = ", ".join(str(fixture.id) for fixture in eligible)
+        await reply(
             f"Choose fixture {ids} with /{championship.command}play FIXTURE_ID.")
         return
-    fixture, (host_team, target_team) = eligible[0]
+    try:
+        fixture, pitch_mode, stadium, pitch = cup.prepare_conditions(db, championship.id, eligible[0].id)
+        teams = cup.meeting(fixture, host.telegram_id, target.telegram_id)
+        if not teams:
+            raise cup.FixtureUnavailable("Team assignments changed. Start the fixture again.")
+        if teams[0].id != fixture.series.home_id:
+            host, target = target, host
+            teams = teams[::-1]
+        db.commit()
+    except cup.FixtureUnavailable as exc:
+        db.rollback()
+        await reply(str(exc))
+        return
+    host_team, target_team = teams
     series = fixture.series
     tag = dict(championship_id=championship.id, fixture_id=fixture.id,
                users=[host.id, target.id], teams=[host_team.id, target_team.id],
                challenge_teams=[host_team.challenge_team_id, target_team.challenge_team_id],
-               pitch=series.pitch, stadium=series.stadium,
+               pitch_mode=pitch_mode, pitch=pitch, stadium=stadium,
                team_codes={team.name: team.team.short_name or team.name for team in (host_team, target_team)})
     title = championship.name
     if cup.is_postseason(series):
@@ -312,4 +390,4 @@ async def _play(update, context, db, championship, args):
         league_record=championship.league, host_team=host_team.name, target_team=target_team.name,
         session=db, championship=tag)
     if not ok:
-        await message.reply_text(error)
+        await reply(error)

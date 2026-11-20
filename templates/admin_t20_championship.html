@@ -20,6 +20,7 @@
   <label>Co-owner · Telegram ID or @username<input name="co_owner" value="{{ entry.co_owner_id or '' if entry else '' }}"></label>
   <label>Primary colour<input name="primary_color" value="{{ team.primary_color or '' if team else '' }}" placeholder="#1d4ed8"></label>
   <label>Secondary colour<input name="secondary_color" value="{{ team.secondary_color or '' if team else '' }}" placeholder="#facc15"></label>
+  <label>Home stadium<input name="home_stadium" list="t20-stadiums" value="{{ entry.home_stadium or '' if entry else '' }}" placeholder="Choose from Stadium Data"></label>
   <label>Team logo<input type="file" name="logo" accept=".png,.jpg,.jpeg,.webp,.gif"></label>
 </div>
 {% endmacro %}
@@ -30,14 +31,6 @@
     {% for entry in championship.teams if entry.is_participating or not championship.started_at %}<option value="{{ entry.id }}"{% if entry.id == selected %} selected{% endif %}>{{ entry.name }}</option>{% endfor %}
   </select>
 </label>
-{% endmacro %}
-{% macro conditions(venue=none, stadium=none, pitch=none) %}
-<label>Venue<input name="venue" value="{{ venue or '' }}" maxlength="120"></label>
-<label>Stadium<input name="stadium" value="{{ stadium or '' }}" list="t20-stadiums"></label>
-<label>Pitch<select name="pitch">
-  <option value="">Captain chooses</option>
-  {% for option in pitches %}<option{% if option == pitch %} selected{% endif %}>{{ option }}</option>{% endfor %}
-</select></label>
 {% endmacro %}
 {% macro fixture_dates(fixture=none) %}
 <label>Opens (IST)<input name="opens_at" type="datetime-local" value="{{ local(fixture.opens_at).strftime('%Y-%m-%dT%H:%M') if fixture else '' }}" required></label>
@@ -127,6 +120,7 @@
 <section class="section-card">
   <h2>{% if entry.team.logo_url %}<img src="{{ entry.team.logo_url }}" alt="" width="36" height="36" style="object-fit:contain;vertical-align:middle"> {% endif %}{{ entry.name }}</h2>
   <p>Team #{{ entry.id }} · {{ entry.team.players|length }} players{% if not entry.is_participating %} · Reserve team{% endif %} · Owner {{ entry.owner_id }}{% if entry.co_owner_id %} · Co-owner {{ entry.co_owner_id }}{% endif %}</p>
+  <p>Home stadium · {{ entry.home_stadium or "Choose a home stadium in team details" }}</p>
   {% if not championship.completed_at %}
   <details>
     <summary>Edit team details</summary>
@@ -172,16 +166,22 @@
 {% elif tab == "schedule" %}
 {% set postseason_started = rows|selectattr("is_final")|list or rows|selectattr("semifinal_no")|list %}
 {% set series_limit = cup.league_series_limit(championship) %}
-{% if not championship.started_at %}
+{% if not championship.completed_at and not postseason_started and (not championship.started_at or regenerable_count) %}
 <section class="section-card">
-  <h2>Generate schedule</h2>
-  <p>Matches are scheduled one per day in IST. Generating again replaces the current schedule.</p>
+  <h2>{{ "Regenerate upcoming series" if championship.started_at else "Regenerate schedule" if rows else "Generate schedule" }}</h2>
+  {% if championship.started_at %}
+  <p>Rebuild match dates and lengths for {{ regenerable_count }} untouched series. Matchups, live series and results carry forward.</p>
+  {% else %}
+  <p>Matches are scheduled one per day in IST. Generating again replaces the draft schedule.</p>
+  {% endif %}
   <form method="post">
     {{ hidden(tab) }}
     <div class="form-grid">
+      {% if not championship.started_at %}
       <label>Number of participating teams<input name="team_count" type="number" min="2" value="{{ championship.teams|selectattr("is_participating")|list|length }}" required></label>
       <label>Opponents per team<input name="opponents" type="number" min="1" value="{{ championship.opponents or '' }}" required></label>
-      <label>Start date<input name="start_date" type="date" value="{{ local(championship.start_at).date() if championship.start_at else '' }}" required></label>
+      {% endif %}
+      <label>{{ "Earliest new fixture date" if championship.started_at else "Start date" }}<input name="start_date" type="date" value="{{ schedule_today if championship.started_at else local(championship.start_at).date() if championship.start_at else '' }}"{% if championship.started_at %} min="{{ schedule_today }}"{% endif %} required></label>
       <label>End date<input name="end_date" type="date" value="{{ local(championship.end_at).date() if championship.end_at else '' }}" required></label>
       <label>Rest days between series<input name="rest_days" type="number" min="0" value="{{ championship.rest_days }}" required></label>
     </div>
@@ -192,15 +192,17 @@
         <label>Maximum matches<input name="max_matches" type="number" min="3" value="{{ championship.max_matches_per_series or championship.matches_per_series }}" required></label>
       </div>
     </fieldset>
+    {% if not championship.started_at %}
     <fieldset>
       <legend>Participating teams</legend>
       {% for team in championship.teams %}
       <label><input type="checkbox" name="participants" value="{{ team.id }}"{% if team.is_participating %} checked{% endif %}> {{ team.name }}</label>
       {% endfor %}
     </fieldset>
-    <button class="action-btn accent-btn" name="action" value="generate">Generate schedule</button>
+    {% endif %}
+    <button class="action-btn accent-btn" name="action" value="{{ 'regenerate' if championship.started_at else 'generate' }}">{{ "Regenerate upcoming series" if championship.started_at else "Regenerate schedule" if rows else "Generate schedule" }}</button>
   </form>
-  {% if rows %}
+  {% if rows and not championship.started_at %}
   <form method="post">
     {{ hidden(tab) }}
     <button class="action-btn play-btn" name="action" value="start">Start championship</button>
@@ -218,10 +220,19 @@
         {{ team_select("home", "Home team") }}{{ team_select("away", "Touring team") }}
         <label>First match date (IST)<input type="date" name="start_date" required></label>
         <label>Matches<input type="number" name="matches" value="3" min="3" max="{{ series_limit }}" required></label>
-        {{ conditions() }}
+        <label>Venue notes<input name="venue" maxlength="120"></label>
       </div>
       <button class="action-btn accent-btn" name="action" value="add_series">Add series</button>
     </form>
+  </details>
+</section>
+{% endif %}
+{% if rows %}
+<section class="section-card">
+  {% set totals = cup.league_match_totals(championship, rows) %}
+  <details>
+    <summary>League matches per team · {{ totals|map(attribute=1)|min }}–{{ totals|map(attribute=1)|max }}</summary>
+    <ul>{% for name, total in totals %}<li>{{ name }} · {{ total }}</li>{% endfor %}</ul>
   </details>
 </section>
 {% endif %}
@@ -230,7 +241,7 @@
 <section class="section-card">
   <h2>{{ series_name(series) }}</h2>
   <p>Series #{{ series.id }}{% if not cup.is_postseason(series) %} · {{ active_matches }} matches{% endif %} · {{ summary(series) }}</p>
-  {% if series.venue or series.stadium or series.pitch %}<p>{{ [series.venue, series.stadium, series.pitch]|reject("none")|join(" · ") }}</p>{% endif %}
+  <p>{{ cup.series_stadium(series) or "Home stadium needed" }}{% if series.venue %} · {{ series.venue }}{% endif %}</p>
   {% set series_locked = series.fixtures|selectattr("status", "in", ("live","completed","forfeited"))|list|length %}
   {% if not championship.completed_at and not postseason_started and not series_locked %}
   <details>
@@ -239,7 +250,7 @@
       {{ hidden(tab, series_id=series.id) }}
       <div class="form-grid">
         {{ team_select("home", "Home team", series.home_id) }}{{ team_select("away", "Touring team", series.away_id) }}
-        {{ conditions(series.venue, series.stadium, series.pitch) }}
+        <label>Venue notes<input name="venue" value="{{ series.venue or '' }}" maxlength="120"></label>
       </div>
       <button class="action-btn accent-btn" name="action" value="edit_series">Save series</button>
     </form>
@@ -256,8 +267,11 @@
     <summary>
       Match {{ fixture.number }} · #{{ fixture.id }} · {{ cup.STATUS[cup.fixture_status(championship, fixture, next_by_team)] }}
       {% if result_label(fixture) %} · {{ result_label(fixture) }}{% endif %}
+      {% if fixture.match and fixture.match.pitch_type %} · {{ fixture.match.pitch_type }}
+      {% elif fixture.random_pitch and championship.pitch_mode == "random" %} · {{ fixture.random_pitch }}{% endif %}
     </summary>
     <p>{{ format_ist(fixture.opens_at) }} to {{ format_ist(fixture.deadline) }}</p>
+    {% if fixture.match and fixture.match.stadium %}<p>{{ fixture.match.stadium }}</p>{% endif %}
     {% if fixture.status in ("completed","forfeited") %}
     <a href="{{ url_for('admin_t20_championship', championship_id=championship.id, tab='scorecard', fixture=fixture.id) }}">Scorecard</a>
     {% endif %}
@@ -359,6 +373,26 @@
 
 {% elif tab == "settings" %}
 <section class="section-card">
+  <h2>Pitch and stadium</h2>
+  <p>League and semifinal matches use the home team’s stadium. Set each ground on the Teams tab.</p>
+  {% if championship.completed_at %}
+    <p>{{ cup.PITCH_MODES[championship.pitch_mode] }}</p>
+  {% else %}
+  <form method="post">
+    {{ hidden(tab) }}
+    <div class="form-grid">
+      <div>
+        <label for="t20-pitch-mode">Pitch selection</label>
+        <select id="t20-pitch-mode" name="pitch_mode">
+          {% for key, label in cup.PITCH_MODES.items() %}<option value="{{ key }}"{% if championship.pitch_mode == key %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+    <button class="action-btn accent-btn" name="action" value="pitch_settings">Save pitch selection</button>
+  </form>
+  {% endif %}
+</section>
+<section class="section-card">
   <h2>Points system</h2>
   <form method="post">
     {{ hidden(tab) }}
@@ -386,7 +420,8 @@
       <label>Final format<select name="final_format">
         {% for key, label in final_formats.items() %}<option value="{{ key }}"{% if championship.final_format == key %} selected{% endif %}>{{ label }}</option>{% endfor %}
       </select></label>
-      {{ conditions(championship.final_venue, championship.final_stadium, championship.final_pitch) }}
+      <label>Final venue notes<input name="venue" value="{{ championship.final_venue or '' }}" maxlength="120"></label>
+      <label>Neutral final stadium<input name="stadium" value="{{ championship.final_stadium or '' }}" list="t20-stadiums" placeholder="Home stadium if blank"></label>
       <label>Final deadline (IST)<input type="datetime-local" name="final_deadline" value="{{ local(championship.final_deadline).strftime('%Y-%m-%dT%H:%M') if championship.final_deadline else '' }}"></label>
     </div>
     <p>Seeds 1 and 4 play in one semifinal. Seeds 2 and 3 play in the other. The winners meet in the final.</p>

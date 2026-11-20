@@ -17041,22 +17041,13 @@ def _t20_number(name, *, optional=False):
     return int(value)
 
 
-def _t20_conditions():
-    from services.match_constants import PITCH_TYPES
-    from services.tournament_stadiums import resolve
-    stadium = request.form.get("stadium", "").strip()
-    pitch = request.form.get("pitch", "").strip()
-    resolved = resolve(stadium)
-    if stadium and not resolved:
-        raise ValueError("Choose a stadium from Stadium Data.")
-    if pitch and pitch not in PITCH_TYPES:
-        raise ValueError("Choose a valid pitch.")
-    return dict(venue=request.form.get("venue", "").strip()[:120] or None,
-                stadium=resolved, pitch=pitch or None)
+def _t20_venue():
+    return request.form.get("venue", "").strip()[:120] or None
 
 
 def _t20_team(db, championship, existing=None):
     from models import T20ChampionshipTeam
+    from services.t20_championship import validate_stadium
     from services.t20_championship_io import captain_id
     name = request.form.get("team_name", "").strip()
     if not name or len(name) > 120 or any(
@@ -17068,6 +17059,10 @@ def _t20_team(db, championship, existing=None):
     co_owner = captain_id(db, request.form.get("co_owner", ""), "co-owner", optional=True)
     if owner == co_owner:
         raise ValueError("Use different IDs for the owner and co-owner.")
+    home_stadium = (validate_stadium(request.form["home_stadium"]) if "home_stadium" in request.form
+                    else existing.home_stadium if existing else None)
+    if championship.started_at and not home_stadium:
+        raise ValueError("Choose a home stadium before saving this team.")
     if existing is None:
         existing = T20ChampionshipTeam(championship=championship,
                                        team=ChallengeTeam(league=championship.league, name=name),
@@ -17076,6 +17071,7 @@ def _t20_team(db, championship, existing=None):
     else:
         existing.team.name = name
         existing.owner_id, existing.co_owner_id = owner, co_owner
+    existing.home_stadium = home_stadium
     team = existing.team
     team.short_name = request.form.get("short_name", "").strip()[:30] or None
     team.primary_color = _team_colour_form("primary_color")
@@ -17107,13 +17103,20 @@ def _t20_mutation(db, championship):
                   if key != "series_win_bonus" or key in request.form}
         cup.update_points(championship, points)
         return
-    if action == "generate":
-        selected = request.form.getlist("participants", type=int)
-        cup.generate(db, championship, team_count=_t20_number("team_count"),
-                     opponents=_t20_number("opponents"), matches=_t20_number("matches"),
-                     max_matches=_t20_number("max_matches", optional=True),
-                     start=_t20_day("start_date"), end=_t20_day("end_date"), rest=_t20_number("rest_days"),
-                     team_ids=selected or None)
+    if action in ("generate", "regenerate"):
+        minimum = _t20_number("matches")
+        maximum = _t20_number("max_matches", optional=True)
+        settings = dict(matches=minimum, max_matches=minimum if maximum is None else maximum,
+                        start=_t20_day("start_date"), end=_t20_day("end_date"), rest=_t20_number("rest_days"))
+        if action == "regenerate":
+            lengths = cup.regenerate_remaining(db, championship, **settings)
+        else:
+            selected = request.form.getlist("participants", type=int)
+            lengths = cup.generate(db, championship, team_count=_t20_number("team_count"),
+                                   opponents=_t20_number("opponents"), team_ids=selected or None, **settings)
+        if maximum and maximum > minimum and lengths == {minimum}:
+            flash("The dates and match-balance limit kept every series at the minimum. "
+                  "More dates can make room for longer series.", "info")
         return
     if action == "start":
         cup.start(championship)
@@ -17121,6 +17124,12 @@ def _t20_mutation(db, championship):
         return
     if championship.completed_at:
         raise ValueError("This championship is complete.")
+    if action == "pitch_settings":
+        mode = request.form.get("pitch_mode")
+        if mode not in cup.PITCH_MODES:
+            raise ValueError("Choose a pitch selection mode.")
+        championship.pitch_mode = mode
+        return
     rows = cup.series_list(db, championship)
     if action == "final_settings":
         mode = request.form.get("final_format")
@@ -17146,13 +17155,14 @@ def _t20_mutation(db, championship):
             raise ValueError("The semifinal format is locked once postseason fixtures are created.")
         if playoff_deadline != championship.playoff_deadline:
             _t20_round_deadline(semifinals, playoff_deadline)
-        conditions = _t20_conditions() if mode != "none" else dict(venue=None, stadium=None, pitch=None)
+        conditions = dict(venue=_t20_venue() if mode != "none" else None,
+                          stadium=cup.validate_stadium(request.form.get("stadium")) if mode != "none" else None)
         if final:
             if mode != championship.final_format:
                 raise ValueError("The format is locked once the final fixtures are created.")
             if any(f.status in ("live", "completed", "forfeited") for f in final.fixtures):
                 if any(getattr(final, key) != value for key, value in conditions.items()):
-                    raise ValueError("The final venue and pitch are locked once play starts.")
+                    raise ValueError("The final venue and stadium are locked once play starts.")
             for key, value in conditions.items():
                 setattr(final, key, value)
             if deadline != championship.final_deadline:
@@ -17203,7 +17213,7 @@ def _t20_mutation(db, championship):
 
     if action == "add_series":
         cup.add_series(db, championship, team_field("home"), team_field("away"),
-                       _t20_number("matches"), _t20_day("start_date"), **_t20_conditions())
+                       _t20_number("matches"), _t20_day("start_date"), venue=_t20_venue())
         return
 
     series = next((row for row in rows if row.id == _t20_number("series_id")), None)
@@ -17226,9 +17236,7 @@ def _t20_mutation(db, championship):
                 raise ValueError("Choose two participating teams.")
             series.home, series.away = home, away
             home.is_participating = away.is_participating = True
-            conditions = _t20_conditions()
-            for key, value in conditions.items():
-                setattr(series, key, value)
+            series.venue = _t20_venue()
         elif action == "remove_series":
             db.delete(series)
         else:
@@ -17336,7 +17344,6 @@ def admin_t20_championship(championship_id):
     from handlers import t20_championship as views
     from models import T20Championship
     from services import t20_championship as cup, t20_championship_stats as stats
-    from services.match_constants import PITCH_TYPES
     from services.tournament_stadiums import all_rows
     from utils.tournament_time import IST_OFFSET, format_ist
 
@@ -17357,7 +17364,8 @@ def admin_t20_championship(championship_id):
                 log_admin(db, "t20_" + request.form.get("action", ""), "t20_championship",
                           championship.id, championship.name)
                 db.commit()
-                flash("Championship saved.", "success")
+                flash("Upcoming league series regenerated." if request.form.get("action") == "regenerate"
+                      else "Championship saved.", "success")
             except (ValueError, IntegrityError, OverflowError) as exc:
                 db.rollback()
                 flash(str(exc) if isinstance(exc, ValueError) else "Could not save those changes.", "error")
@@ -17379,8 +17387,10 @@ def admin_t20_championship(championship_id):
             final_formats=cup.FINALS, playoff_formats=cup.PLAYOFFS,
             series_name=cup.series_name, summary=views.series_summary, result_label=views.result_label,
             next_by_team=next_by_team, standings=cup.standings(championship, rows),
+            regenerable_count=sum(cup.regenerable_series(row) for row in rows),
+            schedule_today=(datetime.utcnow() + IST_OFFSET).date(),
             local=lambda dt: (dt + IST_OFFSET) if dt else None, format_ist=format_ist,
-            stadiums=all_rows() if tab in ("schedule", "settings") else [], pitches=PITCH_TYPES,
+            stadiums=all_rows() if tab in ("teams", "settings") else [],
             command_help=views.command_help(championship.command), player_rows=player_rows,
             player_figures=stats.player_figures, filter_team=filter_team, filter_series=filter_series,
             award_lines=views.render(db, championship, "awards", []) if tab == "stats" else [],
@@ -17418,6 +17428,7 @@ def admin_t20_roster_download(championship_id, kind, file_format):
 def admin_t20_roster_import(championship_id):
     from sqlalchemy.exc import IntegrityError
     from services import t20_championship as cup, t20_championship_io as roster_io
+    from services.tournament_stadiums import all_rows
 
     with get_session() as db:
         championship = cup.lock(db, championship_id)
@@ -17448,7 +17459,7 @@ def admin_t20_roster_import(championship_id):
             else:
                 errors = ["Could not save the import. Check for duplicate team or player names and try again."]
             return render_template("admin_t20_championship.html", championship=championship,
-                                   tab="teams", stadiums=[], roster_import_errors=errors), 422
+                                   tab="teams", stadiums=all_rows(), roster_import_errors=errors), 422
 
     if created or updated:
         flash(f"Teams created {created} · Teams updated {updated} · Players added {added}.", "success")
