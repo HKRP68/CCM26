@@ -28,8 +28,8 @@ FINALS = {"none": "No Final", **SERIES_FORMATS}
 MATCH_COUNTS = {"single": 1, "best_of_3": 3, "best_of_5": 5, "five_matches": 5}
 CLINCH_WINS = {"best_of_3": 2, "best_of_5": 3}
 VIEWS = ("info", "help", "table", "fixtures", "teams", "series", "final", "stats", "player",
-         "awards", "scorecard", "play")
-SUBCOMMANDS = (*VIEWS, "playoffs")
+         "awards", "scorecard", "play", "teamfix")
+SUBCOMMANDS = (*VIEWS, "playoffs", "teamfixtures")
 TERMINAL = {"completed", "forfeited", "cancelled"}
 STATUS = {"upcoming": "Upcoming", "available": "Available to Play", "live": "In Progress",
           "completed": "Completed", "postponed": "Postponed", "forfeited": "Forfeited",
@@ -43,7 +43,14 @@ def all_commands(championship):
 
 def find_command(db, command):
     alias = db.query(Command).filter(Command.command == command).first()
-    return (alias.championship, alias.view) if alias else None
+    if alias:
+        return alias.championship, alias.view
+    # Championships created before the team fixture command still support it.
+    if command.endswith("teamfix"):
+        championship = db.query(Championship).filter_by(command=command[:-7]).first()
+        if championship:
+            return championship, "teamfix"
+    return None
 
 
 def create(db, name, command, reserved=()):
@@ -57,6 +64,8 @@ def create(db, name, command, reserved=()):
     commands = all_commands(championship)
     taken.update(command for command, in
                  db.query(Command.command).filter(Command.command.in_(commands)))
+    taken.update(f"{prefix}teamfix" for prefix, in db.query(Championship.command)
+                 .filter(Championship.command.in_([cmd[:-7] for cmd in commands if cmd.endswith("teamfix")])))
     clash = sorted(taken.intersection(commands))
     if clash:
         raise ValueError("Commands already in use: " + ", ".join("/" + cmd for cmd in clash))

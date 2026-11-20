@@ -645,6 +645,9 @@ def test_championship_commands_produce_rich_replies(competition, monkeypatch):
     from handlers import t20_championship as commands
 
     db, championship = competition
+    from services import t20_championship as cup
+    cup.add_series(db, championship, *championship.teams[:2], 3, date.today())
+    db.flush()
     championship.name = "T20 <Cup>"
     deliver = AsyncMock()
     monkeypatch.setattr(commands.R, "reply_rich", deliver)
@@ -652,7 +655,8 @@ def test_championship_commands_produce_rich_replies(competition, monkeypatch):
     update = SimpleNamespace(effective_message=message)
     for command in ("wt20c", "wt20chelp", "wt20cinfo", "wt20ctable", "wt20cfixtures",
                     "wt20cteams", "wt20cseries", "wt20cfinal", "wt20cstats", "wt20cplayer",
-                    "wt20cawards", "wt20cscorecard", "wt20cplay", "wt20c playoffs"):
+                    "wt20cawards", "wt20cscorecard", "wt20cplay", "wt20cteamfix",
+                    "wt20c teamfixtures", "wt20c playoffs"):
         deliver.reset_mock()
         name = command.split()[0]
         message.text = "/" + command
@@ -662,6 +666,11 @@ def test_championship_commands_produce_rich_replies(competition, monkeypatch):
         assert "T20 &lt;Cup&gt;" in fallback
         if command == "wt20ctable":
             assert blocks[1]["type"] == "table"
+        if command == "wt20chelp":
+            assert blocks[1]["type"] == "list"
+        if command in ("wt20cfixtures", "wt20cseries", "wt20cteams"):
+            assert any(block["type"] == "details" for block in blocks)
+            assert "<blockquote expandable>" in fallback
 
 
 def test_admin_home_stadium_and_pitch_settings(roster_admin):
@@ -734,3 +743,85 @@ def test_admin_regenerates_upcoming_series_around_live_and_completed_fixtures(ro
     assert all((row.fixtures[0].opens_at - kept.fixtures[-1].deadline).days >= 2 for row in rows[1:])
     assert (rows[2].fixtures[0].opens_at - rows[1].fixtures[-1].deadline).days >= 2
     assert cup.next_fixtures(rows)[australia.id] == kept.fixtures[1].id
+
+
+def test_team_fixture_command_filters_paginated_cards_and_resolves_co_owners(competition, monkeypatch):
+    import asyncio
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from handlers import t20_championship as commands
+    from models import T20ChampionshipCommand
+    from services import t20_championship as cup
+
+    db, championship = competition
+    india, australia, england = championship.teams
+    australia.co_owner_id = 9876
+    australia.team.short_name = "AUS"
+    for index in range(6):
+        cup.add_series(db, championship, australia, india, 3, date.today() + timedelta(days=4*index))
+    cup.add_series(db, championship, england, india, 3, date.today())
+    db.flush()
+
+    # Older championships do not have a saved teamfix alias yet.
+    db.query(T20ChampionshipCommand).filter_by(command="wt20cteamfix").delete()
+    send, edit = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(commands.R, "reply_rich", send)
+    monkeypatch.setattr(commands.R, "edit_rich", edit)
+    monkeypatch.setattr(commands, "get_session", lambda: nullcontext(db))
+    message = SimpleNamespace(text="/wt20cteamfix", reply_to_message=None)
+    update = SimpleNamespace(effective_message=message, effective_user=SimpleNamespace(id=9876))
+    assert asyncio.run(commands.dispatch(update, None, db, "wt20cteamfix"))
+    send.assert_awaited_once()
+    _, blocks, fallback = send.await_args.args
+    assert "Australia fixtures" in fallback and "India tour of England" not in fallback
+    assert sum(block["type"] == "details" for block in blocks) == 3
+    assert fallback.count("<blockquote expandable>") == 3
+    assert "Page 1 of 2" in fallback and len(fallback) < commands.R.CHUNK_LIMIT
+    button = send.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "Next ›"
+
+    query = SimpleNamespace(data=button.callback_data, answer=AsyncMock())
+    asyncio.run(commands.fixture_page_callback(SimpleNamespace(callback_query=query), None))
+    _, next_blocks, next_fallback = edit.await_args.args
+    assert "Page 2 of 2" in next_fallback and "India tour of England" not in next_fallback
+    assert sum(block["type"] == "details" for block in next_blocks) == 3
+    query.answer.assert_awaited_once()
+
+    for text in ("/wt20c teamfixtures AUS", "/wt20cteamfix Australia", f"/wt20cteamfix {australia.id}"):
+        send.reset_mock()
+        message.text = text
+        update.effective_user.id = 12345
+        assert asyncio.run(commands.dispatch(update, None, db, text.split()[0][1:]))
+        assert "Australia fixtures" in send.await_args.args[2]
+
+
+def test_long_series_is_paged_without_splitting_html_sections(competition):
+    import re
+
+    from handlers import t20_championship as commands
+    from services import t20_championship as cup
+
+    db, championship = competition
+    india, australia, _ = championship.teams
+    championship.name = "&" * 120
+    india.team.name = "&" * 120
+    australia.team.name = "<" * 120
+    championship.max_matches_per_series = 40
+    tour = cup.add_series(db, championship, india, australia, 40, date.today(), venue="&" * 120)
+    db.flush()
+    rows = cup.series_list(db, championship)
+    seen = set()
+    page = 0
+    while True:
+        blocks, fallback, markup = commands._fixture_page(championship, rows, "fixtures", india.id, 0, page)
+        assert len(fallback) < commands.R.CHUNK_LIMIT
+        assert fallback.count("<blockquote expandable>") == fallback.count("</blockquote>")
+        assert any(block["type"] == "details" for block in blocks)
+        message = re.sub("<[^>]*>", "", fallback)
+        seen.update(int(match) for match in re.findall(r"Match \d+ · #(\d+)", message))
+        if not markup or not any(button.text == "Next ›" for button in markup.inline_keyboard[0]):
+            break
+        page += 1
+    assert page > 0 and seen == {fixture.id for fixture in tour.fixtures}

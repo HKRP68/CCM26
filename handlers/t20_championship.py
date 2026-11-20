@@ -2,7 +2,10 @@
 import json
 from functools import partial
 
-from models import User
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+from database import get_session
+from models import T20Championship, User
 from services import rich_message as R
 from services.rich_message_html import inline
 from services import t20_championship as cup
@@ -16,6 +19,8 @@ VIEW_TITLES = {
     "playoffs": "Playoffs", "final": "Championship final", "stats": "Player statistics",
     "player": "Player statistics", "awards": "Awards", "scorecard": "Scorecard",
 }
+FIXTURE_VIEWS = {"fixtures": "f", "series": "s", "playoffs": "p", "final": "n"}
+PAGE_VIEWS = {code: view for view, code in FIXTURE_VIEWS.items()}
 
 
 def command_help(prefix):
@@ -24,6 +29,7 @@ def command_help(prefix):
         f"/{prefix}info — championship overview",
         f"/{prefix}table — points and series standings",
         f"/{prefix}fixtures [team=ID] — schedule, deadlines and results",
+        f"/{prefix}teamfix [TEAM] — your fixtures, or look up a team by name, short name or ID",
         f"/{prefix}teams — squads and captains",
         f"/{prefix}series [ID] — bilateral series scores and results",
         f"/{prefix} playoffs — semifinal bracket, fixtures and results",
@@ -124,21 +130,64 @@ def _filters(championship, rows, args, *, allowed):
     return " ".join(names), found
 
 
-def _fixture_blocks(championship, rows, selected):
+def _fixture_sections(championship, rows, selected, team_id=0):
     next_by_team = cup.next_fixtures(rows)
     for series in selected:
-        header = f"\nSeries #{series.id} · {cup.series_name(series)}\n{series_summary(series)}"
+        title = f"#{series.id} · {cup.series_name(series)}"
+        if team_id:
+            if series.is_final and series.stadium:
+                side = "Neutral"
+            else:
+                side = "Home" if series.home_id == team_id else "Away"
+            title = f"{title} · {side}"
         stadium = cup.series_stadium(series)
-        header += "\n" + (" · ".join(filter(None, (stadium, series.venue))) or "Home stadium needed")
-        yield header
+        venue = " · ".join(filter(None, (stadium, series.venue))) or "Home stadium needed"
+        lines = [series_summary(series), venue]
         for fixture in series.fixtures:
             status = cup.STATUS[cup.fixture_status(championship, fixture, next_by_team)]
             result = result_label(fixture)
             pitch = fixture.match.pitch_type if fixture.match else (
                 fixture.random_pitch if championship.pitch_mode == "random" else None)
             details = " · ".join(filter(None, (status, result, pitch)))
-            yield (f"Match {fixture.number} · #{fixture.id} · {details}\n"
-                   f"Opens {format_ist(fixture.opens_at)} · Deadline {format_ist(fixture.deadline)}")
+            lines.append(f"Match {fixture.number} · #{fixture.id} · {details}\n"
+                         f"Opens {format_ist(fixture.opens_at)} · Deadline {format_ist(fixture.deadline)}")
+        yield title, lines
+
+
+def _fixture_scope(championship, rows, view, team_id=0, series_id=0):
+    prefix = championship.command
+    if view == "playoffs":
+        if championship.playoff_format == "none":
+            return ["Top-four semifinals are off.", f"/{prefix}final"], [], ""
+        notes = [f"Semifinals · {cup.PLAYOFFS[championship.playoff_format]}",
+                 "Seeds 1 vs 4 and 2 vs 3 · Winners meet in the final."]
+        postseason = [row for row in rows if cup.is_postseason(row)]
+        return notes, postseason, "The bracket opens after the league series finish."
+    if view == "final":
+        final = [row for row in rows if row.is_final]
+        if championship.final_format == "none":
+            qualification = "The table leader becomes champion."
+        elif championship.playoff_format != "none":
+            qualification = f"The semifinal winners qualify. See /{prefix} playoffs."
+        else:
+            qualification = "The top two qualify after the league series finish."
+        champion = next((team for team in championship.teams if team.id == championship.champion_id), None)
+        notes = [f"Final · {cup.FINALS[championship.final_format]}"]
+        if champion:
+            notes.append(f"Champion · {champion.name}")
+        return notes, final, qualification
+    selected = [row for row in rows if (not team_id or team_id in (row.home_id, row.away_id))
+                and (not series_id or series_id == row.id)]
+    return [], selected, "No matching series."
+
+
+def _fixture_filters(championship, rows, view, args):
+    if view not in ("fixtures", "series"):
+        return 0, 0
+    query, filters = _filters(championship, rows, args, allowed={"team"})
+    if view == "series" and query and not query.isdecimal():
+        raise ValueError(f"Use /{championship.command}series ID.")
+    return filters.get("team_id", 0), int(query) if view == "series" and query else 0
 
 
 def _player_block(row):
@@ -183,7 +232,7 @@ def render(db, championship, view, args):
                 f"Semifinals · {cup.PLAYOFFS[championship.playoff_format]} · /{prefix} playoffs"
                 if championship.playoff_format != "none" else "",
                 f"Champion · {champion.name}" if champion else "",
-                f"/{prefix}table · /{prefix}fixtures · /{prefix}teams · /{prefix}help"]
+                f"/{prefix}table · /{prefix}fixtures · /{prefix}teamfix · /{prefix}teams · /{prefix}help"]
     if view == "table":
         return [" · ".join(map(str, row))
                 for _, headers, values in _standing_tables(cup.standings(championship, rows))
@@ -200,38 +249,14 @@ def render(db, championship, view, args):
             lines.extend(f"{p.name} · {p.source_player.version or 'Base'}"
                          if p.source_player else p.name for p in team.team.players)
         return lines or ["No teams have been added."]
-    if view == "playoffs":
-        if championship.playoff_format == "none":
-            return ["Top-four semifinals are off.", f"/{prefix}final"]
-        postseason = [row for row in rows if cup.is_postseason(row)]
-        return [f"Semifinals · {cup.PLAYOFFS[championship.playoff_format]}",
-                "Seeds 1 vs 4 and 2 vs 3 · Winners meet in the final.",
-                *(list(_fixture_blocks(championship, rows, postseason)) or
-                  ["The bracket opens after the league series finish."])]
-    if view in ("series", "fixtures", "final"):
-        if view == "final":
-            final = [row for row in rows if row.is_final]
-            if championship.final_format == "none":
-                qualification = "The table leader becomes champion."
-            elif championship.playoff_format != "none":
-                qualification = f"The semifinal winners qualify. See /{prefix} playoffs."
-            else:
-                qualification = "The top two qualify after the league series finish."
-            return [f"Final · {cup.FINALS[championship.final_format]}",
-                    f"Champion · {champion.name}" if champion else "",
-                    *(list(_fixture_blocks(championship, rows, final)) or [qualification])]
-        query, filters = _filters(championship, rows, args, allowed={"team"})
-        selected = [row for row in rows if filters.get("team_id") in (None, row.home_id, row.away_id)]
-        if view == "series" and query:
-            if not query.isdecimal():
-                raise ValueError(f"Use /{prefix}series ID.")
-            selected = [row for row in selected if row.id == int(query)]
-        blocks = list(_fixture_blocks(championship, rows, selected))
-        if view == "series" and query and selected:
-            best = next((row for row in stats.aggregate(selected) if row["pots"]), None)
-            if best:
-                blocks.append(f"Player of the Series · {stats.player_label(best)}")
-        return blocks or ["No matching series."]
+    if view in FIXTURE_VIEWS:
+        team_id, series_id = _fixture_filters(championship, rows, view, args)
+        notes, selected, empty = _fixture_scope(championship, rows, view, team_id, series_id)
+        if not selected:
+            return [*notes, empty]
+        return [*notes, *_series_award(selected, series_id),
+                *(line for title, lines in _fixture_sections(championship, rows, selected, team_id)
+                  for line in (title, *lines))]
     if view == "scorecard":
         if len(args) != 1 or not args[0].isdecimal():
             raise ValueError(f"Use /{prefix}scorecard FIXTURE_ID. Find the ID in /{prefix}fixtures.")
@@ -253,7 +278,186 @@ def render(db, championship, view, args):
     return [_player_block(row) for row in totals] or ["No player figures for this selection yet."]
 
 
-async def _reply(message, title, content):
+def _series_award(series, series_id):
+    if series_id and series:
+        best = next((row for row in stats.aggregate(series) if row["pots"]), None)
+        if best:
+            return [f"Player of the Series · {stats.player_label(best)}"]
+    return []
+
+
+def _line(line):
+    if line.startswith("Opens "):
+        return R.italic(line)
+    label, separator, body = line.partition(" — " if line.startswith("/") else " · ")
+    if separator:
+        mark = R.code if line.startswith("/") else R.bold
+        return [mark(label), separator, body]
+    return line
+
+
+def _section_rows(lines, limit):
+    for line in lines:
+        parts = [part for part in line.splitlines() if part.strip()]
+        formatted = list(map(_line, parts))
+        html = "\n".join(map(inline, formatted))
+        if len(html) <= limit:
+            yield formatted, html
+            continue
+        # Split unusually long text before adding tags so the fallback stays valid.
+        width = max(1, limit // 6)
+        for part, value in zip(parts, formatted):
+            rendered = inline(value)
+            if len(rendered) <= limit:
+                yield [value], rendered
+            else:
+                for start in range(0, len(part), width):
+                    piece = part[start:start + width]
+                    yield [piece], inline(piece)
+
+
+def _section_cards(title, lines, limit, *, expanded=False):
+    """Keep each details block and its legacy HTML quote together."""
+    summary = inline(R.bold(title))
+    limit -= len(summary) + 70
+    groups = [[]]
+    size = 0
+    for parts, html in _section_rows(lines, limit):
+        if groups[-1] and size + len(html) + 1 > limit:
+            groups.append([])
+            size = 0
+        groups[-1].append((parts, html))
+        size += len(html) + 1
+    for index, group in enumerate(groups):
+        label = f"{title} · continued" if index else title
+        blocks = [R.paragraph(part) for parts, _ in group for part in parts]
+        body = "\n".join(html for _, html in group)
+        heading = inline(R.bold(label))
+        if expanded:
+            fallback = f"{heading}\n{body}"
+        else:
+            fallback = f"<blockquote expandable>{heading}\n{body}</blockquote>"
+        yield R.details(R.bold(label), blocks, is_open=expanded), fallback
+
+
+def _pack_cards(cards, limit, *, max_cards=None):
+    group, size = [], 0
+    for card in cards:
+        length = len(card[1]) + 1
+        if group and (size + length > limit or len(group) == max_cards):
+            yield group
+            group, size = [], 0
+        group.append(card)
+        size += length
+    if group:
+        yield group
+
+
+def _fixture_button(label, championship_id, view, team_id, series_id, page):
+    data = f"wt20f:{championship_id}:{FIXTURE_VIEWS[view]}:{team_id}:{series_id}:{page}"
+    return InlineKeyboardButton(label, callback_data=data)
+
+
+def _fixture_page(championship, rows, view, team_id, series_id, page):
+    team = next((team for team in championship.teams if team.id == team_id), None)
+    subtitle = f"{team.name} fixtures" if team else VIEW_TITLES[view]
+    title = f"{championship.name} · {subtitle}"
+    notes, selected, empty = _fixture_scope(championship, rows, view, team_id, series_id)
+    if not selected:
+        summary = [line for line in (*notes, empty) if line]
+        return ([R.heading(title), *(R.paragraph(_line(line)) for line in summary)],
+                "\n".join([inline(R.bold(title)), *(inline(_line(line)) for line in summary)]), None)
+
+    intro = [_line(line) for line in notes]
+    if team:
+        pending = cup.next_fixtures(rows)
+        next_id = pending.get(team.id)
+        fixture = next((f for row in selected for f in row.fixtures if f.id == next_id), None)
+        if fixture:
+            status = cup.STATUS[cup.fixture_status(championship, fixture, pending)]
+            series = fixture.series
+            opponent = series.away if series.home_id == team.id else series.home
+            name = opponent.team.short_name or opponent.name
+            intro.append([R.bold("Next fixture"),
+                          f" · vs {name[:45]} · #{fixture.id} · {status}"])
+            intro.append(R.italic(f"Opens {format_ist(fixture.opens_at)}"))
+    intro.append("Tap a series to see its fixtures.")
+    header = "\n".join([inline(R.bold(title)), *(inline(line) for line in intro)])
+    award = _series_award(selected, series_id)
+    limit = R.CHUNK_LIMIT - len(header) - 100
+    selected = sorted(selected, key=lambda row: (cup.series_complete(row), row.position))
+    cards = (card for label, lines in _fixture_sections(championship, rows, selected, team_id)
+             for card in _section_cards(label, [*lines, *award], limit))
+    pages = list(_pack_cards(cards, limit, max_cards=3))
+    page = min(max(0, page), len(pages) - 1)
+    blocks = [R.heading(title), *(R.paragraph(line) for line in intro)]
+    blocks.extend(block for block, _ in pages[page])
+    fallback = [header, *(html for _, html in pages[page])]
+    buttons = []
+    if len(pages) > 1:
+        label = f"Page {page + 1} of {len(pages)}"
+        blocks.append(R.footer(label))
+        fallback.append(inline(label))
+        for target, button_label in ((page - 1, "‹ Previous"), (page + 1, "Next ›")):
+            if 0 <= target < len(pages):
+                buttons.append(_fixture_button(button_label, championship.id, view, team_id, series_id, target))
+    return blocks, "\n".join(fallback), InlineKeyboardMarkup([buttons]) if buttons else None
+
+
+def _matching_teams(championship, query, viewer_id):
+    teams = sorted(championship.teams, key=lambda team: team.name.casefold())
+    if not query:
+        return [team for team in teams if cup.assigned(team, viewer_id)] if viewer_id is not None else []
+    lookup = query.casefold().removeprefix("team=")
+    if lookup.isdecimal():
+        return [team for team in teams if team.id == int(lookup)]
+    exact = [team for team in teams if lookup in (team.name.casefold(), (team.team.short_name or "").casefold())]
+    return exact or [team for team in teams if lookup in team.name.casefold()]
+
+
+async def _reply_team_fixtures(message, championship, rows, args, viewer_id):
+    query = " ".join(args)
+    teams = _matching_teams(championship, query, viewer_id)
+    if len(teams) == 1:
+        blocks, fallback, markup = _fixture_page(championship, rows, "fixtures", teams[0].id, 0, 0)
+        await R.reply_rich(message, blocks, fallback, reply_markup=markup)
+        return
+    title = f"{championship.name} · Team fixtures"
+    if teams:
+        lines = [f"#{team.id} · {team.name}" for team in teams[:8]]
+        if len(teams) > 8:
+            lines.append(f"/{championship.command}teamfix TEAM_NAME — look up another team")
+        buttons = [[_fixture_button(team.name[:40], championship.id, "fixtures", team.id, 0, 0)]
+                   for team in teams[:8]]
+        await _reply(message, title, ["Choose a team.", *lines],
+                     reply_markup=InlineKeyboardMarkup(buttons))
+    else:
+        text = "No team matches that name or ID." if query else "Choose a team to see its fixtures."
+        await _reply(message, title, [text, f"/{championship.command}teamfix TEAM_NAME",
+                                     f"/{championship.command}teams — team names and IDs"])
+
+
+async def fixture_page_callback(update, context):
+    query = update.callback_query
+    try:
+        _, championship, code, team, series, page = query.data.split(":")
+        view = PAGE_VIEWS[code]
+        championship_id, team_id, series_id, page = map(int, (championship, team, series, page))
+    except (ValueError, KeyError, AttributeError):
+        await query.answer("This fixture page is unavailable.", show_alert=True)
+        return
+    with get_session() as db:
+        championship = db.get(T20Championship, championship_id)
+        if not championship or (team_id and all(team.id != team_id for team in championship.teams)):
+            await query.answer("This fixture page is unavailable.", show_alert=True)
+            return
+        rows = cup.series_list(db, championship)
+        blocks, fallback, markup = _fixture_page(championship, rows, view, team_id, series_id, page)
+    await query.answer()
+    await R.edit_rich(query, blocks, fallback, reply_markup=markup)
+
+
+async def _reply(message, title, content, *, reply_markup=None):
     lines = [content] if isinstance(content, str) else content
     for chunk in chunk_blocks(lines):
         blocks = [R.heading(title)]
@@ -264,19 +468,15 @@ async def _reply(message, title, content):
                 after_blank = True
                 fallback.append("")
                 continue
-            label, separator, body = line.partition(" — " if line.startswith("/") else " · ")
             if after_blank:
                 block, formatted = R.heading(line, size=5), R.bold(line)
-            elif separator:
-                mark = R.code if line.startswith("/") else R.bold
-                formatted = [mark(label), separator, body]
-                block = R.paragraph(formatted)
             else:
-                block, formatted = R.paragraph(line), line
+                formatted = _line(line)
+                block = R.paragraph(formatted)
             blocks.append(block)
             fallback.append(inline(formatted))
             after_blank = False
-        await R.reply_rich(message, blocks, "\n".join(fallback))
+        await R.reply_rich(message, blocks, "\n".join(fallback), reply_markup=reply_markup)
 
 
 async def _reply_standings(message, championship, table):
@@ -292,6 +492,57 @@ async def _reply_standings(message, championship, table):
             await R.reply_rich(message, blocks, "\n".join(fallback))
 
 
+def _split_sections(lines):
+    lead, sections = [], []
+    section_start = False
+    for text in lines:
+        for line in text.split("\n"):
+            if not line.strip():
+                section_start = True
+            elif section_start:
+                sections.append((line, []))
+                section_start = False
+            elif sections:
+                sections[-1][1].append(line)
+            else:
+                lead.append(line)
+    return lead, sections
+
+
+async def _reply_view(message, title, view, lines):
+    if view == "help":
+        items = [_line(line) for line in lines]
+        fallback = [inline(R.bold(title)), *("• " + inline(item) for item in items)]
+        await R.reply_rich(message, [R.heading(title), R.list_block(items)], "\n".join(fallback))
+        return
+    if view in ("info", "awards") and len(lines) > 1:
+        summary, *rest = lines
+        values = [line.split(" · ", 1) for line in rest if line and not line.startswith("/")]
+        cells = [[R.cell(R.bold(label)), R.cell(value)] for label, value in values]
+        blocks = [R.heading(title), R.pullquote(R.bold(summary))]
+        if cells:
+            blocks.append(R.table(cells, compact=True, striped=True))
+        blocks.extend(R.footer(line) for line in rest if line.startswith("/"))
+        fallback = [inline(R.bold(title)), inline(R.bold(summary)),
+                    *(inline(_line(line)) for line in rest if line)]
+        await R.reply_rich(message, blocks, "\n".join(fallback))
+        return
+    if view in ("teams", "stats", "player", "scorecard"):
+        lead, sections = _split_sections(lines)
+        if sections:
+            heading = inline(R.bold(title))
+            opening = [R.paragraph(_line(line)) for line in lead]
+            prefix = "\n".join([heading, *(inline(_line(line)) for line in lead)])
+            limit = R.CHUNK_LIMIT - len(prefix) - 25
+            cards = (card for label, body in sections
+                     for card in _section_cards(label, body, limit, expanded=view == "player"))
+            for page in _pack_cards(cards, limit):
+                blocks = [R.heading(title), *opening, *(block for block, _ in page)]
+                await R.reply_rich(message, blocks, "\n".join([prefix, *(html for _, html in page)]))
+            return
+    await _reply(message, title, lines)
+
+
 async def dispatch(update, context, db, command):
     found = cup.find_command(db, command)
     if not found:
@@ -303,19 +554,34 @@ async def dispatch(update, context, db, command):
     bare = command == championship.command
     if bare and args and args[0].lower() in cup.SUBCOMMANDS:
         view, args = args[0].lower(), args[1:]
+        if view == "teamfixtures":
+            view = "teamfix"
         bare = False
     if view == "play" and (not bare or challenge._reply_target_telegram_user(update)):
         await _play(update, context, db, championship, args)
     elif view == "table":
         table = cup.standings(championship, cup.series_list(db, championship))
         await _reply_standings(message, championship, table)
+    elif view == "teamfix":
+        viewer = getattr(update, "effective_user", None)
+        await _reply_team_fixtures(message, championship, cup.series_list(db, championship),
+                                   args, viewer.id if viewer else None)
+    elif view in FIXTURE_VIEWS:
+        rows = cup.series_list(db, championship)
+        try:
+            team_id, series_id = _fixture_filters(championship, rows, view, args)
+        except ValueError as exc:
+            await _reply(message, f"{championship.name} · {VIEW_TITLES[view]}", str(exc))
+        else:
+            blocks, fallback, markup = _fixture_page(championship, rows, view, team_id, series_id, 0)
+            await R.reply_rich(message, blocks, fallback, reply_markup=markup)
     else:
         view = "info" if view == "play" else view
         try:
             content = render(db, championship, view, args)
         except ValueError as exc:
-            content = str(exc)
-        await _reply(message, f"{championship.name} · {VIEW_TITLES[view]}", content)
+            content = [str(exc)]
+        await _reply_view(message, f"{championship.name} · {VIEW_TITLES[view]}", view, content)
     return True
 
 

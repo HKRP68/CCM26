@@ -452,7 +452,8 @@ Championship commands send rich Telegram replies with an HTML fallback.
 | `/wt20c` · `/wt20cplay [fixture ID]` | Play the next fixture as a reply. The bare command opens the overview when sent on its own |
 | `/wt20cinfo` · `/wt20chelp` | Overview and command reference |
 | `/wt20ctable` | PCT table, series bonus points and home/away series records |
-| `/wt20cfixtures [team=ID]` | Match IDs, playing windows, statuses and results |
+| `/wt20cfixtures [team=ID]` | Expand a series to see match IDs, playing windows, statuses and results. Use Previous and Next to browse a long schedule |
+| `/wt20cteamfix [team]` | Your team's fixtures. Supply a team name, short name or ID to look up another team |
 | `/wt20cteams` | Teams, squad versions, owners and team IDs |
 | `/wt20cseries [series ID]` | Tour results and Player of the Series |
 | `/wt20c playoffs` | Semifinal and final bracket, fixtures and results |
@@ -462,7 +463,8 @@ Championship commands send rich Telegram replies with an HTML fallback.
 | `/wt20cawards` | Championship award leaders and final awards |
 | `/wt20cscorecard <fixture ID>` | Archived innings and player figures |
 
-Space-separated commands such as `/wt20c table` and `/wt20c scorecard 42` work too.
+Space-separated commands such as `/wt20c teamfixtures`, `/wt20c table` and
+`/wt20c scorecard 42` work too.
 
 ## 12. Tournament Draft
 

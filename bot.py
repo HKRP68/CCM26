@@ -1663,6 +1663,8 @@ def main():
         app.add_handler(CommandHandler(["ctinjuries", "ctinjury"],
                                        ctinjuries_handler))
         app.add_handler(CallbackQueryHandler(ct_view_callback, pattern=r"^ctv_"))
+        from handlers.t20_championship import fixture_page_callback
+        app.add_handler(CallbackQueryHandler(fixture_page_callback, pattern=r"^wt20f:"))
         # /clsd <TEAM NAME> — one team's schedule: where they stand, their form,
         # what they play next and every result so far. Takes the team NAME (not
         # ownership) so a captain can scout the side they are about to face, and
