@@ -1,0 +1,12 @@
+{
+  "files": [
+    "templates/base.html",
+    "templates/fantasy_picker.html",
+    "templates/franchise_site.html",
+    "templates/public_stats.html",
+    "templates/webapp.html"
+  ],
+  "insertBefore": "</body>",
+  "commentSyntax": "html",
+  "cspChecked": true
+}
