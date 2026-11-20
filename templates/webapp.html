@@ -38,29 +38,35 @@
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
   :root {
-    color-scheme: dark;
-    --bg: #151316;
-    --card: #1e1b1f;
-    --card-2: #282428;
-    --border: #40383d;
-    --text: #f5eee9;
-    --muted: #bdb0b5;
-    --accent: #f2c48b;
-    --accent-2: #ffdaaa;
-    --success: #efe0c9;
-    --success-bg: #332923;
-    --red: #f48c98;
-    --blue: #aebff2;
-    --purple: #c9b4ed;
-    --input-bg: #191619;
+    color-scheme: light;
+    --bg: #faf8fc;
+    --card: #fff;
+    --card-2: #f5f1f8;
+    --border: #ded6e5;
+    --text: #1e1925;
+    --muted: #5e566a;
+    --ink: #19151f;
+    --accent: #59418d;
+    --accent-2: #d7c7f7;
+    --lilac: #e6dcf9;
+    --cream: #fff1d8;
+    --coral: #fbe0dc;
+    --pink: #f9e4f0;
+    --navy: #28213c;
+    --success: #285843;
+    --success-bg: #dff3e8;
+    --red: #9c2f48;
+    --blue: #305a9d;
+    --purple: #654a97;
+    --input-bg: #fffdff;
     --bg-color: var(--bg);
     --card-bg: var(--card);
     --card-border: var(--border);
-    --primary-accent: var(--success);
+    --primary-accent: var(--accent);
     --warning-accent: var(--accent);
     --danger-accent: var(--red);
-    --app-max-width: 42rem;
-    --font-family: Outfit, system-ui, sans-serif;
+    --app-max-width: 45rem;
+    --font-family: Geist, system-ui, sans-serif;
     --font-display: var(--font-family);
   }
   html, body {
@@ -73,7 +79,7 @@
   }
   body { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  ::selection { background: var(--accent); color: #261c09; }
+  ::selection { background: var(--accent-2); color: var(--ink); }
 
   .top-links { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
   .top-link { text-decoration: none; }
@@ -237,7 +243,7 @@
   .club-member-name { flex: 1; font-weight: 600; font-size: 0.9rem; }
   .club-member-pts { font-weight: 800; font-size: 0.85rem; }
   .founder-badge {
-    font-size: 0.6rem; background: var(--accent); color: #0a0f1a;
+    font-size: 0.6rem; background: var(--ink); color: #fff;
     padding: 0.1rem 0.4rem; border-radius: 4px; font-weight: 800; margin-left: 0.3rem;
   }
   .club-kick-btn {
@@ -257,7 +263,7 @@
     border-radius: 10px; padding: 0.7rem; margin-bottom: 0.5rem;
   }
   .club-join-btn {
-    margin-left: auto; background: var(--success); color: #0a0f1a; border: none;
+    margin-left: auto; background: var(--success-bg); color: var(--success); border: none;
     padding: 0.45rem 0.9rem; border-radius: 8px; font-weight: 800;
     font-family: inherit; font-size: 0.8rem; cursor: pointer; white-space: nowrap;
   }
@@ -267,7 +273,7 @@
     border: 1px solid var(--border); border-radius: 8px; font-family: inherit;
     font-size: 0.82rem; font-weight: 600; cursor: pointer;
   }
-  .club-tab.active { background: var(--accent); color: #0a0f1a; font-weight: 800; }
+  .club-tab.active { background: var(--ink); color: #fff; font-weight: 800; }
 
   /* Event banner */
   .event-banner {
@@ -292,15 +298,15 @@
   .season-rank {
     width: 1.8rem; text-align: center; font-weight: 800; font-size: 0.9rem;
   }
-  .season-rank.r1 { color: #ffd700; }
-  .season-rank.r2 { color: #c0c0c0; }
-  .season-rank.r3 { color: #cd7f32; }
+  .season-rank.r1 { color: #775221; }
+  .season-rank.r2 { color: #5b5a6a; }
+  .season-rank.r3 { color: #79522d; }
   .season-name-cell { flex: 1; font-size: 0.88rem; font-weight: 600; }
   .season-pts { font-weight: 800; font-size: 0.88rem; }
 
   /* Upgrade */
   .upgrade-btn {
-    background: rgba(167,139,250,0.15); color: #a78bfa;
+    background: rgba(167,139,250,0.15); color: var(--purple);
     border: 1px solid rgba(167,139,250,0.4);
     padding: 0.25rem 0.5rem; border-radius: 6px;
     font-family: inherit; font-size: 0.7rem; font-weight: 700; cursor: pointer;
@@ -316,7 +322,7 @@
     background: var(--card-2); border: 1px solid var(--border); border-radius: 10px;
   }
   .upgrade-option.affordable { border-color: rgba(167,139,250,0.5); }
-  .upgrade-arrow { font-size: 1.3rem; color: #a78bfa; }
+  .upgrade-arrow { font-size: 1.3rem; color: var(--purple); }
   .upgrade-opt-info { flex: 1; }
   .upgrade-opt-version { font-weight: 800; font-size: 0.9rem; }
   .upgrade-opt-cost { font-size: 0.75rem; color: var(--muted); margin-top: 0.1rem; }
@@ -350,7 +356,7 @@
   .ladder-day.day7 {
     grid-column: span 4;
     background: linear-gradient(135deg, rgba(167,139,250,0.15), rgba(212,168,42,0.12));
-    border-color: #a78bfa;
+    border-color: var(--purple);
   }
   .ladder-day-num { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; }
   .ladder-day-reward { font-size: 0.78rem; font-weight: 700; margin-top: 0.2rem; }
@@ -397,7 +403,7 @@
     font-family: inherit; font-size: 0.82rem; font-weight: 600; cursor: pointer;
     display: flex; align-items: center; justify-content: center; gap: 0.3rem;
   }
-  .packs-tab.active { background: var(--accent); color: #0a0f1a; font-weight: 800; }
+  .packs-tab.active { background: var(--ink); color: #fff; font-weight: 800; }
   .inv-badge {
     background: var(--red); color: #fff; font-size: 0.65rem; font-weight: 800;
     min-width: 16px; height: 16px; border-radius: 8px; padding: 0 4px;
@@ -441,7 +447,7 @@
   }
   .pack-open-btn {
     margin-left: auto; padding: 0.55rem 1.1rem; border: none; border-radius: 8px;
-    background: var(--success); color: #0a0f1a; font-weight: 800;
+    background: var(--success-bg); color: var(--success); font-weight: 800;
     font-family: inherit; font-size: 0.85rem; cursor: pointer;
   }
   /* The in-flight spinner sits on a gold/green button — the shared .spinner
@@ -451,92 +457,6 @@
     width: 14px; height: 14px; margin-right: 0.3rem;
     border-color: rgba(7,12,24,0.28);
     border-top-color: currentColor;
-  }
-
-  /* Pack opening animation */
-  #pack-open-overlay {
-    position: fixed; inset: 0; z-index: 10000;
-    background: radial-gradient(circle at center, rgba(20,28,46,0.97), rgba(8,12,22,0.99));
-    display: flex; align-items: center; justify-content: center;
-    animation: fadein 0.25s;
-  }
-  .pack-open-stage {
-    display: flex; flex-direction: column; align-items: center;
-    width: 100%; max-width: 420px; padding: 1rem;
-  }
-  .pack-anim-pack {
-    position: relative; cursor: pointer;
-    width: 180px; height: 240px; border-radius: 18px;
-    background: linear-gradient(145deg, #ff6b9d, #c41e6a 60%, #7a1142);
-    box-shadow: 0 12px 40px rgba(255,107,157,0.4);
-    display: flex; align-items: center; justify-content: center;
-    animation: packShake 0.6s ease-in-out infinite;
-  }
-  .pack-anim-pack.bursting { animation: packBurst 0.55s ease-out forwards; }
-  @keyframes packShake {
-    0%,100% { transform: rotate(-3deg) scale(1); }
-    20% { transform: rotate(3deg) scale(1.03); }
-    40% { transform: rotate(-2deg) scale(1.01); }
-    60% { transform: rotate(2.5deg) scale(1.04); }
-    80% { transform: rotate(-2.5deg) scale(1.02); }
-  }
-  @keyframes packBurst {
-    0% { transform: scale(1) rotate(0); opacity: 1; }
-    30% { transform: scale(0.85) rotate(-4deg); opacity: 1; }
-    55% { transform: scale(1.5) rotate(3deg); opacity: 1; filter: brightness(2); }
-    100% { transform: scale(2.6) rotate(0); opacity: 0; filter: brightness(3); }
-  }
-  /* white flash that fills screen at the moment of burst */
-  .pack-flash {
-    position: fixed; inset: 0; z-index: 10500; pointer-events: none;
-    background: radial-gradient(circle at center, rgba(255,255,255,0.9), rgba(255,255,255,0) 60%);
-    opacity: 0; animation: packFlash 0.5s ease-out forwards;
-  }
-  @keyframes packFlash {
-    0% { opacity: 0; }
-    30% { opacity: 1; }
-    100% { opacity: 0; }
-  }
-  .pack-anim-emoji { font-size: 5rem; filter: drop-shadow(0 4px 8px rgba(0,0,0,0.3)); }
-  .pack-anim-glow {
-    position: absolute; inset: -20px; border-radius: 24px;
-    background: radial-gradient(circle, rgba(255,217,61,0.4), transparent 70%);
-    animation: glowPulse 1.2s ease-in-out infinite; pointer-events: none;
-  }
-  @keyframes glowPulse { 0%,100% { opacity: 0.4; } 50% { opacity: 0.9; } }
-  .pack-anim-tap {
-    position: absolute; bottom: -2.5rem; left: 50%; transform: translateX(-50%);
-    color: var(--accent); font-weight: 700; font-size: 0.9rem; white-space: nowrap;
-    animation: tapBlink 1s ease-in-out infinite;
-  }
-  @keyframes tapBlink { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
-  .pack-anim-cards {
-    display: flex; flex-wrap: wrap; gap: 0.8rem; justify-content: center;
-    perspective: 1000px;
-  }
-  .reveal-card {
-    width: 130px; border-radius: 12px; padding: 1rem 0.8rem;
-    background: var(--card-2); border: 2px solid var(--border);
-    text-align: center; opacity: 0;
-    animation: cardFlyIn 0.6s cubic-bezier(0.34,1.56,0.64,1) forwards;
-  }
-  .reveal-card.tier-std { border-color: var(--success); }
-  .reveal-card.tier-rare { border-color: var(--accent); box-shadow: 0 0 20px rgba(212,168,42,0.3); }
-  .reveal-card.tier-elite {
-    border-color: #a78bfa;
-    box-shadow: 0 0 28px rgba(167,139,250,0.45);
-    background: linear-gradient(160deg, var(--card-2), rgba(167,139,250,0.12));
-  }
-  .reveal-card .rc-rating { font-size: 2.2rem; font-weight: 900; line-height: 1; }
-  .reveal-card .rc-name { font-size: 0.9rem; font-weight: 700; margin-top: 0.5rem; }
-  .reveal-card .rc-meta { font-size: 0.68rem; color: var(--muted); margin-top: 0.2rem; }
-  .reveal-card .rc-slot {
-    font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.06em;
-    color: var(--accent); margin-top: 0.4rem; font-weight: 800;
-  }
-  @keyframes cardFlyIn {
-    0% { opacity: 0; transform: translateY(40px) rotateY(180deg) scale(0.8); }
-    100% { opacity: 1; transform: translateY(0) rotateY(0) scale(1); }
   }
 
   /* Free pack opening steps */
@@ -555,22 +475,6 @@
   .freepack-steps p { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.76rem; line-height: 1.5; }
 
   /* Free pack reveal card */
-  .freepack-reveal-card {
-    background: var(--card-2);
-    border: 2px solid var(--border);
-    border-radius: 14px;
-    padding: 1.4rem 1rem;
-    animation: scaleup 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-  }
-  .freepack-reveal-card.tier-std { border-color: var(--success); }
-  .freepack-reveal-card.tier-rare {
-    border-color: var(--accent);
-    box-shadow: 0 0 24px rgba(212,168,42,0.25);
-  }
-  .freepack-reveal-card.tier-elite {
-    border-color: #a78bfa;
-    box-shadow: 0 0 30px rgba(167,139,250,0.4);
-  }
 
   /* ── Career Player ── */
   .career-hero {
@@ -616,7 +520,7 @@
   .career-attr-actions { display: flex; gap: 0.35rem; align-items: center; }
   .career-cost { font-size: 0.76rem; opacity: 0.75; margin-right: auto; }
   .career-btn {
-    border: 1px solid var(--border); background: var(--success); color: var(--accent-ink);
+    border: 1px solid var(--border); background: var(--success-bg); color: var(--success);
     border-radius: 8px; padding: 0.28rem 0.62rem; font-size: 0.78rem;
     font-weight: 700; cursor: pointer;
   }
@@ -642,7 +546,7 @@
     font-family: inherit; font-size: 0.78rem; font-weight: 600;
     cursor: pointer;
   }
-  .sc-tab.active { background: var(--accent); color: #0a0f1a; font-weight: 800; }
+  .sc-tab.active { background: var(--ink); color: #fff; font-weight: 800; }
   .scorecard-table {
     width: 100%; border-collapse: collapse;
     font-size: 0.78rem; margin-top: 0.4rem;
@@ -808,13 +712,13 @@
     border-radius: 10px;
     display: flex; align-items: center; justify-content: center;
     font-weight: 900; font-size: 1.1rem;
-    background: linear-gradient(135deg, var(--accent), #b8901f);
+    background: linear-gradient(135deg, #fff1db, #e9c783);
     color: #0a0f1a;
     flex-shrink: 0;
   }
   .player-rating.bronze { background: linear-gradient(135deg, #b87333, #8b4513); color: #fff; }
   .player-rating.silver { background: linear-gradient(135deg, #c0c0c0, #888); color: #1a1a1a; }
-  .player-rating.gold { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #0a0f1a; }
+  .player-rating.gold { background: linear-gradient(135deg, #fff1db, #e9c783); color: var(--ink); }
   .player-rating.epic { background: linear-gradient(135deg, var(--purple), #6d28d9); color: #fff; }
   .player-rating.legendary { background: linear-gradient(135deg, #ff8c00, var(--red)); color: #fff; }
   .player-info { flex: 1; min-width: 0; }
@@ -882,15 +786,6 @@
   .spin-container {
     display: flex; flex-direction: column; align-items: center;
     padding: 1.1rem 1rem;
-  }
-  .pick-head { text-align: center; margin-bottom: 1rem; }
-  .pick-title {
-    font-family: var(--font-display); font-weight: 900; font-size: 1.5rem;
-    letter-spacing: .04em; text-transform: uppercase;
-    background: linear-gradient(90deg, #c8942a, var(--accent), #fff0a2, var(--accent), #c8942a);
-    background-size: 220% auto; -webkit-background-clip: text; background-clip: text;
-    -webkit-text-fill-color: transparent; color: transparent;
-    animation: btnShimmer 3.4s linear infinite;
   }
   .pick-hint {
     color: var(--muted); font-size: .82rem; margin-top: .3rem; min-height: 1.2em;
@@ -965,17 +860,12 @@
   }
 
   /* Armed: the cards are live and asking to be tapped. */
-  .pick-deck.armed .pick-card { cursor: pointer; animation: pickFloat 1.6s ease-in-out infinite; }
-  .pick-deck.armed .pick-card[data-i="1"] { animation-delay: .12s; }
-  .pick-deck.armed .pick-card[data-i="2"] { animation-delay: .24s; }
-  .pick-deck.armed .pick-card[data-i="3"] { animation-delay: .36s; }
-  .pick-deck.armed .pick-card[data-i="4"] { animation-delay: .48s; }
-  .pick-deck.armed .pick-back { border-color: var(--accent); box-shadow: 0 0 16px rgba(232,184,75,.45), inset 0 1px 0 rgba(255,255,255,.14); }
-  .pick-deck.armed .pick-card:active { transform: translateY(calc(var(--fan-y, 0px) - 6px)) rotate(var(--fan-r, 0deg)) scale(.95); }
-  @keyframes pickFloat {
-    0%, 100% { transform: translateY(var(--fan-y, 0)) rotate(var(--fan-r, 0deg)); }
-    50% { transform: translateY(calc(var(--fan-y, 0px) - 7px)) rotate(var(--fan-r, 0deg)); }
+  .pick-deck.armed .pick-card { cursor: pointer; }
+  .pick-deck.armed .pick-back {
+    border-color: #9976bb;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / .34);
   }
+  .pick-deck.armed .pick-card:active { transform: translateY(calc(var(--fan-y, 0px) - 6px)) rotate(var(--fan-r, 0deg)) scale(.95); }
 
   /* Dealing: a quick cascade in when a round starts. */
   .pick-card.dealing { animation: pickDeal .38s cubic-bezier(.3,1.3,.5,1) both; }
@@ -996,7 +886,7 @@
   }
   .pick-card.won .pick-front .pick-label { color: #fff; }
   .pick-card.won.tier-rare .pick-front { border-color: #4a9eff; box-shadow: 0 0 26px rgba(74,158,255,.8); }
-  .pick-card.won.tier-epic .pick-front { border-color: #a78bfa; box-shadow: 0 0 30px rgba(167,139,250,.85); }
+  .pick-card.won.tier-epic .pick-front { border-color: var(--purple); box-shadow: 0 0 30px rgba(167,139,250,.85); }
   .pick-card.won.tier-legend .pick-front { border-color: #ffd966; box-shadow: 0 0 40px rgba(255,217,102,1); }
 
   .spin-button {
@@ -1025,7 +915,7 @@
     box-shadow: 0 0 40px rgba(232,184,75,0.12), 0 4px 24px rgba(0,0,0,0.4);
   }
   .reward-banner.tier-rare { border-color: #4a9eff; box-shadow: 0 0 28px rgba(74,158,255,0.4); }
-  .reward-banner.tier-epic { border-color: #a78bfa; box-shadow: 0 0 32px rgba(167,139,250,0.5); }
+  .reward-banner.tier-epic { border-color: var(--purple); box-shadow: 0 0 32px rgba(167,139,250,0.5); }
   .reward-banner.tier-legend {
     border-color: #ffd966;
     box-shadow: 0 0 40px rgba(255,217,102,0.6);
@@ -1086,7 +976,6 @@
     /* Keep the flip readable but instant, and stop the deck bobbing. */
     .pick-deck.armed .pick-card, .pick-card.dealing { animation: none !important; }
     .pick-card, .pick-card-inner { transition: none !important; }
-    .pick-title { animation: none !important; }
   }
   /* Very narrow phones: drop the fan so five cards still fit side by side. */
   @media (max-width: 360px) {
@@ -1313,7 +1202,7 @@
   .roster-item .meta { color: var(--muted); font-size: 0.7rem; margin-top: 0.15rem; }
   .roster-item .captain-tag {
     position: absolute; top: 6px; right: 6px;
-    background: var(--accent); color: #0a0f1a;
+    background: var(--ink); color: #fff;
     font-size: 0.55rem;
     padding: 0.1rem 0.32rem;
     border-radius: 4px;
@@ -1354,7 +1243,7 @@
   /* ════ Live PvP match board ════ */
   .lm-scorebar {
     position: sticky; top: 0; z-index: 5;
-    background: linear-gradient(135deg, #1e1b1f, var(--card));
+    background: var(--card);
     border: 1px solid var(--accent); border-radius: 12px;
     padding: 0.7rem 0.9rem; margin-bottom: 0.7rem;
   }
@@ -1380,7 +1269,7 @@
     color: var(--muted); cursor: pointer; border: none; background: transparent;
     font-family: inherit; transition: background 0.15s, color 0.15s;
   }
-  .lm-tab.active { background: var(--primary-accent); color: #261810; }
+  .lm-tab.active { background: var(--ink); color: white; }
   .lm-tab:active { transform: scale(0.97); }
   /* ════ Cricbuzz-style commentary feed ════ */
   .lm-comm {
@@ -1437,8 +1326,8 @@
     border-radius: 9px; padding: 0.7rem 0.4rem; font-family: inherit;
     font-size: 0.8rem; font-weight: 700; cursor: pointer;
   }
-  .lm-shot-btn:active, .lm-opt-btn:active { background: var(--accent); color: #0a0f1a; }
-  .lm-opt-btn.selected { background: var(--accent); color: #0a0f1a; }
+  .lm-shot-btn:active, .lm-opt-btn:active { background: var(--ink); color: #fff; }
+  .lm-opt-btn.selected { background: var(--ink); color: #fff; }
   .lm-delivery-banner {
     text-align: center; padding: 1.1rem; border-radius: 12px;
     background: linear-gradient(135deg, rgba(255,77,109,0.15), rgba(212,168,42,0.1));
@@ -1466,7 +1355,7 @@
     display: inline-block; font-size: 0.66rem; font-weight: 800;
     padding: 0.15rem 0.5rem; border-radius: 5px; margin-left: 0.4rem;
   }
-  .lm-role-bat { background: var(--success); color: #0a0f1a; }
+  .lm-role-bat { background: var(--success-bg); color: var(--success); }
   .lm-role-bowl { background: #4a9eff; color: #0a0f1a; }
   .lm-role-spec { background: var(--card-2); color: var(--muted); border: 1px solid var(--border); }
 
@@ -1492,7 +1381,7 @@
     border: 1px solid var(--border); border-radius: 8px; font-family: inherit;
     font-size: 0.8rem; font-weight: 700; cursor: pointer;
   }
-  .lm-drawer-tab.active { background: var(--accent); color: #0a0f1a; }
+  .lm-drawer-tab.active { background: var(--ink); color: #fff; }
   .lm-sc-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-bottom: 0.9rem; }
   .lm-sc-table th { text-align: left; color: var(--muted); font-size: 0.68rem; text-transform: uppercase; padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--border); }
   .lm-sc-table td { padding: 0.4rem; border-bottom: 1px solid var(--border); }
@@ -1500,7 +1389,7 @@
   .lm-sc-out { font-size: 0.66rem; color: var(--muted); }
   .lm-sc-fab {
     position: fixed; bottom: 1.2rem; right: 1.2rem; z-index: 100;
-    background: var(--accent); color: #0a0f1a; border: none;
+    background: var(--ink); color: #fff; border: none;
     border-radius: 50px; padding: 0.7rem 1.1rem; font-weight: 800;
     font-family: inherit; font-size: 0.85rem; cursor: pointer;
     box-shadow: 0 4px 16px rgba(0,0,0,0.4);
@@ -1516,7 +1405,7 @@
   .pd-meta { color: var(--muted); font-size: 0.82rem; margin-top: 0.25rem; }
   .pd-version-tag {
     display: inline-block; margin-top: 0.4rem; background: rgba(167,139,250,0.18);
-    color: #a78bfa; font-size: 0.72rem; font-weight: 800; padding: 0.2rem 0.55rem;
+    color: var(--purple); font-size: 0.72rem; font-weight: 800; padding: 0.2rem 0.55rem;
     border-radius: 6px;
   }
   .pd-section { margin-bottom: 0.9rem; }
@@ -1526,7 +1415,7 @@
     border: 1px solid var(--border); border-radius: 8px; font-family: inherit;
     font-size: 0.8rem; font-weight: 600; cursor: pointer;
   }
-  .pd-tab.active { background: var(--accent); color: #0a0f1a; font-weight: 800; }
+  .pd-tab.active { background: var(--ink); color: #fff; font-weight: 800; }
   .pd-stat-grid {
     display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem;
   }
@@ -1556,9 +1445,9 @@
     border: none; border-radius: 6px; padding: 0.35rem 0.6rem;
     font-family: inherit; font-size: 0.72rem; font-weight: 700; cursor: pointer;
   }
-  .pd-btn-up { background: rgba(167,139,250,0.2); color: #a78bfa; }
+  .pd-btn-up { background: rgba(167,139,250,0.2); color: var(--purple); }
   .pd-btn-rm { background: rgba(255,77,109,0.15); color: var(--red); }
-  .pd-btn-add { background: var(--success); color: #0a0f1a; }
+  .pd-btn-add { background: var(--success-bg); color: var(--success); }
   .link-btn {
     background: var(--card);
     color: var(--text);
@@ -1615,7 +1504,7 @@
     border-radius: 3px; text-transform: uppercase; vertical-align: middle;
   }
   .market-buy-btn {
-    background: var(--accent); color: #0a0f1a;
+    background: var(--ink); color: #fff;
     border: none; padding: 0.5rem 0.85rem;
     border-radius: 7px;
     font-weight: 800; font-size: 0.72rem;
@@ -1690,7 +1579,7 @@
     font-family: inherit; font-size: 0.7rem;
     cursor: pointer; line-height: 1;
   }
-  .xi-move-btn:active:not(:disabled) { background: var(--accent); color: #0a0f1a; }
+  .xi-move-btn:active:not(:disabled) { background: var(--ink); color: #fff; }
   .xi-move-btn:disabled { opacity: 0.3; cursor: not-allowed; }
   .cat-tag {
     display: inline-block;
@@ -1704,7 +1593,7 @@
   .cat-batsman { background: rgba(255, 77, 109, 0.15); color: var(--red); }
   .cat-bowler { background: rgba(232,188,138, 0.15); color: var(--success); }
   .cat-wicket-keeper { background: rgba(212, 168, 42, 0.2); color: var(--accent); }
-  .cat-all-rounder { background: rgba(167, 139, 250, 0.2); color: #a78bfa; }
+  .cat-all-rounder { background: rgba(167, 139, 250, 0.2); color: var(--purple); }
 
   /* Swap picker overlay */
   .swap-overlay {
@@ -1809,8 +1698,8 @@
   .setup-loop { margin: 0.75rem 0; padding-left: 1.2rem; color: var(--text); font-size: 0.82rem; line-height: 1.65; }
   .guide-step { display: flex; gap: 0.65rem; align-items: center; border-top: 1px solid var(--border); padding: 0.68rem 0; }
   .guide-state { width: 1.3rem; height: 1.3rem; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; background: var(--card-2); color: var(--muted); font-size: 0.7rem; font-weight: 800; }
-  .guide-step.done .guide-state { background: var(--success); color: #261810; }
-  .guide-step.later .guide-state { background: rgba(167,139,250,0.2); color: #a78bfa; }
+  .guide-step.done .guide-state { background: var(--success-bg); color: var(--success); }
+  .guide-step.later .guide-state { background: rgba(167,139,250,0.2); color: var(--purple); }
   .guide-body { flex: 1; min-width: 0; }
   .guide-title { font-size: 0.84rem; font-weight: 800; }
   .guide-sub { margin-top: 0.12rem; color: var(--muted); font-size: 0.7rem; line-height: 1.35; }
@@ -1920,17 +1809,19 @@
   .tn-seg button { flex: 1; background: none; border: none; color: var(--muted); padding: 0.45rem; border-radius: 9px; font-family: inherit; font-weight: 700; font-size: 0.78rem; cursor: pointer; }
   .tn-seg button.active { background: rgba(232,184,75,.15); color: var(--accent); }
   .tn-inj { display: flex; justify-content: space-between; gap: 0.5rem; }
-  .tn-inj .sev { font-size: 0.62rem; font-weight: 800; padding: 0.1rem 0.4rem; border-radius: 6px; background: rgba(242,201,76,.16); color: #f2c94c; white-space: nowrap; align-self: flex-start; }
+  .tn-inj .sev { font-size: 0.62rem; font-weight: 800; padding: 0.1rem 0.4rem; border-radius: 6px; background: rgba(242,201,76,.16); color: #795415; white-space: nowrap; align-self: flex-start; }
   .tn-inj .sev.serious { background: rgba(255,77,109,.16); color: var(--red); }
-  .tn-inj .sev.strain { background: rgba(255,150,70,.16); color: #ff9646; }
+  .tn-inj .sev.strain { background: rgba(255,150,70,.16); color: #823d15; }
   .lm-sc-result { font-size: 0.78rem; color: var(--success); margin-bottom: 0.6rem; font-weight: 700; }
   .lm-sc-note { font-size: 0.68rem; color: var(--muted); margin-top: 0.6rem; }
 </style>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_clubhouse.css', v='5') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_player_hub.css', v='5') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_shell.css', v='5') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_shell.css', v='6') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_pastel.css', v='2') }}">
 </head>
 <body>
+<div class="miniapp-background" aria-hidden="true"></div>
 
 <header class="appbar">
   <div class="appbar-inner">
@@ -1946,13 +1837,18 @@
         </button>
       {% endfor %}
     </nav>
-    <button type="button" class="app-secondary app-wallet" id="app-wallet" style="display:none;" onclick="navigate('wallet')">
-      {{ icon('wallet') }}<span>Wallet</span>
-    </button>
+    <div class="appbar-actions">
+      <button type="button" class="app-motion-button" id="app-motion" aria-label="Pause background animation" title="Pause background animation" aria-pressed="false">
+        {{ icon('pause', 'app-icon motion-pause') }}{{ icon('play', 'app-icon motion-play') }}
+      </button>
+      <button type="button" class="app-secondary app-wallet" id="app-wallet" style="display:none;" onclick="navigate('wallet')">
+        {{ icon('wallet') }}<span>Wallet</span>
+      </button>
+    </div>
   </div>
 </header>
 
-<div class="toast-container" id="toasts"></div>
+<div class="toast-container" id="toasts" role="status"></div>
 
 
 <!-- ════ New-user setup screen ════ -->
@@ -1988,39 +1884,37 @@
      What changed is the game on top of them. -->
 <div class="screen" id="screen-spin">
   <div class="ad-banner" id="spin-ad-banner">🎁 <strong>1 FREE pick</strong> + 📺 <strong>5 ad picks</strong> per cycle.</div>
-  <div class="spin-container">
-    <div class="pick-head">
-      <div class="pick-title">Lucky Card Pick</div>
-      <div class="pick-hint" id="pick-hint" aria-live="polite">Five cards. One is yours.</div>
-    </div>
+  <header class="page-heading reward-heading"><h2>Lucky Card Pick</h2></header>
+  <div class="spin-container lucky-stage">
+    <p class="pick-hint" id="pick-hint" aria-live="polite">Five cards. One is yours.</p>
     <div class="pick-deck" id="pick-deck" role="group" aria-label="Five face-down cards">
       <button class="pick-card" type="button" data-i="0" onclick="onCardPick(0)" aria-label="Card 1">
         <span class="pick-card-inner">
-          <span class="pick-face pick-back"><span class="pick-crest">🏏</span></span>
+          <span class="pick-face pick-back">{{ icon('cricket', 'app-icon pick-crest') }}</span>
           <span class="pick-face pick-front"><span class="pick-emoji">🎁</span><span class="pick-label"></span></span>
         </span>
       </button>
       <button class="pick-card" type="button" data-i="1" onclick="onCardPick(1)" aria-label="Card 2">
         <span class="pick-card-inner">
-          <span class="pick-face pick-back"><span class="pick-crest">🏏</span></span>
+          <span class="pick-face pick-back">{{ icon('cricket', 'app-icon pick-crest') }}</span>
           <span class="pick-face pick-front"><span class="pick-emoji">🎁</span><span class="pick-label"></span></span>
         </span>
       </button>
       <button class="pick-card" type="button" data-i="2" onclick="onCardPick(2)" aria-label="Card 3">
         <span class="pick-card-inner">
-          <span class="pick-face pick-back"><span class="pick-crest">🏏</span></span>
+          <span class="pick-face pick-back">{{ icon('cricket', 'app-icon pick-crest') }}</span>
           <span class="pick-face pick-front"><span class="pick-emoji">🎁</span><span class="pick-label"></span></span>
         </span>
       </button>
       <button class="pick-card" type="button" data-i="3" onclick="onCardPick(3)" aria-label="Card 4">
         <span class="pick-card-inner">
-          <span class="pick-face pick-back"><span class="pick-crest">🏏</span></span>
+          <span class="pick-face pick-back">{{ icon('cricket', 'app-icon pick-crest') }}</span>
           <span class="pick-face pick-front"><span class="pick-emoji">🎁</span><span class="pick-label"></span></span>
         </span>
       </button>
       <button class="pick-card" type="button" data-i="4" onclick="onCardPick(4)" aria-label="Card 5">
         <span class="pick-card-inner">
-          <span class="pick-face pick-back"><span class="pick-crest">🏏</span></span>
+          <span class="pick-face pick-back">{{ icon('cricket', 'app-icon pick-crest') }}</span>
           <span class="pick-face pick-front"><span class="pick-emoji">🎁</span><span class="pick-label"></span></span>
         </span>
       </button>
@@ -2032,38 +1926,17 @@
 
 <!-- ════ Daily screen ════ -->
 <div class="screen" id="screen-daily">
-  <div class="ad-banner" id="daily-ad-banner">🎁 <strong>1 FREE claim</strong> + 📺 <strong>5 ad claims</strong> per cycle.</div>
-  <div style="padding: 1rem 0; text-align: center;">
-    <div style="font-size: 4rem; margin-bottom: 0.5rem;">📅</div>
-    <h2 style="margin: 0 0 0.25rem; font-size: 1.4rem;">Daily Reward</h2>
-    <p style="color: var(--muted); margin: 0;" id="daily-streak-line">Streak: 0 days</p>
-  </div>
-
-  <div class="card" id="daily-preview" style="text-align: center; padding: 1.5rem;">
-    <div style="display: flex; justify-content: space-around; flex-wrap: wrap; gap: 0.5rem;">
-      <div>
-        <div style="font-size: 1.5rem;">💰</div>
-        <div style="font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem;">Coins</div>
-      </div>
-      <div>
-        <div style="font-size: 1.5rem;">💎</div>
-        <div style="font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem;">Gems</div>
-      </div>
-      <div>
-        <div style="font-size: 1.5rem;">🏏</div>
-        <div style="font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem;">Players</div>
-      </div>
-      <div>
-        <div style="font-size: 1.5rem;">🎁</div>
-        <div style="font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem;">Streak bonus</div>
-      </div>
+  <header class="page-heading reward-heading"><h2>Daily reward</h2></header>
+  <section class="daily-stage">
+    <div class="daily-mark">{{ icon('calendar') }}</div>
+    <div>
+      <h3>Reward streak</h3>
+      <p id="daily-streak-line">Streak: 0 days</p>
     </div>
-  </div>
-
-  <button class="spin-button" id="daily-btn" onclick="onDailyClick()" style="margin-top: 1rem; width: 100%;">
-    📺 Watch ad to claim
-  </button>
-  <div id="daily-result"></div>
+    <p class="ad-banner" id="daily-ad-banner"></p>
+    <button type="button" class="spin-button" id="daily-btn" onclick="onDailyClick()">Watch ad to claim</button>
+  </section>
+  <div id="daily-result" aria-live="polite"></div>
 </div>
 
 <!-- ════ Browse screen ════ -->
@@ -2186,16 +2059,25 @@
   </dl>
   <div id="market-receipt" role="status"></div>
   <div id="market-offer"></div>
-  <div class="market-filters">
-    <input id="market-search" class="market-field" type="search" placeholder="Search player or country" aria-label="Search player or country">
-    <select id="market-role" class="market-field" aria-label="Player role"><option value="">All roles</option></select>
-    <select id="market-sort" class="market-field" aria-label="Sort listings">
-      <option value="listed">Listing order</option><option value="rating">Highest rating</option>
-      <option value="price">Lowest price</option>
-    </select>
+  <div class="market-controls">
+    <div class="market-filters">
+      <label class="market-search-label">Search
+        <input id="market-search" class="market-field" type="search" placeholder="Player or country" aria-label="Search player or country">
+      </label>
+      <label>Role
+        <select id="market-role" class="market-field" aria-label="Player role"><option value="">All roles</option></select>
+      </label>
+      <label>Sort by
+        <select id="market-sort" class="market-field" aria-label="Sort listings">
+          <option value="listed">Listing order</option><option value="rating">Highest rating</option>
+          <option value="price">Lowest price</option>
+        </select>
+      </label>
+    </div>
+    <div class="market-order"><label><input type="checkbox" id="market-available"> Show players I can sign</label>
+      <span id="market-count" role="status"></span>
+    </div>
   </div>
-  <div class="market-order"><label><input type="checkbox" id="market-available"> Can sign now</label>
-    <span id="market-count" role="status"></span></div>
   <div id="market-list">
     <div class="empty"><div class="spinner"></div></div>
   </div>
@@ -2326,7 +2208,7 @@
 <div class="screen" id="screen-packs">
   <div style="text-align:center;padding:0.8rem 0;">
     <div style="font-size:3rem;">🎴</div>
-    <h2 style="margin:0.3rem 0 0.2rem;font-size:1.35rem;">Packs</h2>
+    <h2 tabindex="-1" style="margin:0.3rem 0 0.2rem;font-size:1.35rem;">Packs</h2>
     <p style="color:var(--muted);margin:0;font-size:0.85rem;">Buy packs, open them, build your squad.</p>
   </div>
 
@@ -2346,7 +2228,7 @@
 <div class="screen" id="screen-freepack">
   <div style="text-align:center;padding:1rem 0;">
     <div style="font-size:4rem;margin-bottom:0.4rem;">📦</div>
-    <h2 style="margin:0 0 0.25rem;font-size:1.4rem;">Free Pack</h2>
+    <h2 tabindex="-1" style="margin:0 0 0.25rem;font-size:1.4rem;">Free Pack</h2>
     <p style="color:var(--muted);margin:0;font-size:0.88rem;">
       Watch a short ad. Reveal a player. Build your squad.
     </p>
@@ -2639,13 +2521,12 @@
 
 <!-- Scorecard drawer (sliding bottom sheet) -->
 <div id="lm-drawer-backdrop" class="lm-drawer-backdrop" style="display:none;" onclick="closeScorecard()"></div>
-<div id="lm-drawer" class="lm-drawer">
-  <div class="lm-drawer-handle" onclick="closeScorecard()"></div>
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
-    <h3 style="margin:0;font-size:1.05rem;">📋 Scorecard</h3>
-    <button class="link-btn" onclick="closeScorecard()">✕</button>
-  </div>
-  <div id="lm-drawer-tabs" class="lm-drawer-tabs"></div>
+<div id="lm-drawer" class="lm-drawer" role="dialog" aria-modal="true" aria-labelledby="scorecard-heading" aria-hidden="true" inert>
+  <header class="scorecard-toolbar">
+    <h2 id="scorecard-heading">Scorecard</h2>
+    <button type="button" class="app-secondary" id="scorecard-close" onclick="closeScorecard()">Close</button>
+  </header>
+  <div id="lm-drawer-tabs" class="lm-drawer-tabs" role="group" aria-label="Innings"></div>
   <div id="lm-drawer-body"></div>
 </div>
 
@@ -2663,27 +2544,52 @@
 </div>
 
 <!-- ════ Pack opening animation overlay ════ -->
-<div id="pack-open-overlay" style="display:none;">
+<div id="pack-open-overlay" class="pack-overlay" role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="pack-reveal-title" hidden>
   <div class="pack-open-stage">
-    <div id="pack-open-pack" class="pack-anim-pack" onclick="revealPackCards()">
-      <div class="pack-anim-emoji">🎴</div>
-      <div class="pack-anim-glow"></div>
-      <div class="pack-anim-tap">Tap to open!</div>
-    </div>
-    <div id="pack-open-cards" class="pack-anim-cards" style="display:none;"></div>
-    <button id="pack-open-done" class="spin-button" style="display:none;margin-top:1.5rem;max-width:280px;" onclick="closePackOpen()">✓ Add to squad</button>
+    <header>
+      <h2 id="pack-reveal-title">Pack opening</h2>
+      <p id="pack-open-status" role="status">Your pack is ready to reveal.</p>
+    </header>
+    <button type="button" id="pack-open-pack" class="pack-opening-button" onclick="revealPackCards()">
+      <span class="pack-foil" aria-hidden="true">
+        <span class="pack-foil-seal"></span>
+        {{ icon('cricket') }}
+        <strong>CricMaster</strong>
+      </span>
+      <span class="app-primary">Reveal players</span>
+    </button>
+    <div id="pack-open-cards" class="pack-anim-cards" hidden></div>
+    <div id="pack-open-overflow"></div>
+    <button type="button" id="pack-open-done" class="app-primary" hidden onclick="closePackOpen()">Done</button>
   </div>
 </div>
 
 <script>
+const ambientMotion = document.getElementById('app-motion');
+
+function setAmbientMotionPaused(paused) {
+  document.body.classList.toggle('background-paused', paused);
+  ambientMotion.setAttribute('aria-pressed', String(paused));
+  const label = paused ? 'Resume background animation' : 'Pause background animation';
+  ambientMotion.setAttribute('aria-label', label);
+  ambientMotion.title = label;
+}
+
+try { setAmbientMotionPaused(localStorage.getItem('cm_background_paused') === '1'); } catch (_) {}
+ambientMotion.addEventListener('click', () => {
+  const paused = !document.body.classList.contains('background-paused');
+  setAmbientMotionPaused(paused);
+  try { localStorage.setItem('cm_background_paused', paused ? '1' : '0'); } catch (_) {}
+});
+
 const tg = window.Telegram?.WebApp;
 if (tg) {
   tg.ready();
   tg.expand();
-  // Theme the Telegram WebView chrome to match our dark UI
+  // Match the Telegram chrome to the Mini App canvas.
   try {
-    tg.setHeaderColor('#1e1b1f');
-    tg.setBackgroundColor('#151316');
+    tg.setHeaderColor('#fffefe');
+    tg.setBackgroundColor('#faf8fc');
   } catch (e) {}
 }
 
@@ -2717,6 +2623,7 @@ let searchTimer = null;
 let currentCat = '';
 // True while the reward for a Lucky Pick round is being claimed.
 let isSpinning = false;
+let isRevealingPick = false;
 // True while the ad for a round is being fetched/watched — a separate state
 // from isSpinning so the button can say "getting an ad" instead of "dealing"
 // while the deck sits face-down.
@@ -3008,10 +2915,8 @@ function navigate(screen) {
     });
   }
   if (screen === 'daily') updateDailyButton();
-  // Entering the pick screen deals a fresh face-down hand — unless a round is
-  // still waiting on a tap, which would throw away a reward already granted.
   if (screen === 'spin') {
-    if (!pendingPick) resetDeck();
+    if (!pendingPick && !isRevealingPick && !document.getElementById('spin-result').hasChildNodes()) resetDeck();
     updateSpinButton();
   }
   // Get the ad SDK ready the moment a user opens a screen whose button needs
@@ -3094,7 +2999,7 @@ async function refreshDashboard() {
 
   // Streak line on Daily screen
   document.getElementById('daily-streak-line').textContent =
-    `🔥 Streak: ${userData.streak || 0} days`;
+    `Streak · ${userData.streak || 0} days`;
 
   initAds(data.ads || data.adsgram);
 
@@ -3616,8 +3521,12 @@ function updateSpinButton(g) {
     btn.innerHTML = '<span class="spinner"></span> Dealing…';
     return;
   }
-  // A dealt hand waiting on a tap. The reward is already granted, so this is a
-  // prompt, not a control.
+  if (isRevealingPick) {
+    btn.disabled = true;
+    btn.textContent = 'Revealing your card…';
+    return;
+  }
+  // A dealt hand waiting on a tap. The reward is already granted.
   if (pendingPick) {
     btn.disabled = true;
     btn.textContent = '👆 Pick a card above';
@@ -3783,10 +3692,12 @@ async function onDailyClick() {
 
 function showDailyReward(r) {
   const el = document.getElementById('daily-result');
+  const rewards = [
+    r.coins ? `<div><dt>Coins</dt><dd>+${r.coins.toLocaleString()}</dd></div>` : '',
+    r.gems ? `<div><dt>Gems</dt><dd>+${r.gems}</dd></div>` : '',
+    `<div><dt>Streak</dt><dd>${r.streak}/${r.streak_max}</dd></div>`,
+  ].join('');
   let lines = '';
-  if (r.coins) lines += `<div>💰 <strong>+${formatNum(r.coins)}</strong> coins</div>`;
-  if (r.gems) lines += `<div>💎 <strong>+${r.gems}</strong> gems</div>`;
-  lines += `<div style="margin-top:0.5rem;">🔥 Streak: <strong>${r.streak}/${r.streak_max}</strong></div>`;
   if (r.milestone && r.milestone_player) {
     lines += `<div style="margin-top:0.5rem;color:var(--accent);">🎉 MILESTONE: <strong>${escapeHtml(r.milestone_player.name)} (${r.milestone_player.rating} OVR)</strong></div>`;
   }
@@ -3809,10 +3720,10 @@ function showDailyReward(r) {
       `${r.players_skipped.length} player${r.players_skipped.length === 1 ? '' : 's'} didn't fit — replace or release:`);
   }
   el.innerHTML = `
-    <div class="reward-banner">
-      <div class="emoji">📅</div>
-      <div class="label">Daily claimed!</div>
-      <div class="detail" style="text-align:left;">${lines}</div>
+    <div class="reward-banner daily-receipt">
+      <h3 class="reward-receipt-title">Reward claimed <span aria-hidden="true">✓</span></h3>
+      <dl class="reward-totals">${rewards}</dl>
+      ${lines ? `<div class="reward-receipt-detail">${lines}</div>` : ''}
     </div>
   `;
 }
@@ -3862,6 +3773,7 @@ async function openReplacePicker(claimId, name, rating) {
   const body = document.getElementById('modal-body');
   body.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
   modal.classList.add('open');
+  modal.querySelector('.close-btn')?.focus();
   const { ok, data } = await api('/api/webapp/roster', {});
   if (!ok) {
     body.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Failed to load roster')}</div>`;
@@ -4571,7 +4483,9 @@ function onCardPick(index) {
 function revealPick(index) {
   const reward = pendingPick;
   if (!reward) return;
-  pendingPick = null;                        // one reveal per round
+  pendingPick = null;
+  isRevealingPick = true;
+  updateSpinButton();
   clearTimeout(pickAutoTimer);
   pickAutoTimer = null;
 
@@ -4606,6 +4520,7 @@ function revealPick(index) {
   setPickHint('', false);
   const delay = reducedSpinMotion.matches ? 0 : 520;
   setTimeout(() => {
+    isRevealingPick = false;
     hapticNotif('success');
     showReward(reward);
     updateSpinButton();
@@ -4652,7 +4567,7 @@ async function requestSpin(adToken) {
 // and the button narrates ("Getting your ad…", "Dealing…") until the server
 // has answered, and a failure is a message rather than a dead animation.
 async function onSpinClick() {
-  if (isSpinning || isPreparingSpinAd) return;
+  if (isSpinning || isPreparingSpinAd || isRevealingPick) return;
   // A round is already dealt and waiting on a tap — send them to the cards
   // rather than starting a second one over the top of it.
   if (pendingPick) { setPickHint('👆 Pick a card', true); haptic('light'); return; }
@@ -5229,7 +5144,8 @@ async function showAd(quotaKind = null) {
 }
 
 // Celebration confetti — bursts from top, falls down. count scales with tier.
-function launchConfetti(count = 60, tier = '') {
+function launchConfetti(count = 60, tier = '', surface = document.body) {
+  if (reducedSpinMotion.matches) return;
   const colors = tier === 'legend'
     ? ['#ffd966', '#ff8c00', '#fff2b3', '#ffb347']
     : tier === 'epic'
@@ -5237,7 +5153,7 @@ function launchConfetti(count = 60, tier = '') {
     : ['#ffd966', '#f0c188', '#4a9eff', '#ff4d6d', '#a78bfa'];
   const layer = document.createElement('div');
   layer.className = 'confetti-layer';
-  document.body.appendChild(layer);
+  surface.appendChild(layer);
   for (let i = 0; i < count; i++) {
     const p = document.createElement('div');
     p.className = 'confetti-piece';
@@ -5284,12 +5200,16 @@ function showReward(r) {
 
   const tier = rewardTier(r);
   const tierClass = tier ? `tier-${tier}` : '';
+  const playerCard = r.type === 'player' ? playerRevealCard({
+    id: r.player_id, card_url: r.card_url, name: r.player_name, rating: r.player_rating,
+  }) : '';
   el.innerHTML = `
     <div class="reward-banner ${tierClass}">
-      ${tier === 'legend' ? '<div style="font-size:0.7rem;font-weight:800;color:#ffd966;letter-spacing:0.1em;">⭐ LEGENDARY PULL ⭐</div>' : ''}
+      ${tier === 'legend' ? '<p class="page-note">Legendary pull</p>' : ''}
       <div class="emoji">${escapeHtml(r.emoji || '🎁')}</div>
       <div class="label">${escapeHtml(r.label)}</div>
       <div class="detail">${detail}</div>
+      ${playerCard}
     </div>
   `;
   // Squad full → offer Replace / Release for the pulled player.
@@ -5298,10 +5218,11 @@ function showReward(r) {
       'Squad full — replace a player or release this pull:');
   }
   // Celebration: confetti scaled to tier
-  if (tier === 'legend') launchConfetti(120, 'legend');
-  else if (tier === 'epic') launchConfetti(90, 'epic');
-  else if (tier === 'rare') launchConfetti(60, 'rare');
-  else launchConfetti(40);
+  const spinScreen = el.closest('.screen');
+  if (tier === 'legend') launchConfetti(80, 'legend', spinScreen);
+  else if (tier === 'epic') launchConfetti(60, 'epic', spinScreen);
+  else if (tier === 'rare') launchConfetti(45, 'rare', spinScreen);
+  else launchConfetti(32, '', spinScreen);
 }
 
 // ════════════════ Browse (players with filters) ════════════════
@@ -5549,6 +5470,7 @@ async function openPlayer(id) {
 
 function closeModal() {
   document.getElementById('modal').classList.remove('open');
+  if (document.body.classList.contains('pack-overlay-open')) document.getElementById('pack-open-done').focus();
 }
 
 async function buyPlayer(id, price) {
@@ -5834,13 +5756,21 @@ function marketRow(s, balance) {
   const discount = s.discount_pct > 0 ? ' · ' + s.discount_pct + '% off' : '';
   const bonus = s.gem_bonus > 0 ? ' · +' + s.gem_bonus.toLocaleString() + ' gems' : '';
   return `<article class="market-row">
-    <div class="market-art"><span>${s.rating}<br>OVR</span>${cardImg(s.card_url, '')}</div>
-    <div><h3 class="market-name">${escapeHtml(s.name)}</h3>
-    <p class="market-meta">${s.rating} OVR · ${escapeHtml(s.category)} · ${escapeHtml(s.country || '—')}</p>
-    <p class="market-stock">${escapeHtml(s.version || 'Base')} · ${stock}${discount}${bonus}</p>
-    <div class="market-price-line"><strong>${s.final_price.toLocaleString()} coins</strong>
-    <button class="market-buy-btn ${blocked ? 'disabled' : ''}" data-sign="${s.slot_id}"
-      ${blocked || marketSigning ? 'disabled' : ''}>${blocked || 'Sign player'}</button></div></div></article>`;
+    <div class="market-art">
+      <span aria-hidden="true">${s.rating}<br>OVR</span>
+      ${cardImg(s.card_url, s.name + ' player card')}
+    </div>
+    <div class="market-player">
+      <h3 class="market-name">${escapeHtml(s.name)}</h3>
+      <p class="market-meta">${s.rating} OVR · ${escapeHtml(s.category)} · ${escapeHtml(s.country || '—')}</p>
+      <p class="market-stock">${escapeHtml(s.version || 'Base')} · ${stock}${discount}${bonus}</p>
+      <div class="market-price-line">
+        <strong>${s.final_price.toLocaleString()} coins</strong>
+        <button type="button" class="market-buy-btn" data-sign="${s.slot_id}"
+          ${blocked || marketSigning ? 'disabled' : ''}>${blocked || 'Sign player'}</button>
+      </div>
+    </div>
+  </article>`;
 }
 
 async function buyFromMarket(slotId) {
@@ -7109,89 +7039,58 @@ function formatCountdown(sec) {
 }
 
 async function openFreePack() {
-  const btn = document.getElementById('freepack-open-btn');
-  // An ad already watched but never spent opens the pack with no new ad — the
-  // server redeems it from the ledger, so this request carries no token.
-  const useSavedAd = (freePackState?.ads_saved || 0) > 0;
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = useSavedAd ? '📦 Opening…' : adConfirmation.isPending() ? 'Checking ad reward…' : '📺 Loading ad…';
-  }
-  haptic('medium');
-
-  let adToken = '';
-  if (!useSavedAd) {
-    adToken = await showAd();
-    // The server can redeem a confirmed credit without a client token.
-    if (adToken === AD_TOKEN_LEDGER) adToken = '';
-    else if (!adToken) {
-      if (btn) { btn.disabled = false; btn.textContent = adConfirmation.isPending() ? 'Check reward' : '📺 Watch ad & open pack'; }
-      return;  // showAd already toasted
+  if (packActionBusy || pendingRevealPlayers) return;
+  packActionBusy = true;
+  try {
+    const btn = document.getElementById('freepack-open-btn');
+    // An ad already watched but never spent opens the pack with no new ad — the
+    // server redeems it from the ledger, so this request carries no token.
+    const useSavedAd = (freePackState?.ads_saved || 0) > 0;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = useSavedAd ? '📦 Opening…' : adConfirmation.isPending() ? 'Checking ad reward…' : '📺 Loading ad…';
     }
-  }
+    haptic('medium');
 
-  if (btn) btn.textContent = '📦 Opening…';
-  const { ok, data } = await api('/api/webapp/freepack/open', { ad_token: adToken });
-  if (!ok) {
-    // ad_banked / ads_saved: the ad was kept, so this isn't the loss it reads
-    // as. Say so rather than only "Pack failed".
-    toast(rewardClaimMessage(data, 'Pack failed'), data.ad_banked ? 'info' : 'error');
-    hapticNotif('error');
-    loadFreePack();
-    return;
-  }
+    let adToken = '';
+    if (!useSavedAd) {
+      adToken = await showAd();
+      // The server can redeem a confirmed credit without a client token.
+      if (adToken === AD_TOKEN_LEDGER) adToken = '';
+      else if (!adToken) {
+        if (btn) { btn.disabled = false; btn.textContent = adConfirmation.isPending() ? 'Check reward' : '📺 Watch ad & open pack'; }
+        return;  // showAd already toasted
+      }
+    }
 
-  adConfirmation.clear();
-  hapticNotif('success');
-  showFreePackReveal(data.player, data.band, data.overflow_claim);
-  refreshDashboard();
+    if (btn) btn.textContent = '📦 Opening…';
+    const { ok, data } = await api('/api/webapp/freepack/open', { ad_token: adToken });
+    if (!ok) {
+      // ad_banked / ads_saved: the ad was kept, so this isn't the loss it reads
+      // as. Say so rather than only "Pack failed".
+      toast(rewardClaimMessage(data, 'Pack failed'), data.ad_banked ? 'info' : 'error');
+      hapticNotif('error');
+      loadFreePack();
+      return;
+    }
+
+    adConfirmation.clear();
+    hapticNotif('success');
+    showFreePackReveal(data.player, data.overflow_claim);
+    refreshDashboard();
+  } finally {
+    packActionBusy = false;
+  }
 }
 
-function showFreePackReveal(player, band, overflowClaim) {
-  const tier = player.rating >= 84 ? 'elite' : (player.rating >= 81 ? 'rare' : (player.rating >= 75 ? 'std' : 'common'));
-  const overlay = document.createElement('div');
-  overlay.className = 'swap-overlay';
-  overlay.id = 'freepack-reveal';
-  overlay.onclick = (e) => { if (e.target === overlay) closeFreePackReveal(); };
-  // Roster full → player is held pending; show Replace / Release instead of the
-  // "added to roster" line.
-  const statusBlock = overflowClaim
-    ? renderOverflowLines([overflowClaim], 'Squad full — replace a player or release for coins:')
-    : `<p style="color:var(--muted);font-size:0.78rem;margin:0.8rem 0 0;">
-         Added to your roster · sell value ${formatNum(player.sell_value)} 🪙
-       </p>`;
-  overlay.innerHTML = `
-    <div class="swap-panel" style="text-align:center;">
-      <div style="font-size:0.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.3rem;">
-        You pulled
-      </div>
-      <div class="freepack-reveal-card tier-${tier}">
-        <div style="font-size:2.6rem;font-weight:800;line-height:1;">${player.rating}</div>
-        <div style="font-size:0.7rem;color:var(--muted);margin-top:0.1rem;">OVR</div>
-        <div style="font-size:1.15rem;font-weight:800;margin-top:0.7rem;">${escapeHtml(player.name)}</div>
-        <div style="font-size:0.8rem;color:var(--muted);margin-top:0.25rem;">
-          ${escapeHtml(player.category)} · ${escapeHtml(player.country)}
-        </div>
-        ${player.version && player.version !== 'Base' ? `<div style="font-size:0.72rem;color:var(--accent);margin-top:0.3rem;">${escapeHtml(player.version)}</div>` : ''}
-      </div>
-      <div style="text-align:left;">${statusBlock}</div>
-      <button class="spin-button" onclick="closeFreePackReveal()" style="margin-top:1rem;width:100%;">
-        ✓ Nice!
-      </button>
-    </div>
-  `;
-  document.body.appendChild(overlay);
-  // Celebrate based on pull quality
-  if (tier === 'elite') launchConfetti(110, 'epic');
-  else if (tier === 'rare') launchConfetti(70, 'rare');
-  else launchConfetti(45);
-  hapticNotif('success');
-}
-
-function closeFreePackReveal() {
-  const o = document.getElementById('freepack-reveal');
-  if (o) o.remove();
-  loadFreePack();  // refresh → now on cooldown
+function showFreePackReveal(player, overflowClaim) {
+  pendingRevealPlayers = {
+    source: 'freepack',
+    pack_name: 'Free pack',
+    players: [player],
+    overflow: overflowClaim ? [overflowClaim] : [],
+  };
+  startPackOpenAnimation();
 }
 
 // ════════════════ Packs (buy + open) ════════════════
@@ -7364,6 +7263,7 @@ async function buyPack(packId, btn) {
 
 async function openPack(inventoryId, btn) {
   if (packActionBusy) return;
+  if (pendingRevealPlayers) return;
   packActionBusy = true;
   haptic('medium');
 
@@ -7386,7 +7286,7 @@ async function openPack(inventoryId, btn) {
     }
     // Store revealed players and start the animation. The inventory stays
     // locked behind the reveal overlay and is re-rendered by closePackOpen().
-    pendingRevealPlayers = data;
+    pendingRevealPlayers = { ...data, source: 'packs' };
     startPackOpenAnimation();
     refreshDashboard();
   } finally {
@@ -7394,96 +7294,125 @@ async function openPack(inventoryId, btn) {
   }
 }
 
+const packOverlay = document.getElementById('pack-open-overlay');
+let packReturnFocus = null;
+
 function startPackOpenAnimation() {
-  const overlay = document.getElementById('pack-open-overlay');
   const pack = document.getElementById('pack-open-pack');
   const cards = document.getElementById('pack-open-cards');
-  const doneBtn = document.getElementById('pack-open-done');
-  // Reset
-  pack.style.display = 'flex';
+  packReturnFocus = document.activeElement;
+  document.getElementById('pack-reveal-title').textContent = pendingRevealPlayers.pack_name || 'Player pack';
+  document.getElementById('pack-open-status').textContent = 'Your pack is ready to reveal.';
+  document.getElementById('pack-open-overflow').replaceChildren();
+  document.getElementById('pack-open-done').hidden = true;
+  pack.hidden = false;
+  pack.disabled = false;
   pack.classList.remove('bursting');
-  cards.style.display = 'none';
-  cards.innerHTML = '';
-  doneBtn.style.display = 'none';
-  overlay.style.display = 'flex';
+  cards.hidden = true;
+  cards.replaceChildren();
   packRevealing = false;
-  hapticNotif('success');
+  packOverlay.hidden = false;
+  document.body.classList.add('pack-overlay-open');
+  pack.focus();
 }
 
 function revealPackCards() {
-  // Same story as the Buy button: an impatient double-tap on the pack used to
-  // restart the burst animation and re-append the card list.
   if (!pendingRevealPlayers || packRevealing) return;
   packRevealing = true;
   haptic('heavy');
   const pack = document.getElementById('pack-open-pack');
-  const cards = document.getElementById('pack-open-cards');
-  const doneBtn = document.getElementById('pack-open-done');
-
-  // Burst the pack + screen flash
+  pack.disabled = true;
   pack.classList.add('bursting');
-  const flash = document.createElement('div');
-  flash.className = 'pack-flash';
-  document.body.appendChild(flash);
-  setTimeout(() => flash.remove(), 520);
+  packOverlay.focus();
 
-  // Best card in the pack drives the celebration intensity
-  const allPlayers = pendingRevealPlayers.players || [];
-  const bestRating = allPlayers.reduce((m, p) => Math.max(m, p.rating || 0), 0);
-  const packTier = bestRating >= 84 ? 'epic' : (bestRating >= 81 ? 'rare' : '');
-  if (packTier === 'epic') launchConfetti(110, 'epic');
-  else if (packTier === 'rare') launchConfetti(70, 'rare');
-  else launchConfetti(45);
-
-  setTimeout(() => {
-    pack.style.display = 'none';
-    cards.style.display = 'flex';
-
-    const players = pendingRevealPlayers.players || [];
-    // Sort: main first, then by rating desc
-    const sorted = [...players].sort((a, b) => {
-      if (a.slot !== b.slot) return a.slot === 'main' ? -1 : 1;
-      return b.rating - a.rating;
+  const render = () => {
+    const cards = document.getElementById('pack-open-cards');
+    const done = document.getElementById('pack-open-done');
+    const players = [...(pendingRevealPlayers.players || [])].sort((a, b) => {
+      const slotOrder = Number(b.slot === 'main') - Number(a.slot === 'main');
+      return slotOrder || b.rating - a.rating;
     });
-
-    cards.innerHTML = sorted.map((p, i) => {
-      const tier = p.rating >= 84 ? 'elite' : (p.rating >= 81 ? 'rare' : (p.rating >= 75 ? 'std' : 'common'));
-      return `
-        <div class="reveal-card tier-${tier}" style="animation-delay:${i * 0.18}s;">
-          <div class="rc-rating">${p.rating}</div>
-          <div style="font-size:0.6rem;color:var(--muted);">OVR</div>
-          <div class="rc-name">${escapeHtml(p.name)}</div>
-          <div class="rc-meta">${escapeHtml(p.category)} · ${escapeHtml(p.country)}</div>
-          <div class="rc-slot">${p.slot === 'main' ? '⭐ Main' : 'Bonus'}</div>
-        </div>
-      `;
-    }).join('');
-
-    // Haptic burst as cards land
-    sorted.forEach((p, i) => setTimeout(() => haptic('light'), i * 180));
-
-    // Overflow → Replace / Release picker (squad full)
     const overflow = pendingRevealPlayers.overflow || [];
-    if (overflow.length) {
-      const warn = document.createElement('div');
-      warn.style.cssText = 'width:100%;margin-top:0.6rem;';
-      warn.innerHTML = renderOverflowLines(overflow,
-        `${overflow.length} player(s) couldn't fit — replace or release:`);
-      cards.appendChild(warn);
-    }
+    const freePack = pendingRevealPlayers.source === 'freepack';
+    const count = players.length + (freePack ? 0 : overflow.length);
+    document.getElementById('pack-open-status').textContent = count
+      ? `${count} player${count === 1 ? '' : 's'} revealed`
+      : 'Pack opened';
+    cards.innerHTML = players.map((player, index) => playerRevealCard(player, index)).join('');
+    const sellValue = players[0]?.sell_value;
+    document.getElementById('pack-open-overflow').innerHTML = freePack && !overflow.length && sellValue != null
+      ? `<p class="pack-open-note">Added to your squad · ${formatNum(sellValue)} coins sell value</p>`
+      : renderOverflowLines(overflow, 'Squad full. Replace a player or release this pull.');
+    pack.hidden = true;
+    cards.hidden = players.length === 0;
+    done.hidden = false;
+    done.focus();
+    hapticNotif('success');
+    if (players.some(player => player.rating >= 84)) launchConfetti(32, 'epic', packOverlay);
+  };
+  if (reducedSpinMotion.matches) render();
+  else setTimeout(render, 310);
+}
 
-    // Show done button after cards animate in
-    setTimeout(() => { doneBtn.style.display = 'block'; }, sorted.length * 180 + 400);
-  }, 450);
+function playerRevealCard(player, index = 0) {
+  const rating = Number(player.rating) || 0;
+  const tier = rating >= 84 ? 'elite' : rating >= 81 ? 'rare' : 'standard';
+  const url = player.card_url || (player.id ? playerCardUrl(player.id) : '');
+  const slot = player.slot === 'main' ? 'Main player' : player.slot === 'bonus' ? 'Bonus player' : '';
+  const version = player.version === 'Base' ? '' : player.version;
+  const details = [player.category, player.country, version].filter(Boolean).map(escapeHtml).join(' · ');
+  return `<article class="player-reveal tier-${tier}" style="--reveal-delay:${Math.min(index, 4) * 70}ms">
+    <div class="player-reveal-art">
+      <span aria-hidden="true">${rating}<small>OVR</small></span>
+      ${cardImg(url, player.name || 'Player card')}
+    </div>
+    <div class="player-reveal-copy">
+      <h3>${escapeHtml(player.name || 'Player')}</h3>
+      <p>${rating} OVR${details ? ` · ${details}` : ''}</p>
+      ${slot ? `<span class="player-reveal-slot">${slot}</span>` : ''}
+    </div>
+  </article>`;
 }
 
 function closePackOpen() {
-  haptic('light');
-  document.getElementById('pack-open-overlay').style.display = 'none';
+  if (document.getElementById('pack-open-done').hidden) return;
+  const source = pendingRevealPlayers.source;
+  packOverlay.hidden = true;
+  document.body.classList.remove('pack-overlay-open');
   pendingRevealPlayers = null;
   packRevealing = false;
-  loadPacks();  // refresh inventory — also re-enables the pack buttons
+  const heading = document.querySelector('.screen.active h2[tabindex="-1"]');
+  if (heading) heading.focus();
+  else if (packReturnFocus?.isConnected && !packReturnFocus.disabled) packReturnFocus.focus();
+  packReturnFocus = null;
+  haptic('light');
+  if (source === 'freepack') loadFreePack();
+  else loadPacks();
 }
+
+packOverlay.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    if (document.getElementById('pack-open-done').hidden) revealPackCards();
+    else closePackOpen();
+  }
+  if (event.key !== 'Tab') return;
+  const controls = Array.from(packOverlay.querySelectorAll('button:not(:disabled)'))
+    .filter(button => button.getClientRects().length);
+  if (!controls.length) {
+    event.preventDefault();
+    return;
+  }
+  const first = controls[0];
+  const last = controls[controls.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
 
 // ════════════════ Login streak ════════════════
 function showLoginStreakModal() {
@@ -8664,9 +8593,7 @@ async function openScorecard(matchId = lmMatchId) {
   const request = ++scorecardRequest;
   document.getElementById('lm-drawer-tabs').replaceChildren();
   haptic('light');
-  document.getElementById('lm-drawer-backdrop').style.display = 'block';
-  const drawer = document.getElementById('lm-drawer');
-  drawer.classList.add('open');
+  showScorecardDrawer();
   document.getElementById('lm-drawer-body').innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
   const { ok, data } = await api('/api/webapp/match/scorecard', { match_id: matchId });
   if (request !== scorecardRequest) return;
@@ -8687,20 +8614,57 @@ async function openScorecardOnly(matchId) {
   await openScorecard();
 }
 
+let scorecardReturnFocus = null;
+
+function showScorecardDrawer() {
+  const drawer = document.getElementById('lm-drawer');
+  if (!drawer.classList.contains('open')) scorecardReturnFocus = document.activeElement;
+  drawer.classList.add('open');
+  drawer.inert = false;
+  drawer.removeAttribute('aria-hidden');
+  document.getElementById('lm-drawer-backdrop').style.display = 'block';
+  document.getElementById('scorecard-close').focus();
+}
+
 function closeScorecard() {
   scorecardRequest++;
-  document.getElementById('lm-drawer').classList.remove('open');
+  const drawer = document.getElementById('lm-drawer');
+  drawer.classList.remove('open');
+  drawer.inert = true;
+  drawer.setAttribute('aria-hidden', 'true');
   document.getElementById('lm-drawer-backdrop').style.display = 'none';
+  if (scorecardReturnFocus?.isConnected) scorecardReturnFocus.focus();
+  scorecardReturnFocus = null;
 }
+
+document.getElementById('lm-drawer').addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeScorecard();
+  } else if (event.key === 'Tab') {
+    const targets = Array.from(event.currentTarget.querySelectorAll('button, [tabindex="0"]'));
+    const first = targets[0];
+    const last = targets[targets.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+});
 
 function renderScorecard() {
   const d = lmScorecardData;
   if (!d) return;
   // Tabs (one per innings)
-  const tabs = d.innings.map(inn =>
-    `<button class="lm-drawer-tab ${lmScorecardTab === inn.number ? 'active' : ''}" onclick="setScorecardTab(${inn.number})">
-      Inns ${inn.number}: ${escapeHtml(inn.bat_team)}
-    </button>`).join('');
+  const tabs = d.innings.map(inn => {
+    const selected = lmScorecardTab === inn.number;
+    return `<button type="button" class="lm-drawer-tab" data-innings="${inn.number}" aria-pressed="${selected}" onclick="setScorecardTab(${inn.number})">
+      <span>${escapeHtml(inn.bat_team)}</span><strong>${inn.runs}/${inn.wickets}</strong>
+    </button>`;
+  }).join('');
   document.getElementById('lm-drawer-tabs').innerHTML = tabs;
 
   const inn = d.innings.find(i => i.number === lmScorecardTab) || d.innings[0];
@@ -8726,25 +8690,43 @@ function renderScorecard() {
       <td class="num">${b.econ}</td>
     </tr>`).join('') : `<tr><td colspan="6" style="color:var(--muted);">—</td></tr>`;
 
+  const elapsed = d.ball_format === 'The100' ? `${inn.overs} balls` : `${inn.overs} overs`;
   document.getElementById('lm-drawer-body').innerHTML = `
-    ${d.result_text ? `<div class="lm-sc-result">🏁 ${escapeHtml(d.result_text)}</div>` : ''}
-    <div style="font-weight:800;margin-bottom:0.5rem;">
-      ${escapeHtml(inn.bat_team)} — ${inn.runs}/${inn.wickets} (${inn.overs}${d.ball_format==='The100'?'':' ov'})
-    </div>
-    <table class="lm-sc-table">
-      <thead><tr><th>Batter</th><th style="text-align:right;">R</th><th style="text-align:right;">B</th><th style="text-align:right;">4s</th><th style="text-align:right;">6s</th><th style="text-align:right;">SR</th></tr></thead>
-      <tbody>${batRows}</tbody>
-    </table>
-    <div style="font-weight:800;margin:0.6rem 0 0.4rem;">🎳 Bowling</div>
-    <table class="lm-sc-table">
-      <thead><tr><th>Bowler</th><th style="text-align:right;">O</th><th style="text-align:right;">M</th><th style="text-align:right;">R</th><th style="text-align:right;">W</th><th style="text-align:right;">Econ</th></tr></thead>
-      <tbody>${bowlRows}</tbody>
-    </table>
-    ${d.summary_only ? `<div class="lm-sc-note">Summary scorecard — this result was entered without ball-by-ball details.</div>` : ''}
+    <section class="scorecard-total" aria-label="Innings score">
+      <div>
+        <p>${escapeHtml(inn.bat_team)}</p>
+        <strong>${inn.runs}/${inn.wickets}</strong>
+      </div>
+      <div><span>Innings ${inn.number}</span><span>${escapeHtml(elapsed)}</span></div>
+      ${d.result_text ? `<p class="lm-sc-result">${escapeHtml(d.result_text)}</p>` : ''}
+    </section>
+    <section class="scorecard-section" aria-labelledby="scorecard-batting">
+      <h3 id="scorecard-batting">Batting</h3>
+      <div class="scorecard-scroll" tabindex="0" role="region" aria-label="Batting figures">
+        <table class="lm-sc-table">
+          <thead><tr><th scope="col">Batter</th><th scope="col"><abbr title="Runs">R</abbr></th><th scope="col"><abbr title="Balls">B</abbr></th><th scope="col">4s</th><th scope="col">6s</th><th scope="col"><abbr title="Strike rate">SR</abbr></th></tr></thead>
+          <tbody>${batRows}</tbody>
+        </table>
+      </div>
+    </section>
+    <section class="scorecard-section" aria-labelledby="scorecard-bowling">
+      <h3 id="scorecard-bowling">Bowling</h3>
+      <div class="scorecard-scroll" tabindex="0" role="region" aria-label="Bowling figures">
+        <table class="lm-sc-table">
+          <thead><tr><th scope="col">Bowler</th><th scope="col"><abbr title="Overs">O</abbr></th><th scope="col"><abbr title="Maidens">M</abbr></th><th scope="col"><abbr title="Runs">R</abbr></th><th scope="col"><abbr title="Wickets">W</abbr></th><th scope="col">Econ</th></tr></thead>
+          <tbody>${bowlRows}</tbody>
+        </table>
+      </div>
+    </section>
+    ${d.summary_only ? `<p class="lm-sc-note">Summary scorecard. This result was entered without ball-by-ball details.</p>` : ''}
   `;
 }
 
-function setScorecardTab(n) { lmScorecardTab = n; renderScorecard(); }
+function setScorecardTab(n) {
+  lmScorecardTab = n;
+  renderScorecard();
+  document.querySelector('#lm-drawer-tabs [aria-pressed="true"]')?.focus();
+}
 
 async function lmAbandon() {
   if (!confirm('Forfeit this match? Your opponent wins. This cannot be undone.')) return;
@@ -8987,8 +8969,7 @@ async function tnOpenTeam(teamId) {
   const body = document.getElementById('lm-drawer-body');
   tabs.replaceChildren();
   body.textContent = 'Loading squad…';
-  document.getElementById('lm-drawer-backdrop').style.display = 'block';
-  document.getElementById('lm-drawer').classList.add('open');
+  showScorecardDrawer();
   const {ok, data} = await api('/api/webapp/tournament/team', {tournament_id: tnId, team_id: teamId});
   if (request !== scorecardRequest || currentScreen !== 'tournament') return;
   body.innerHTML = `<h3>${escapeHtml(team.name)}</h3>` + (ok && data.players.length
@@ -9252,8 +9233,7 @@ function tnInjuriesView(d) {
 // without leaving the Tournament screen.
 async function openTournamentScorecard(fixtureId) {
   haptic('light');
-  document.getElementById('lm-drawer-backdrop').style.display = 'block';
-  document.getElementById('lm-drawer').classList.add('open');
+  showScorecardDrawer();
   document.getElementById('lm-drawer-tabs').innerHTML = '';
   document.getElementById('lm-drawer-body').innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
   const request = ++scorecardRequest;

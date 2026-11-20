@@ -5,10 +5,16 @@
 The Mini App is a daily cricket companion. Players can go from opening the app
 to resuming a match, claiming a reward, or managing their XI in a few taps.
 
-The interface uses charcoal surfaces, burgundy for live and ready states, and
-willow tones for primary actions. Outfit is self-hosted for headings, interface
-text and score displays. The Quick Match artwork shows a cricket ball and bat;
-the WebP is served with the rest of the app's static assets.
+The interface uses a light canvas with dark type and pill controls. Lilac marks
+play and scorecard surfaces, cream holds balances and claim information, and
+pastel coral groups rewards. Geist is self-hosted for UI text and tabular scores.
+The Quick Match WebP is original cricket equipment artwork. A small procedural
+grain texture appears on the canvas and foil wrapper.
+
+The background lighting drifts slowly. Its pause control persists on the device
+and the animation stops automatically when the system requests reduced motion.
+Pack opening and card reveals run after the server confirms the reward. Market
+filters and scorecard innings remain available as direct, labelled controls.
 
 ## Home and navigation
 

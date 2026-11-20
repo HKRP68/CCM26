@@ -15,7 +15,7 @@
 <main class="screen active" id="screen-home" aria-labelledby="home-title">
   <header class="home-heading">
     <div>
-      <h2 id="home-title">Home</h2>
+      <h2 id="home-title">Clubhouse</h2>
       <p id="home-team" hidden></p>
     </div>
     <button class="app-secondary home-profile" type="button" onclick="navigate('profile')">
@@ -24,7 +24,7 @@
   </header>
 
   <section class="home-match" id="home-match" aria-labelledby="home-match-title">
-    <img class="home-match-art" src="{{ url_for('static', filename='miniapp/quick-match.webp') }}" alt=""
+    <img class="home-match-art" src="{{ url_for('static', filename='miniapp/quick-match.webp', v='2') }}" alt=""
          width="1000" height="667" fetchpriority="high">
     <div class="home-match-copy">
       <h3 id="home-match-title">Quick Match</h3>
@@ -51,7 +51,7 @@
 
   <div class="home-columns">
     <div class="home-column">
-      <section class="home-section" aria-labelledby="mission-hub-title">
+      <section class="home-section home-quests" aria-labelledby="mission-hub-title">
         <div class="home-section-head">
           <h3 id="mission-hub-title">Quests</h3>
           <div class="mission-toggle" role="group" aria-label="Quest period">
@@ -71,7 +71,7 @@
         </div>
       </section>
 
-      <section class="home-section" aria-labelledby="home-play-title">
+      <section class="home-section home-competitions" aria-labelledby="home-play-title">
         <div class="home-section-head"><h3 id="home-play-title">Play &amp; compete</h3></div>
         <div class="home-panel">
           {% call home_link('Tournament centre', 'cup', 'openTournamentDirectory()', 'Live competitions and past results') %}
@@ -94,7 +94,7 @@
     </div>
 
     <div class="home-column">
-      <section class="home-section" aria-labelledby="home-rewards-title">
+      <section class="home-section home-rewards" aria-labelledby="home-rewards-title">
         <div class="home-section-head"><h3 id="home-rewards-title">Rewards &amp; packs</h3></div>
         <div class="home-panel">
           {{ home_link('Daily rewards', 'calendar', "navigate('daily')", 'Claim coins and gems', 'daily-tile-sub') }}

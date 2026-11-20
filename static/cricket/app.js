@@ -2447,11 +2447,10 @@ function renderScorecardPanel() {
   const firstDisplayName = firstTeam.teamName || firstTeam.username || 'HOST';
   const secondDisplayName = secondTeam ? (secondTeam.teamName || secondTeam.username) : 'AI XI';
 
-  const firstNameShort = firstDisplayName.substring(0, 8).toUpperCase();
-  const secondNameShort = secondDisplayName.substring(0, 8).toUpperCase();
-
-  hostLabel.innerText = `${firstNameShort} ${firstInn.runs}/${firstInn.wickets}`;
-  guestLabel.innerText = `${secondNameShort} ${secondInn.runs}/${secondInn.wickets}`;
+  hostLabel.innerText = `${firstDisplayName} · ${firstInn.runs}/${firstInn.wickets}`;
+  guestLabel.innerText = `${secondDisplayName} · ${secondInn.runs}/${secondInn.wickets}`;
+  hostLabel.setAttribute('aria-pressed', String(activeScorecardTab === 'innings1'));
+  guestLabel.setAttribute('aria-pressed', String(activeScorecardTab === 'innings2'));
 
   const container = document.getElementById('scorecard-batting-rows');
   container.innerHTML = '';

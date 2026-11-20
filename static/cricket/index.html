@@ -28,7 +28,7 @@
   <!-- Telegram Web App SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Custom Styling -->
-  <link rel="stylesheet" href="style.css?v=20261111-live-batting">
+  <link rel="stylesheet" href="style.css?v=20261120-scorecard">
 </head>
 <body>
   <div id="app-container">
@@ -301,10 +301,12 @@
       <div id="panel-scorecard" class="tab-panel">
         <div class="scorecard-wrapper">
           <!-- TEAM TOGGLE TABS -->
-          <div class="scorecard-team-tabs">
-            <button class="sc-tab-btn active" id="scorecard-tab-host">HOST XI 0/0</button>
-            <button class="sc-tab-btn" id="scorecard-tab-guest">GUEST XI</button>
+          <div class="scorecard-team-tabs" role="group" aria-label="Innings">
+            <button type="button" class="sc-tab-btn active" id="scorecard-tab-host" aria-pressed="true">HOST XI 0/0</button>
+            <button type="button" class="sc-tab-btn" id="scorecard-tab-guest" aria-pressed="false">GUEST XI</button>
           </div>
+
+          <div class="total-row" id="scorecard-total">TOTAL 0/0 (0.0 Ov)</div>
 
           <!-- Batting Team Section -->
           <div class="scorecard-section-title" id="scorecard-batting-title">BATTING</div>
@@ -323,7 +325,6 @@
           </div>
 
           <div class="extras-row" id="scorecard-extras">Extras 0 (w 0, lb 0, b 0, nb 0, p 0)</div>
-          <div class="total-row" id="scorecard-total">TOTAL 0/0 (0.0 Ov)</div>
 
           <div class="yet-to-bat-section">
             <span class="ytb-label">YET TO BAT:</span>
@@ -701,7 +702,7 @@
     <ol id="live-batting-order"></ol>
     <button type="button" id="save-live-order-btn" class="btn btn-primary btn-block btn-green" disabled>Save batting order</button>
   </dialog>
-  <script src="app.js?v=20261111-live-batting"></script>
+  <script src="app.js?v=20261120-scorecard"></script>
   <script src="live-batting.js?v=20261111-1"></script>
   <script src="approach.js?v=20261111-live-batting"></script>
 </body>
