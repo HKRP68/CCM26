@@ -81,6 +81,39 @@
 <datalist id="t20-stadiums">{% for stadium in stadiums %}<option value="{{ stadium.name }}">{% endfor %}</datalist>
 
 {% if tab == "teams" %}
+<section class="section-card" aria-labelledby="t20-bulk-heading">
+  <div class="section-header">
+    <h2 class="section-title" id="t20-bulk-heading">Bulk teams and squads</h2>
+  </div>
+  <div class="t20-roster-downloads">
+    {% for file_format in ("csv", "json") %}
+    <a class="action-btn outline-btn" href="{{ url_for('admin_t20_roster_download', championship_id=championship.id, kind='template', file_format=file_format) }}">Download {{ file_format|upper }} template</a>
+    {% endfor %}
+    {% for file_format in ("csv", "json") %}
+    <a class="action-btn outline-btn" href="{{ url_for('admin_t20_roster_download', championship_id=championship.id, kind='export', file_format=file_format) }}">Export {{ file_format|upper }}</a>
+    {% endfor %}
+  </div>
+  {% if not championship.started_at %}
+  {% if roster_import_errors %}
+  <div class="flash flash-error t20-roster-errors" role="alert" id="t20-roster-errors">
+    <strong>Import blocked. Fix these issues and upload the file again.</strong>
+    <ul>{% for error in roster_import_errors %}<li>{{ error }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+  <form action="{{ url_for('admin_t20_roster_import', championship_id=championship.id) }}" method="post" enctype="multipart/form-data" class="t20-roster-import">
+    {{ hidden(tab) }}
+    <label for="t20-roster-file">CSV or JSON file</label>
+    <p id="t20-roster-help">Match teams by name and add players by name. New teams need an owner. The highest-rated active card is selected for each new player.</p>
+    <div class="t20-roster-submit">
+      <input id="t20-roster-file" type="file" name="roster_file" accept=".csv,.json" required
+             aria-describedby="t20-roster-help{% if roster_import_errors %} t20-roster-errors{% endif %}"{% if roster_import_errors %} aria-invalid="true"{% endif %}>
+      <button type="submit" class="action-btn accent-btn">Import teams and squads</button>
+    </div>
+  </form>
+  {% else %}
+  <p class="t20-roster-import">Imports are available before the championship starts.</p>
+  {% endif %}
+</section>
 {% if not championship.started_at %}
 <section class="section-card">
   <h2>Add team</h2>

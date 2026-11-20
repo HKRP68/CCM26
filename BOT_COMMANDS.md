@@ -401,6 +401,14 @@ colours, owner and co-owner. Paste one player name per line to select the
 highest-rated active version of each player. Participating teams need at least
 11 squad members to start.
 
+Use **Teams → Bulk teams and squads** to download a CSV or JSON template, import
+teams and their squads, or export the current setup. CSV uses one row per
+player, with the team name repeated. A row with a blank player name can set up
+team details alone. JSON uses a list of player names inside each team. Supply an
+owner by Telegram ID or registered @username for each new team. Imports match
+existing teams by name, preserve blank details and add missing players. Finish
+imports before starting the championship. Exports are available throughout.
+
 In **Schedule**, select the participating teams, opponent count, matches per
 series, dates and minimum rest. The generator schedules one match per day in IST.
 With 10 teams and six opponents, each team hosts three series and tours three

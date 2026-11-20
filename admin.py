@@ -17055,28 +17055,19 @@ def _t20_conditions():
                 stadium=resolved, pitch=pitch or None)
 
 
-def _t20_captain(db, field, *, optional=False):
-    text = request.form.get(field, "").strip()
-    if re.fullmatch(r"@[a-zA-Z0-9_]{1,32}", text):
-        user = db.query(User).filter(func.lower(User.username) == text[1:].lower()).first()
-        if user:
-            return user.telegram_id
-        raise ValueError(f"{text} must use /debut before you can add them by username.")
-    return _t20_number(field, optional=optional)
-
-
 def _t20_team(db, championship, existing=None):
     from models import T20ChampionshipTeam
+    from services.t20_championship_io import captain_id
     name = request.form.get("team_name", "").strip()
     if not name or len(name) > 120 or any(
         team is not existing and team.name.casefold() == name.casefold()
         for team in championship.teams
     ):
         raise ValueError("Use a unique team name of up to 120 characters.")
-    owner = _t20_captain(db, "owner")
-    co_owner = _t20_captain(db, "co_owner", optional=True)
-    if owner == 0 or co_owner in (0, owner):
-        raise ValueError("Enter a valid Telegram user ID for each captain. Use distinct IDs.")
+    owner = captain_id(db, request.form.get("owner", ""), "owner")
+    co_owner = captain_id(db, request.form.get("co_owner", ""), "co-owner", optional=True)
+    if owner == co_owner:
+        raise ValueError("Use different IDs for the owner and co-owner.")
     if existing is None:
         existing = T20ChampionshipTeam(championship=championship,
                                        team=ChallengeTeam(league=championship.league, name=name),
@@ -17093,26 +17084,6 @@ def _t20_team(db, championship, existing=None):
     if logo:
         team.logo_url = logo
     return existing
-
-
-def _t20_add_players(db, championship, team, names):
-    from services.version_paginator import find_players_for_search
-    from services.version_service import get_all_versions
-    current = {p.name.casefold() for p in team.players}
-    order = max((p.sort_order for p in team.players), default=0)
-    for name in dict.fromkeys(line.strip() for line in names.splitlines() if line.strip()):
-        matches = find_players_for_search(db, name)
-        if len(matches) != 1:
-            detail = "use the full player name" if matches else "no matching player"
-            raise ValueError(f"{name} · {detail}.")
-        editions = [p for p in get_all_versions(db, matches[0].id) if p.is_active and not p.is_career]
-        if not editions:
-            raise ValueError(f"{name} has no active player card.")
-        source = max(editions, key=lambda card: (card.rating, card.parent_player_id is not None, card.id))
-        if source.name.casefold() not in current:
-            order += 1
-            _add_challenge_player_row(db, team, championship.league, source, order)
-            current.add(source.name.casefold())
 
 
 def _t20_round_deadline(series, deadline):
@@ -17214,7 +17185,8 @@ def _t20_mutation(db, championship):
                 raise ValueError("Finish the team's current match before changing its details.")
             _t20_team(db, championship, team)
         elif action == "add_players":
-            _t20_add_players(db, championship, team.team, request.form.get("player_names", ""))
+            from services.t20_championship_io import add_players_by_name
+            add_players_by_name(db, team.team, request.form.get("player_names", "").splitlines())
         elif action == "remove_player":
             member = db.get(ChallengePlayer, _t20_number("player_id"))
             if not member or member.team_id != team.challenge_team_id:
@@ -17413,6 +17385,73 @@ def admin_t20_championship(championship_id):
         )
     finally:
         db.close()
+
+
+@app.get("/world-t20/<int:championship_id>/teams/<kind>.<file_format>")
+@login_required
+def admin_t20_roster_download(championship_id, kind, file_format):
+    from models import T20Championship
+    from services import t20_championship_io as roster_io
+
+    if kind not in ("template", "export") or file_format not in roster_io.MIMETYPES:
+        abort(404)
+    with get_session() as db:
+        championship = db.get(T20Championship, championship_id)
+        if championship is None:
+            abort(404)
+        if kind == "template":
+            teams, filename = roster_io.TEMPLATE, "world-t20-squad-template"
+        else:
+            teams = roster_io.export_teams(roster_io.championship_teams(db, championship_id))
+            filename = f"{championship.command}-teams-and-squads"
+        return Response(roster_io.format_file(teams, file_format),
+                        mimetype=roster_io.MIMETYPES[file_format],
+                        headers={"Content-Disposition": f'attachment; filename="{filename}.{file_format}"',
+                                 "Cache-Control": "private, no-store"})
+
+
+@app.post("/world-t20/<int:championship_id>/teams/import")
+@login_required
+def admin_t20_roster_import(championship_id):
+    from sqlalchemy.exc import IntegrityError
+    from services import t20_championship as cup, t20_championship_io as roster_io
+
+    with get_session() as db:
+        championship = cup.lock(db, championship_id)
+        if championship is None:
+            abort(404)
+        if championship.started_at:
+            flash("Import squads before the championship starts.", "error")
+            return redirect(url_for("admin_t20_championship", championship_id=championship_id, tab="teams"))
+        try:
+            upload = request.files.get("roster_file")
+            if not upload or not upload.filename:
+                raise ValueError("Choose a CSV or JSON file to import.")
+            file_format = upload.filename.rpartition(".")[2].lower()
+            if file_format not in roster_io.MIMETYPES:
+                raise ValueError("Choose a .csv or .json file.")
+            rows = roster_io.read_file(upload.read(roster_io.MAX_UPLOAD_BYTES + 1), file_format)
+            created, updated, added = roster_io.import_teams(db, championship, rows)
+            if created or updated:
+                log_admin(db, "t20_roster_import", "t20_championship", championship.id, championship.name,
+                          f"Teams created {created}, teams updated {updated}, players added {added}")
+            db.commit()
+        except (ValueError, IntegrityError) as exc:
+            db.rollback()
+            if isinstance(exc, roster_io.SquadImportError):
+                errors = exc.errors
+            elif isinstance(exc, ValueError):
+                errors = [str(exc)]
+            else:
+                errors = ["Could not save the import. Check for duplicate team or player names and try again."]
+            return render_template("admin_t20_championship.html", championship=championship,
+                                   tab="teams", stadiums=[], roster_import_errors=errors), 422
+
+    if created or updated:
+        flash(f"Teams created {created} · Teams updated {updated} · Players added {added}.", "success")
+    else:
+        flash("The teams and squads in this file are already up to date.", "info")
+    return redirect(url_for("admin_t20_championship", championship_id=championship_id, tab="teams"))
 
 
 @app.route("/challenge-data/leagues/<int:league_id>/teams.json")

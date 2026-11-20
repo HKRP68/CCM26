@@ -352,3 +352,145 @@ def test_best_of_five_semifinals_seed_a_full_five_match_final(competition):
     assert [row["team"].id for row in table] == [india.id, australia.id, south_africa.id, england.id]
     assert [row["bonus"] for row in table] == [2, 2, 0, 0]
     assert all(row["played"] == 3 and row["max_points"] == 8 for row in table)
+
+
+@pytest.fixture
+def roster_admin(competition, monkeypatch):
+    from sqlalchemy.orm import Session
+
+    import admin
+    from models import Player, User
+    from services import t20_championship as cup
+
+    db, _ = competition
+    championship = cup.create(db, "Source Cup", "sourcecup")
+    destination = cup.create(db, "Destination Cup", "destinationcup")
+    rival = cup.create(db, "Separate Cup", "separatecup")
+    db.add(User(telegram_id=555, username="ownername"))
+    for name, version, rating, active in (
+        ("Virat Kohli", "Base", 88, True),
+        ("Virat Kohli", "2026", 99, True),
+        ("Virat Kohli", "Inactive", 100, False),
+        ("Jasprit Bumrah", "Base", 90, True),
+        ("Glenn Maxwell", "Base", 90, True),
+    ):
+        db.add(Player(name=name, version=version, rating=rating, is_active=active,
+                      category="Batsman", country="India", bat_hand="Right", bowl_hand="Right",
+                      bowl_style="Fast", bat_rating=rating, bowl_rating=30))
+    db.commit()
+
+    monkeypatch.setattr(admin, "get_session", lambda: Session(bind=db.get_bind(), autoflush=False))
+    monkeypatch.setitem(admin.app.config, "TESTING", True)
+    monkeypatch.setitem(admin.app.config, "WTF_CSRF_ENABLED", False)
+    client = admin.app.test_client()
+    with client.session_transaction() as auth:
+        auth["admin"] = True
+    return client, db, championship, destination, rival
+
+
+def _roster_upload(client, championship_id, filename, data):
+    from io import BytesIO
+
+    return client.post(f"/world-t20/{championship_id}/teams/import",
+                       data={"roster_file": (BytesIO(data), filename)}, follow_redirects=True)
+
+
+def test_admin_bulk_roster_templates_and_roundtrip(roster_admin):
+    import json
+
+    from services import t20_championship_io as roster_io
+
+    client, db, championship, destination, rival = roster_admin
+    base = f"/world-t20/{championship.id}"
+    page = client.get(base + "?tab=teams")
+    assert b"Bulk teams and squads" in page.data
+    for file_format in roster_io.MIMETYPES:
+        template = client.get(f"{base}/teams/template.{file_format}")
+        assert template.status_code == 200
+        assert f"world-t20-squad-template.{file_format}" in template.headers["Content-Disposition"]
+        teams = roster_io.read_file(template.data, file_format)
+        assert len(teams) == 2 and teams[0]["players"] == ["Virat Kohli", "Jasprit Bumrah"]
+
+    csv_data = (
+        "team_name,short_name,logo_url,primary_colour,secondary_color,owner,co_owner,player_name\n"
+        "=India,IND,/static/challenge_leagues/india.png,#abc,#123456,@OwnerName,556,Virat Kohli\n"
+        "=india,,,,,,,Jasprit Bumrah\n"
+        "=India,,,,,,,virat kohli\n"
+        '"Australia, XI",AUS,,#ffcd00,,999,,Glenn Maxwell\n'
+        "Reserve XI,RES,,,,999,,\n"
+    ).encode()
+    response = _roster_upload(client, championship.id, "source.CSV", csv_data)
+    assert response.status_code == 200
+    assert b"Teams created 3" in response.data and b"Players added 3" in response.data
+
+    db.expire_all()
+    india, australia, reserve = roster_io.championship_teams(db, championship.id)
+    assert india.name == "=India"
+    assert (india.owner_id, india.co_owner_id) == (555, 556)
+    assert india.team.primary_color == "#aabbcc" and india.team.secondary_color == "#123456"
+    assert [p.source_player.version for p in india.team.players] == ["2026", "Base"]
+    assert australia.name == "Australia, XI" and not reserve.team.players
+    assert not roster_io.championship_teams(db, rival.id)
+
+    csv_export = client.get(base + "/teams/export.csv")
+    assert csv_export.status_code == 200 and b"'=India" in csv_export.data
+    json_export = client.get(base + "/teams/export.json")
+    assert json.loads(json_export.data)["teams"][0]["owner"] == "555"
+    assert roster_io.read_file(csv_export.data, "csv")[0]["team_name"] == "=India"
+
+    response = _roster_upload(client, destination.id, "copy.json", json_export.data)
+    assert response.status_code == 200 and b"Players added 3" in response.data
+    response = _roster_upload(client, destination.id, "copy.csv", csv_export.data)
+    assert response.status_code == 200 and b"already up to date" in response.data
+    new_json = client.get(f"/world-t20/{destination.id}/teams/export.json")
+    assert json.loads(json_export.data) == json.loads(new_json.data)
+
+    minimal = b"team_name,player_name\n=INDIA,Glenn Maxwell\n"
+    response = _roster_upload(client, destination.id, "one-player.csv", minimal)
+    assert b"Teams updated 1" in response.data and b"Players added 1" in response.data
+    db.expire_all()
+    copied = roster_io.championship_teams(db, destination.id)[0]
+    assert copied.name == "=India" and copied.owner_id == 555 and copied.team.primary_color == "#aabbcc"
+    assert len(copied.team.players) == 3
+
+
+def test_admin_bulk_roster_errors_leave_the_whole_file_unapplied(roster_admin):
+    import json
+
+    from services import t20_championship_io as roster_io
+
+    client, db, championship, _, _ = roster_admin
+    base = f"/world-t20/{championship.id}"
+    rows = [
+        {"team_name": "Valid Squad", "owner": 555, "players": ["Virat Kohli"]},
+        {"team_name": "Missing Player XI", "owner": 555, "players": ["Unknown Player"]},
+        {"team_name": "Missing Owner XI", "players": ["Glenn Maxwell"]},
+    ]
+    result = _roster_upload(client, championship.id, "teams.json", json.dumps(rows).encode())
+    assert result.status_code == 422
+    assert b"Unknown Player" in result.data and b"Missing Owner XI" in result.data
+    db.expire_all()
+    assert not roster_io.championship_teams(db, championship.id)
+
+    result = _roster_upload(client, championship.id, "teams.csv",
+                            b"team_name,owner\nTeam,555\nteam,777\n")
+    assert result.status_code == 422 and b"conflicting owner" in result.data
+    result = _roster_upload(client, championship.id, "roster.csv", b"\xff")
+    assert result.status_code == 422 and b"UTF-8" in result.data
+    result = _roster_upload(client, championship.id, "bad.json",
+                            b'{"team_name":"Unsafe URL","owner":555,"logo_url":"/static/../secrets.png"}')
+    assert result.status_code == 422 and b"public HTTP(S)" in result.data
+
+    result = _roster_upload(client, championship.id, "teams.json", json.dumps(rows[:1]).encode())
+    assert result.status_code == 200
+    championship.started_at = datetime.utcnow()
+    db.commit()
+    result = _roster_upload(client, championship.id, "teams.json", json.dumps(rows[:1]).encode())
+    assert b"Import squads before the championship starts." in result.data
+    assert b'id="t20-roster-file"' not in result.data
+    assert client.get(base + "/teams/export.csv").status_code == 200
+
+    with client.session_transaction() as auth:
+        auth.clear()
+    assert client.get(base + "/teams/export.json").status_code == 302
+    assert client.post(base + "/teams/import").status_code == 302

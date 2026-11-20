@@ -42,7 +42,7 @@ def export_teams(teams):
     } for team in teams]
 
 
-def _team_values(row):
+def team_values(row):
     if not isinstance(row, dict):
         raise ValueError("each team must be a JSON object")
     values = {}
@@ -84,7 +84,7 @@ def import_teams(db, league, rows):
     errors = []
     for number, row in enumerate(rows, 1):
         try:
-            values = _team_values(row)
+            values = team_values(row)
             name = values.get("name")
             team = by_name.get(name.casefold()) if name else None
             if not name and values.get("short_name"):

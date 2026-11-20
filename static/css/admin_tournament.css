@@ -355,6 +355,24 @@
 .form-grid label { color: var(--muted); display: block; font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; margin-bottom: .25rem; }
 .form-grid input, .form-grid select, .form-grid textarea { width: 100%; }
 
+.t20-roster-downloads {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .55rem;
+}
+.t20-roster-downloads a { text-align: center; }
+.t20-roster-import, .t20-roster-errors { margin-block: 1rem 0; }
+.t20-roster-import p { color: var(--muted); max-width: 67ch; margin-block: .4rem .65rem; }
+.t20-roster-errors { overflow-wrap: anywhere; }
+.t20-roster-errors ul { padding-inline-start: 1.4rem; margin-block: .5rem 0; }
+.t20-roster-submit { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem; }
+.t20-roster-submit input { min-width: 0; flex: 1 1 16rem; max-width: 26rem; }
+.t20-roster-submit button { width: auto; }
+@media (min-width: 860px) {
+  .t20-roster-downloads { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+
 /* --- Manual result form (inside fixture cards) --- */
 .rr-form { display: flex; flex-direction: column; gap: .55rem; margin-top: .5rem; padding: .7rem; background: var(--card); border: 1px dashed var(--border); border-radius: 10px; }
 .rr-row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: end; }
