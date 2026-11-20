@@ -2192,9 +2192,9 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
 async def launch_cl_tour_match(context, *, message_obj, chat_id, host, target,
                               league_key, league_name, league_record,
                               host_team, target_team, session,
-                              cl_tour_id, cl_tour_match_id, cl_tour_match_no,
-                              cl_tour_match_count):
-    """Open a Challenge League Tour match.
+                              cl_tour_id=None, cl_tour_match_id=None, cl_tour_match_no=None,
+                              cl_tour_match_count=None, championship=None):
+    """Open a fixed-team Challenge League Tour or World T20 fixture.
 
     The league and both teams are fixed at tour-creation time, so this builds a
     Challenge League draft that is already at the ``turn == "complete"`` state and
@@ -2240,7 +2240,8 @@ async def launch_cl_tour_match(context, *, message_obj, chat_id, host, target,
         draft_id = random.randint(100000, 999999)
 
     teams = [host_team, target_team]
-    team_codes = {t: (_team_short_code(t, league_key, session) or t) for t in teams}
+    team_codes = (championship["team_codes"] if championship else
+                  {t: (_team_short_code(t, league_key, session) or t) for t in teams})
     context.bot_data[_challenge_team_draft_key(draft_id)] = {
         "draft_id": draft_id,
         "chat_id": chat_id,
@@ -2269,6 +2270,12 @@ async def launch_cl_tour_match(context, *, message_obj, chat_id, host, target,
     }
     context.bot_data[_challenge_draft_chat_key(chat_id)] = draft_id
     draft = context.bot_data[_challenge_team_draft_key(draft_id)]
+    if championship:
+        draft["t20_championship"] = championship
+        draft["stadium"] = championship["stadium"]
+        draft["tournament_name"] = league_name
+        draft["tournament_team_by_user"] = dict(zip(championship["users"],
+                                                     championship["challenge_teams"]))
 
     # Carry the league's format + overseas limits onto the draft up front so the
     # match uses the league's real format (T20/The100) and XI rules — the normal
@@ -2292,11 +2299,18 @@ async def launch_cl_tour_match(context, *, message_obj, chat_id, host, target,
     # it to the tour chat (not wherever the Play button was tapped) so the whole
     # setup + match runs in the group the tour belongs to.
     sent = None
+    fixed_pitch = championship and championship["pitch"]
     try:
-        sent = await R.send_rich_message(
-            context.bot, chat_id, _pitch_prompt_blocks(draft),
-            _pitch_prompt(draft),
-            reply_markup=_pitch_keyboard(draft_id, allow_deny=False))
+        if fixed_pitch:
+            draft["pitch_locked"] = True
+            text = _apply_pitch(draft, fixed_pitch)
+            sent = await R.send_rich_message(
+                context.bot, chat_id, draft.pop("_pitch_card_blocks", None), text)
+        else:
+            sent = await R.send_rich_message(
+                context.bot, chat_id, _pitch_prompt_blocks(draft),
+                _pitch_prompt(draft),
+                reply_markup=_pitch_keyboard(draft_id, allow_deny=False))
     except Exception:
         logger.exception("Failed to send CL tour pitch prompt; releasing draft lock")
         _release_draft_chat_lock(context.bot_data, draft)
@@ -2314,7 +2328,10 @@ async def launch_cl_tour_match(context, *, message_obj, chat_id, host, target,
     except Exception:
         logger.exception("Failed to schedule CL tour draft expiry")
 
-    await _arm_selection_timer(context, draft, [host.telegram_id], "pitch")
+    if fixed_pitch:
+        await _after_pitch_selected(context, draft, draft_id, sent)
+    else:
+        await _arm_selection_timer(context, draft, [host.telegram_id], "pitch")
     return True, None
 
 
@@ -2792,6 +2809,8 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
                 return
             league_key, league_name = is_super_over_league_command(command_name, session)
             if not league_key:
+                from handlers.t20_championship import dispatch as championship_dispatch
+                await championship_dispatch(update, context, session, command_name)
                 return
             standalone_super_over = True
             if update.effective_chat.id > 0:

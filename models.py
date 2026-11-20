@@ -2798,6 +2798,122 @@ class UserTeamLastXI(Base):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# WORLD T20 CHAMPIONSHIPS — bilateral tours with a championship table
+# ══════════════════════════════════════════════════════════════════════
+
+
+class T20Championship(Base):
+    __tablename__ = "t20_championships"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(120), nullable=False)
+    command = Column(String(23), nullable=False, unique=True)
+    league_id = Column(Integer, ForeignKey("challenge_leagues.id"), nullable=False, unique=True)
+    started_at = Column(DateTime)
+    completed_at = Column(DateTime)
+    start_at = Column(DateTime)
+    end_at = Column(DateTime)
+    opponents = Column(Integer)
+    matches_per_series = Column(Integer, nullable=False, default=3)
+    rest_days = Column(Integer, nullable=False, default=0)
+    points = Column(Text, nullable=False)
+    playoff_format = Column(String(12), nullable=False, default="none", server_default="none")
+    playoff_deadline = Column(DateTime)
+    final_format = Column(String(12), nullable=False, default="single")
+    final_venue = Column(String(120))
+    final_stadium = Column(String(120))
+    final_pitch = Column(String(20))
+    final_deadline = Column(DateTime)
+    champion_id = Column(Integer, ForeignKey("t20_championship_teams.id",
+                                            use_alter=True, name="fk_t20_champion"))
+    champion_captain = Column(BigInteger)
+
+    league = relationship("ChallengeLeague")
+    teams = relationship("T20ChampionshipTeam", back_populates="championship",
+                         foreign_keys="T20ChampionshipTeam.championship_id",
+                         cascade="all, delete-orphan")
+    series = relationship("T20ChampionshipSeries", back_populates="championship",
+                          cascade="all, delete-orphan")
+
+
+class T20ChampionshipTeam(Base):
+    __tablename__ = "t20_championship_teams"
+
+    id = Column(Integer, primary_key=True)
+    championship_id = Column(Integer, ForeignKey("t20_championships.id", ondelete="CASCADE"),
+                             nullable=False, index=True)
+    challenge_team_id = Column(Integer, ForeignKey("challenge_teams.id"), nullable=False, unique=True)
+    owner_id = Column(BigInteger, nullable=False)
+    co_owner_id = Column(BigInteger)
+    is_participating = Column(Boolean, nullable=False, default=True)
+
+    championship = relationship("T20Championship", back_populates="teams",
+                                foreign_keys=[championship_id])
+    team = relationship("ChallengeTeam")
+
+    @property
+    def name(self):
+        return self.team.name
+
+
+class T20ChampionshipCommand(Base):
+    __tablename__ = "t20_championship_commands"
+
+    command = Column(String(32), primary_key=True)
+    championship_id = Column(Integer, ForeignKey("t20_championships.id", ondelete="CASCADE"),
+                             nullable=False, index=True)
+    view = Column(String(12), nullable=False)
+
+    championship = relationship("T20Championship")
+
+
+class T20ChampionshipSeries(Base):
+    __tablename__ = "t20_championship_series"
+
+    id = Column(Integer, primary_key=True)
+    championship_id = Column(Integer, ForeignKey("t20_championships.id", ondelete="CASCADE"),
+                             nullable=False, index=True)
+    home_id = Column(Integer, ForeignKey("t20_championship_teams.id"), nullable=False)
+    away_id = Column(Integer, ForeignKey("t20_championship_teams.id"), nullable=False)
+    position = Column(Integer, nullable=False)
+    is_final = Column(Boolean, nullable=False, default=False)
+    semifinal_no = Column(Integer)
+    venue = Column(String(120))
+    stadium = Column(String(120))
+    pitch = Column(String(20))
+
+    championship = relationship("T20Championship", back_populates="series")
+    home = relationship("T20ChampionshipTeam", foreign_keys=[home_id])
+    away = relationship("T20ChampionshipTeam", foreign_keys=[away_id])
+    fixtures = relationship("T20ChampionshipFixture", back_populates="series",
+                            order_by="T20ChampionshipFixture.number", cascade="all, delete-orphan")
+
+    __table_args__ = (UniqueConstraint("championship_id", "position"),)
+
+
+class T20ChampionshipFixture(Base):
+    __tablename__ = "t20_championship_fixtures"
+
+    id = Column(Integer, primary_key=True)
+    series_id = Column(Integer, ForeignKey("t20_championship_series.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    number = Column(Integer, nullable=False)
+    opens_at = Column(DateTime, nullable=False)
+    deadline = Column(DateTime, nullable=False)
+    status = Column(String(14), nullable=False, default="scheduled")
+    result = Column(String(14))
+    winner_id = Column(Integer, ForeignKey("t20_championship_teams.id"))
+    captain_id = Column(BigInteger)
+    match_id = Column(Integer, ForeignKey("matches.id", ondelete="SET NULL"), unique=True)
+    scorecard = Column(Text)
+
+    series = relationship("T20ChampionshipSeries", back_populates="fixtures")
+    match = relationship("Match")
+
+    __table_args__ = (UniqueConstraint("series_id", "number"),)
+
+
+# ══════════════════════════════════════════════════════════════════════
 # CHALLENGE LEAGUE TOURNAMENTS — admin-run structured competitions
 # ══════════════════════════════════════════════════════════════════════
 

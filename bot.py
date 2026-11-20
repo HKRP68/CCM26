@@ -2778,11 +2778,13 @@ def main():
                     # progress". Put those back to 'scheduled' so they can be
                     # replayed or entered by hand.
                     from services import league_schedule_service as _lss
+                    from services import t20_championship
                     healed = _lss.heal_live_fixtures(s)
-                    if healed:
+                    championship_healed = t20_championship.heal_abandoned(s)
+                    if healed or championship_healed:
                         s.commit()
-                        logger.info("Match cleanup: %d stale tournament "
-                                    "fixture(s) released", len(healed))
+                        logger.info("Match cleanup: %d stale competition fixture(s) released",
+                                    len(healed) + championship_healed)
                 except Exception:
                     s.rollback()
                     logger.exception("Stuck-match cleanup job failed")

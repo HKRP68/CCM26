@@ -3479,6 +3479,12 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit",
         win_id, lose_id = None, None
         result_text = "Match cancelled — no balls bowled."
 
+    from services import t20_championship
+    championship_forfeit = t20_championship.record_forfeit(session, m, opponent_id, state)
+    if championship_forfeit and not q["has_progress"]:
+        margin_type = "forfeit"
+        win_id, lose_id = opponent_id, quitter_id
+        result_text = "Championship match forfeited."
     if state:
         state["match_result"] = {
             "winner_team_id": win_id, "loser_team_id": lose_id,
@@ -3523,7 +3529,7 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit",
     except Exception:
         pass
     return True, {"penalty": applied_penalty, "compensation": compensation,
-                  "balls_bowled": balls, "cancelled": not q["has_progress"],
+                  "balls_bowled": balls, "cancelled": not q["has_progress"] and not championship_forfeit,
                   "winner_id": win_id, "loser_id": lose_id,
                   "result_text": result_text}
 
@@ -3608,6 +3614,8 @@ def abandon_match(session, match_id, by_user_id, reason="abandoned",
     except Exception:
         logger.exception("CL-tour-result hook (forfeit) failed (non-fatal)")
 
+    from services import t20_championship
+    t20_championship.record_forfeit(session, m, winner_id, state)
     session.commit()
     try:
         from services.match_state_store import cleanup_state

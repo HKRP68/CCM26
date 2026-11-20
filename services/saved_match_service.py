@@ -350,6 +350,10 @@ def discard(mid, by_user_id=None):
 
 def _release_holds(session, mid, state):
     """Hand back a fixture / tour slot still bound to match ``mid``."""
+    championship = state.get("t20_championship")
+    if championship:
+        from services import t20_championship
+        t20_championship.release(session, championship["fixture_id"], mid)
     rfx = state.get("reserved_fixture_id")
     if rfx:
         from models import TournamentMatch
@@ -402,6 +406,25 @@ def revive_match(mid, chat_id, state):
             raise ReviveError("That match no longer exists.", permanent=True)
         if (m.status or "") in _LIVE_STATUSES:
             raise ReviveError("That match is already being played.")
+
+        championship = state.get("t20_championship")
+        if championship:
+            from models import T20ChampionshipFixture, User
+            from services import t20_championship
+            t20_championship.lock(session, championship["championship_id"])
+            fixture = session.get(T20ChampionshipFixture, championship["fixture_id"], populate_existing=True)
+            if fixture is None or fixture.status in t20_championship.TERMINAL:
+                raise ReviveError("That championship fixture is closed.", permanent=True)
+            if fixture.status == "live" and fixture.match_id != int(mid):
+                raise ReviveError("That championship fixture is already in progress.")
+            if fixture.status != "live":
+                host, target = (session.get(User, uid) for uid in championship["users"])
+                if not host or not target:
+                    raise ReviveError("One of the original captains is unavailable.", permanent=True)
+                try:
+                    t20_championship.bind(session, championship, m, host, target)
+                except t20_championship.FixtureUnavailable as exc:
+                    raise ReviveError(str(exc)) from exc
 
         tid = state.get("tournament_id")
         if tid:

@@ -606,6 +606,7 @@ def mark_bot_match(state, bot_user_id, difficulty=None, play_mode=None):
     state.pop("_planned_winner_user_id", None)
     state["cl_tour_id"] = None
     state["cl_tour_match_id"] = None
+    state.pop("t20_championship", None)
     return state
 
 
@@ -1392,6 +1393,9 @@ async def _forfeit_live_match(context, mid, state, expected):
                     record_cl_match_result(session, state["cl_tour_match_id"], win_uid)
             except Exception:
                 logger.exception("CL tour forfeit recording failed for %s", mid)
+        if state.get("t20_championship") and win_uid:
+            from services import t20_championship
+            t20_championship.record_played(session, state, winner_user_id=win_uid, forfeit=True)
         from services.match_handover import controller_uid
         idle_user = session.get(User, controller_uid(state, idle_uid)) if idle_uid else None
         win_user = session.get(User, win_uid) if win_uid else None
@@ -1709,7 +1713,8 @@ def _release_launch_reservations(draft):
     """Blocking: hand back the fixture / tour slot a failed launch reserved."""
     fixture_id = draft.get("reserved_fixture_id")
     tour_match_id = draft.get("cl_tour_match_id")
-    if not fixture_id and not tour_match_id:
+    championship = draft.get("t20_championship")
+    if not fixture_id and not tour_match_id and not (championship and draft.get("match_id")):
         return
     session = get_session()
     try:
@@ -1719,6 +1724,9 @@ def _release_launch_reservations(draft):
         if tour_match_id:
             from services.cl_tour_service import unlink_match_from_cl_tour
             unlink_match_from_cl_tour(session, tour_match_id)
+        if championship and draft.get("match_id"):
+            from services import t20_championship
+            t20_championship.release(session, championship["fixture_id"], draft["match_id"])
         session.commit()
     except Exception:
         session.rollback()
@@ -2046,6 +2054,14 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         # in the SAME transaction as match creation — flush to get match.id, link,
         # then commit once, so the Match and its tour slot can never diverge.
         session.flush()
+        if draft.get("t20_championship"):
+            from services import t20_championship
+            try:
+                t20_championship.bind(session, draft["t20_championship"], match, host, target)
+            except t20_championship.FixtureUnavailable as exc:
+                session.rollback()
+                await _fail(str(exc))
+                return
         if draft.get("cl_tour_match_id"):
             from services.cl_tour_service import link_match_to_cl_tour
             if link_match_to_cl_tour(session, draft["cl_tour_match_id"], match.id) is None:
@@ -2257,13 +2273,16 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         # Carry CL Tour identity so the series score updates when the match ends.
         state["cl_tour_id"] = draft.get("cl_tour_id")
         state["cl_tour_match_id"] = draft.get("cl_tour_match_id")
+        if draft.get("t20_championship"):
+            state["t20_championship"] = draft["t20_championship"]
         # What this match IS, for the announcement card. Only league_key used to
         # come across, and only for a bot match, so every card announced itself
         # as IPL whatever it actually was.
         state["league_key"] = draft.get("league_key")
         state["league_name"] = draft.get("league_name")
         state["tournament_name"] = (draft.get("tournament_name")
-                                    if draft.get("is_tournament") else None)
+                                    if draft.get("is_tournament") or draft.get("t20_championship")
+                                    else None)
         state["cl_tour_match_no"] = draft.get("cl_tour_match_no")
         state["cl_tour_match_count"] = draft.get("cl_tour_match_count")
         # The Playing XI rules the picker enforced (keeper, bowling options,
@@ -5448,6 +5467,12 @@ async def _complete_match(context, mid, state):
                             session, state["cl_tour_match_id"], winner_for_tour)
             except Exception:
                 logger.exception("CL tour result recording failed for %s", mid)
+
+            if match and state.get("t20_championship"):
+                from services import t20_championship
+                fixture = t20_championship.record_played(
+                    session, state, winner_user_id=None if result["tie"] else match.winner_id)
+                injury_news = html.escape(t20_championship.result_news(fixture))
 
             # Auction League: the fixture this match was, back into the season.
             try:

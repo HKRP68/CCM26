@@ -769,6 +769,10 @@ def _migrate_add_columns():
     _try_add("challenge_leagues", "tournament_view_commands_json", "TEXT")
     _try_add("matches", "tournament_id", "INTEGER")
 
+    _try_add("t20_championships", "playoff_format", "VARCHAR(12) NOT NULL DEFAULT 'none'")
+    _try_add("t20_championships", "playoff_deadline", "TIMESTAMP")
+    _try_add("t20_championship_series", "semifinal_no", "INTEGER")
+
     # League Tournament Structure: league formats, groups, schedule + knockouts.
     # New table ``tournament_groups`` is created by create_all above; these add the
     # new columns on the existing tournament_* tables.

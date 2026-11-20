@@ -2282,6 +2282,12 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
                              synchronize_session=False))
             except Exception:
                 logger.exception("endmatch: CL-tour-match reset failed (non-fatal)")
+            if was_active and u and u.id in (m.user1_id, m.user2_id):
+                from services import t20_championship
+                winner_id = m.user2_id if u.id == m.user1_id else m.user1_id
+                if t20_championship.record_forfeit(session, m, winner_id, s):
+                    m.winner_id, m.loser_id = winner_id, u.id
+                    m.margin_type, m.margin_value = "forfeit", 0
         session.commit()
         u_mention = _mention(u) if u else "Player"
         await q.edit_message_text(

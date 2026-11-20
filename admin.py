@@ -16395,14 +16395,25 @@ def _apply_tournament_view_commands(db, league):
     warning — the rest still save."""
     import json as _json
     from services import tournament_service as _ts
+    from models import T20ChampionshipCommand
+    from handlers.challenge import normalize_challenge_league
     norm = _ts.normalize_command
-    taken = {}
+    championship_commands = {cmd for cmd, in db.query(T20ChampionshipCommand.command)}
+    taken = dict.fromkeys(championship_commands, "World T20 Championships")
     for other in db.query(ChallengeLeague).filter(ChallengeLeague.id != league.id).all():
         for raw in (other.command, other.tournament_command, other.fixtures_command):
             if norm(raw):
                 taken.setdefault(norm(raw), other.name)
         for _v, cmd, _l, _c in _ts.league_view_commands(other):
             taken.setdefault(norm(cmd), other.name)
+    league_commands = {norm(raw) for raw in (league.command, league.tournament_command, league.fixtures_command)}
+    key = normalize_challenge_league(league.short_code or league.name)
+    if key:
+        league_commands.update(prefix + key for prefix in ("c", "challenge", "s"))
+        league_commands.update(prefix + key + "bot" for prefix in ("c", "challenge"))
+    clash = league_commands & championship_commands
+    if clash:
+        raise ValueError(f"/{min(clash)} belongs to a World T20 Championship.")
     for raw in (league.command, league.tournament_command, league.fixtures_command):
         if norm(raw):
             taken.setdefault(norm(raw), f"{league.name} (its own command)")
@@ -16416,6 +16427,9 @@ def _apply_tournament_view_commands(db, league):
             skipped.append(f"/{cmd} (used by {clash})")
             continue
         chosen[view] = "/" + cmd
+    for view, cmd in _ts.default_view_commands(league.tournament_command).items():
+        if view not in chosen and cmd in championship_commands:
+            raise ValueError(f"/{cmd} belongs to a World T20 Championship. Set a custom command for {view}.")
     league.tournament_view_commands_json = _json.dumps(chosen) if chosen else None
     if skipped:
         flash("⚠️ Some tournament commands were not saved because they are already "
@@ -16523,7 +16537,9 @@ def _save_challenge_team_logo(file_storage):
 
 
 def _ensure_default_challenge_mode(db):
+    from services.t20_championship import ROSTER_MODE
     mode = (db.query(ChallengeMode)
+              .filter(ChallengeMode.name != ROSTER_MODE)
               .order_by(ChallengeMode.sort_order, ChallengeMode.id)
               .first())
     if mode:
@@ -16887,11 +16903,18 @@ def _hydrate_team_counts(teams):
 
 
 def _get_league_or_404(db, league_id):
+    from services.t20_championship import ROSTER_MODE
     league = db.get(ChallengeLeague, int(league_id))
-    if not league:
+    if not league or league.mode.name == ROSTER_MODE:
         flash("League not found.", "error")
         return None
     return league
+
+
+def _public_challenge_leagues(db):
+    from models import T20Championship
+    return db.query(ChallengeLeague).filter(
+        ChallengeLeague.id.not_in(db.query(T20Championship.league_id)))
 
 
 def _get_team_or_404(db, league_id, team_id):
@@ -16941,7 +16964,7 @@ def admin_challenge_data():
                         log_admin(db, "challenge_league_add", "challenge_league", league.id, league.name)
                         flash(f"✅ Added league {league.name}.", "success")
                 elif action in {"toggle_league", "delete_league", "remove_league_image"}:
-                    league = db.get(ChallengeLeague, _int_form("league_id"))
+                    league = _get_league_or_404(db, _int_form("league_id"))
                     if not league:
                         flash("League not found.", "error")
                     elif action == "toggle_league":
@@ -16997,6 +17020,399 @@ def _team_colour_form(field):
     if not colour:
         raise ValueError(f"{field.replace('_', ' ').title()} must be a hex code such as #1d4ed8 or #abc.")
     return colour
+
+
+def _t20_form_time(name, *, optional=False):
+    from utils.tournament_time import parse_ist_deadline
+    value = request.form.get(name, "").strip()
+    return None if optional and not value else parse_ist_deadline(value)
+
+
+def _t20_day(name):
+    return datetime.strptime(request.form.get(name, ""), "%Y-%m-%d").date()
+
+
+def _t20_number(name, *, optional=False):
+    value = request.form.get(name, "").strip()
+    if optional and not value:
+        return None
+    if not value.isdecimal() or len(value) > 16:
+        raise ValueError(f"Enter a valid {name.replace('_', ' ')}.")
+    return int(value)
+
+
+def _t20_conditions():
+    from services.match_constants import PITCH_TYPES
+    from services.tournament_stadiums import resolve
+    stadium = request.form.get("stadium", "").strip()
+    pitch = request.form.get("pitch", "").strip()
+    resolved = resolve(stadium)
+    if stadium and not resolved:
+        raise ValueError("Choose a stadium from Stadium Data.")
+    if pitch and pitch not in PITCH_TYPES:
+        raise ValueError("Choose a valid pitch.")
+    return dict(venue=request.form.get("venue", "").strip()[:120] or None,
+                stadium=resolved, pitch=pitch or None)
+
+
+def _t20_captain(db, field, *, optional=False):
+    text = request.form.get(field, "").strip()
+    if re.fullmatch(r"@[a-zA-Z0-9_]{1,32}", text):
+        user = db.query(User).filter(func.lower(User.username) == text[1:].lower()).first()
+        if user:
+            return user.telegram_id
+        raise ValueError(f"{text} must use /debut before you can add them by username.")
+    return _t20_number(field, optional=optional)
+
+
+def _t20_team(db, championship, existing=None):
+    from models import T20ChampionshipTeam
+    name = request.form.get("team_name", "").strip()
+    if not name or len(name) > 120 or any(
+        team is not existing and team.name.casefold() == name.casefold()
+        for team in championship.teams
+    ):
+        raise ValueError("Use a unique team name of up to 120 characters.")
+    owner = _t20_captain(db, "owner")
+    co_owner = _t20_captain(db, "co_owner", optional=True)
+    if owner == 0 or co_owner in (0, owner):
+        raise ValueError("Enter a valid Telegram user ID for each captain. Use distinct IDs.")
+    if existing is None:
+        existing = T20ChampionshipTeam(championship=championship,
+                                       team=ChallengeTeam(league=championship.league, name=name),
+                                       owner_id=owner, co_owner_id=co_owner)
+        db.add(existing)
+    else:
+        existing.team.name = name
+        existing.owner_id, existing.co_owner_id = owner, co_owner
+    team = existing.team
+    team.short_name = request.form.get("short_name", "").strip()[:30] or None
+    team.primary_color = _team_colour_form("primary_color")
+    team.secondary_color = _team_colour_form("secondary_color")
+    logo = _save_challenge_team_logo(request.files.get("logo"))
+    if logo:
+        team.logo_url = logo
+    return existing
+
+
+def _t20_add_players(db, championship, team, names):
+    from services.version_paginator import find_players_for_search
+    from services.version_service import get_all_versions
+    current = {p.name.casefold() for p in team.players}
+    order = max((p.sort_order for p in team.players), default=0)
+    for name in dict.fromkeys(line.strip() for line in names.splitlines() if line.strip()):
+        matches = find_players_for_search(db, name)
+        if len(matches) != 1:
+            detail = "use the full player name" if matches else "no matching player"
+            raise ValueError(f"{name} · {detail}.")
+        editions = [p for p in get_all_versions(db, matches[0].id) if p.is_active and not p.is_career]
+        if not editions:
+            raise ValueError(f"{name} has no active player card.")
+        source = max(editions, key=lambda card: (card.rating, card.parent_player_id is not None, card.id))
+        if source.name.casefold() not in current:
+            order += 1
+            _add_challenge_player_row(db, team, championship.league, source, order)
+            current.add(source.name.casefold())
+
+
+def _t20_round_deadline(series, deadline):
+    if deadline is None:
+        return
+    for row in series:
+        for fixture in row.fixtures:
+            if fixture.status in ("scheduled", "postponed"):
+                if deadline < fixture.opens_at:
+                    raise ValueError("The deadline must follow the fixture's opening time.")
+                fixture.deadline = deadline
+
+
+def _t20_mutation(db, championship):
+    from services import t20_championship as cup
+    from models import T20ChampionshipFixture
+
+    action = request.form.get("action", "")
+    if action == "points":
+        points = {key: _t20_number(key) for key in cup.POINTS
+                  if key != "series_win_bonus" or key in request.form}
+        cup.update_points(championship, points)
+        return
+    if action == "generate":
+        selected = request.form.getlist("participants", type=int)
+        cup.generate(db, championship, team_count=_t20_number("team_count"),
+                     opponents=_t20_number("opponents"), matches=_t20_number("matches"),
+                     start=_t20_day("start_date"), end=_t20_day("end_date"), rest=_t20_number("rest_days"),
+                     team_ids=selected or None)
+        return
+    if action == "start":
+        cup.start(championship)
+        cup.advance(db, championship)
+        return
+    if championship.completed_at:
+        raise ValueError("This championship is complete.")
+    rows = cup.series_list(db, championship)
+    if action == "final_settings":
+        mode = request.form.get("final_format")
+        if mode not in cup.FINALS:
+            raise ValueError("Choose a final format.")
+        playoffs = request.form.get("playoff_format", championship.playoff_format)
+        if playoffs not in cup.PLAYOFFS:
+            raise ValueError("Choose a semifinal format.")
+        if playoffs != "none":
+            if mode == "none":
+                raise ValueError("Choose a final format to use the semifinals.")
+            if championship.started_at and sum(t.is_participating for t in championship.teams) < 4:
+                raise ValueError("Top-four semifinals require at least four participating teams.")
+        playoff_deadline = championship.playoff_deadline
+        if playoffs == "none":
+            playoff_deadline = None
+        elif "playoff_deadline" in request.form:
+            playoff_deadline = _t20_form_time("playoff_deadline", optional=True)
+        deadline = _t20_form_time("final_deadline", optional=True)
+        final = next((series for series in rows if series.is_final), None)
+        semifinals = [series for series in rows if series.semifinal_no]
+        if (semifinals or final) and playoffs != championship.playoff_format:
+            raise ValueError("The semifinal format is locked once postseason fixtures are created.")
+        if playoff_deadline != championship.playoff_deadline:
+            _t20_round_deadline(semifinals, playoff_deadline)
+        conditions = _t20_conditions() if mode != "none" else dict(venue=None, stadium=None, pitch=None)
+        if final:
+            if mode != championship.final_format:
+                raise ValueError("The format is locked once the final fixtures are created.")
+            if any(f.status in ("live", "completed", "forfeited") for f in final.fixtures):
+                if any(getattr(final, key) != value for key, value in conditions.items()):
+                    raise ValueError("The final venue and pitch are locked once play starts.")
+            for key, value in conditions.items():
+                setattr(final, key, value)
+            if deadline != championship.final_deadline:
+                _t20_round_deadline([final], deadline)
+        championship.playoff_format, championship.playoff_deadline = playoffs, playoff_deadline
+        championship.final_format, championship.final_deadline = mode, deadline
+        for key, value in conditions.items():
+            setattr(championship, "final_" + key, value)
+        return
+
+    teams = {team.id: team for team in championship.teams}
+
+    def team_field(field):
+        team = teams.get(_t20_number(field))
+        if not team:
+            raise ValueError("Select a team in this championship.")
+        return team
+
+    if action in ("add_team", "edit_team", "add_players", "remove_player", "remove_team"):
+        if action in ("add_team", "add_players", "remove_player", "remove_team") and championship.started_at:
+            raise ValueError("Squad membership is locked once the championship starts.")
+        if action == "add_team":
+            _t20_team(db, championship)
+            return
+        team = team_field("team_id")
+        if action == "edit_team":
+            if championship.started_at and request.form.get("team_name", "").strip() != team.name:
+                raise ValueError("Team names are locked once the championship starts.")
+            if any(f.status == "live" for row in rows for f in row.fixtures
+                   if team.id in (row.home_id, row.away_id)):
+                raise ValueError("Finish the team's current match before changing its details.")
+            _t20_team(db, championship, team)
+        elif action == "add_players":
+            _t20_add_players(db, championship, team.team, request.form.get("player_names", ""))
+        elif action == "remove_player":
+            member = db.get(ChallengePlayer, _t20_number("player_id"))
+            if not member or member.team_id != team.challenge_team_id:
+                raise ValueError("Choose a player on this team.")
+            db.delete(member)
+        elif action == "remove_team":
+            if any(team.id in (row.home_id, row.away_id) for row in rows):
+                raise ValueError("Remove this team's series first.")
+            db.delete(team)
+            db.flush()
+            db.delete(team.team)
+        return
+
+    if action == "add_series":
+        cup.add_series(db, championship, team_field("home"), team_field("away"),
+                       _t20_number("matches"), _t20_day("start_date"), **_t20_conditions())
+        return
+
+    series = next((row for row in rows if row.id == _t20_number("series_id")), None)
+    if series is None:
+        raise ValueError("Series not found in this championship.")
+    postseason = cup.is_postseason(series)
+    if not postseason:
+        cup.editable_schedule(championship)
+    if action in ("edit_series", "remove_series", "earlier", "later"):
+        if postseason:
+            raise ValueError("Use Playoffs & Final settings and the individual fixture controls.")
+        played = {"live", "completed", "forfeited"}
+        if any(f.status in played for f in series.fixtures):
+            raise ValueError("This series has match activity. Edit its remaining fixtures individually.")
+        if action == "edit_series":
+            home, away = team_field("home"), team_field("away")
+            if home is away:
+                raise ValueError("Select two different teams.")
+            if championship.started_at and not (home.is_participating and away.is_participating):
+                raise ValueError("Choose two participating teams.")
+            series.home, series.away = home, away
+            home.is_participating = away.is_participating = True
+            conditions = _t20_conditions()
+            for key, value in conditions.items():
+                setattr(series, key, value)
+        elif action == "remove_series":
+            db.delete(series)
+        else:
+            neighbor_index = rows.index(series) + (-1 if action == "earlier" else 1)
+            if not 0 <= neighbor_index < len(rows):
+                return
+            neighbor = rows[neighbor_index]
+            if any(f.status in played for f in neighbor.fixtures):
+                raise ValueError("A series cannot move across a series with match activity.")
+            old, new = series.position, neighbor.position
+            series.position = 0
+            db.flush()
+            neighbor.position = old
+            db.flush()
+            series.position = new
+        cup.advance(db, championship)
+        return
+
+    if action == "add_fixture":
+        if postseason:
+            if not cup.needs_decider(series):
+                raise ValueError("A decider is available after the series finishes level.")
+        elif sum(f.status != "cancelled" for f in series.fixtures) >= 5:
+            raise ValueError("A bilateral series can have up to five matches.")
+        opens, deadline = _t20_form_time("opens_at"), _t20_form_time("deadline")
+        if deadline < opens:
+            raise ValueError("The deadline must follow the opening time.")
+        series.fixtures.append(T20ChampionshipFixture(
+            number=max((f.number for f in series.fixtures), default=0) + 1,
+            opens_at=opens, deadline=deadline))
+        return
+
+    fixture_id = _t20_number("fixture_id")
+    fixture = next((f for f in series.fixtures if f.id == fixture_id), None)
+    if not fixture or fixture.status == "live" or fixture.status in cup.TERMINAL:
+        raise ValueError("Choose a fixture that is still in the schedule and has no result.")
+    if action == "schedule_fixture":
+        opens, deadline = _t20_form_time("opens_at"), _t20_form_time("deadline")
+        if deadline < opens:
+            raise ValueError("The deadline must follow the opening time.")
+        fixture.opens_at, fixture.deadline = opens, deadline
+        fixture.status = "scheduled"
+    elif action == "postpone_fixture":
+        fixture.status = "postponed"
+    elif action == "cancel_fixture":
+        fixture.status = "cancelled"
+        cup.advance(db, championship)
+    elif action == "result":
+        if not championship.started_at:
+            raise ValueError("Start the championship before recording results.")
+        pending = cup.next_fixtures(rows)
+        if any(pending.get(team_id) != fixture.id for team_id in (series.home_id, series.away_id)):
+            raise ValueError("Resolve the preceding fixtures first.")
+        cup.set_result(db, championship, fixture, request.form.get("result"),
+                       _t20_number("winner", optional=True))
+    else:
+        raise ValueError("Choose a championship action.")
+
+
+@app.route("/world-t20", methods=["GET", "POST"])
+@login_required
+def admin_t20_championships():
+    from sqlalchemy.exc import IntegrityError
+    from models import T20Championship
+    from services import t20_championship as cup
+    from handlers import challenge
+
+    db = get_session()
+    try:
+        if request.method == "POST":
+            from bot import ADMIN_MENU_COMMANDS, BOT_MENU_COMMANDS
+            from services.tournament_service import league_view_commands, normalize_command
+            reserved = {cmd for cmd, _ in (*ADMIN_MENU_COMMANDS, *BOT_MENU_COMMANDS)}
+            for league in db.query(ChallengeLeague):
+                reserved.update(normalize_command(raw) for raw in
+                                (league.command, league.tournament_command, league.fixtures_command))
+                reserved.update(normalize_command(cmd) for _, cmd, _, _ in league_view_commands(league))
+            for key in challenge._challenge_leagues(db):
+                for prefix in ("c", "challenge", "s"):
+                    reserved.add(prefix + key)
+                reserved.add("c" + key + "bot")
+                reserved.add("challenge" + key + "bot")
+            try:
+                championship = cup.create(db, request.form.get("name", ""),
+                                          request.form.get("command", ""), reserved)
+                log_admin(db, "t20_championship_create", "t20_championship", championship.id, championship.name)
+                championship_id = championship.id
+                db.commit()
+                return redirect(url_for("admin_t20_championship", championship_id=championship_id))
+            except (ValueError, IntegrityError) as exc:
+                db.rollback()
+                flash(str(exc) if isinstance(exc, ValueError) else "That command is already in use.", "error")
+                return redirect(url_for("admin_t20_championships"))
+        championships = db.query(T20Championship).order_by(T20Championship.id.desc()).all()
+        return render_template("admin_t20_championship.html", championships=championships)
+    finally:
+        db.close()
+
+
+@app.route("/world-t20/<int:championship_id>", methods=["GET", "POST"])
+@login_required
+def admin_t20_championship(championship_id):
+    from handlers import t20_championship as views
+    from models import T20Championship
+    from services import t20_championship as cup, t20_championship_stats as stats
+    from services.match_constants import PITCH_TYPES
+    from services.tournament_stadiums import all_rows
+    from utils.tournament_time import IST_OFFSET, format_ist
+
+    db = get_session()
+    try:
+        championship = (cup.lock(db, championship_id) if request.method == "POST"
+                        else db.get(T20Championship, championship_id))
+        if championship is None:
+            abort(404)
+        sections = ("teams", "schedule", "standings", "stats", "settings", "scorecard")
+        tab = request.values.get("tab", "teams")
+        if tab not in sections:
+            tab = "teams"
+        if request.method == "POST":
+            from sqlalchemy.exc import IntegrityError
+            try:
+                _t20_mutation(db, championship)
+                log_admin(db, "t20_" + request.form.get("action", ""), "t20_championship",
+                          championship.id, championship.name)
+                db.commit()
+                flash("Championship saved.", "success")
+            except (ValueError, IntegrityError, OverflowError) as exc:
+                db.rollback()
+                flash(str(exc) if isinstance(exc, ValueError) else "Could not save those changes.", "error")
+            return redirect(url_for("admin_t20_championship", championship_id=championship_id, tab=tab))
+        rows = cup.series_list(db, championship)
+        next_by_team = cup.next_fixtures(rows)
+        filter_team = request.args.get("team", type=int)
+        filter_series = request.args.get("series", type=int)
+        player_rows = stats.aggregate(rows, team_id=filter_team, series_id=filter_series) if tab == "stats" else []
+        fixture = None
+        if tab == "scorecard":
+            fixture_id = request.args.get("fixture", type=int)
+            fixture = next((f for row in rows for f in row.fixtures if f.id == fixture_id), None)
+            if fixture is None:
+                abort(404)
+        return render_template(
+            "admin_t20_championship.html", championship=championship, tab=tab, rows=rows,
+            points=cup.point_system(championship), cup=cup,
+            final_formats=cup.FINALS, playoff_formats=cup.PLAYOFFS,
+            series_name=cup.series_name, summary=views.series_summary, result_label=views.result_label,
+            next_by_team=next_by_team, standings=cup.standings(championship, rows),
+            local=lambda dt: (dt + IST_OFFSET) if dt else None, format_ist=format_ist,
+            stadiums=all_rows() if tab in ("schedule", "settings") else [], pitches=PITCH_TYPES,
+            command_help=views.command_help(championship.command), player_rows=player_rows,
+            player_figures=stats.player_figures, filter_team=filter_team, filter_series=filter_series,
+            award_lines=views.render(db, championship, "awards", []) if tab == "stats" else [],
+            scorecard_lines=views.scorecard(fixture) if fixture else None,
+        )
+    finally:
+        db.close()
 
 
 @app.route("/challenge-data/leagues/<int:league_id>/teams.json")
@@ -17630,7 +18046,7 @@ def admin_tournaments_list():
                        .all())
         current = [t for t in tournaments if t.status in ("draft", "scheduled", "active", "paused")]
         history = [t for t in tournaments if t.status in ("completed", "cancelled")]
-        leagues = (db.query(ChallengeLeague)
+        leagues = (_public_challenge_leagues(db)
                    .order_by(ChallengeLeague.sort_order, ChallengeLeague.name).all())
         league_teams = {}
         for lg in leagues:
@@ -25375,7 +25791,7 @@ def admin_auction_detail(season_id):
             # ``list_sets`` knows — a lot row carries the set's name, not its
             # place in the running order.
             set_numbers={entry["name"]: entry["set_no"] for entry in sets},
-            leagues=db.query(ChallengeLeague)
+            leagues=_public_challenge_leagues(db)
                       .order_by(ChallengeLeague.name).all(),
             ledger_drift=auction_svc.reconcile_purses(db, season),
             events=auction_svc.recent_events(db, season.id, limit=40),

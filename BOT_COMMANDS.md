@@ -393,6 +393,58 @@ The general commands (`/ctour`, `/cttable`, `/ctfixtures`, `/ctteams`, `/ctinjur
 `/tournamentstats`, `/statstour`, `/mvp`) open the tournament directly when only one is
 running. When several are running, they list each tournament's own commands.
 
+## World T20 Championship
+
+In the admin site, open **World T20 Championships** and create a championship with
+a name and an unused command prefix such as `/wt20c`. Add teams with their logo,
+colours, owner and co-owner. Paste one player name per line to select the
+highest-rated active version of each player. Participating teams need at least
+11 squad members to start.
+
+In **Schedule**, select the participating teams, opponent count, matches per
+series, dates and minimum rest. The generator schedules one match per day in IST.
+With 10 teams and six opponents, each team hosts three series and tours three
+opponents. When an odd number of teams each requests an odd number of opponents,
+one team plays one fewer series. Admins can edit or reorder future series, add
+series, reschedule individual fixtures, record results or cancel fixtures.
+
+In **Settings & commands**, set the points and optional series-win bonus before
+starting. The defaults are two points for a win, one for a tie or no result, and
+zero for a loss, forfeit loss or series-win bonus. Each finished league series
+with a recorded result adds the configured bonus to both teams' PCT denominators.
+Only the series winner earns it. For a three-match series with two points per
+win and a one-point bonus, a 2–1 winner earns 5 out of 7 points.
+
+Top-four semifinals pair seeds 1 and 4, and seeds 2 and 3. The winners meet in
+the final. Set the semifinal and final formats independently to a single T20,
+best of three, best of five, or five matches with every fixture played. Best-of
+series close when a team clinches. Use **Schedule → Add decider** if a
+postseason series finishes level. With semifinals off, the top two go directly
+to the final, or select **No Final** to award the title to the table leader.
+Set the semifinal deadline and the final's neutral venue, stadium, pitch and
+deadline in **Settings & commands**.
+
+Reply to an owner or co-owner of the opposing team in a group with `/wt20c`.
+Both teams must have the same next fixture, and it must be inside its playing
+window. An overdue unplayed fixture can be rescheduled or resolved by an admin.
+
+| Example command | What it does |
+|-----------------|--------------|
+| `/wt20c` · `/wt20cplay [fixture ID]` | Play the next fixture as a reply. The bare command opens the overview when sent on its own |
+| `/wt20cinfo` · `/wt20chelp` | Overview and command reference |
+| `/wt20ctable` | PCT table, series bonus points and home/away series records |
+| `/wt20cfixtures [team=ID]` | Match IDs, playing windows, statuses and results |
+| `/wt20cteams` | Teams, squad versions, owners and team IDs |
+| `/wt20cseries [series ID]` | Tour results and Player of the Series |
+| `/wt20c playoffs` | Semifinal and final bracket, fixtures and results |
+| `/wt20cfinal` | Final format, fixtures and champion |
+| `/wt20cstats [team=ID] [series=ID]` | Batting, bowling, fielding and awards statistics |
+| `/wt20cplayer <name> [team=ID] [series=ID]` | One player's statistics |
+| `/wt20cawards` | Championship award leaders and final awards |
+| `/wt20cscorecard <fixture ID>` | Archived innings and player figures |
+
+Space-separated commands such as `/wt20c table` and `/wt20c scorecard 42` work too.
+
 ## 12. Tournament Draft
 
 A draft is a group event; these run in the chat the draft is bound to.

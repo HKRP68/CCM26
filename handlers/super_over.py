@@ -1998,6 +1998,12 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
                             session, cl_state["cl_tour_match_id"], winner_uid)
             except Exception:
                 logger.exception("CL tour Super Over recording failed (%s)", mid)
+            main_state = so.get("main_state") or {}
+            if m and main_state.get("t20_championship"):
+                from services import t20_championship
+                fixture = t20_championship.record_played(session, main_state, winner_user_id=winner_uid)
+                injury_news = html.escape(t20_championship.result_news(fixture))
+
             # Auction League fixture decided by the Super Over.
             try:
                 al_state = so.get("main_state") or {}
