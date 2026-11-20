@@ -409,8 +409,10 @@ owner by Telegram ID or registered @username for each new team. Imports match
 existing teams by name, preserve blank details and add missing players. Finish
 imports before starting the championship. Exports are available throughout.
 
-In **Schedule**, select the participating teams, opponent count, matches per
-series, dates and minimum rest. The generator schedules one match per day in IST.
+In **Schedule**, select the participating teams, opponent count, series length
+range, dates and minimum rest. Enter a range such as 3–5 or 4–7 matches. The
+generator varies series lengths within the range as the calendar allows and
+schedules one match per day in IST.
 With 10 teams and six opponents, each team hosts three series and tours three
 opponents. When an odd number of teams each requests an odd number of opponents,
 one team plays one fewer series. Admins can edit or reorder future series, add

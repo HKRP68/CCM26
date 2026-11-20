@@ -171,6 +171,7 @@
 
 {% elif tab == "schedule" %}
 {% set postseason_started = rows|selectattr("is_final")|list or rows|selectattr("semifinal_no")|list %}
+{% set series_limit = cup.league_series_limit(championship) %}
 {% if not championship.started_at %}
 <section class="section-card">
   <h2>Generate schedule</h2>
@@ -180,11 +181,17 @@
     <div class="form-grid">
       <label>Number of participating teams<input name="team_count" type="number" min="2" value="{{ championship.teams|selectattr("is_participating")|list|length }}" required></label>
       <label>Opponents per team<input name="opponents" type="number" min="1" value="{{ championship.opponents or '' }}" required></label>
-      <label>Matches per series<input name="matches" type="number" min="3" max="5" value="{{ championship.matches_per_series }}" required></label>
       <label>Start date<input name="start_date" type="date" value="{{ local(championship.start_at).date() if championship.start_at else '' }}" required></label>
       <label>End date<input name="end_date" type="date" value="{{ local(championship.end_at).date() if championship.end_at else '' }}" required></label>
       <label>Rest days between series<input name="rest_days" type="number" min="0" value="{{ championship.rest_days }}" required></label>
     </div>
+    <fieldset>
+      <legend>Length of Series</legend>
+      <div class="form-grid">
+        <label>Minimum matches<input name="matches" type="number" min="3" value="{{ championship.matches_per_series }}" required></label>
+        <label>Maximum matches<input name="max_matches" type="number" min="3" value="{{ championship.max_matches_per_series or championship.matches_per_series }}" required></label>
+      </div>
+    </fieldset>
     <fieldset>
       <legend>Participating teams</legend>
       {% for team in championship.teams %}
@@ -210,7 +217,7 @@
       <div class="form-grid">
         {{ team_select("home", "Home team") }}{{ team_select("away", "Touring team") }}
         <label>First match date (IST)<input type="date" name="start_date" required></label>
-        <label>Matches<input type="number" name="matches" value="3" min="3" max="5" required></label>
+        <label>Matches<input type="number" name="matches" value="3" min="3" max="{{ series_limit }}" required></label>
         {{ conditions() }}
       </div>
       <button class="action-btn accent-btn" name="action" value="add_series">Add series</button>
@@ -219,11 +226,11 @@
 </section>
 {% endif %}
 {% for series in rows %}
+{% set active_matches = series.fixtures|rejectattr("status", "equalto", "cancelled")|list|length %}
 <section class="section-card">
   <h2>{{ series_name(series) }}</h2>
-  <p>Series #{{ series.id }} · {{ summary(series) }}</p>
+  <p>Series #{{ series.id }}{% if not cup.is_postseason(series) %} · {{ active_matches }} matches{% endif %} · {{ summary(series) }}</p>
   {% if series.venue or series.stadium or series.pitch %}<p>{{ [series.venue, series.stadium, series.pitch]|reject("none")|join(" · ") }}</p>{% endif %}
-  {% set active_matches = series.fixtures|rejectattr("status", "equalto", "cancelled")|list|length %}
   {% set series_locked = series.fixtures|selectattr("status", "in", ("live","completed","forfeited"))|list|length %}
   {% if not championship.completed_at and not postseason_started and not series_locked %}
   <details>
@@ -277,7 +284,7 @@
     {% endif %}
   </details>
   {% endfor %}
-  {% if not championship.completed_at and ((not postseason_started and active_matches < 5) or cup.needs_decider(series)) %}
+  {% if not championship.completed_at and ((not postseason_started and active_matches < series_limit) or cup.needs_decider(series)) %}
   <details>
     <summary>{{ "Add decider" if cup.is_postseason(series) else "Add match" }}</summary>
     <form method="post">

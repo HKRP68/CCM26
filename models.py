@@ -2815,6 +2815,7 @@ class T20Championship(Base):
     end_at = Column(DateTime)
     opponents = Column(Integer)
     matches_per_series = Column(Integer, nullable=False, default=3)
+    max_matches_per_series = Column(Integer, default=5)
     rest_days = Column(Integer, nullable=False, default=0)
     points = Column(Text, nullable=False)
     playoff_format = Column(String(12), nullable=False, default="none", server_default="none")

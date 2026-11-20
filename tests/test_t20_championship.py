@@ -11,20 +11,43 @@ def test_balanced_home_and_away_calendar():
 
     start = date(2026, 1, 1)
     rows = plan(list(range(10)), 6, 3, start, start + timedelta(days=27), 2)
-    home_counts = Counter(home for home, _, _ in rows)
-    away_counts = Counter(away for _, away, _ in rows)
-    assert len(rows) == len({frozenset((home, away)) for home, away, _ in rows}) == 30
+    home_counts = Counter(home for home, _, _, _ in rows)
+    away_counts = Counter(away for _, away, _, _ in rows)
+    assert len(rows) == len({frozenset((home, away)) for home, away, _, _ in rows}) == 30
     assert set(home_counts.values()) == set(away_counts.values()) == {3}
     for team in range(10):
-        days = [day for home, away, day in rows if team in (home, away)]
+        days = [day for home, away, day, _ in rows if team in (home, away)]
         assert len(days) == 6
         assert all((b - a).days >= 5 for a, b in zip(days, days[1:]))
     with pytest.raises(ValueError, match="28 calendar days"):
         plan(list(range(10)), 6, 3, start, start + timedelta(days=26), 2)
 
     odd = plan(list(range(7)), 3, 5, start, start + timedelta(days=40), 0)
-    degrees = Counter(team for home, away, _ in odd for team in (home, away))
+    degrees = Counter(team for home, away, _, _ in odd for team in (home, away))
     assert sorted(degrees.values()) == [2, 3, 3, 3, 3, 3, 3]
+
+
+def test_series_length_range_fits_the_calendar_and_balances_matches():
+    from services.t20_championship_schedule import plan
+
+    start = date(2026, 1, 1)
+    teams = list(range(10))
+    end = start + timedelta(days=42)
+    rows = plan(teams, 6, 4, start, end, 2, max_duration=7)
+    assert {count for _, _, _, count in rows} == {4, 5, 6, 7}
+    for team in teams:
+        tours = [(day, count) for home, away, day, count in rows if team in (home, away)]
+        assert sum(count for _, count in tours) == 33
+        assert all((following - day).days >= count + 2
+                   for (day, count), (following, _) in zip(tours, tours[1:]))
+        assert tours[-1][0] + timedelta(days=tours[-1][1] - 1) <= end
+
+    tight = plan(teams, 6, 4, start, start + timedelta(days=33), 2, max_duration=7)
+    assert {count for _, _, _, count in tight} == {4}
+    small = plan(teams[:2], 1, 4, start, start + timedelta(days=4), 2, max_duration=7)
+    assert small[0][-1] == 5
+    with pytest.raises(ValueError, match="maximum at or above"):
+        plan(teams, 6, 7, start, end, 2, max_duration=4)
 
 
 @pytest.fixture
@@ -494,3 +517,41 @@ def test_admin_bulk_roster_errors_leave_the_whole_file_unapplied(roster_admin):
         auth.clear()
     assert client.get(base + "/teams/export.json").status_code == 302
     assert client.post(base + "/teams/import").status_code == 302
+
+
+def test_admin_saves_series_length_range_and_supports_seven_match_series(roster_admin):
+    from models import T20Championship
+    from services import t20_championship as cup
+
+    client, db, _, _, _ = roster_admin
+    championship = db.query(T20Championship).filter_by(command="wt20c").one()
+    base = f"/world-t20/{championship.id}?tab=schedule"
+    payload = {"action": "generate", "team_count": 3, "opponents": 2, "matches": 4,
+               "max_matches": 7, "start_date": "2026-01-01", "end_date": "2026-02-01",
+               "rest_days": 1}
+    response = client.post(base, data=payload, follow_redirects=True)
+    assert b"Championship saved." in response.data
+    assert b"Length of Series" in response.data and b"7 matches" in response.data
+    db.expire_all()
+    assert (championship.matches_per_series, championship.max_matches_per_series) == (4, 7)
+    rows = cup.series_list(db, championship)
+    assert sorted(len(row.fixtures) for row in rows) == [4, 5, 7]
+
+    response = client.post(base, data={**payload, "max_matches": 3}, follow_redirects=True)
+    assert b"maximum at or above the minimum" in response.data
+    db.expire_all()
+    assert sorted(len(row.fixtures) for row in cup.series_list(db, championship)) == [4, 5, 7]
+
+    first = next(row for row in rows if len(row.fixtures) == 5)
+    for day in (20, 21):
+        response = client.post(base, data={"action": "add_fixture", "series_id": first.id,
+                                          "opens_at": f"2026-02-{day}T10:00",
+                                          "deadline": f"2026-02-{day}T23:00"},
+                               follow_redirects=True)
+        assert b"Championship saved." in response.data
+    response = client.post(base, data={"action": "add_series", "home": first.home_id,
+                                      "away": first.away_id, "matches": 7, "start_date": "2026-03-01"},
+                           follow_redirects=True)
+    assert b"Championship saved." in response.data
+    db.expire_all()
+    assert sorted(len(row.fixtures) for row in cup.series_list(db, championship)) == [4, 7, 7, 7]

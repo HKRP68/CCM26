@@ -1,6 +1,6 @@
 """Balance distinct opponents, home assignments, and rest windows."""
 from collections import defaultdict
-from datetime import timedelta
+from datetime import date, timedelta
 from itertools import islice
 
 
@@ -71,13 +71,38 @@ def _pack(ordered, duration, rest):
     return sorted(dates)
 
 
-def plan(teams, opponents, duration, start, end, rest):
-    """Return (home, away, first day) tuples, with day 0 inclusive."""
+def _slot_windows(count, minimum, maximum, rest, spare_days):
+    """Vary round lengths within the range while keeping parallel series equal."""
+    if count == 1:
+        return [(0, minimum + min(maximum - minimum, spare_days))]
+    width = maximum - minimum + 1
+    windows = []
+    offset = 0
+    for slot in range(count):
+        # Alternate from the ends of the range so short and long series both
+        # appear even when there are fewer rounds than possible lengths.
+        index = slot % width
+        extra = index // 2 if index % 2 == 0 else width - 1 - index // 2
+        extra = min(extra, spare_days)
+        duration = minimum + extra
+        windows.append((offset, duration))
+        offset += duration + rest
+        spare_days -= extra
+    return windows
+
+
+def plan(teams, opponents, duration, start, end, rest, *, max_duration=None):
+    """Return (home, away, first day, match count) tuples."""
     count = len(teams)
     if not 1 <= opponents < count:
         raise ValueError("Each team needs between 1 and the number of teams minus 1 opponents.")
-    if not 3 <= duration <= 5 or rest < 0 or end < start:
-        raise ValueError("Use 3–5 matches, nonnegative rest days, and an end date on or after the start.")
+    max_duration = duration if max_duration is None else max_duration
+    if not 3 <= duration <= max_duration:
+        raise ValueError("Enter at least 3 matches per series and a maximum at or above the minimum.")
+    if max_duration > date.max.toordinal():
+        raise ValueError("The maximum series length exceeds the supported calendar.")
+    if rest < 0 or end < start:
+        raise ValueError("Use nonnegative rest days and an end date on or after the start.")
     pairs = _orient(count, _pairings(count, opponents))
     round_keys = (frozenset(edge) for edge in _round_robin(count))
     round_order = [pairs[edge] for edge in round_keys if edge in pairs]
@@ -86,7 +111,14 @@ def plan(teams, opponents, duration, start, end, rest):
                  for order in (round_order, round_order[::-1], edge_order, edge_order[::-1])]
     dates = min(schedules, key=lambda rows: rows[-1][0])
     required = dates[-1][0] + duration
-    if required > (end - start).days + 1:
+    window_days = (end - start).days + 1
+    if required > window_days:
         raise ValueError(f"These settings need {required} calendar days. Extend the date range or reduce the schedule.")
-    return [(teams[home], teams[away], start + timedelta(days=offset))
-            for offset, home, away in dates]
+    unit = duration + rest
+    windows = _slot_windows(dates[-1][0] // unit + 1, duration, max_duration, rest,
+                            window_days - required)
+    series = []
+    for first_day, home, away in dates:
+        offset, matches = windows[first_day // unit]
+        series.append((teams[home], teams[away], start + timedelta(days=offset), matches))
+    return series

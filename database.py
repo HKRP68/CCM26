@@ -771,6 +771,7 @@ def _migrate_add_columns():
 
     _try_add("t20_championships", "playoff_format", "VARCHAR(12) NOT NULL DEFAULT 'none'")
     _try_add("t20_championships", "playoff_deadline", "TIMESTAMP")
+    _try_add("t20_championships", "max_matches_per_series", "INTEGER")
     _try_add("t20_championship_series", "semifinal_no", "INTEGER")
 
     # League Tournament Structure: league formats, groups, schedule + knockouts.

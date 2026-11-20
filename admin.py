@@ -17111,6 +17111,7 @@ def _t20_mutation(db, championship):
         selected = request.form.getlist("participants", type=int)
         cup.generate(db, championship, team_count=_t20_number("team_count"),
                      opponents=_t20_number("opponents"), matches=_t20_number("matches"),
+                     max_matches=_t20_number("max_matches", optional=True),
                      start=_t20_day("start_date"), end=_t20_day("end_date"), rest=_t20_number("rest_days"),
                      team_ids=selected or None)
         return
@@ -17250,8 +17251,10 @@ def _t20_mutation(db, championship):
         if postseason:
             if not cup.needs_decider(series):
                 raise ValueError("A decider is available after the series finishes level.")
-        elif sum(f.status != "cancelled" for f in series.fixtures) >= 5:
-            raise ValueError("A bilateral series can have up to five matches.")
+        else:
+            limit = cup.league_series_limit(championship)
+            if sum(f.status != "cancelled" for f in series.fixtures) >= limit:
+                raise ValueError(f"A bilateral series can have up to {limit} matches with these settings.")
         opens, deadline = _t20_form_time("opens_at"), _t20_form_time("deadline")
         if deadline < opens:
             raise ValueError("The deadline must follow the opening time.")

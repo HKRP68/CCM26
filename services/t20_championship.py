@@ -115,7 +115,8 @@ def _series(championship, home, away, position, windows, **settings):
     return series
 
 
-def generate(db, championship, *, team_count, opponents, matches, start, end, rest, team_ids=None):
+def generate(db, championship, *, team_count, opponents, matches, start, end, rest,
+             team_ids=None, max_matches=None):
     if championship.started_at:
         raise ValueError("The schedule generator is available before the championship starts.")
     selected = set(team_ids) if team_ids is not None else {
@@ -124,16 +125,19 @@ def generate(db, championship, *, team_count, opponents, matches, start, end, re
                    key=lambda team: (team.name.casefold(), team.id))
     if team_count != len(teams) or len(teams) != len(selected):
         raise ValueError(f"Select {team_count} of the saved teams as participants.")
-    schedule = t20_championship_schedule.plan(teams, opponents, matches, start, end, rest)
+    maximum = matches if max_matches is None else max_matches
+    schedule = t20_championship_schedule.plan(teams, opponents, matches, start, end, rest,
+                                             max_duration=maximum)
     championship.series.clear()
     db.flush()
     for team in championship.teams:
         team.is_participating = team.id in selected
-    for position, (home, away, day) in enumerate(schedule, 1):
+    for position, (home, away, day, count) in enumerate(schedule, 1):
         db.add(_series(championship, home, away, position,
-                       [day_window(day + timedelta(days=i)) for i in range(matches)]))
+                       [day_window(day + timedelta(days=i)) for i in range(count)]))
     championship.start_at, championship.end_at = day_window(start)[0], day_window(end)[1]
     championship.opponents, championship.matches_per_series, championship.rest_days = opponents, matches, rest
+    championship.max_matches_per_series = maximum
 
 
 def editable_schedule(championship):
@@ -141,10 +145,17 @@ def editable_schedule(championship):
         raise ValueError("The league schedule is locked once the postseason starts or the championship ends.")
 
 
+def league_series_limit(championship):
+    return max(5, championship.max_matches_per_series or 0)
+
+
 def add_series(db, championship, home, away, count, start, **settings):
     editable_schedule(championship)
-    if home is away or not 3 <= count <= 5:
-        raise ValueError("Choose two different teams and 3–5 matches.")
+    if home is away:
+        raise ValueError("Choose two different teams.")
+    limit = league_series_limit(championship)
+    if not 3 <= count <= limit:
+        raise ValueError(f"Choose between 3 and {limit} matches.")
     if championship.started_at and not (home.is_participating and away.is_participating):
         raise ValueError("Choose two participating teams.")
     position = max((series.position for series in championship.series), default=0) + 1
