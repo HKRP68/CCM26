@@ -1,8 +1,9 @@
+{% from '_miniapp_icons.html' import icon %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>CricMaster Ultra</title>
 <script src="{{ url_for('static', filename='js/ad_reward_confirmation.js', v='2') }}"></script>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -33,141 +34,84 @@
         onerror="window.__adsFailed = true; console.warn('Adsgram SDK failed to load — ad spins unavailable this session');"></script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js" async
         onerror="window.__sortableFailed = true; console.warn('SortableJS failed to load — using ▲▼ reorder buttons only');"></script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@600;700;800&family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
   :root {
-    --bg: #080d18;
-    --card: #111827;
-    --card-2: #162032;
-    --border: #1e2d45;
-    --text: #e5edf7;
-    --muted: #6b7a96;
-    --accent: #e8b84b;
-    --accent-2: #fcc844;
-    --green: #00d4aa;
-    --red: #ff4d6d;
-    --blue: #4a9eff;
-    --purple: #a78bfa;
-    --input-bg: #0c1520;
-    --gold-glow: rgba(232, 184, 75, 0.25);
-    --card-shadow: 0 4px 24px rgba(0,0,0,0.5), 0 1px 4px rgba(0,0,0,0.3);
-    --card-shadow-hover: 0 8px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(232,184,75,0.1);
-    /* Spec-named design tokens */
+    color-scheme: dark;
+    --bg: #151316;
+    --card: #1e1b1f;
+    --card-2: #282428;
+    --border: #40383d;
+    --text: #f5eee9;
+    --muted: #bdb0b5;
+    --accent: #f2c48b;
+    --accent-2: #ffdaaa;
+    --success: #efe0c9;
+    --success-bg: #332923;
+    --red: #f48c98;
+    --blue: #aebff2;
+    --purple: #c9b4ed;
+    --input-bg: #191619;
     --bg-color: var(--bg);
     --card-bg: var(--card);
     --card-border: var(--border);
-    --primary-accent: var(--green);
+    --primary-accent: var(--success);
     --warning-accent: var(--accent);
     --danger-accent: var(--red);
-    --app-max-width: 480px;
-    --font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    --font-display: 'Plus Jakarta Sans', 'Outfit', sans-serif;
+    --app-max-width: 42rem;
+    --font-family: Outfit, system-ui, sans-serif;
+    --font-display: var(--font-family);
   }
   html, body {
-    margin: 0; padding: 0; height: 100%;
+    margin: 0;
+    min-height: 100%;
     background: var(--bg);
     color: var(--text);
     font-family: var(--font-family);
-    overflow-x: hidden;
     -webkit-font-smoothing: antialiased;
   }
-  body {
-    background:
-      radial-gradient(ellipse at top, rgba(232, 184, 75, 0.07) 0%, transparent 50%),
-      radial-gradient(ellipse at bottom, rgba(0, 212, 170, 0.05) 0%, transparent 50%),
-      var(--bg);
-    min-height: 100vh;
-    padding-bottom: 70px;
-    max-width: var(--app-max-width);
-    margin: 0 auto;
-    position: relative;
-  }
+  body { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  ::selection { background: var(--accent); color: #261c09; }
 
-  /* ════ Top app bar ════ */
-  .appbar {
-    position: sticky; top: 0; z-index: 50;
-    background: linear-gradient(180deg, rgba(14,20,38,0.98) 0%, rgba(17,24,39,0.97) 100%);
-    border-bottom: 1px solid rgba(232,184,75,0.3);
-    padding: 0.85rem 1rem 0.7rem;
-    display: flex; align-items: center; gap: 0.6rem;
-    box-shadow: 0 2px 20px rgba(0,0,0,0.5), 0 1px 0 rgba(232,184,75,0.12);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+  .top-links { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+  .top-link { text-decoration: none; }
+  .cm-card {
+    margin-bottom: 8px;
+    padding: 0 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card);
   }
-  .appbar .logo {
-    font-size: 1.4rem;
-  }
-
-  /* Top community links bar */
-  .top-links {
-    position: sticky; top: 0; z-index: 49;
-    display: flex; gap: 0.5rem; padding: 0.5rem 0.8rem;
-    background: var(--card-2, #12201a);
-    border-bottom: 1px solid var(--border);
-    overflow-x: auto;
-  }
-  .top-link {
-    flex: 1; text-align: center; white-space: nowrap;
-    background: rgba(0,212,170,0.08); border: 1px solid rgba(0,212,170,0.35);
-    color: var(--accent); text-decoration: none;
-    padding: 0.4rem 0.7rem; border-radius: 8px;
-    font-size: 0.8rem; font-weight: 700;
-  }
-  .top-link:active { background: rgba(0,212,170,0.18); }
-
-  .suggestion-box {
-    margin: 0.65rem 0.8rem 0.75rem;
-    padding: 0.8rem;
-    border-radius: 15px;
-    background: rgba(17,24,39,0.92);
-    border: 1px solid rgba(74,158,255,0.28);
-    box-shadow: 0 10px 28px rgba(0,0,0,0.22);
-  }
-  .suggestion-head { display:flex; align-items:center; justify-content:space-between; gap:0.6rem; margin-bottom:0.45rem; }
-  .suggestion-title { font-size: 0.84rem; font-weight: 900; }
-  .suggestion-sub { color: var(--muted); font-size: 0.68rem; }
-  .suggestion-input {
-    width: 100%; min-height: 76px; resize: vertical; border-radius: 11px;
-    border: 1px solid var(--border); background: var(--input-bg); color: var(--text);
-    padding: 0.7rem; font: inherit; font-size: 0.78rem; line-height: 1.4; outline: none;
-  }
-  .suggestion-input:focus { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(74,158,255,0.14); }
-  .suggestion-actions { display:flex; align-items:center; gap:0.55rem; margin-top:0.55rem; }
-  .suggestion-count { color: var(--muted); font-size: 0.67rem; flex:1; }
-  .suggestion-send {
-    border: 1px solid rgba(74,158,255,0.45); border-radius: 10px; padding: 0.5rem 0.78rem;
-    background: rgba(74,158,255,0.14); color: var(--blue); font: inherit; font-size: 0.74rem;
-    font-weight: 900; cursor: pointer;
-  }
-  .suggestion-send:disabled { opacity: 0.55; cursor: wait; }
-
-  /* Collapsible community cards: suggestion box, CMU News, poll */
   .cm-head {
-    display:flex; align-items:center; gap:0.55rem; width:100%;
-    background:none; border:0; padding:0; color:var(--text); font:inherit;
-    text-align:left; cursor:pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 48px;
+    border: 0;
+    padding: 0;
+    background: none;
+    color: var(--text);
+    font: 550 .9375rem var(--font-family);
+    text-align: left;
+    cursor: pointer;
   }
-  .cm-head .cm-title { font-size:0.84rem; font-weight:900; flex:1; }
-  .cm-chev { color:var(--muted); font-size:0.8rem; transition:transform .2s ease; }
-  .cm-open .cm-chev { transform:rotate(180deg); }
-  .cm-body { display:none; margin-top:0.6rem; }
-  .cm-open .cm-body { display:block; }
-  .suggestion-box.cm-card { padding:0.7rem 0.8rem; }
-  .suggestion-box.cm-card .suggestion-head { margin-bottom:0; }
-  .cm-card { margin: 0.65rem 0.8rem 0; }
-  #poll-box.cm-card { margin-bottom: 0.2rem; }
-  .news-box {
-    padding:0.7rem 0.8rem; border-radius:15px;
-    background:rgba(17,24,39,0.92); border:1px solid rgba(232,184,75,0.3);
-    box-shadow:0 10px 28px rgba(0,0,0,0.22);
+  .cm-title { flex: 1; }
+  .cm-chev, .news-unread { color: var(--muted); font-size: .8125rem; }
+  .cm-open .cm-chev { transform: rotate(180deg); }
+  .cm-body { display: none; border-top: 1px solid var(--border); padding: 12px 0; }
+  .cm-open .cm-body { display: block; }
+  .suggestion-sub { display: block; margin-bottom: 6px; color: var(--muted); font-size: .875rem; }
+  .suggestion-input {
+    width: 100%; min-height: 76px; resize: vertical; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--input-bg); color: var(--text);
+    padding: 10px; font: inherit; font-size: .9375rem; line-height: 1.4;
   }
-  .news-unread {
-    background:var(--red); color:#fff; font-size:0.64rem; font-weight:900;
-    padding:0.12rem 0.5rem; border-radius:999px; white-space:nowrap;
-  }
+  .suggestion-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+  .suggestion-count { color: var(--muted); font-size: .8125rem; }
+  .suggestion-send:disabled { opacity: .55; cursor: wait; }
   .news-row {
     display:flex; gap:0.6rem; align-items:center; padding:0.5rem 0;
     border-top:1px solid var(--border); cursor:pointer;
@@ -183,16 +127,8 @@
   .news-row-meta { font-size:0.64rem; color:var(--muted); margin-top:0.15rem; }
   .news-dot { width:8px; height:8px; border-radius:50%; background:var(--red); flex:none; }
   .news-row.read .news-row-title { color:var(--muted); font-weight:700; }
-  .news-submit-btn {
-    width:100%; margin-top:0.55rem; border:1px dashed rgba(232,184,75,0.5);
-    background:rgba(232,184,75,0.08); color:var(--accent); border-radius:10px;
-    padding:0.5rem; font:inherit; font-size:0.75rem; font-weight:900; cursor:pointer;
-  }
-  .poll-box {
-    padding:0.75rem 0.8rem; border-radius:15px;
-    background:linear-gradient(135deg, rgba(167,139,250,0.14), rgba(17,24,39,0.94));
-    border:1px solid rgba(167,139,250,0.4); box-shadow:0 10px 28px rgba(0,0,0,0.22);
-  }
+  .news-submit-btn { width: 100%; margin-top: 8px; }
+  .poll-box { padding-block: 12px; }
   .poll-q { font-size:0.84rem; font-weight:800; line-height:1.35; margin-bottom:0.5rem; }
   .poll-chips { display:flex; gap:0.4rem; flex-wrap:wrap; margin-bottom:0.55rem; }
   .poll-chip { font-size:0.63rem; font-weight:800; padding:0.15rem 0.5rem; border-radius:999px;
@@ -228,116 +164,36 @@
     color:var(--text); padding:0.65rem; font:inherit; font-size:0.82rem; outline:none; }
   .ns-input:focus { border-color:var(--accent); }
   .ns-preview { width:100%; max-height:180px; object-fit:cover; border-radius:11px; margin-top:0.45rem; display:none; }
-  .appbar h1 {
-    margin: 0; font-size: 1.1rem; letter-spacing: 0.04em;
-    font-weight: 800; font-family: var(--font-display);
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    flex: 1;
+  .screen {
+    display: none;
+    width: min(100%, var(--app-max-width));
+    margin-inline: auto;
+    padding: 1rem;
+    min-height: calc(100vh - 140px);
   }
-  .balance-pill {
-    background: rgba(232, 184, 75, 0.1);
-    border: 1px solid rgba(232, 184, 75, 0.4);
-    padding: 0.3rem 0.7rem;
-    border-radius: 14px;
-    font-size: 0.82rem;
-    font-weight: 700;
-    display: flex; align-items: center; gap: 0.25rem;
-    box-shadow: 0 0 8px rgba(232,184,75,0.12);
-  }
-
-  /* ════ Bottom tabs ════ */
-  .tabs {
-    position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
-    width: 100%; max-width: var(--app-max-width);
-    background: rgba(17, 24, 39, 0.97);
-    border-top: 1px solid rgba(232, 184, 75, 0.12);
-    display: flex;
-    z-index: 100;
-    padding: 0.35rem 0.5rem;
-    padding-bottom: calc(0.35rem + env(safe-area-inset-bottom));
-    box-shadow: 0 -4px 24px rgba(0,0,0,0.45), 0 -1px 0 rgba(232,184,75,0.08);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
-    gap: 0.25rem;
-  }
-  .tab {
-    flex: 1;
-    background: transparent;
-    border: none; color: var(--muted);
-    padding: 0.4rem 0.25rem 0.45rem;
-    font-size: 0.68rem;
-    cursor: pointer;
-    display: flex; flex-direction: column;
-    align-items: center; gap: 0.1rem;
-    transition: color 0.2s;
-    font-family: inherit;
-    border-radius: 12px;
-    position: relative;
-  }
-  .tab:active { transform: scale(0.91); }
-  .tab .icon {
-    font-size: 1.35rem;
-    line-height: 1;
-    transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
-  }
-  .tab.active { color: var(--accent); }
-  .tab.active::before {
-    content: '';
-    position: absolute; top: 4px; left: 50%; transform: translateX(-50%);
-    width: 36px; height: 30px;
-    background: rgba(232, 184, 75, 0.12);
-    border-radius: 10px;
-    box-shadow: 0 0 12px rgba(232, 184, 75, 0.2);
-    pointer-events: none;
-  }
-  .tab.active .icon { transform: translateY(-3px) scale(1.12); }
-  .tab.active div:last-child { font-weight: 700; font-family: var(--font-display); }
-  @keyframes tabPop {
-    0%   { transform: scale(1); }
-    40%  { transform: scale(0.88); }
-    70%  { transform: scale(1.08); }
-    100% { transform: scale(1); }
-  }
-  .tab-popping .icon { animation: tabPop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
-
-  /* ════ Screens ════ */
-  .screen { display: none; padding: 1rem; min-height: calc(100vh - 130px); }
-  .screen.active { display: block; animation: fadeIn 0.28s ease; }
-  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-  @keyframes slideUpFade { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+  .screen.active { display: block; }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes slideUpFade { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; } }
 
   /* ════ Cards ════ */
   .card {
-    background: linear-gradient(135deg, var(--card-2), var(--card));
-    border: 1px solid rgba(232,184,75,0.08);
-    border-radius: 16px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
     padding: 1rem;
     margin-bottom: 0.85rem;
-    box-shadow: var(--card-shadow);
-    transition: box-shadow 0.25s ease, transform 0.2s ease;
   }
-  .card:active { box-shadow: var(--card-shadow-hover); }
   .card-title {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--muted);
-    margin: 0 0 0.6rem;
-    font-weight: 700;
-    font-family: var(--font-display);
+    font: 600 .9375rem/1.3 var(--font-family);
+    color: var(--text);
+    margin: 0 0 .75rem;
   }
 
   /* Heading font for all headings */
   h1, h2, h3,
-  .greeting .name,
   .club-hero-name,
-  .tile .tile-label,
   .pack-shop-name,
   .pd-name,
-  .lsb-title,
   .event-name {
     font-family: var(--font-display);
   }
@@ -354,175 +210,6 @@
     0% { background-position: 0% center; }
     100% { background-position: 200% center; }
   }
-  @keyframes cardShimmer {
-    0%   { transform: translateX(-100%) skewX(-15deg); }
-    100% { transform: translateX(250%) skewX(-15deg); }
-  }
-
-  /* ════ Stats grid (dashboard) ════ */
-  .greeting {
-    margin-bottom: 1rem;
-  }
-  .greeting .hi {
-    font-size: 0.85rem; color: var(--muted); margin: 0 0 0.2rem;
-  }
-  .greeting .name {
-    font-size: 1.5rem; font-weight: 800;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    background-clip: text;
-    margin: 0;
-  }
-  .stat-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.65rem;
-  }
-  .stat {
-    background: var(--card-2);
-    border: 1px solid rgba(232,184,75,0.07);
-    border-radius: 14px;
-    padding: 0.75rem;
-    position: relative;
-    overflow: hidden;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.3), 0 0 0 1px rgba(232,184,75,0.04);
-    transition: box-shadow 0.2s, transform 0.2s;
-  }
-  .stat:active {
-    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
-    transform: scale(0.98);
-  }
-  .stat::before {
-    content: ""; position: absolute;
-    top: -10px; right: -10px;
-    width: 50px; height: 50px;
-    border-radius: 50%;
-    opacity: 0.12;
-    background: var(--accent);
-  }
-  .stat .label {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    color: var(--muted);
-    font-weight: 700;
-    letter-spacing: 0.06em;
-  }
-  .stat .val {
-    font-size: 1.5rem;
-    font-weight: 800;
-    color: var(--text);
-    margin-top: 0.2rem;
-  }
-  .stat.coins .val { color: var(--accent); }
-  .stat.gems .val { color: var(--blue); }
-  .stat.qp .val { color: var(--purple); }
-  .stat.roster .val { color: var(--green); }
-
-  /* ════ Big action tiles ════ */
-  .tile-grid {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; margin-top: 0.85rem;
-  }
-  .tile {
-    background: linear-gradient(135deg, var(--card-2), var(--card));
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 1rem;
-    text-align: center;
-    cursor: pointer;
-    transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
-    font-family: inherit; color: var(--text);
-    position: relative; overflow: hidden;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.3);
-  }
-  .tile:active { transform: scale(0.96); box-shadow: 0 1px 6px rgba(0,0,0,0.2); }
-  .tile:active::after {
-    content: '';
-    position: absolute; top: 0; left: 0;
-    width: 40%; height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.04), transparent);
-    animation: cardShimmer 0.5s ease-out forwards;
-    pointer-events: none;
-  }
-  .tile.spin {
-    border-color: rgba(212, 168, 42, 0.5);
-    box-shadow: 0 0 16px rgba(212, 168, 42, 0.15) inset;
-  }
-  .tile.daily {
-    border-color: rgba(0, 212, 170, 0.4);
-    box-shadow: 0 0 16px rgba(0, 212, 170, 0.1) inset;
-  }
-  .tile.browse { border-color: rgba(74, 158, 255, 0.4); }
-  .tile.leaderboard { border-color: rgba(167, 139, 250, 0.4); }
-  .tile.invite {
-    border-color: rgba(0, 212, 170, 0.45);
-    box-shadow: 0 0 16px rgba(0, 212, 170, 0.08) inset;
-  }
-  .tile.quests {
-    border-color: rgba(212, 168, 42, 0.45);
-    box-shadow: 0 0 16px rgba(212, 168, 42, 0.08) inset;
-  }
-  .tile.freepack {
-    border-color: rgba(167, 139, 250, 0.45);
-    box-shadow: 0 0 16px rgba(167, 139, 250, 0.08) inset;
-  }
-  .tile.packs {
-    border-color: rgba(255, 107, 157, 0.45);
-    box-shadow: 0 0 16px rgba(255, 107, 157, 0.08) inset;
-  }
-  .tile.achievements {
-    border-color: rgba(255, 196, 0, 0.45);
-    box-shadow: 0 0 16px rgba(255, 196, 0, 0.08) inset;
-  }
-  .tile.season {
-    border-color: rgba(124, 196, 255, 0.45);
-    box-shadow: 0 0 16px rgba(124, 196, 255, 0.08) inset;
-  }
-  .tile.clubs {
-    border-color: rgba(96, 220, 160, 0.45);
-    box-shadow: 0 0 16px rgba(96, 220, 160, 0.08) inset;
-  }
-
-  /* ════ Home mission hub ════ */
-  .mission-hub {
-    margin: 0.95rem 0 0.85rem;
-    border: 1px solid rgba(232,184,75,0.28);
-    background:
-      radial-gradient(circle at top right, rgba(232,184,75,0.13), transparent 42%),
-      linear-gradient(145deg, rgba(22,32,50,0.98), rgba(12,21,32,0.98));
-    border-radius: 20px; overflow: hidden;
-    box-shadow: 0 12px 30px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.04);
-  }
-  .mission-hub-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.7rem; padding: 0.95rem 0.95rem 0.65rem; }
-  .mission-kicker { color: var(--accent); font-size: 0.64rem; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 0.25rem; }
-  .mission-hub-title { margin: 0; color: var(--text); font-size: 1.12rem; font-weight: 800; font-family: var(--font-display); letter-spacing: -0.02em; }
-  .mission-hub-sub { color: var(--muted); font-size: 0.73rem; margin-top: 0.2rem; }
-  .mission-toggle { display: flex; gap: 0.2rem; flex-shrink: 0; padding: 0.2rem; border-radius: 12px; border: 1px solid rgba(232,184,75,0.14); background: rgba(8,13,24,0.65); }
-  .mission-toggle-btn { border: 0; border-radius: 9px; padding: 0.42rem 0.52rem; background: transparent; color: var(--muted); font-family: inherit; font-size: 0.68rem; font-weight: 800; cursor: pointer; }
-  .mission-toggle-btn.active { background: var(--accent); color: #151005; box-shadow: 0 4px 12px rgba(232,184,75,0.22); }
-  .mission-list { padding: 0 0.75rem 0.5rem; }
-  .home-quest { width: 100%; display: grid; grid-template-columns: 2rem 1fr auto; align-items: center; gap: 0.55rem; padding: 0.62rem 0.18rem; border: 0; border-top: 1px solid rgba(107,122,150,0.14); background: transparent; color: var(--text); text-align: left; font-family: inherit; cursor: pointer; }
-  .home-quest-icon { width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: 10px; background: rgba(232,184,75,0.09); font-size: 1rem; }
-  .home-quest-title { font-size: 0.79rem; font-weight: 700; line-height: 1.2; }
-  .home-quest-progress { display: flex; align-items: center; gap: 0.35rem; margin-top: 0.35rem; }
-  .home-quest-progress-track { height: 4px; flex: 1; overflow: hidden; border-radius: 9px; background: rgba(107,122,150,0.2); }
-  .home-quest-progress-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg,var(--accent),var(--accent-2)); }
-  .home-quest-progress-fill.done { background: linear-gradient(90deg,var(--green),#00f5c4); }
-  .home-quest-count { color: var(--muted); font-size: 0.66rem; font-weight: 700; white-space: nowrap; }
-  .home-quest-reward { color: var(--accent); font-size: 0.69rem; font-weight: 800; white-space: nowrap; }
-  .mission-footer { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.7rem 0.85rem; border-top: 1px solid rgba(232,184,75,0.12); background: rgba(8,13,24,0.34); }
-  .mission-footer-copy { color: var(--muted); font-size: 0.7rem; }
-  .mission-link { border: 0; background: transparent; color: var(--accent); padding: 0.2rem; font-family: inherit; font-size: 0.74rem; font-weight: 800; cursor: pointer; }
-  .mission-loading { padding: 1.1rem; text-align: center; color: var(--muted); font-size: 0.78rem; }
-  .tile.freepack.ready { animation: freePackTilePulse 1.8s ease-in-out infinite; border-color: rgba(167,139,250,0.9); }
-  .tile-badge { position: absolute; top: 0.55rem; right: 0.55rem; padding: 0.2rem 0.38rem; border-radius: 99px; background: var(--purple); color: #130c27; font-size: 0.56rem; font-weight: 900; letter-spacing: 0.08em; }
-  @keyframes freePackTilePulse { 0%,100% { box-shadow: 0 0 14px rgba(167,139,250,0.16) inset, 0 0 0 rgba(167,139,250,0); } 50% { box-shadow: 0 0 18px rgba(167,139,250,0.28) inset, 0 0 22px rgba(167,139,250,0.22); } }
-  .freepack-pop-panel { width: min(92vw, 390px); padding: 1.15rem; text-align: center; border: 1px solid rgba(167,139,250,0.72); background: radial-gradient(circle at 50% 0%, rgba(167,139,250,0.3), transparent 42%), var(--card); box-shadow: 0 24px 80px rgba(0,0,0,0.6), 0 0 38px rgba(167,139,250,0.2); }
-  .freepack-pop-gift { font-size: 4rem; filter: drop-shadow(0 10px 20px rgba(167,139,250,0.48)); animation: giftFloat 2s ease-in-out infinite; }
-  .freepack-pop-kicker { color: var(--purple); text-transform: uppercase; font-size: 0.65rem; font-weight: 900; letter-spacing: 0.2em; }
-  .freepack-pop-title { margin: 0.35rem 0 0.25rem; font-family: var(--font-display); font-size: 1.45rem; }
-  .freepack-pop-copy { margin: 0 0 1rem; color: var(--muted); font-size: 0.8rem; line-height: 1.5; }
-  @keyframes giftFloat { 0%,100% { transform: translateY(0) rotate(-3deg); } 50% { transform: translateY(-8px) rotate(3deg); } }
-
   /* Clubs */
   .club-card {
     background: var(--card); border: 1px solid var(--border);
@@ -530,8 +217,8 @@
   }
   .club-hero {
     text-align: center; padding: 1.2rem 1rem;
-    background: linear-gradient(135deg, rgba(96,220,160,0.12), rgba(124,196,255,0.08));
-    border: 1px solid rgba(96,220,160,0.4); border-radius: 14px; margin-bottom: 0.9rem;
+    background: var(--card);
+    border: 1px solid var(--border); border-radius: 10px; margin-bottom: 0.9rem;
   }
   .club-hero-emoji { font-size: 2.6rem; }
   .club-hero-name { font-size: 1.3rem; font-weight: 800; margin-top: 0.3rem; }
@@ -546,7 +233,7 @@
     padding: 0.5rem 0; border-bottom: 1px solid var(--border);
   }
   .club-member:last-child { border-bottom: none; }
-  .club-member.me { background: rgba(96,220,160,0.08); margin: 0 -0.5rem; padding: 0.5rem; border-radius: 6px; }
+  .club-member.me { background: rgba(219,163,126,0.08); margin: 0 -0.5rem; padding: 0.5rem; border-radius: 6px; }
   .club-member-name { flex: 1; font-weight: 600; font-size: 0.9rem; }
   .club-member-pts { font-weight: 800; font-size: 0.85rem; }
   .founder-badge {
@@ -563,14 +250,14 @@
     padding: 0.5rem 0; border-bottom: 1px solid var(--border);
   }
   .club-lb-row:last-child { border-bottom: none; }
-  .club-lb-row.mine { background: rgba(96,220,160,0.08); margin: 0 -0.5rem; padding: 0.5rem; border-radius: 6px; }
+  .club-lb-row.mine { background: rgba(219,163,126,0.08); margin: 0 -0.5rem; padding: 0.5rem; border-radius: 6px; }
   .club-open-row {
     display: flex; align-items: center; gap: 0.6rem;
     background: var(--card-2); border: 1px solid var(--border);
     border-radius: 10px; padding: 0.7rem; margin-bottom: 0.5rem;
   }
   .club-join-btn {
-    margin-left: auto; background: var(--green); color: #0a0f1a; border: none;
+    margin-left: auto; background: var(--success); color: #0a0f1a; border: none;
     padding: 0.45rem 0.9rem; border-radius: 8px; font-weight: 800;
     font-family: inherit; font-size: 0.8rem; cursor: pointer; white-space: nowrap;
   }
@@ -584,9 +271,9 @@
 
   /* Event banner */
   .event-banner {
-    background: linear-gradient(135deg, rgba(167,139,250,0.18), rgba(255,107,157,0.12));
-    border: 1px solid rgba(167,139,250,0.45);
-    border-radius: 12px; padding: 0.7rem 0.9rem; margin: 0.8rem 0;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px; padding: 0.7rem 0.9rem; margin: 0.8rem 0;
   }
   .event-banner-row { display: flex; align-items: center; gap: 0.6rem; }
   .event-banner-row + .event-banner-row { margin-top: 0.4rem; }
@@ -640,26 +327,6 @@
   }
   .upgrade-do-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  /* Login streak banner */
-  .login-streak-banner {
-    display: flex; align-items: center; gap: 0.8rem;
-    background: linear-gradient(135deg, rgba(255,107,53,0.15), rgba(255,196,0,0.1));
-    border: 1px solid rgba(255,140,0,0.4);
-    border-radius: 12px; padding: 0.8rem 1rem; margin: 0.8rem 0;
-    cursor: pointer;
-  }
-  .login-streak-banner:active { opacity: 0.85; }
-  .lsb-flame { font-size: 2rem; animation: flameFlicker 1.5s ease-in-out infinite; }
-  @keyframes flameFlicker { 0%,100% { transform: scale(1) rotate(-2deg); } 50% { transform: scale(1.1) rotate(2deg); } }
-  .lsb-text { flex: 1; }
-  .lsb-title { font-weight: 800; font-size: 0.95rem; }
-  .lsb-sub { font-size: 0.75rem; color: var(--muted); margin-top: 0.1rem; }
-  .lsb-cta {
-    background: var(--accent); color: #0a0f1a; font-weight: 800;
-    padding: 0.45rem 0.9rem; border-radius: 8px; font-size: 0.82rem;
-  }
-  .lsb-cta.claimed { background: var(--card-2); color: var(--muted); }
-
   /* Login ladder */
   .login-ladder {
     display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem;
@@ -678,7 +345,7 @@
   }
   .ladder-day.claimed::after {
     content: '✓'; position: absolute; top: 4px; right: 6px;
-    color: var(--green); font-weight: 800; font-size: 0.75rem;
+    color: var(--success); font-weight: 800; font-size: 0.75rem;
   }
   .ladder-day.day7 {
     grid-column: span 4;
@@ -774,7 +441,7 @@
   }
   .pack-open-btn {
     margin-left: auto; padding: 0.55rem 1.1rem; border: none; border-radius: 8px;
-    background: var(--green); color: #0a0f1a; font-weight: 800;
+    background: var(--success); color: #0a0f1a; font-weight: 800;
     font-family: inherit; font-size: 0.85rem; cursor: pointer;
   }
   /* The in-flight spinner sits on a gold/green button — the shared .spinner
@@ -853,7 +520,7 @@
     text-align: center; opacity: 0;
     animation: cardFlyIn 0.6s cubic-bezier(0.34,1.56,0.64,1) forwards;
   }
-  .reveal-card.tier-std { border-color: var(--green); }
+  .reveal-card.tier-std { border-color: var(--success); }
   .reveal-card.tier-rare { border-color: var(--accent); box-shadow: 0 0 20px rgba(212,168,42,0.3); }
   .reveal-card.tier-elite {
     border-color: #a78bfa;
@@ -895,7 +562,7 @@
     padding: 1.4rem 1rem;
     animation: scaleup 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
-  .freepack-reveal-card.tier-std { border-color: var(--green); }
+  .freepack-reveal-card.tier-std { border-color: var(--success); }
   .freepack-reveal-card.tier-rare {
     border-color: var(--accent);
     box-shadow: 0 0 24px rgba(212,168,42,0.25);
@@ -905,22 +572,6 @@
     box-shadow: 0 0 30px rgba(167,139,250,0.4);
   }
 
-  /* Quest screen */
-  .quest-tabs {
-    display: flex; gap: 0.3rem; margin-bottom: 0.75rem;
-    background: var(--card); padding: 0.25rem; border-radius: 8px;
-    border: 1px solid var(--border);
-  }
-  .quest-tab {
-    flex: 1; padding: 0.5rem 0.7rem;
-    background: transparent; color: var(--muted);
-    border: none; border-radius: 6px;
-    font-family: inherit; font-size: 0.82rem; font-weight: 600;
-    cursor: pointer;
-  }
-  .quest-tab.active {
-    background: var(--accent); color: #0a0f1a; font-weight: 800;
-  }
   /* ── Career Player ── */
   .career-hero {
     display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap;
@@ -956,16 +607,16 @@
   .career-attr-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; }
   .career-attr-name { font-size: 0.86rem; }
   .career-attr-val { font-size: 0.95rem; font-weight: 800; }
-  .career-lift { font-size: 0.7rem; font-weight: 600; color: var(--green); }
+  .career-lift { font-size: 0.7rem; font-weight: 600; color: var(--success); }
   .career-bar {
     height: 5px; border-radius: 999px; background: rgba(127,127,127,0.22);
     margin: 0.35rem 0 0.4rem; overflow: hidden;
   }
-  .career-bar-fill { height: 100%; background: var(--green); border-radius: 999px; }
+  .career-bar-fill { height: 100%; background: var(--success); border-radius: 999px; }
   .career-attr-actions { display: flex; gap: 0.35rem; align-items: center; }
   .career-cost { font-size: 0.76rem; opacity: 0.75; margin-right: auto; }
   .career-btn {
-    border: 1px solid var(--border); background: var(--green); color: #04160f;
+    border: 1px solid var(--border); background: var(--success); color: var(--accent-ink);
     border-radius: 8px; padding: 0.28rem 0.62rem; font-size: 0.78rem;
     font-weight: 700; cursor: pointer;
   }
@@ -976,55 +627,7 @@
     font-size: 0.82rem; padding: 0.4rem 0; border-top: 1px solid var(--border);
   }
   .career-quest:first-of-type { border-top: none; }
-  .career-quest.done { color: var(--green); }
-
-  .quest-row {
-    padding: 0.75rem;
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 10px; margin-bottom: 0.5rem;
-  }
-  .quest-row.completed { border-color: var(--green); }
-  .quest-row.claimed { opacity: 0.55; }
-  .quest-row-header {
-    display: flex; gap: 0.5rem; align-items: flex-start;
-    margin-bottom: 0.5rem;
-  }
-  .quest-row-emoji { font-size: 1.2rem; line-height: 1.2; }
-  .quest-row-title {
-    flex: 1; font-weight: 700; font-size: 0.92rem; line-height: 1.25;
-  }
-  .quest-row-desc {
-    color: var(--muted); font-size: 0.75rem; margin-top: 0.2rem;
-    line-height: 1.35;
-  }
-  .quest-progress-wrap {
-    background: var(--input-bg); border-radius: 4px; height: 7px;
-    overflow: hidden; margin: 0.4rem 0;
-  }
-  .quest-progress-bar {
-    height: 100%;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    border-radius: 4px;
-    transition: width 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-    box-shadow: 0 0 6px rgba(232,184,75,0.35);
-  }
-  .quest-progress-bar.completed {
-    background: linear-gradient(90deg, var(--green), #00f5c4);
-    box-shadow: 0 0 6px rgba(0,212,170,0.35);
-  }
-  .quest-meta-row {
-    display: flex; justify-content: space-between; align-items: center;
-    font-size: 0.78rem;
-  }
-  .quest-rewards { color: var(--muted); }
-  .quest-claim-btn {
-    background: var(--green); color: #0a0f1a;
-    border: none; padding: 0.4rem 0.9rem;
-    border-radius: 6px; font-weight: 800; font-size: 0.78rem;
-    font-family: inherit; cursor: pointer;
-  }
-  .quest-claim-btn:active { opacity: 0.85; }
-  .quest-claim-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .career-quest.done { color: var(--success); }
 
   /* Quick Match scorecard */
   .scorecard-tabs {
@@ -1056,14 +659,6 @@
   }
   .scorecard-table tr:last-child td { border-bottom: none; }
   .scorecard-table tr.dnb td { opacity: 0.45; }
-  .tile.match {
-    border-color: rgba(255, 77, 109, 0.5);
-    box-shadow: 0 0 16px rgba(255, 77, 109, 0.1) inset;
-  }
-  .tile .tile-icon { font-size: 2rem; line-height: 1; }
-  .tile .tile-label { font-size: 0.88rem; font-weight: 700; margin-top: 0.4rem; }
-  .tile .tile-sub { font-size: 0.66rem; color: var(--muted); margin-top: 0.15rem; }
-
   /* ════ Browse: filter bar with sliders + dropdown ════ */
   .filter-bar {
     background: var(--card-2);
@@ -1171,45 +766,6 @@
   .load-more-btn:active { transform: scale(0.98); }
 
   /* ════ Leaderboard ════ */
-  .lb-row {
-    display: flex; align-items: center; gap: 0.7rem;
-    padding: 0.7rem 0.85rem;
-    background: var(--card-2);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    margin-bottom: 0.45rem;
-    position: relative;
-  }
-  .lb-row.me {
-    border-color: var(--accent);
-    background: linear-gradient(90deg, rgba(212,168,42,.08), var(--card-2));
-  }
-  .lb-rank {
-    width: 32px; height: 32px;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-weight: 900; font-size: 0.95rem;
-    background: var(--card);
-    flex-shrink: 0;
-  }
-  .lb-rank.gold { background: linear-gradient(135deg, #ffd966, #d4a82a); color: #0a0f1a; }
-  .lb-rank.silver { background: linear-gradient(135deg, #d8d8d8, #888); color: #0a0f1a; }
-  .lb-rank.bronze { background: linear-gradient(135deg, #cd7f32, #8b4513); color: #fff; }
-  .lb-info { flex: 1; min-width: 0; }
-  .lb-name {
-    font-weight: 700; font-size: 0.92rem;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .lb-team {
-    font-size: 0.74rem; color: var(--muted);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .lb-value {
-    font-weight: 800; color: var(--accent);
-    font-size: 0.95rem;
-    white-space: nowrap;
-  }
-
   /* ════ Player cards ════ */
   .player-row {
     display: flex; align-items: center; gap: 0.7rem;
@@ -1283,7 +839,7 @@
     text-transform: uppercase;
     vertical-align: middle;
   }
-  .badge-mini.owned { background: rgba(0, 212, 170, 0.2); color: var(--green); }
+  .badge-mini.owned { background: rgba(232,188,138, 0.2); color: var(--success); }
   .badge-mini.blocked { background: rgba(255, 77, 109, 0.18); color: var(--red); }
   .badge-mini.version { background: rgba(167, 139, 250, 0.18); color: var(--purple); }
 
@@ -1444,41 +1000,23 @@
   .pick-card.won.tier-legend .pick-front { border-color: #ffd966; box-shadow: 0 0 40px rgba(255,217,102,1); }
 
   .spin-button {
-    margin-top: 2rem;
-    padding: 1.05rem 2.5rem;
-    background: linear-gradient(90deg, #c8942a, var(--accent), var(--accent-2), var(--accent), #c8942a);
-    background-size: 200% auto;
-    animation: btnShimmer 3s linear infinite;
-    color: #070c18;
-    border: none;
-    border-radius: 30px;
-    font-size: 1.05rem;
-    font-weight: 900;
-    font-family: var(--font-display);
+    margin-top: 1.25rem;
+    min-height: 44px;
+    max-width: 100%;
+    padding: 0.65rem 1.2rem;
+    background: var(--accent);
+    color: #221908;
+    border: 0;
+    border-radius: 8px;
+    font: 650 .9375rem/1.3 var(--font-family);
     cursor: pointer;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    box-shadow: 0 6px 24px rgba(232, 184, 75, 0.45), 0 2px 6px rgba(0,0,0,0.3);
-    transition: transform 0.15s, box-shadow 0.15s;
-    min-width: 240px;
-    position: relative; overflow: hidden;
   }
-  .spin-button:active {
-    transform: scale(0.96);
-    box-shadow: 0 3px 10px rgba(232, 184, 75, 0.3);
-    animation-play-state: paused;
-  }
-  .spin-button:disabled {
-    background: var(--card-2);
-    color: var(--muted);
-    box-shadow: none;
-    cursor: not-allowed;
-    animation: none;
-  }
+  .spin-button:hover:not(:disabled) { background: var(--accent-hover); }
+  .spin-button:disabled { background: var(--card-2); color: var(--muted); cursor: not-allowed; }
   .reward-banner {
     margin-top: 1.5rem;
     padding: 1.4rem 1.25rem;
-    background: linear-gradient(135deg, rgba(232, 184, 75, 0.15), rgba(0, 212, 170, 0.1));
+    background: linear-gradient(135deg, rgba(232, 184, 75, 0.15), rgba(232,188,138, 0.1));
     border: 1px solid rgba(232,184,75,0.5);
     border-radius: 18px;
     text-align: center;
@@ -1637,7 +1175,7 @@
     animation: none;
   }
   .big-buy-btn.blocked { color: var(--red); border: 1px solid var(--red); }
-  .big-buy-btn.owned { color: var(--green); border: 1px solid var(--green); }
+  .big-buy-btn.owned { color: var(--success); border: 1px solid var(--success); }
   .close-btn {
     position: absolute;
     top: 1rem; right: 1rem;
@@ -1672,7 +1210,7 @@
     pointer-events: auto;
   }
   .toast.error { border-color: var(--red); }
-  .toast.success { border-color: var(--green); }
+  .toast.success { border-color: var(--success); }
   @keyframes slideDown { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
   @keyframes fadeOutT { to { opacity: 0; transform: translateY(-10px); } }
 
@@ -1742,7 +1280,7 @@
   }
   .empty .icon { font-size: 2.5rem; margin-bottom: 0.6rem; }
   .ad-banner {
-    background: linear-gradient(135deg, rgba(255, 217, 102, 0.1), rgba(0, 212, 170, 0.08));
+    background: linear-gradient(135deg, rgba(255, 217, 102, 0.1), rgba(232,188,138, 0.08));
     border: 1px dashed var(--accent);
     border-radius: 10px;
     padding: 0.7rem 0.9rem;
@@ -1793,7 +1331,7 @@
     margin-top: 0.4rem; gap: 0.3rem;
   }
   .roster-item .sell-val {
-    color: var(--green); font-size: 0.7rem; font-weight: 700;
+    color: var(--success); font-size: 0.7rem; font-weight: 700;
   }
   .release-btn {
     background: rgba(255, 77, 109, 0.12);
@@ -1816,7 +1354,7 @@
   /* ════ Live PvP match board ════ */
   .lm-scorebar {
     position: sticky; top: 0; z-index: 5;
-    background: linear-gradient(135deg, #16241c, var(--card));
+    background: linear-gradient(135deg, #1e1b1f, var(--card));
     border: 1px solid var(--accent); border-radius: 12px;
     padding: 0.7rem 0.9rem; margin-bottom: 0.7rem;
   }
@@ -1842,7 +1380,7 @@
     color: var(--muted); cursor: pointer; border: none; background: transparent;
     font-family: inherit; transition: background 0.15s, color 0.15s;
   }
-  .lm-tab.active { background: var(--primary-accent); color: #06231d; }
+  .lm-tab.active { background: var(--primary-accent); color: #261810; }
   .lm-tab:active { transform: scale(0.97); }
   /* ════ Cricbuzz-style commentary feed ════ */
   .lm-comm {
@@ -1869,7 +1407,7 @@
   .lm-comm-badge.six { background: rgba(167,139,250,0.2); color: var(--purple); }
   .lm-comm-badge.wkt { background: rgba(255,77,109,0.2); color: var(--danger-accent); }
   .lm-comm-badge.dot { background: rgba(125,137,166,0.15); color: var(--muted); }
-  .lm-comm-badge.run { background: rgba(0,212,170,0.16); color: var(--primary-accent); }
+  .lm-comm-badge.run { background: rgba(232,188,138,0.16); color: var(--primary-accent); }
   .lm-comm-text { flex: 1; font-size: 0.82rem; line-height: 1.35; }
   .lm-batter.on-strike { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
   .lm-batter .nm { font-weight: 700; font-size: 0.82rem; }
@@ -1928,7 +1466,7 @@
     display: inline-block; font-size: 0.66rem; font-weight: 800;
     padding: 0.15rem 0.5rem; border-radius: 5px; margin-left: 0.4rem;
   }
-  .lm-role-bat { background: var(--green); color: #0a0f1a; }
+  .lm-role-bat { background: var(--success); color: #0a0f1a; }
   .lm-role-bowl { background: #4a9eff; color: #0a0f1a; }
   .lm-role-spec { background: var(--card-2); color: var(--muted); border: 1px solid var(--border); }
 
@@ -1970,7 +1508,7 @@
 
   .pd-hero {
     text-align: center; padding: 1.2rem 1rem;
-    background: linear-gradient(135deg, rgba(212,168,42,0.1), rgba(0,212,170,0.06));
+    background: linear-gradient(135deg, rgba(212,168,42,0.1), rgba(232,188,138,0.06));
     border: 1px solid var(--border); border-radius: 14px; margin-bottom: 0.9rem;
   }
   .pd-rating { font-size: 2.6rem; font-weight: 900; line-height: 1; }
@@ -2020,7 +1558,7 @@
   }
   .pd-btn-up { background: rgba(167,139,250,0.2); color: #a78bfa; }
   .pd-btn-rm { background: rgba(255,77,109,0.15); color: var(--red); }
-  .pd-btn-add { background: var(--green); color: #0a0f1a; }
+  .pd-btn-add { background: var(--success); color: #0a0f1a; }
   .link-btn {
     background: var(--card);
     color: var(--text);
@@ -2034,39 +1572,43 @@
   .link-btn:active { background: var(--card-2); }
 
   /* Transfer market */
-  .market-header { padding: 1.1rem; border-radius: 16px; border: 1px solid #355849;
-    background: linear-gradient(115deg,#163e32,#102921 85%); margin-bottom: .85rem; }
-  .market-title, .market-wallet, .market-filters, .market-order, .market-price-line {
-    display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; }
-  .market-title, .market-order, .market-price-line { justify-content: space-between; }
-  .market-title h2 { margin: 0; font: 800 1.5rem var(--font-display); color: #f4f4d9; }
-  #market-cadence, .market-meta, .market-stock, #market-count { font-size: .8rem; color: #aabbce; }
-  #market-cadence { color: #bed3c5; margin: .3rem 0 .9rem; }
-  .market-wallet { border-top: 1px solid #3b574b; padding-top: .7rem; gap: 2rem; }
-  .market-wallet small, .market-wallet strong { display: block; }
-  .market-wallet small { color: #c1d7c9; }
-  .market-wallet strong { font: 800 1.12rem var(--font-display); margin-top: .12rem; }
-  .market-field { background: var(--input-bg); color: var(--text); border: 1px solid #385067;
-    font: inherit; font-size: .87rem; border-radius: 9px; min-height: 42px; padding: .45rem .65rem; }
-  .market-filters { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,.7fr); }
+  .market-order, .market-price-line {
+    display: flex; align-items: center; justify-content: space-between; gap: .65rem; flex-wrap: wrap;
+  }
+  .market-wallet {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 0 16px;
+    border: 1px solid var(--border); border-radius: 10px; background: var(--card);
+  }
+  .market-wallet > div { padding: 12px; }
+  .market-wallet > div + div { border-left: 1px solid var(--border); }
+  .market-wallet dt, .market-meta, .market-stock, #market-count { font-size: .875rem; color: var(--muted); }
+  .market-wallet dd { font-weight: 650; margin: 3px 0 0; font-size: 1.125rem; overflow-wrap: anywhere; }
+  .market-field {
+    background: var(--input-bg); color: var(--text); border: 1px solid var(--border);
+    font: inherit; font-size: .9375rem; border-radius: 8px; min-height: 44px; padding: .45rem .65rem; min-width: 0;
+  }
+  .market-filters { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 8px; }
   .market-filters input { grid-column: 1/-1; }
+  @media (min-width: 38rem) {
+    .market-filters { grid-template-columns: minmax(0,2fr) minmax(0,1fr) minmax(0,1fr); }
+    .market-filters input { grid-column: auto; }
+  }
   .market-order { margin: .65rem 0; font-size: .86rem; }
-  .market-order label { display: inline-flex; gap: .4rem; align-items: center; min-height: 36px; }
-  .market-order input { accent-color: var(--green); }
+  .market-order label { display: inline-flex; gap: .4rem; align-items: center; min-height: 44px; cursor: pointer; }
+  .market-order input { accent-color: var(--success); }
   .market-row { display: grid; grid-template-columns: minmax(75px,26%) minmax(0,1fr); gap: .8rem;
-    padding: .85rem; border: 1px solid #2a3b4f; background: var(--card);
-    border-radius: 12px; margin-bottom: .5rem; align-items: center; }
+    padding: .85rem; border: 1px solid var(--border); background: var(--card);
+    border-radius: 10px; margin-bottom: .5rem; align-items: center; }
   .market-art { position: relative; width: 100%; aspect-ratio: 5/4; border-radius: 6px;
-    background: #182c30; overflow: hidden; display: grid; place-items: center; }
+    background: var(--input-bg); overflow: hidden; display: grid; place-items: center; }
   .market-art span { color: var(--accent); font-weight: 800; text-align: center; }
   .market-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
-  .market-name { font: 800 1.02rem var(--font-display); margin: 0; overflow-wrap: anywhere; }
+  .market-name { font: 650 1rem var(--font-display); margin: 0; overflow-wrap: anywhere; }
   .market-meta, .market-stock { margin: .2rem 0; }
   .market-price-line { margin-top: .5rem; gap: .3rem; }
-  .market-price-line strong { color: #ffda77; }
-  #market-receipt:not(:empty) { background: #12372e; color: #b8f6df; border-radius: 9px;
+  .market-price-line strong { color: var(--accent); }
+  #market-receipt:not(:empty) { background: var(--success-bg); color: var(--success); border-radius: 9px;
     padding: .7rem; margin-bottom: .65rem; font-size: .86rem; }
-  #screen-market :focus-visible { outline: 2px solid #ffda77; outline-offset: 2px; }
   .ver-badge {
     background: rgba(255,217,102,0.18); color: var(--accent);
     font-size: 0.55rem; font-weight: 800; padding: 0.1rem 0.32rem;
@@ -2080,7 +1622,8 @@
     font-family: inherit; cursor: pointer;
     white-space: nowrap;
   }
-  .market-buy-btn { min-height: 40px; }
+  .market-buy-btn { min-height: 44px; }
+  .market-buy-btn:hover:not(:disabled) { background: var(--accent-hover); }
   .market-buy-btn:active { opacity: 0.85; }
   .market-buy-btn.disabled {
     background: var(--card-2); color: var(--muted); cursor: not-allowed;
@@ -2159,7 +1702,7 @@
     letter-spacing: 0.04em;
   }
   .cat-batsman { background: rgba(255, 77, 109, 0.15); color: var(--red); }
-  .cat-bowler { background: rgba(0, 212, 170, 0.15); color: var(--green); }
+  .cat-bowler { background: rgba(232,188,138, 0.15); color: var(--success); }
   .cat-wicket-keeper { background: rgba(212, 168, 42, 0.2); color: var(--accent); }
   .cat-all-rounder { background: rgba(167, 139, 250, 0.2); color: #a78bfa; }
 
@@ -2208,29 +1751,6 @@
   .swap-actions { display:flex; gap:.6rem; margin-top:1rem; }
   .swap-actions button { flex:1; padding:.7rem; }
 
-  /* Phase result flash overlay */
-  .phase-result-overlay {
-    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0, 0, 0, 0.75);
-    display: flex; align-items: center; justify-content: center;
-    z-index: 9999;
-    animation: fadein 0.18s;
-    transition: opacity 0.2s;
-  }
-  .phase-result-card {
-    background: var(--card); border: 2px solid var(--accent);
-    border-radius: 14px;
-    padding: 1.4rem 1.8rem;
-    text-align: center;
-    max-width: 320px;
-    animation: scaleup 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
-  }
-  .phase-result-card.phase-big {
-    border-color: var(--green);
-    box-shadow: 0 0 28px rgba(0, 212, 170, 0.3);
-  }
-  .phase-result-card.phase-good { border-color: var(--accent); }
-  .phase-result-card.phase-meh { border-color: var(--border); }
   @keyframes scaleup {
     from { transform: scale(0.85); opacity: 0; }
     to { transform: scale(1); opacity: 1; }
@@ -2242,7 +1762,7 @@
     padding: 0.4rem 0; border-bottom: 1px solid var(--border);
   }
   .invite-lb-row:last-child { border-bottom: none; }
-  .invite-lb-row.me { background: rgba(0, 212, 170, 0.06); margin: 0 -0.3rem; padding: 0.4rem 0.3rem; border-radius: 6px; }
+  .invite-lb-row.me { background: rgba(232,188,138, 0.06); margin: 0 -0.3rem; padding: 0.4rem 0.3rem; border-radius: 6px; }
   .invite-lb-rank { width: 36px; font-weight: 800; color: var(--accent); }
   .invite-lb-name {
     flex: 1; min-width: 0;
@@ -2250,7 +1770,7 @@
     font-size: 0.85rem;
   }
   .invite-lb-count {
-    font-weight: 800; font-size: 0.95rem; color: var(--green);
+    font-weight: 800; font-size: 0.95rem; color: var(--success);
   }
   .invitee-row {
     display: flex; justify-content: space-between; align-items: center;
@@ -2276,9 +1796,9 @@
 
   /* New-user setup + first-session guide */
   .onboarding-hero, .starter-guide {
-    background: linear-gradient(145deg, rgba(0, 212, 170, 0.12), rgba(74, 158, 255, 0.08), var(--card));
-    border: 1px solid rgba(0, 212, 170, 0.45);
-    border-radius: 18px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
     padding: 1rem;
     margin-bottom: 0.9rem;
   }
@@ -2289,7 +1809,7 @@
   .setup-loop { margin: 0.75rem 0; padding-left: 1.2rem; color: var(--text); font-size: 0.82rem; line-height: 1.65; }
   .guide-step { display: flex; gap: 0.65rem; align-items: center; border-top: 1px solid var(--border); padding: 0.68rem 0; }
   .guide-state { width: 1.3rem; height: 1.3rem; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; background: var(--card-2); color: var(--muted); font-size: 0.7rem; font-weight: 800; }
-  .guide-step.done .guide-state { background: var(--green); color: #06251e; }
+  .guide-step.done .guide-state { background: var(--success); color: #261810; }
   .guide-step.later .guide-state { background: rgba(167,139,250,0.2); color: #a78bfa; }
   .guide-body { flex: 1; min-width: 0; }
   .guide-title { font-size: 0.84rem; font-weight: 800; }
@@ -2316,19 +1836,11 @@
   }
 
 
-  /* ════ Tournament tab ════ */
-  .tab .tab-live-dot {
-    position: absolute; top: 3px; right: calc(50% - 20px);
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--red); box-shadow: 0 0 0 0 rgba(255,77,109,.7);
-    animation: tnPulse 1.6s infinite;
-  }
   @keyframes tnPulse {
     0% { box-shadow: 0 0 0 0 rgba(255,77,109,.7); }
     70% { box-shadow: 0 0 0 7px rgba(255,77,109,0); }
     100% { box-shadow: 0 0 0 0 rgba(255,77,109,0); }
   }
-  @media (max-width: 360px) { .tab { font-size: 0.6rem; } .tab .icon { font-size: 1.2rem; } }
   .tn-head { position: relative; }
   .tn-head h2 { margin: 0.15rem 0 0.2rem; font-size: 1.15rem; font-family: var(--font-display); padding-right: 2.2rem; }
   .tn-meta { font-size: 0.74rem; color: var(--muted); }
@@ -2367,11 +1879,11 @@
   .tn-table td.team .nm { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tn-table td.pts { font-weight: 900; color: var(--accent); }
   .tn-table tr.me td { background: rgba(232,184,75,.08); }
-  .tn-table tr.q td.pos { color: var(--green); }
-  .tn-table tr.cut td { border-bottom: 1px dashed rgba(0,212,170,.5); }
+  .tn-table tr.q td.pos { color: var(--success); }
+  .tn-table tr.cut td { border-bottom: 1px dashed rgba(232,188,138,.5); }
   .tn-form { display: flex; gap: 3px; margin-top: 3px; }
   .tn-form span { width: 13px; height: 13px; border-radius: 3px; font-size: 0.5rem; font-weight: 900; display: inline-flex; align-items: center; justify-content: center; color: #0a0f1a; }
-  .tn-form .W { background: var(--green); } .tn-form .L { background: var(--red); color: #fff; } .tn-form .T { background: #f2c94c; }
+  .tn-form .W { background: var(--success); } .tn-form .L { background: var(--red); color: #fff; } .tn-form .T { background: #f2c94c; }
   .tn-foot { font-size: 0.68rem; color: var(--muted); margin-top: 0.5rem; }
   .tn-fx {
     background: var(--card-2); border: 1px solid var(--border); border-radius: 12px;
@@ -2388,7 +1900,7 @@
   .tn-fx-row .sc { font-weight: 800; font-size: 0.85rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .tn-fx-row.win .nm, .tn-fx-row.win .sc { color: var(--accent); }
   .tn-fx-row.lose { opacity: .7; }
-  .tn-fx-res { font-size: 0.74rem; color: var(--green); margin-top: 0.35rem; }
+  .tn-fx-res { font-size: 0.74rem; color: var(--success); margin-top: 0.35rem; }
   .tn-fx-sub { font-size: 0.7rem; color: var(--muted); margin-top: 0.3rem; }
   .tn-badge { font-size: 0.6rem; font-weight: 900; padding: 0.1rem 0.4rem; border-radius: 6px; background: rgba(232,184,75,.18); color: var(--accent); }
   .tn-badge.live { background: rgba(255,77,109,.18); color: var(--red); }
@@ -2411,57 +1923,34 @@
   .tn-inj .sev { font-size: 0.62rem; font-weight: 800; padding: 0.1rem 0.4rem; border-radius: 6px; background: rgba(242,201,76,.16); color: #f2c94c; white-space: nowrap; align-self: flex-start; }
   .tn-inj .sev.serious { background: rgba(255,77,109,.16); color: var(--red); }
   .tn-inj .sev.strain { background: rgba(255,150,70,.16); color: #ff9646; }
-  .lm-sc-result { font-size: 0.78rem; color: var(--green); margin-bottom: 0.6rem; font-weight: 700; }
+  .lm-sc-result { font-size: 0.78rem; color: var(--success); margin-bottom: 0.6rem; font-weight: 700; }
   .lm-sc-note { font-size: 0.68rem; color: var(--muted); margin-top: 0.6rem; }
 </style>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/auction_miniapp.css', v='auction-settings-v1') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/franchise_draft.css', v='draft-controls-v4') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/auction_arena.css', v='auction-settings-v1') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_clubhouse.css', v='2') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_player_hub.css', v='2') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_clubhouse.css', v='5') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_player_hub.css', v='5') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_shell.css', v='5') }}">
 </head>
 <body>
 
-<!-- Top app bar -->
-<div class="appbar">
-  <span class="logo">🏏</span>
-  <h1>CRICMASTER</h1>
-  <div class="balance-pill" id="balance-pill" style="display:none;">
-    <span>💰</span><span id="bp-coins">0</span>
+<header class="appbar">
+  <div class="appbar-inner">
+    <h1>{{ icon('cricket') }}<span>CricMaster</span></h1>
+    <nav class="tabs" id="bottom-nav" aria-label="Main navigation" style="display:none;">
+      {% for screen, label, image in [
+        ('home', 'Home', 'home'), ('matchcentre', 'Matches', 'matches'), ('roster', 'Squad', 'squad'),
+        ('market', 'Market', 'market'), ('rewards', 'Rewards', 'gift')
+      ] %}
+        <button type="button" class="tab{% if screen == 'home' %} active{% endif %}" data-screen="{{ screen }}"
+          {% if screen == 'home' %}aria-current="page"{% endif %} onclick="navigate('{{ screen }}')">
+          {{ icon(image) }}<span>{{ label }}</span>
+        </button>
+      {% endfor %}
+    </nav>
+    <button type="button" class="app-secondary app-wallet" id="app-wallet" style="display:none;" onclick="navigate('wallet')">
+      {{ icon('wallet') }}<span>Wallet</span>
+    </button>
   </div>
-</div>
-
-<!-- Top community links (channel + official group) — populated from init -->
-<div class="top-links" id="top-links" style="display:none;"></div>
-
-<div class="suggestion-box cm-card" id="suggestion-box" style="display:none;">
-  <button class="cm-head" onclick="toggleCommunityCard('suggestion-box')">
-    <span class="cm-title">💡 Suggestion Box</span>
-    <span class="cm-chev">▾</span>
-  </button>
-  <div class="cm-body">
-    <div class="suggestion-sub" style="margin-bottom:0.45rem;">Send ideas, bugs, or balance feedback straight to the website report box.</div>
-    <textarea class="suggestion-input" id="suggestion-message" maxlength="1000" placeholder="Write your message here…"></textarea>
-    <div class="suggestion-actions">
-      <span class="suggestion-count" id="suggestion-count">0/1000</span>
-      <button class="suggestion-send" id="suggestion-send" onclick="sendSuggestion()">📨 Send</button>
-    </div>
-  </div>
-</div>
-
-<div class="news-box cm-card" id="news-box" style="display:none;">
-  <button class="cm-head" onclick="toggleCommunityCard('news-box')">
-    <span class="cm-title">📰 Today's CMU News</span>
-    <span class="news-unread" id="news-unread" style="display:none;"></span>
-    <span class="cm-chev">▾</span>
-  </button>
-  <div class="cm-body">
-    <div id="news-list"><div class="news-row-meta">Loading…</div></div>
-    <button class="news-submit-btn" onclick="openNewsSubmit()">✍️ Submit your own news</button>
-  </div>
-</div>
-
-<div class="poll-box cm-card" id="poll-box" style="display:none;"></div>
+</header>
 
 <div class="toast-container" id="toasts"></div>
 
@@ -2491,184 +1980,7 @@
   </div>
 </div>
 
-<!-- ════ Home / Dashboard screen ════ -->
-<div class="screen active" id="screen-home">
-  <div id="resume-match-banner" style="display:none;"></div>
-  <div class="greeting">
-    <p class="hi">Welcome back,</p>
-    <button class="hub-profile-link" type="button" onclick="navigate('profile')">
-      <span class="name" id="user-name">…</span><span class="hub-open-profile">Profile ›</span>
-    </button>
-  </div>
-
-
-  <div class="starter-guide" id="starter-guide" style="display:none;"></div>
-
-  <div class="stat-grid">
-    <div class="stat coins">
-      <div class="label">💰 Coins</div>
-      <div class="val" id="stat-coins">—</div>
-    </div>
-    <div class="stat gems">
-      <div class="label">💎 Gems</div>
-      <div class="val" id="stat-gems">—</div>
-    </div>
-    <div class="stat qp">
-      <div class="label">⭐ Quest Pts</div>
-      <div class="val" id="stat-qp">—</div>
-    </div>
-    <div class="stat roster">
-      <div class="label">👥 Roster</div>
-      <div class="val" id="stat-roster">—</div>
-    </div>
-  </div>
-
-  <div class="club-shortcuts">
-    <button type="button" class="club-shortcut" onclick="navigate('matchcentre')"><span aria-hidden="true">🏏</span><span>Matches</span></button>
-    <button type="button" class="club-shortcut" onclick="navigate('wallet')"><span aria-hidden="true">◈</span><span>Wallet</span></button>
-    <button type="button" class="club-shortcut" onclick="navigate('rewards')"><span aria-hidden="true">🎁</span><span>Rewards</span>
-      <span class="club-gift-count" id="club-gift-count" hidden></span></button>
-  </div>
-
-  <!-- Login streak banner -->
-  <div class="login-streak-banner" id="login-streak-banner" style="display:none;" onclick="showLoginStreakModal()">
-    <div class="lsb-flame">🔥</div>
-    <div class="lsb-text">
-      <div class="lsb-title"><span id="lsb-streak">0</span>-day login streak</div>
-      <div class="lsb-sub" id="lsb-sub">Tap to claim your daily reward</div>
-    </div>
-    <div class="lsb-cta" id="lsb-cta">Claim</div>
-  </div>
-
-  <!-- Active event banner -->
-  <div class="event-banner" id="event-banner" style="display:none;"></div>
-
-  <!-- Mission hub -->
-  <section class="mission-hub" aria-labelledby="mission-hub-title">
-    <div class="mission-hub-head">
-      <div>
-        <div class="mission-kicker">Your game plan</div>
-        <h2 class="mission-hub-title" id="mission-hub-title">Today's quests</h2>
-        <div class="mission-hub-sub" id="mission-hub-sub"></div>
-      </div>
-      <div class="mission-toggle" aria-label="Quest period">
-        <button class="mission-toggle-btn active" data-home-qtab="daily" onclick="switchHomeQuestTab('daily')">Today</button>
-        <button class="mission-toggle-btn" data-home-qtab="monthly" onclick="switchHomeQuestTab('monthly')">Monthly</button>
-      </div>
-    </div>
-    <div class="mission-list" id="home-quest-list"><div class="mission-loading">Loading your game plan…</div></div>
-    <div class="mission-footer">
-      <span class="mission-footer-copy" id="home-quest-footer"></span>
-      <button class="mission-link" onclick="openHomeQuestPeriod()">View all <span aria-hidden="true">→</span></button>
-    </div>
-  </section>
-
-  <div class="tile-grid">
-    <button class="tile season" onclick="openTournamentDirectory()">
-      <div class="tile-icon">🏟️</div>
-      <div class="tile-label">Tournament Centre</div>
-      <div class="tile-sub">Live competitions and past results</div>
-    </button>
-    <button class="tile season" onclick="navigate('auction')">
-      <div class="tile-icon">🔨</div>
-      <div class="tile-label">Franchise Auction</div>
-      <div class="tile-sub">Live bids · Teams · Retention</div>
-    </button>
-    <button class="tile season" onclick="navigate('franchisedraft')">
-      <div class="tile-icon">🏏</div>
-      <div class="tile-label">Franchise Draft</div>
-      <div class="tile-sub">Rotating picks · Squads · Purses</div>
-    </button>
-    <button class="tile match" onclick="navigate('match')">
-      <div class="tile-icon">🏏</div>
-      <div class="tile-label">Quick Match</div>
-      <div class="tile-sub">Play in 60s</div>
-    </button>
-    <button class="tile spin" onclick="navigate('spin')">
-      <div class="tile-icon">🎴</div>
-      <div class="tile-label">Lucky Card Pick</div>
-      <div class="tile-sub" id="spin-tile-sub">Tap to play</div>
-    </button>
-    <button class="tile daily" onclick="navigate('daily')">
-      <div class="tile-icon">📅</div>
-      <div class="tile-label">Daily</div>
-      <div class="tile-sub" id="daily-tile-sub">Tap to claim</div>
-    </button>
-    <button class="tile browse" onclick="navigate('browse')">
-      <div class="tile-icon">📚</div>
-      <div class="tile-label">Browse Players</div>
-      <div class="tile-sub">Search &amp; buy</div>
-    </button>
-    <button class="tile leaderboard" onclick="navigate('leaderboard')">
-      <div class="tile-icon">🏆</div>
-      <div class="tile-label">Leaderboard</div>
-      <div class="tile-sub" id="lb-tile-sub">Top players</div>
-    </button>
-    <button class="tile invite" onclick="navigate('invite')">
-      <div class="tile-icon">🎟️</div>
-      <div class="tile-label">Invite &amp; Win</div>
-      <div class="tile-sub" id="invite-tile-sub">Earn rewards</div>
-    </button>
-    <button class="tile quests" onclick="navigate('quests')">
-      <div class="tile-icon">🎯</div>
-      <div class="tile-label">Quests</div>
-      <div class="tile-sub" id="quests-tile-sub">Daily challenges</div>
-    </button>
-    <button class="tile career" onclick="navigate('career')">
-      <div class="tile-icon">🎖</div>
-      <div class="tile-label">Career Player</div>
-      <div class="tile-sub" id="career-tile-sub">Train your own card</div>
-    </button>
-    <button class="tile freepack" id="home-freepack-tile" onclick="navigate('freepack')">
-      <span class="tile-badge" id="freepack-ready-badge" style="display:none;">READY</span>
-      <div class="tile-icon">📦</div>
-      <div class="tile-label">Free Pack</div>
-      <div class="tile-sub" id="freepack-tile-sub">Watch &amp; win</div>
-    </button>
-    <button class="tile packs" onclick="navigate('packs')">
-      <div class="tile-icon">🎴</div>
-      <div class="tile-label">Packs</div>
-      <div class="tile-sub" id="packs-tile-sub">Buy &amp; open</div>
-    </button>
-    <button class="tile achievements" onclick="navigate('achievements')">
-      <div class="tile-icon">🏆</div>
-      <div class="tile-label">Achievements</div>
-      <div class="tile-sub" id="achievements-tile-sub">Milestones</div>
-    </button>
-    <button class="tile season" onclick="navigate('season')">
-      <div class="tile-icon">👑</div>
-      <div class="tile-label">Season</div>
-      <div class="tile-sub" id="season-tile-sub">Monthly ranks</div>
-    </button>
-    <button class="tile clubs" onclick="navigate('clubs')">
-      <div class="tile-icon">🛡️</div>
-      <div class="tile-label">Clubs</div>
-      <div class="tile-sub" id="clubs-tile-sub">Team up</div>
-    </button>
-  </div>
-
-  <div class="card" style="margin-top:1rem;">
-    <p class="card-title">Your record</p>
-    <div style="display:flex;justify-content:space-around;text-align:center;">
-      <div>
-        <div style="font-size:1.5rem;font-weight:800;" id="rec-played">0</div>
-        <div style="color:var(--muted);font-size:0.75rem;">Matches</div>
-      </div>
-      <div>
-        <div style="font-size:1.5rem;font-weight:800;color:var(--green);" id="rec-won">0</div>
-        <div style="color:var(--muted);font-size:0.75rem;">Won</div>
-      </div>
-      <div>
-        <div style="font-size:1.5rem;font-weight:800;color:var(--red);" id="rec-lost">0</div>
-        <div style="color:var(--muted);font-size:0.75rem;">Lost</div>
-      </div>
-      <div>
-        <div style="font-size:1.5rem;font-weight:800;color:var(--accent);" id="rec-wr">0%</div>
-        <div style="color:var(--muted);font-size:0.75rem;">Win rate</div>
-      </div>
-    </div>
-  </div>
-</div>
+{% include '_miniapp_home.html' %}
 
 <!-- ════ Lucky Card Pick screen ════
      Screen id, route key and endpoints stay "spin": the quota, the reward
@@ -2836,22 +2148,25 @@
 
 <!-- ════ Roster screen ════ -->
 <div class="screen hub-screen" id="screen-roster">
-  <header class="hub-hero">
-    <div class="hub-between"><h2>Squad management</h2><strong id="roster-count">—</strong></div>
-    <progress class="hub-progress" id="roster-capacity" value="0" max="1" aria-label="Squad capacity"></progress>
-    <div class="hub-actions">
-      <button type="button" class="hub-button primary" onclick="navigate('xi')">Manage Playing XI</button>
-      <button type="button" class="hub-button" onclick="toggleSquadSelectMode()" id="squad-select-toggle">Sell multiple</button>
+  <header class="page-heading">
+    <h2>Squad</h2>
+    <div class="page-heading-actions">
+      <button type="button" class="app-secondary" onclick="navigate('xi')">Playing XI</button>
+      <button type="button" class="app-secondary" onclick="toggleSquadSelectMode()" id="squad-select-toggle">Sell multiple</button>
     </div>
   </header>
-  <div class="hub-actions hub-filters">
+  <section class="squad-capacity" aria-label="Squad capacity">
+    <span>Squad places used</span><strong id="roster-count">—</strong>
+    <progress class="hub-progress" id="roster-capacity" value="0" max="1" aria-label="Squad places used"></progress>
+  </section>
+  <div class="hub-actions hub-filters squad-filters">
     <input id="roster-search" type="search" placeholder="Search squad" aria-label="Search squad" oninput="renderSquadList()">
     <select id="roster-role" aria-label="Filter by role" onchange="renderSquadList()"><option value="">All roles</option></select>
   </div>
-  <div id="squad-bulk-bar" style="display:none;background:rgba(212,168,42,0.12);border:1px solid var(--accent);border-radius:8px;padding:0.6rem 0.75rem;margin-bottom:0.65rem;align-items:center;gap:0.6rem;">
+  <div id="squad-bulk-bar" class="squad-bulk-bar" style="display:none;">
     <span style="flex:1;font-size:0.85rem;"><b id="squad-bulk-count">0</b> selected · <b id="squad-bulk-coins">0</b> 🪙</span>
-    <button class="link-btn" onclick="releaseSquadSelection()" style="background:var(--red);color:#fff;padding:0.3rem 0.7rem;border-radius:6px;">Release</button>
-    <button class="link-btn" onclick="clearSquadSelection()">Cancel</button>
+    <button type="button" class="app-secondary" onclick="releaseSquadSelection()">Release</button>
+    <button type="button" class="app-secondary" onclick="clearSquadSelection()">Cancel</button>
   </div>
   <div id="roster-list">
     <div class="empty"><div class="icon">⏳</div>Loading roster…</div>
@@ -2860,15 +2175,15 @@
 
 <!-- ════ Market screen ════ -->
 <div class="screen" id="screen-market">
-  <header class="market-header">
-    <div class="market-title"><h2>Player market</h2>
-      <button class="link-btn" onclick="navigate('roster')">My squad</button></div>
+  <header class="page-heading">
+    <h2>Player market</h2>
+    <button type="button" class="app-secondary" onclick="navigate('roster')">My squad</button>
     <p id="market-cadence">Current listings</p>
-    <div class="market-wallet">
-      <div><small>Transfer budget</small><strong id="market-balance">—</strong></div>
-      <div><small>Squad places used</small><strong id="market-capacity">—</strong></div>
-    </div>
   </header>
+  <dl class="market-wallet">
+    <div><dt>Transfer budget</dt><dd id="market-balance">—</dd></div>
+    <div><dt>Squad places used</dt><dd id="market-capacity">—</dd></div>
+  </dl>
   <div id="market-receipt" role="status"></div>
   <div id="market-offer"></div>
   <div class="market-filters">
@@ -3061,7 +2376,7 @@
     </ol>
   </div>
 
-  <div class="card" style="margin-top:0.8rem;background:rgba(0,212,170,0.05);">
+  <div class="card" style="margin-top:0.8rem;background:rgba(232,188,138,0.05);">
     <p style="margin:0;font-size:0.78rem;color:var(--muted);line-height:1.6;">
       ℹ️ Your player goes straight to your squad. Squad full? Choose someone to replace, or release the new player for coins after opening.
     </p>
@@ -3070,14 +2385,14 @@
 
 <!-- ════ Quests screen ════ -->
 <div class="screen" id="screen-quests">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
-    <h2 style="margin:0;font-size:1.25rem;">🎯 Quests</h2>
-    <button class="link-btn" onclick="loadQuests()">↻ Refresh</button>
-  </div>
-  <div class="quest-tabs">
-    <button class="quest-tab active" data-qtab="daily" onclick="switchQuestTab('daily')">Daily</button>
-    <button class="quest-tab" data-qtab="weekly" onclick="switchQuestTab('weekly')">Weekly</button>
-    <button class="quest-tab" data-qtab="monthly" onclick="switchQuestTab('monthly')">Monthly</button>
+  <header class="page-heading">
+    <h2>Quests</h2>
+    <button type="button" class="app-secondary" onclick="loadQuests()">Refresh</button>
+  </header>
+  <div class="page-tabs quest-tabs" role="group" aria-label="Quest period">
+    <button type="button" class="page-tab" data-qtab="daily" aria-pressed="true" onclick="switchQuestTab('daily')">Daily</button>
+    <button type="button" class="page-tab" data-qtab="weekly" aria-pressed="false" onclick="switchQuestTab('weekly')">Weekly</button>
+    <button type="button" class="page-tab" data-qtab="monthly" aria-pressed="false" onclick="switchQuestTab('monthly')">Monthly</button>
   </div>
   <div id="quest-content">
     <div class="empty"><div class="spinner"></div></div>
@@ -3108,123 +2423,77 @@
 <!-- ════ Quick Match screen ════ -->
 <div class="screen" id="screen-match">
   <div id="match-step-intro">
-    <div style="text-align: center; padding: 1rem 0;">
-      <div style="font-size: 4rem; margin-bottom: 0.5rem;">🏏</div>
-      <h2 style="margin: 0 0 0.25rem; font-size: 1.4rem;">Quick Match</h2>
-      <p style="color: var(--muted); margin: 0; font-size: 0.88rem;">
-        Your XI vs a bot team. Choose tactics phase by phase as the match unfolds — react to the situation.
-      </p>
+    <header class="page-heading">
+      <h2>Quick Match</h2>
+      <button type="button" class="app-secondary" onclick="navigate('xi')">Playing XI</button>
+      <p>Play a bot team and choose your tactics each phase.</p>
+    </header>
+
+    <div class="match-quota" id="qm-quota-card">
+      <div>
+        <strong>Today's matches</strong>
+        <p>Resets at midnight UTC</p>
+      </div>
+      <span id="qm-quota-display" role="status">Checking limit…</span>
     </div>
 
-    <!-- Daily quota card -->
-    <div class="card" id="qm-quota-card" style="text-align:center; padding: 0.9rem 1rem; margin-bottom: 0.7rem; background: rgba(212,168,42,0.06);">
-      <div style="font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em;">
-        Today's Quick Matches
+    <fieldset class="match-difficulty">
+      <legend>Difficulty</legend>
+      <div class="page-tabs" aria-describedby="diff-hint">
+        <button type="button" class="page-tab" data-diff="easy" aria-pressed="false" onclick="setMatchDifficulty('easy')">Easy</button>
+        <button type="button" class="page-tab" data-diff="medium" aria-pressed="true" onclick="setMatchDifficulty('medium')">Medium</button>
+        <button type="button" class="page-tab" data-diff="hard" aria-pressed="false" onclick="setMatchDifficulty('hard')">Hard</button>
       </div>
-      <div id="qm-quota-display" style="font-size: 1.4rem; font-weight: 800; margin-top: 0.25rem;">
-        — / —
-      </div>
-      <div style="font-size: 0.7rem; color: var(--muted); margin-top: 0.2rem;">
-        Resets at UTC midnight
-      </div>
-    </div>
+      <p id="diff-hint" class="page-note">Opponent rating matches your XI average.</p>
+    </fieldset>
 
-    <div class="card" style="text-align: center; padding: 1.5rem;">
-      <p class="card-title">Difficulty</p>
-      <div class="filters" style="justify-content: center; margin-top: 0.5rem;">
-        <button class="chip" data-diff="easy" onclick="setMatchDifficulty('easy')">😌 Easy</button>
-        <button class="chip active" data-diff="medium" onclick="setMatchDifficulty('medium')">⚔️ Medium</button>
-        <button class="chip" data-diff="hard" onclick="setMatchDifficulty('hard')">🔥 Hard</button>
+    <button type="button" class="app-primary match-play" id="qm-play-button" onclick="startMatch()">Go to toss</button>
+
+    <details class="match-help">
+      <summary>Rules and rewards</summary>
+      <div class="match-help-content">
+        <dl>
+          <div><dt>Aggressive</dt><dd>More runs and wickets.</dd></div>
+          <div><dt>Balanced</dt><dd>Steady risk and reward.</dd></div>
+          <div><dt>Defensive</dt><dd>Fewer runs and wickets.</dd></div>
+        </dl>
+        <p>A win earns 250 coins, with 100 extra for a dominant win. A tie earns 100 coins.</p>
+        <p>Quick Match results are tracked separately from career records.</p>
       </div>
-      <p style="color: var(--muted); font-size: 0.78rem; margin: 0.8rem 0 0;" id="diff-hint">
-        Opponent rating = your XI average
-      </p>
-      <p style="color: var(--muted); font-size: 0.72rem; margin: 0.5rem 0 0;">
-        Need a full XI? <a href="#" onclick="navigate('xi'); return false;" style="color: var(--accent);">Manage your XI</a>
-      </p>
-    </div>
-
-    <div class="card" style="margin-top: 0.8rem;">
-      <p class="card-title">How phases work</p>
-      <div style="font-size: 0.85rem; line-height: 1.6; color: var(--muted);">
-        🟢 <strong style="color: var(--accent);">Aggressive</strong>: more runs, more wickets<br>
-        ⚪ <strong style="color: var(--accent);">Balanced</strong>: steady risk and reward<br>
-        🛡️ <strong style="color: var(--accent);">Defensive</strong>: safer, fewer runs
-      </div>
-    </div>
-
-    <div class="card" style="margin-top: 0.8rem; background: rgba(0,212,170,0.05);">
-      <p style="margin: 0; font-size: 0.78rem; color: var(--muted); line-height: 1.6;">
-        🪙 <b style="color:var(--text);">+250 coins</b> for a win (+100 dominant bonus). 100 for a tie.<br>
-        ℹ️ Quick Match stats are <b>separate</b> from your career — they don't affect the leaderboard.
-      </p>
-    </div>
-
-    <button class="spin-button" id="qm-play-button" onclick="startMatch()" style="margin-top: 1.2rem; width: 100%;">
-      🎲 Toss &amp; Play
-    </button>
+    </details>
   </div>
 
   <div id="match-step-toss" style="display:none;">
-    <div style="text-align: center; padding: 2rem 1rem;">
-      <div style="font-size: 4rem; margin-bottom: 1rem;">🎲</div>
-      <h2 style="margin: 0 0 0.5rem;">Toss</h2>
-      <p style="color: var(--muted); margin: 0 0 1.5rem;">Call your choice. You'll win the toss 50% of the time.</p>
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem;">
-        <button class="tile" onclick="submitToss('bat')" style="padding: 1.3rem 0.5rem;">
-          <div style="font-size: 2.2rem;">🏏</div>
-          <div style="font-weight: 700; margin-top: 0.4rem;">Bat First</div>
-        </button>
-        <button class="tile" onclick="submitToss('bowl')" style="padding: 1.3rem 0.5rem;">
-          <div style="font-size: 2.2rem;">⚾</div>
-          <div style="font-weight: 700; margin-top: 0.4rem;">Bowl First</div>
-        </button>
-      </div>
+    <header class="page-heading">
+      <h2>Call the toss</h2>
+      <button type="button" class="app-secondary" onclick="showMatchStep('intro')">Back to setup</button>
+      <p>Choose what your team will do if you win the toss.</p>
+    </header>
+    <div class="match-toss-options">
+      <button type="button" class="match-choice" onclick="submitToss('bat')">{{ icon('cricket') }} Bat first</button>
+      <button type="button" class="match-choice" onclick="submitToss('bowl')">{{ icon('cricket-ball') }} Bowl first</button>
     </div>
   </div>
 
   <div id="match-step-phases" style="display:none;">
-    <div style="text-align: center; padding: 0.5rem 0;">
-      <p style="color: var(--muted); margin: 0; font-size: 0.85rem;" id="phases-progress">Innings 1 · Phase 1/3</p>
-      <h2 style="margin: 0.3rem 0; font-size: 1.4rem;" id="phases-name">Powerplay</h2>
-      <p style="color: var(--muted); margin: 0; font-size: 0.78rem;" id="phases-overs">Overs 1-6</p>
-    </div>
+    <header class="page-heading">
+      <h2 id="phases-name">Powerplay</h2>
+      <button type="button" class="app-secondary" onclick="endQuickMatch(this)">End match</button>
+      <p><span id="phases-progress">Innings 1 · Phase 1/3</span> · <span id="phases-overs">Overs 1–6</span></p>
+    </header>
 
-    <div class="card" style="margin-top: 0.5rem; text-align: center;" id="phases-context">
-      <!-- Filled by JS: current state, history, situation -->
-    </div>
+    <div class="card match-score" id="phases-context" aria-live="polite" aria-atomic="true"></div>
 
-    <div style="margin-top: 1rem; font-size: 0.82rem; color: var(--muted); text-align: center;" id="phases-choices-hint">
-      How will your batters play?
-    </div>
-
-    <div style="display: grid; grid-template-columns: 1fr; gap: 0.65rem; margin-top: 0.5rem;">
-      <button class="tile match" onclick="pickPhase('aggressive')" style="padding: 1.1rem;">
-        <div style="display:flex; align-items:center; gap:0.8rem; text-align: left;">
-          <div style="font-size: 2rem;">🟢</div>
-          <div style="flex:1;">
-            <div style="font-weight: 800; font-size: 1rem;">Aggressive</div>
-            <div style="font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem;">More runs · more wickets</div>
-          </div>
-        </div>
+    <h3 class="match-tactics-title" id="phases-choices-hint">Choose a batting tactic</h3>
+    <div class="match-tactics" role="group" aria-labelledby="phases-choices-hint">
+      <button type="button" class="match-choice" onclick="pickPhase('aggressive')">
+        <strong>Aggressive</strong><span>More runs and wickets</span>
       </button>
-      <button class="tile" onclick="pickPhase('balanced')" style="padding: 1.1rem; border-color: rgba(212,168,42,0.5);">
-        <div style="display:flex; align-items:center; gap:0.8rem; text-align: left;">
-          <div style="font-size: 2rem;">⚪</div>
-          <div style="flex:1;">
-            <div style="font-weight: 800; font-size: 1rem;">Balanced</div>
-            <div style="font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem;">Steady · neutral</div>
-          </div>
-        </div>
+      <button type="button" class="match-choice" onclick="pickPhase('balanced')">
+        <strong>Balanced</strong><span>Steady risk and reward</span>
       </button>
-      <button class="tile browse" onclick="pickPhase('defensive')" style="padding: 1.1rem;">
-        <div style="display:flex; align-items:center; gap:0.8rem; text-align: left;">
-          <div style="font-size: 2rem;">🛡️</div>
-          <div style="flex:1;">
-            <div style="font-weight: 800; font-size: 1rem;">Defensive</div>
-            <div style="font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem;">Safer · fewer runs</div>
-          </div>
-        </div>
+      <button type="button" class="match-choice" onclick="pickPhase('defensive')">
+        <strong>Defensive</strong><span>Fewer runs and wickets</span>
       </button>
     </div>
   </div>
@@ -3233,10 +2502,8 @@
     <div id="innings-break-content"></div>
   </div>
 
-  <div id="match-step-playing" style="display:none; text-align:center; padding: 3rem 1rem;">
-    <div style="font-size: 3.5rem;">🏏</div>
-    <div style="margin-top: 1rem; color: var(--muted);">Loading…</div>
-    <div class="spinner" style="margin-top: 1rem; width: 28px; height: 28px;"></div>
+  <div id="match-step-playing" style="display:none;">
+    <div class="empty" role="status">Starting match…</div>
   </div>
 
   <div id="match-step-result" style="display:none;">
@@ -3246,21 +2513,21 @@
 
 <!-- ════ Leaderboard screen ════ -->
 <div class="screen" id="screen-leaderboard">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.85rem;">
-    <h2 style="margin:0;font-size:1.25rem;">🏆 Leaderboard</h2>
-    <span id="my-rank-pill" style="display:none;background:rgba(212,168,42,.15);border:1px solid var(--accent);color:var(--accent);padding:0.25rem 0.6rem;border-radius:12px;font-size:0.8rem;font-weight:700;"></span>
+  <header class="page-heading">
+    <h2>Leaderboard</h2>
+    <span id="my-rank-pill" class="rank-summary" style="display:none;"></span>
+  </header>
+  <div class="page-tabs rank-tabs" role="group" aria-label="Rank by">
+    <button type="button" class="page-tab" aria-pressed="true" data-metric="wins" onclick="setLeaderboardMetric('wins')">Wins</button>
+    <button type="button" class="page-tab" aria-pressed="false" data-metric="win_rate" onclick="setLeaderboardMetric('win_rate')">Win rate</button>
+    <button type="button" class="page-tab" aria-pressed="false" data-metric="streak" onclick="setLeaderboardMetric('streak')">Win streak</button>
+    <button type="button" class="page-tab" aria-pressed="false" data-metric="active_days" onclick="setLeaderboardMetric('active_days')">Active days</button>
+    <button type="button" class="page-tab" aria-pressed="false" data-metric="coins" onclick="setLeaderboardMetric('coins')">Coins</button>
+    <button type="button" class="page-tab" aria-pressed="false" data-metric="roster_rating" onclick="setLeaderboardMetric('roster_rating')">Squad rating</button>
   </div>
-  <div class="filters">
-    <button class="chip active" data-metric="wins" onclick="setLeaderboardMetric('wins')">🏆 Wins</button>
-    <button class="chip" data-metric="win_rate" onclick="setLeaderboardMetric('win_rate')">📈 Win %</button>
-    <button class="chip" data-metric="streak" onclick="setLeaderboardMetric('streak')">🔥 Streak</button>
-    <button class="chip" data-metric="active_days" onclick="setLeaderboardMetric('active_days')">📅 Active Days</button>
-    <button class="chip" data-metric="coins" onclick="setLeaderboardMetric('coins')">💰 Coins</button>
-    <button class="chip" data-metric="roster_rating" onclick="setLeaderboardMetric('roster_rating')">⭐ Squad</button>
-  </div>
-  <p id="lb-caption" style="margin:0 0 0.6rem;font-size:0.72rem;color:var(--muted);"></p>
+  <p id="lb-caption" class="page-note"></p>
   <div id="leaderboard-list">
-    <div class="empty"><div class="icon">⏳</div>Loading…</div>
+    <div class="empty" role="status">Loading ranks…</div>
   </div>
 </div>
 
@@ -3273,19 +2540,15 @@
   <div id="tn-content"><div class="empty"><div class="spinner"></div></div></div>
 </div>
 
-<!-- ════ Franchise auction: shared with Telegram ════ -->
-<div class="screen" id="screen-auction">
-  <div class="empty" role="status">Opening Franchise Auction…</div>
-</div>
-<div class="screen" id="screen-franchisedraft">
-  <div class="empty" role="status">Opening Franchise Draft…</div>
-</div>
-
 <section class="screen club-page" id="screen-matchcentre" aria-labelledby="club-matches-title">
   <header class="club-hero">
     <h2 id="club-matches-title">Match centre</h2>
     <p>Resume a game or revisit your results.</p>
-    <button type="button" class="club-link primary" onclick="navigate('match')">Play Quick Match</button>
+    <div class="page-heading-actions">
+      <button type="button" class="club-link primary" id="matchcentre-play" onclick="navigate('match')">Play Quick Match</button>
+      <button type="button" class="club-link" onclick="openTournamentDirectory()">Tournaments</button>
+      <button type="button" class="club-link" onclick="navigate('leaderboard')">Leaderboard</button>
+    </div>
   </header>
   <div class="club-segment" role="group" aria-label="Match type">
     <button type="button" data-club-filter="matches" aria-pressed="true">My matches</button>
@@ -3311,7 +2574,8 @@
     <div class="club-shortcuts" style="margin:12px 0 0;">
       <button type="button" class="club-shortcut" onclick="navigate('daily')">Daily</button>
       <button type="button" class="club-shortcut" onclick="navigate('freepack')">Free Pack</button>
-      <button type="button" class="club-shortcut" onclick="navigate('spin')">Lucky Pick</button>
+      <button type="button" class="club-shortcut" onclick="navigate('spin')">Lucky Card Pick</button>
+      <button type="button" class="club-shortcut" onclick="navigate('packs')">Pack shop</button>
     </div>
   </header>
   <div class="club-segment" role="group" aria-label="Reward type">
@@ -3321,35 +2585,6 @@
   <div id="club-reward-body"></div>
   <p id="club-reward-feedback" role="status"></p>
 </section>
-
-<!-- ════ Bottom tabs ════ -->
-<div class="tabs" id="bottom-nav">
-  <button class="tab active" data-screen="home" onclick="navigate('home')">
-    <div class="icon">🏠</div>
-    <div>Home</div>
-  </button>
-  <button class="tab" data-screen="matchcentre" onclick="navigate('matchcentre')">
-    <div class="icon">🏏</div>
-    <div>Matches</div>
-  </button>
-  <button class="tab" data-screen="market" onclick="navigate('market')">
-    <div class="icon">🌟</div>
-    <div>Market</div>
-  </button>
-  <button class="tab" data-screen="roster" onclick="navigate('roster')">
-    <div class="icon">👥</div>
-    <div>Squad</div>
-  </button>
-  <button class="tab" id="tab-tournament" data-screen="tournament" onclick="openTournamentDirectory()">
-    <span id="tn-live-dot" class="tab-live-dot" hidden></span>
-    <div class="icon">🏟️</div>
-    <div>Tourney</div>
-  </button>
-  <button class="tab" data-screen="leaderboard" onclick="navigate('leaderboard')">
-    <div class="icon">🏆</div>
-    <div>Ranks</div>
-  </button>
-</div>
 
 <!-- ════ Player detail modal ════ -->
 <div class="modal-backdrop" id="modal" onclick="if(event.target.id==='modal') closeModal()">
@@ -3440,10 +2675,6 @@
   </div>
 </div>
 
-<script src="{{ url_for('static', filename='js/auction_updates.js', v='auction-settings-v1') }}"></script>
-<script src="{{ url_for('static', filename='js/auction_miniapp.js', v='auction-settings-v1') }}"></script>
-<script src="{{ url_for('static', filename='js/auction_arena.js', v='auction-settings-v1') }}"></script>
-<script src="{{ url_for('static', filename='js/franchise_draft.js', v='draft-controls-v4') }}"></script>
 <script>
 const tg = window.Telegram?.WebApp;
 if (tg) {
@@ -3451,8 +2682,8 @@ if (tg) {
   tg.expand();
   // Theme the Telegram WebView chrome to match our dark UI
   try {
-    tg.setHeaderColor('#16241c');
-    tg.setBackgroundColor('#0a0f1a');
+    tg.setHeaderColor('#1e1b1f');
+    tg.setBackgroundColor('#151316');
   } catch (e) {}
 }
 
@@ -3586,7 +2817,7 @@ function showLockScreen(icon, bodyHtml, retryLabel) {
   document.body.appendChild(overlay);
   try {
     document.getElementById('bottom-nav').style.display = 'none';
-    document.getElementById('balance-pill').style.display = 'none';
+    document.getElementById('app-wallet').style.display = 'none';
   } catch (e) {}
 }
 
@@ -3686,7 +2917,7 @@ function showSetupScreen(setup = {}) {
   document.getElementById('screen-onboarding').classList.add('active');
   currentScreen = 'onboarding';
   document.getElementById('bottom-nav').style.display = 'none';
-  document.getElementById('balance-pill').style.display = 'none';
+  document.getElementById('app-wallet').style.display = 'none';
   setNativeSetupButton(true);
 }
 
@@ -3721,9 +2952,9 @@ function renderStarterGuide(onboarding = {}) {
 
 // ════════════════ Navigation ════════════════
 function navigate(screen) {
+  const target = document.getElementById('screen-' + screen);
+  if (!target) return;
   haptic('light');
-  if (currentScreen === 'franchisedraft' && screen !== 'franchisedraft') FranchiseDraftApp.stop();
-  if (currentScreen === 'auction' && screen !== 'auction') AuctionApp.stop();
   if (currentScreen === 'tournament' && screen !== 'tournament') stopTournamentPolling();
   // Stop live-match polling whenever we leave that screen
   if (currentScreen === 'livematch' && screen !== 'livematch') {
@@ -3732,16 +2963,19 @@ function navigate(screen) {
     if (_nav) _nav.style.display = '';
   }
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  const target = document.getElementById('screen-' + screen);
-  if (!target) return;
   target.classList.add('active');
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.screen === screen));
-  // Tab pop micro-interaction
-  const activeTab = document.querySelector(`.tab[data-screen="${screen}"]`);
-  if (activeTab) {
-    activeTab.classList.add('tab-popping');
-    activeTab.addEventListener('animationend', () => activeTab.classList.remove('tab-popping'), { once: true });
-  }
+  const section = {
+    match: 'matchcentre', tournament: 'matchcentre', leaderboard: 'matchcentre', season: 'matchcentre',
+    xi: 'roster', playerdetail: 'roster', browse: 'market',
+    daily: 'rewards', freepack: 'rewards', spin: 'rewards', packs: 'rewards',
+    profile: 'home', quests: 'home', career: 'home', achievements: 'home', clubs: 'home', invite: 'home',
+  }[screen] || screen;
+  document.querySelectorAll('#bottom-nav .tab').forEach(tab => {
+    const selected = tab.dataset.screen === section;
+    tab.classList.toggle('active', selected);
+    if (selected) tab.setAttribute('aria-current', screen === section ? 'page' : 'location');
+    else tab.removeAttribute('aria-current');
+  });
   currentScreen = screen;
   window.scrollTo(0, 0);
   syncCommunityCards();
@@ -3749,7 +2983,7 @@ function navigate(screen) {
   if (screen === 'roster') loadRoster();
   if (screen === 'home') refreshDashboard();
   if (screen === 'leaderboard') loadLeaderboard();
-  if (screen === 'match') resetMatchScreen();
+  if (screen === 'match') openQuickMatch();
   window.Clubhouse?.open(screen);
   if (screen === 'market') loadMarket();
   if (screen === 'xi') loadXi();
@@ -3765,8 +2999,6 @@ function navigate(screen) {
     if (tnDirectoryOpen || (!tnId && !tnLive.length)) showTournamentDirectory();
     else loadTournament();
   }
-  if (screen === 'auction') AuctionApp.open();
-  if (screen === 'franchisedraft') FranchiseDraftApp.open();
   if (screen === 'clubs') loadClubs();
   if (screen === 'browse') {
     loadCountries().then(() => {
@@ -3805,12 +3037,17 @@ async function refreshDashboard() {
     return;
   }
   setNativeSetupButton(false);
-  document.getElementById('bottom-nav').style.display = '';
+  document.getElementById('bottom-nav').style.display = currentScreen === 'livematch' ? 'none' : '';
   userData = data.user;
   window.Clubhouse?.giftCount(data.unclaimed_gifts || 0);
   lastInitData = data;
   renderStarterGuide(data.onboarding || {});
-  document.getElementById('user-name').textContent = userData.first_name || userData.username || 'Player';
+  const profileName = document.getElementById('user-name');
+  profileName.textContent = userData.first_name || userData.username || 'Profile';
+  profileName.closest('button').setAttribute('aria-label', `Open profile · ${profileName.textContent}`);
+  const team = document.getElementById('home-team');
+  team.textContent = userData.team_name || '';
+  team.hidden = !userData.team_name;
   document.getElementById('stat-coins').textContent = formatNum(userData.coins);
   document.getElementById('stat-gems').textContent = formatNum(userData.gems);
   document.getElementById('stat-qp').textContent = formatNum(userData.quest_points);
@@ -3819,23 +3056,21 @@ async function refreshDashboard() {
   document.getElementById('rec-won').textContent = userData.matches_won;
   document.getElementById('rec-lost').textContent = userData.matches_lost;
   document.getElementById('rec-wr').textContent = userData.win_rate + '%';
-  const pill = document.getElementById('balance-pill');
-  pill.style.display = 'flex';
-  document.getElementById('bp-coins').textContent = formatNum(userData.coins);
+  document.getElementById('app-wallet').style.display = '';
 
   // Lucky Pick tile
   const spinSub = document.getElementById('spin-tile-sub');
   const sq = data.gspin?.quota;
   if (sq) {
     if (sq.free_available) {
-      spinSub.textContent = `🎁 1 free + ${sq.ad_total} ads`;
+      spinSub.textContent = 'Free pick available';
     } else if (sq.ad_used < sq.ad_total) {
-      spinSub.textContent = `📺 ${sq.ad_total - sq.ad_used} ad picks left`;
+      spinSub.textContent = `${sq.ad_total - sq.ad_used} ad picks left`;
     } else {
-      spinSub.textContent = `⏱️ New in ${fmtRemaining(sq.cycle_reset_in)}`;
+      spinSub.textContent = `Resets in ${fmtRemaining(sq.cycle_reset_in)}`;
     }
   } else {
-    spinSub.textContent = 'Tap to play';
+    spinSub.textContent = 'Pick a card to reveal a reward';
   }
   setAdBanner('spin-ad-banner', 'pick', sq?.ad_total, data.gspin?.cooldown_total);
   updateSpinButton(data.gspin);
@@ -3845,14 +3080,14 @@ async function refreshDashboard() {
   const dq = data.daily?.quota;
   if (dq) {
     if (dq.free_available) {
-      dailySub.textContent = `🎁 1 free + ${dq.ad_total} ads`;
+      dailySub.textContent = 'Free claim available';
     } else if (dq.ad_used < dq.ad_total) {
-      dailySub.textContent = `📺 ${dq.ad_total - dq.ad_used} ad claims left`;
+      dailySub.textContent = `${dq.ad_total - dq.ad_used} ad claims left`;
     } else {
-      dailySub.textContent = `⏱️ New in ${fmtRemaining(dq.cycle_reset_in)}`;
+      dailySub.textContent = `Resets in ${fmtRemaining(dq.cycle_reset_in)}`;
     }
   } else {
-    dailySub.textContent = 'Tap to claim';
+    dailySub.textContent = 'Claim coins and gems';
   }
   setAdBanner('daily-ad-banner', 'claim', dq?.ad_total, data.daily?.cooldown_total);
   updateDailyButton();
@@ -3884,14 +3119,12 @@ async function refreshDashboard() {
   renderResumeBanner(data.live_match || null);
 
   // Season tile sub
-  if (data.season && data.season.me) {
-    const sub = document.getElementById('season-tile-sub');
-    if (sub && data.season.me.rank) sub.textContent = `Rank #${data.season.me.rank}`;
-  }
+  const seasonRank = data.season?.me?.rank;
+  document.getElementById('season-tile-sub').textContent = seasonRank ? `Rank #${seasonRank}` : 'Monthly standings';
   window._seasonInfo = data.season || null;
 
-  // Tournament tab: only while a tournament is live.
-  updateTournamentTab(data.tournament || null);
+  // Mark the tournament shortcut when competition is live.
+  updateTournamentStatus(data.tournament || null);
 
   // Keep the first screen useful: surface missions and the free reward state.
   refreshHomeHighlights();
@@ -3902,65 +3135,42 @@ async function refreshHomeHighlights() {
     api('/api/webapp/quests', { type: 'all' }),
     api('/api/webapp/freepack/status', {}),
   ]);
-  if (questsResult.ok) { cachedQuests = questsResult.data.groups || {}; renderHomeQuests(); }
+  if (questsResult.ok) {
+    cachedQuests = questsResult.data.groups || {};
+    renderHomeQuests();
+  } else if (!cachedQuests) {
+    document.getElementById('home-quest-list').innerHTML =
+      '<p class="mission-loading">Could not load quests. <button type="button" class="mission-link" onclick="refreshHomeHighlights()">Try again</button></p>';
+  }
   if (freePackResult.ok) updateHomeFreePack(freePackResult.data);
 }
 
 function updateHomeFreePack(data) {
   const tile = document.getElementById('home-freepack-tile');
-  const badge = document.getElementById('freepack-ready-badge');
   const sub = document.getElementById('freepack-tile-sub');
-  if (!tile || !badge || !sub || !data) return;
+  if (!tile || !sub || !data) return;
   // A full roster no longer blocks the free pack — the pull is held pending and
   // the user Replaces/Releases it after opening, so "ready" ignores roster_full.
   const ready = Boolean(data.ready);
   tile.classList.toggle('ready', ready);
-  badge.style.display = ready ? '' : 'none';
   sub.textContent = ready
-    ? (data.roster_full ? '🎁 Ready (squad full)' : '🎁 Ready to open')
-    : `⏱️ ${formatCountdown(data.remaining_seconds || 0)}`;
-  const isHomeOpen = document.getElementById('screen-home')?.classList.contains('active');
-  if (ready && isHomeOpen && !sessionStorage.getItem('freepack_ready_seen')) {
-    sessionStorage.setItem('freepack_ready_seen', '1');
-    showFreePackReadyPopup();
-  }
+    ? (data.roster_full ? 'Ready to open · Squad full' : 'Ready to open')
+    : `Available in ${formatCountdown(data.remaining_seconds || 0)}`;
+  document.getElementById('home-freepack-notice').hidden = !ready;
 }
-
-function showFreePackReadyPopup() {
-  if (document.getElementById('freepack-ready-popup')) return;
-  const overlay = document.createElement('div');
-  overlay.className = 'swap-overlay'; overlay.id = 'freepack-ready-popup';
-  overlay.innerHTML = `
-    <div class="swap-panel freepack-pop-panel">
-      <div class="freepack-pop-kicker">Free reward unlocked</div>
-      <div class="freepack-pop-gift">🎁</div>
-      <h2 class="freepack-pop-title">Your free pack is ready!</h2>
-      <p class="freepack-pop-copy">Open it now for a new player card and keep building your dream XI.</p>
-      <button class="spin-button" onclick="openFreePackFromPopup()" style="width:100%;">📦 Open free pack</button>
-      <button class="mission-link" onclick="closeFreePackReadyPopup()" style="margin-top:0.75rem;color:var(--muted);">Maybe later</button>
-    </div>`;
-  document.body.appendChild(overlay); hapticNotif('success');
-}
-function closeFreePackReadyPopup() { document.getElementById('freepack-ready-popup')?.remove(); }
-function openFreePackFromPopup() { closeFreePackReadyPopup(); navigate('freepack'); }
 
 function renderResumeBanner(lm) {
-  const el = document.getElementById('resume-match-banner');
-  if (!el) return;
-  if (!lm || !lm.match_id) { el.style.display = 'none'; el.innerHTML = ''; return; }
-  el.style.display = 'block';
-  el.innerHTML = `
-    <div style="background:linear-gradient(135deg,rgba(255,77,109,0.18),rgba(212,168,42,0.12));
-                border:1px solid var(--accent);border-radius:12px;padding:0.8rem 1rem;margin-bottom:0.8rem;
-                display:flex;align-items:center;gap:0.7rem;">
-      <div style="font-size:1.6rem;">🏏</div>
-      <div style="flex:1;">
-        <div style="font-weight:800;font-size:0.9rem;">Live match in progress</div>
-        <div style="font-size:0.74rem;color:var(--muted);">${escapeHtml(lm.bat_team)} vs ${escapeHtml(lm.bowl_team)}</div>
-      </div>
-      <button class="spin-button" style="padding:0.5rem 0.9rem;font-size:0.82rem;" onclick="openLiveMatch(${lm.match_id})">▶ Resume</button>
-    </div>
-  `;
+  const action = document.getElementById('home-match-action');
+  const live = Boolean(lm?.match_id);
+  const inQuickMatch = ['playing', 'phases', 'innings-break'].includes(quickMatchStep);
+  document.getElementById('home-match').classList.toggle('is-live', live);
+  document.getElementById('home-match-title').textContent = live ? 'Live match' : 'Quick Match';
+  document.getElementById('home-match-detail').textContent = live
+    ? `${lm.bat_team} vs ${lm.bowl_team}`
+    : inQuickMatch ? 'Match in progress' : 'Casual match with your squad';
+  document.getElementById('home-match-action-label').textContent = live || inQuickMatch ? 'Resume match' : 'Play now';
+  document.getElementById('matchcentre-play').textContent = inQuickMatch ? 'Resume Quick Match' : 'Play Quick Match';
+  action.onclick = live ? () => openLiveMatch(lm.match_id) : () => navigate('match');
 }
 
 function renderTopLinks(branding) {
@@ -3969,10 +3179,10 @@ function renderTopLinks(branding) {
   if (!branding || !branding.has_any) { el.style.display = 'none'; return; }
   const links = [];
   if (branding.channel_username && branding.channel_link) {
-    links.push(`<a class="top-link" href="${escapeHtmlAttr(branding.channel_link)}" target="_blank" onclick="openBrandingLink(event,this.href)">📢 ${escapeHtml(branding.channel_label || 'Channel')}</a>`);
+    links.push(`<a class="top-link app-secondary" href="${escapeHtmlAttr(branding.channel_link)}" target="_blank" rel="noopener" onclick="openBrandingLink(event,this.href)">${escapeHtml(branding.channel_label || 'Channel')}</a>`);
   }
   if (branding.group_username && branding.group_link) {
-    links.push(`<a class="top-link" href="${escapeHtmlAttr(branding.group_link)}" target="_blank" onclick="openBrandingLink(event,this.href)">💬 ${escapeHtml(branding.group_label || 'Group')}</a>`);
+    links.push(`<a class="top-link app-secondary" href="${escapeHtmlAttr(branding.group_link)}" target="_blank" rel="noopener" onclick="openBrandingLink(event,this.href)">${escapeHtml(branding.group_label || 'Group')}</a>`);
   }
   if (!links.length) { el.style.display = 'none'; return; }
   el.innerHTML = links.join('');
@@ -3989,6 +3199,7 @@ function renderCommunityPanel(show) {
 // screen (an open article especially) they would just push content down.
 function syncCommunityCards() {
   const onHome = communityReady && currentScreen === 'home';
+  document.getElementById('home-community').hidden = !onHome;
   const box = document.getElementById('suggestion-box');
   const news = document.getElementById('news-box');
   const poll = document.getElementById('poll-box');
@@ -4009,17 +3220,19 @@ function toggleCommunityCard(id, forceOpen) {
   if (!el) return;
   const open = forceOpen === undefined ? !el.classList.contains('cm-open') : !!forceOpen;
   el.classList.toggle('cm-open', open);
+  el.querySelector('.cm-head')?.setAttribute('aria-expanded', String(open));
   _cardPref(id, open);
   haptic('light');
   if (id === 'news-box' && open) loadNewsFeed();
 }
 
 function restoreCommunityCards() {
-  // Suggestion box starts closed; News remembers what the user last chose.
-  if (_cardPref('suggestion-box') === '1') document.getElementById('suggestion-box')?.classList.add('cm-open');
-  if (_cardPref('news-box') === '1') {
-    document.getElementById('news-box')?.classList.add('cm-open');
-    loadNewsFeed();
+  for (const id of ['suggestion-box', 'news-box']) {
+    if (_cardPref(id) !== '1') continue;
+    const card = document.getElementById(id);
+    card.classList.add('cm-open');
+    card.querySelector('.cm-head')?.setAttribute('aria-expanded', 'true');
+    if (id === 'news-box') loadNewsFeed();
   }
 }
 
@@ -4248,8 +3461,6 @@ async function votePoll(pollId, option) {
   if (!ok) { toast(data.message || 'Could not vote.', 'error'); hapticNotif('error'); return; }
   renderPoll(data.poll);
   if (data.coins_paid && typeof data.balance === 'number') {
-    const bp = document.getElementById('bp-coins');
-    if (bp) bp.textContent = formatNum(data.balance);
     const sc = document.getElementById('stat-coins');
     if (sc) sc.textContent = formatNum(data.balance);
   }
@@ -4327,16 +3538,16 @@ function updateLoginStreakBanner() {
   if (!banner || !loginStreakStatus) return;
   const ls = loginStreakStatus;
   if ((ls.streak || 0) <= 0) { banner.style.display = 'none'; return; }
-  banner.style.display = 'flex';
+  banner.style.display = '';
   document.getElementById('lsb-streak').textContent = ls.streak;
   const cta = document.getElementById('lsb-cta');
   const sub = document.getElementById('lsb-sub');
   if (ls.claimable_today) {
     cta.textContent = 'Claim';
     cta.classList.remove('claimed');
-    sub.textContent = `Day ${ls.ladder_day} reward ready — tap to claim`;
+    sub.textContent = `Day ${ls.ladder_day} reward ready`;
   } else {
-    cta.textContent = '✓ Done';
+    cta.textContent = 'Claimed';
     cta.classList.add('claimed');
     sub.textContent = 'Come back tomorrow to keep your streak';
   }
@@ -4719,60 +3930,80 @@ async function releaseOverflow(claimId, btn, name, sellValue) {
 let matchState = null;
 let matchDifficulty = 'medium';
 let matchQuota = null;
+let matchQuotaRequest = 0;
+let quickMatchStep = 'intro';
+let quickMatchActionPending = false;
 
 function setMatchDifficulty(d) {
   haptic('light');
   matchDifficulty = d;
-  document.querySelectorAll('#screen-match [data-diff]').forEach(c =>
-    c.classList.toggle('active', c.dataset.diff === d));
+  document.querySelectorAll('#screen-match [data-diff]').forEach(button => {
+    button.setAttribute('aria-pressed', String(button.dataset.diff === d));
+  });
   const hint = document.getElementById('diff-hint');
   if (hint) {
     hint.textContent = ({
-      easy: 'Opponent rated -8 OVR vs your XI average',
-      medium: 'Opponent rating = your XI average',
-      hard: 'Opponent rated +8 OVR vs your XI average',
+      easy: 'Opponent rating is 8 points below your XI average.',
+      medium: 'Opponent rating matches your XI average.',
+      hard: 'Opponent rating is 8 points above your XI average.',
     })[d];
   }
 }
 
 function showMatchStep(step) {
+  quickMatchStep = step;
   ['intro', 'toss', 'phases', 'innings-break', 'playing', 'result'].forEach(s => {
     const el = document.getElementById('match-step-' + s);
     if (el) el.style.display = (s === step) ? 'block' : 'none';
   });
-  // Refresh quota when returning to intro
+  renderResumeBanner(lastInitData?.live_match);
   if (step === 'intro') loadMatchQuota();
 }
 
+function openQuickMatch() {
+  if (quickMatchStep === 'result') resetMatchScreen();
+  else if (quickMatchStep === 'intro') loadMatchQuota();
+}
+
 function resetMatchScreen() {
-  // Best-effort abandon if a match is in flight
-  if (matchState && matchState.match_id && !matchState.complete) {
-    api('/api/webapp/quickmatch/abandon', {}).catch(() => {});
-  }
   matchState = null;
   showMatchStep('intro');
+}
+
+async function endQuickMatch(button) {
+  if (quickMatchActionPending) return;
+  quickMatchActionPending = true;
+  button.disabled = true;
+  try {
+    if (!await askConfirm('End this Quick Match? The current score will be lost.')) return;
+    const { ok, data } = await api('/api/webapp/quickmatch/abandon', {});
+    if (ok) resetMatchScreen();
+    else toast(data.message || 'Could not end match. Try again.', 'error');
+  } finally {
+    quickMatchActionPending = false;
+    button.disabled = false;
+  }
 }
 
 async function loadMatchQuota() {
   const display = document.getElementById('qm-quota-display');
   const btn = document.getElementById('qm-play-button');
   if (!display) return;
+  const request = ++matchQuotaRequest;
   const { ok, data } = await api('/api/webapp/quickmatch/quota', {});
-  if (!ok) { display.textContent = '—'; return; }
-  matchQuota = data;
-  const used = data.used || 0, limit = data.limit || 5, rem = data.remaining || 0;
-  display.innerHTML = `<span style="color:${rem === 0 ? 'var(--red)' : 'var(--accent)'};">${used}</span><span style="color:var(--muted);"> / ${limit}</span>`;
-  if (btn) {
-    if (rem <= 0) {
-      btn.disabled = true;
-      btn.textContent = '🚫 Daily limit reached';
-      btn.style.opacity = '0.55';
-    } else {
-      btn.disabled = false;
-      btn.textContent = `🎲 Toss & Play (${rem} left)`;
-      btn.style.opacity = '1';
-    }
+  if (request !== matchQuotaRequest) return;
+  if (!ok) {
+    matchQuota = null;
+    display.textContent = 'Limit unavailable';
+    btn.disabled = false;
+    btn.textContent = 'Go to toss';
+    return;
   }
+  matchQuota = data;
+  const remaining = data.remaining;
+  display.textContent = `${remaining} of ${data.limit} left`;
+  btn.disabled = remaining <= 0;
+  btn.textContent = remaining <= 0 ? 'Daily limit reached' : 'Go to toss';
 }
 
 function startMatch() {
@@ -4785,13 +4016,15 @@ function startMatch() {
 }
 
 const PHASE_INFO = [
-  { name: 'Powerplay', overs: 'Overs 1-6', icon: '⚡' },
-  { name: 'Middle Overs', overs: 'Overs 7-15', icon: '🎯' },
-  { name: 'Death Overs', overs: 'Overs 16-20', icon: '🔥' },
+  { name: 'Powerplay', overs: 'Overs 1–6' },
+  { name: 'Middle overs', overs: 'Overs 7–15' },
+  { name: 'Death overs', overs: 'Overs 16–20' },
 ];
 
 async function submitToss(choice) {
+  if (quickMatchStep !== 'toss') return;
   haptic('medium');
+  matchQuotaRequest++;
   showMatchStep('playing');
   const { ok, data } = await api('/api/webapp/quickmatch/start', {
     toss_choice: choice,
@@ -4803,7 +4036,6 @@ async function submitToss(choice) {
       showXiErrorModal(data.errors || [data.message || 'XI invalid']);
     } else if (data.error === 'daily_limit_reached') {
       showMatchStep('intro');
-      loadMatchQuota();
       toast(data.message, 'error');
     } else {
       toast(data.message || 'Could not start match', 'error');
@@ -4852,7 +4084,7 @@ function showXiErrorModal(errors) {
   document.body.appendChild(overlay);
 }
 
-function renderPhase() {
+function renderPhase(phaseResult = null) {
   if (!matchState) return;
   const inn = matchState.innings;
   const ph = matchState.phase_index;
@@ -4860,7 +4092,7 @@ function renderPhase() {
 
   document.getElementById('phases-progress').textContent =
     `Innings ${inn} · Phase ${ph + 1}/3`;
-  document.getElementById('phases-name').textContent = `${phaseInfo.icon} ${phaseInfo.name}`;
+  document.getElementById('phases-name').textContent = phaseInfo.name;
   document.getElementById('phases-overs').textContent = phaseInfo.overs;
 
   const ctx = document.getElementById('phases-context');
@@ -4872,44 +4104,31 @@ function renderPhase() {
   const balls = currentInn.balls;
   const overs = formatOvers(balls);
 
-  let situationLine = '';
-  if (inn === 2 && matchState.target) {
-    const need = matchState.target - score;
-    situationLine = `<div style="font-size:0.85rem;color:var(--accent);margin-top:0.4rem;font-weight:600;">
-      Need <b>${need}</b> to win
-    </div>`;
-  }
+  const toss = inn === 1 && ph === 0 && typeof matchState.toss_won === 'boolean'
+    ? `<p class="match-toss-result">${matchState.toss_won ? 'You won the toss' : 'Opponent won the toss'} · ${userBatting ? 'Batting first' : 'Bowling first'}</p>`
+    : '';
+  const target = inn === 2 && matchState.target
+    ? `<p class="match-toss-result">Target ${matchState.target} · ${matchState.target - score} runs needed</p>`
+    : '';
+  const progress = PHASE_INFO.map((_, i) => `<span class="${i < ph ? 'played' : i === ph ? 'current' : ''}"></span>`).join('');
+  const history = currentInn.phase_history || [];
+  const latest = phaseResult || history[history.length - 1];
 
-  let historyLine = '';
-  if (currentInn.phase_history && currentInn.phase_history.length) {
-    const last = currentInn.phase_history[currentInn.phase_history.length - 1];
-    const yourTactic = last.user_choice || last.user_bowling_choice || '—';
-    historyLine = `
-      <div style="font-size:0.72rem;color:var(--muted);margin-top:0.6rem;line-height:1.5;border-top:1px solid var(--border);padding-top:0.6rem;">
-        Previous phase: you <b>${escapeHtml(yourTactic)}</b>, bot <b>${escapeHtml(last.bot_choice)}</b><br>
-        +${last.runs} runs · ${last.wickets_lost} wkt
-      </div>
-    `;
-  }
-
-  ctx.style.display = 'block';
+  ctx.classList.toggle('is-updated', Boolean(phaseResult));
   ctx.innerHTML = `
-    <div style="font-size:0.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;">
-      ${userBatting ? '🏏 You are batting' : '⚾ You are bowling'}
+    <div class="match-score-line">
+      <strong>${score}/${wickets}</strong>
+      <span>${userBatting ? 'Batting' : 'Bowling'} · ${overs} overs</span>
     </div>
-    <div style="font-size:1.6rem;font-weight:800;margin-top:0.3rem;">
-      ${score}<span style="color:var(--muted);font-size:1.1rem;">/${wickets}</span>
-      <span style="color:var(--muted);font-size:0.9rem;font-weight:400;"> (${overs})</span>
-    </div>
-    ${situationLine}
-    ${historyLine}
+    <div class="match-phase-progress" aria-hidden="true">${progress}</div>
+    ${toss}${target}${latest ? phaseSummary(latest) : ''}
   `;
 
   const choicesEl = document.getElementById('phases-choices-hint');
   if (choicesEl) {
     choicesEl.textContent = userBatting
-      ? 'How will your batters play?'
-      : 'How will your bowlers attack?';
+      ? 'Choose a batting tactic'
+      : 'Choose a bowling tactic';
   }
 }
 
@@ -4920,107 +4139,66 @@ function formatOvers(balls) {
 }
 
 async function pickPhase(choice) {
+  if (!matchState || quickMatchActionPending || quickMatchStep !== 'phases') return;
   haptic('medium');
-  if (!matchState) return;
-  document.querySelectorAll('#match-step-phases button').forEach(b => b.disabled = true);
+  quickMatchActionPending = true;
+  const buttons = document.querySelectorAll('#match-step-phases button');
+  buttons.forEach(button => button.disabled = true);
+  try {
+    const { ok, data } = await api('/api/webapp/quickmatch/phase', { choice });
+    if (!ok) {
+      toast(data.message || 'Could not play this phase. Try again.', 'error');
+      if (data.error === 'no_match') resetMatchScreen();
+      return;
+    }
 
-  const { ok, data } = await api('/api/webapp/quickmatch/phase', { choice });
-  document.querySelectorAll('#match-step-phases button').forEach(b => b.disabled = false);
-
-  if (!ok) {
-    toast(data.message || 'Phase failed', 'error');
-    if (data.error === 'no_match') resetMatchScreen();
-    return;
+    matchState = data.state;
+    if (data.match_complete) {
+      if (data.quota) matchQuota = data.quota;
+      renderMatchResult(data.scorecard, data.phase_result);
+      hapticNotif(data.scorecard.user_won === true ? 'success'
+                : data.scorecard.user_won === false ? 'error' : 'warning');
+      showMatchStep('result');
+      refreshDashboard();
+    } else if (data.innings_complete) {
+      showInningsBreak(data.phase_result);
+    } else {
+      renderPhase(data.phase_result);
+    }
+  } finally {
+    quickMatchActionPending = false;
+    buttons.forEach(button => button.disabled = false);
   }
-
-  matchState = data.state;
-  const pr = data.phase_result;
-
-  await showPhaseResult(pr);
-
-  if (data.match_complete) {
-    if (data.quota) matchQuota = data.quota;
-    renderMatchResult(data.scorecard);
-    hapticNotif(data.scorecard.user_won === true ? 'success'
-              : data.scorecard.user_won === false ? 'error' : 'warning');
-    showMatchStep('result');
-    refreshDashboard();
-    return;
-  }
-
-  if (data.innings_complete) {
-    showInningsBreak();
-    return;
-  }
-
-  renderPhase();
 }
 
-async function showPhaseResult(pr) {
-  const overlay = document.createElement('div');
-  overlay.className = 'phase-result-overlay';
-  const dir = pr.runs >= 50 ? 'big' : (pr.runs >= 30 ? 'good' : 'meh');
-  overlay.innerHTML = `
-    <div class="phase-result-card phase-${dir}">
-      <div style="font-size:0.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;">
-        ${escapeHtml(pr.name)} done
-      </div>
-      <div style="font-size:2.2rem;font-weight:800;margin:0.4rem 0;">
-        ${pr.runs}<span style="font-size:1.1rem;color:var(--muted);"> runs</span>
-      </div>
-      <div style="font-size:0.85rem;color:var(--muted);">
-        ${pr.wickets_lost} wkt${pr.wickets_lost === 1 ? '' : 's'} ·
-        Score: <b style="color:var(--text);">${pr.score_after}/${pr.wickets_after}</b>
-      </div>
-      <div style="font-size:0.72rem;color:var(--muted);margin-top:0.6rem;">
-        You: ${escapeHtml(pr.user_choice || pr.user_bowling_choice || '—')} ·
-        Bot: ${escapeHtml(pr.bot_choice)}
-      </div>
-    </div>
-  `;
-  document.body.appendChild(overlay);
-  await new Promise(r => setTimeout(r, 1400));
-  overlay.style.opacity = '0';
-  await new Promise(r => setTimeout(r, 200));
-  overlay.remove();
+function phaseSummary(result) {
+  const wickets = Number(result.wickets_lost) || 0;
+  const runs = Number(result.runs) || 0;
+  const yourTactic = result.user_choice || result.user_bowling_choice;
+  const tactics = yourTactic && result.bot_choice
+    ? `<span>Your tactic · ${escapeHtml(yourTactic)} / Opponent · ${escapeHtml(result.bot_choice)}</span>`
+    : '';
+  return `<p class="match-phase-update">${escapeHtml(result.name)} complete · ${runs} run${runs === 1 ? '' : 's'} · ${wickets} wicket${wickets === 1 ? '' : 's'}${tactics}</p>`;
 }
 
-function showInningsBreak() {
-  showMatchStep('innings-break');
-  const inn1 = matchState.innings_1;
-  const target = matchState.target;
-  const userBatsFirst = matchState.user_bats_first;
+function showInningsBreak(phaseResult) {
+  const first = matchState.innings_1;
   const el = document.getElementById('innings-break-content');
   el.innerHTML = `
-    <div style="text-align:center;padding:1rem 0;">
-      <div style="font-size:3rem;">🏏</div>
-      <h2 style="margin:0.5rem 0;">Innings Break</h2>
-    </div>
-    <div class="card" style="padding: 1rem 1.2rem;">
-      <div style="text-align:center;">
-        <div style="font-size:0.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;">
-          ${userBatsFirst ? 'You scored' : 'Opponent scored'}
-        </div>
-        <div style="font-size:2rem;font-weight:800;margin-top:0.3rem;">
-          ${inn1.runs}<span style="color:var(--muted);font-size:1.2rem;">/${inn1.wickets}</span>
-        </div>
-        <div style="font-size:0.85rem;color:var(--accent);margin-top:0.4rem;font-weight:700;">
-          Target: ${target}
-        </div>
+    <header class="page-heading">
+      <h2>Innings break</h2>
+      <button type="button" class="app-secondary" onclick="endQuickMatch(this)">End match</button>
+      <p>${matchState.user_bats_first ? 'Your XI bowls next.' : 'Your XI bats next.'}</p>
+    </header>
+    <div class="card match-score is-updated">
+      <div class="match-score-line">
+        <strong>${first.runs}/${first.wickets}</strong><span>Target ${matchState.target}</span>
       </div>
+      ${phaseResult ? phaseSummary(phaseResult) : ''}
     </div>
-    <div class="card" style="margin-top:0.8rem;">
-      <p class="card-title">${userBatsFirst ? "Now defending" : 'Now chasing'}</p>
-      <p style="font-size:0.85rem;color:var(--muted);margin:0;">
-        ${userBatsFirst
-          ? 'Your bowlers need to defend this total. Bigger total = more flexibility.'
-          : `You need ${target} runs to win in 20 overs. Build phase by phase.`}
-      </p>
-    </div>
-    <button class="spin-button" onclick="continueToInnings2()" style="margin-top:1rem;width:100%;">
-      ▶ Start Innings 2
-    </button>
+    <button type="button" class="app-primary match-play" onclick="continueToInnings2()">Start second innings</button>
   `;
+  showMatchStep('innings-break');
 }
 
 function continueToInnings2() {
@@ -5029,7 +4207,7 @@ function continueToInnings2() {
   showMatchStep('phases');
 }
 
-function renderMatchResult(r) {
+function renderMatchResult(r, phaseResult) {
   const el = document.getElementById('match-step-result');
   const inn1 = r.innings_1, inn2 = r.innings_2;
   const userBatsFirst = r.user_bats_first;
@@ -5038,13 +4216,13 @@ function renderMatchResult(r) {
 
   let outcomeText, outcomeColor;
   if (r.user_won === true) {
-    outcomeText = '🏆 YOU WIN!';
-    outcomeColor = 'var(--green)';
+    outcomeText = 'You won';
+    outcomeColor = 'var(--success)';
   } else if (r.user_won === false) {
-    outcomeText = '💔 You lost';
+    outcomeText = 'Opponent won';
     outcomeColor = 'var(--red)';
   } else {
-    outcomeText = '🤝 Match tied';
+    outcomeText = 'Match tied';
     outcomeColor = 'var(--accent)';
   }
 
@@ -5088,36 +4266,23 @@ function renderMatchResult(r) {
   `;
 
   el.innerHTML = `
-    <div style="text-align:center; padding: 0.5rem 0 1.2rem;">
-      <div style="font-size:1.8rem; font-weight:800; color:${outcomeColor}; margin-bottom: 0.4rem;">
-        ${outcomeText}
-      </div>
-      ${r.coin_reward > 0 ? `<div style="color:var(--accent); font-weight:700;">+${r.coin_reward} 🪙</div>` : ''}
-    </div>
+    <header class="page-heading">
+      <h2 style="color:${outcomeColor};">${outcomeText}</h2>
+      ${r.coin_reward > 0 ? `<span class="rank-summary">+${r.coin_reward} coins</span>` : ''}
+    </header>
 
-    <div class="card" style="padding: 0;">
-      <div style="display:grid; grid-template-columns: 1fr 1fr;">
-        <div style="padding: 1rem; text-align: center; border-right: 1px solid var(--border);">
-          <div style="color:var(--muted); font-size: 0.7rem; text-transform: uppercase;">You · ${r.user_team_rating}</div>
-          <div style="font-size: 1.8rem; font-weight: 800; margin-top: 0.3rem;">
-            ${userInn.total_runs}<span style="color:var(--muted); font-size: 1.1rem;">/${userInn.total_wickets}</span>
-          </div>
-        </div>
-        <div style="padding: 1rem; text-align: center;">
-          <div style="color:var(--muted); font-size: 0.7rem; text-transform: uppercase;">Bot · ${r.opponent_team_rating}</div>
-          <div style="font-size: 1.8rem; font-weight: 800; margin-top: 0.3rem;">
-            ${botInn.total_runs}<span style="color:var(--muted); font-size: 1.1rem;">/${botInn.total_wickets}</span>
-          </div>
-        </div>
-      </div>
+    <div class="card match-score is-updated">
+      <dl class="match-result-scores">
+        <div><dt>Your XI · ${r.user_team_rating} OVR</dt><dd class="match-score-line"><strong>${userInn.total_runs}/${userInn.total_wickets}</strong></dd></div>
+        <div><dt>Opponent · ${r.opponent_team_rating} OVR</dt><dd class="match-score-line"><strong>${botInn.total_runs}/${botInn.total_wickets}</strong></dd></div>
+      </dl>
+      ${phaseResult ? phaseSummary(phaseResult) : ''}
     </div>
 
     ${momBlock}
     ${scorecardBlock}
 
-    <button class="spin-button" onclick="resetMatchScreen()" style="margin-top: 1rem; width: 100%;">
-      🎲 Play Again
-    </button>
+    <button type="button" class="app-primary match-play" onclick="resetMatchScreen()">Play again</button>
   `;
 }
 
@@ -5162,7 +4327,7 @@ function renderInningsScorecard(inn, userBatsFirst, innNum) {
       </td>
       <td style="text-align:right;">${b.overs}</td>
       <td style="text-align:right; color:var(--muted);">${b.runs}</td>
-      <td style="text-align:right; font-weight: 700; color: ${b.wickets >= 3 ? 'var(--green)' : 'var(--text)'};">${b.wickets}</td>
+      <td style="text-align:right; font-weight: 700; color: ${b.wickets >= 3 ? 'var(--success)' : 'var(--text)'};">${b.wickets}</td>
       <td style="text-align:right; color:var(--muted);">${b.economy}</td>
     </tr>
   `).join('');
@@ -5214,14 +4379,15 @@ function renderInnings(title, inn) {
 
 // ════════════════ Leaderboard ════════════════
 let lbMetric = 'wins';
+let lbRequest = 0;
 
 // One line under the chips saying what the board actually measures — "Streak"
 // and "Active Days" are both ambiguous without it (best-ever vs current run,
 // days played vs days logged in).
 const LB_CAPTIONS = {
-  wins: 'Career wins across every ranked match. The AI opponent is not listed.',
+  wins: 'Career wins in ranked matches.',
   win_rate: 'Win percentage, minimum 5 matches played.',
-  streak: 'Longest run of wins ever reached — a defeat resets the live streak.',
+  streak: 'Longest run of consecutive wins.',
   active_days: 'Days on which you played at least one match.',
   coins: 'Current coin balance.',
   roster_rating: 'Average rating of your squad, minimum 5 cards.',
@@ -5230,12 +4396,14 @@ const LB_CAPTIONS = {
 function setLeaderboardMetric(m) {
   haptic('light');
   lbMetric = m;
-  document.querySelectorAll('#screen-leaderboard .chip').forEach(c =>
-    c.classList.toggle('active', c.dataset.metric === m));
+  document.querySelectorAll('#screen-leaderboard [data-metric]').forEach(button => {
+    button.setAttribute('aria-pressed', String(button.dataset.metric === m));
+  });
   loadLeaderboard();
 }
 
 async function loadLeaderboard() {
+  const request = ++lbRequest;
   const el = document.getElementById('leaderboard-list');
   const rankPill = document.getElementById('my-rank-pill');
   const caption = document.getElementById('lb-caption');
@@ -5245,40 +4413,38 @@ async function loadLeaderboard() {
   const { ok, data } = await api('/api/webapp/leaderboard', {
     metric: lbMetric, limit: 30,
   });
+  if (request !== lbRequest) return;
   if (!ok) {
-    el.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Failed')}</div>`;
+    el.innerHTML = `<div class="empty">${escapeHtml(data.message || 'Could not load leaderboard.')}
+      <button type="button" class="app-secondary" onclick="loadLeaderboard()">Try again</button></div>`;
     return;
   }
   if (!data.rows || !data.rows.length) {
-    el.innerHTML = `<div class="empty"><div class="icon">📊</div>Not enough data yet</div>`;
+    el.innerHTML = `<div class="empty">No players qualify for this ranking yet.</div>`;
     return;
   }
   if (data.my_rank) {
     rankPill.style.display = 'inline-block';
-    rankPill.textContent = `You: #${data.my_rank}`;
+    rankPill.textContent = `Your rank · ${data.my_rank}`;
   }
-  el.innerHTML = data.rows.map(r => lbRow(r)).join('');
+  el.innerHTML = `<ol class="lb-list home-panel">${data.rows.map(lbRow).join('')}</ol>`;
 }
 
 function lbRow(r) {
   const cls = ['lb-row'];
   if (r.is_me) cls.push('me');
-  let rankCls = '';
-  if (r.rank === 1) rankCls = 'gold';
-  else if (r.rank === 2) rankCls = 'silver';
-  else if (r.rank === 3) rankCls = 'bronze';
   const display = r.team_name || r.first_name || r.username || `#${r.telegram_id}`;
   const sub = r.team_name && (r.first_name || r.username)
     ? escapeHtml(r.first_name || '@' + r.username) : '';
   return `
-    <div class="${cls.join(' ')}">
-      <div class="lb-rank ${rankCls}">${r.rank}</div>
+    <li class="${cls.join(' ')}">
+      <span class="lb-rank" aria-label="Rank ${r.rank}">${r.rank}</span>
       <div class="lb-info">
-        <div class="lb-name">${escapeHtml(display)}${r.is_me ? ' <span style="color:var(--accent);font-size:0.7rem;">(YOU)</span>' : ''}</div>
+        <div class="lb-name">${escapeHtml(display)}${r.is_me ? ' <span class="lb-you">You</span>' : ''}</div>
         ${sub ? `<div class="lb-team">${sub}</div>` : ''}
       </div>
-      <div class="lb-value">${escapeHtml(r.label)}</div>
-    </div>
+      <span class="lb-value">${escapeHtml(r.label)}</span>
+    </li>
   `;
 }
 
@@ -6068,7 +5234,7 @@ function launchConfetti(count = 60, tier = '') {
     ? ['#ffd966', '#ff8c00', '#fff2b3', '#ffb347']
     : tier === 'epic'
     ? ['#a78bfa', '#7c5ce0', '#c4b5fd', '#ffd966']
-    : ['#ffd966', '#00d4aa', '#4a9eff', '#ff4d6d', '#a78bfa'];
+    : ['#ffd966', '#f0c188', '#4a9eff', '#ff4d6d', '#a78bfa'];
   const layer = document.createElement('div');
   layer.className = 'confetti-layer';
   document.body.appendChild(layer);
@@ -6615,7 +5781,8 @@ async function loadMarket() {
   const load = ++marketLoad;
   marketData = null;
   marketEl('list').innerHTML = '<div class="empty" role="status">Loading listings…</div>';
-  for (const id of ['offer', 'count', 'balance', 'capacity']) marketEl(id).textContent = '';
+  for (const id of ['offer', 'count']) marketEl(id).textContent = '';
+  for (const id of ['balance', 'capacity']) marketEl(id).textContent = '—';
   const { ok, data } = await api('/api/webapp/market', {});
   if (load !== marketLoad) return;
   if (!ok) {
@@ -6797,7 +5964,7 @@ function renderXiChemistry() {
     <div class="xi-chemistry-suggestion">
       <div><b>${escapeHtml(item.incoming.name)}</b> (${escapeHtml(item.incoming.version)})
         for ${escapeHtml(item.outgoing.name)}</div>
-      <div style="color:var(--green);font-weight:700;margin-top:.25rem;">
+      <div style="color:var(--success);font-weight:700;margin-top:.25rem;">
         +${item.delta} CHEM · ${item.before.total} → ${item.after.total}/100</div>
       <div style="color:var(--muted);margin-top:.2rem;">Card OVR ${item.outgoing.rating} → ${item.incoming.rating}
         (${signedChange(item.rating_delta)})</div>
@@ -7031,7 +6198,7 @@ async function previewSwap(benchRosterId, xiRosterId) {
   ] : [];
   const warning = p.warnings.length
     ? `<div class="swap-warning"><b>XI needs attention before a match:</b><ul>${p.warnings.map(text => `<li>${escapeHtml(text)}</li>`).join('')}</ul></div>`
-    : '<p style="color:var(--green);font-size:.8rem;">✓ This swap keeps a valid XI.</p>';
+    : '<p style="color:var(--success);font-size:.8rem;">✓ This swap keeps a valid XI.</p>';
   swapModal('🧪 Swap preview', `
     <p><b>In:</b> ${escapeHtml(p.incoming.name)} (${escapeHtml(p.incoming.version)})<br>
       <b>Out:</b> ${escapeHtml(p.outgoing.name)} (${escapeHtml(p.outgoing.version)})</p>
@@ -7134,7 +6301,7 @@ async function loadInvite() {
       <p class="card-title">Your invites</p>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.5rem;text-align:center;">
         <div>
-          <div style="font-size:1.6rem;font-weight:800;color:var(--green);">${stats.completed}</div>
+          <div style="font-size:1.6rem;font-weight:800;color:var(--success);">${stats.completed}</div>
           <div style="font-size:0.7rem;color:var(--muted);text-transform:uppercase;">Joined</div>
         </div>
         <div>
@@ -7228,7 +6395,7 @@ async function loadInvite() {
         </div>
         <div style="text-align:right;">
           ${iv.completed_at
-            ? '<span style="color:var(--green);font-weight:700;font-size:0.75rem;">✅ Joined</span>'
+            ? '<span style="color:var(--success);font-weight:700;font-size:0.75rem;">✅ Joined</span>'
             : '<span style="color:var(--accent);font-size:0.75rem;">⏳ Pending</span>'}
         </div>
       </div>
@@ -7332,14 +6499,16 @@ let cachedQuests = null;  // {daily: [], weekly: [], monthly: []}
 function switchHomeQuestTab(qtype) {
   haptic('light');
   currentHomeQuestTab = qtype;
-  document.querySelectorAll('[data-home-qtab]').forEach(el => el.classList.toggle('active', el.dataset.homeQtab === qtype));
-  renderHomeQuests();
+  document.querySelectorAll('[data-home-qtab]').forEach(btn => {
+    btn.setAttribute('aria-pressed', String(btn.dataset.homeQtab === qtype));
+  });
+  renderHomeQuests(true);
 }
 
 function questRewardLabel(q) {
-  if (q.reward_coins) return `+${q.reward_coins.toLocaleString()} 🪙`;
-  if (q.reward_gems) return `+${q.reward_gems} 💎`;
-  if (q.reward_points) return `+${q.reward_points} QP`;
+  if (q.reward_coins) return `+${q.reward_coins.toLocaleString()} coins`;
+  if (q.reward_gems) return `+${q.reward_gems} gems`;
+  if (q.reward_points) return `+${q.reward_points} points`;
   return 'Reward';
 }
 
@@ -7348,44 +6517,48 @@ function openHomeQuestPeriod() {
   navigate('quests');
 }
 
-function renderHomeQuests() {
+function renderHomeQuests(animate = false) {
   const el = document.getElementById('home-quest-list');
   if (!el || !cachedQuests) return;
   const list = cachedQuests[currentHomeQuestTab] || [];
-  const title = document.getElementById('mission-hub-title');
-  const sub = document.getElementById('mission-hub-sub');
   const footer = document.getElementById('home-quest-footer');
-  title.textContent = currentHomeQuestTab === 'daily' ? "Today's quests" : 'Monthly quests';
+  const claim = document.getElementById('home-quest-claim');
   const ready = list.filter(q => q.completed && !q.claimed).length;
-  sub.textContent = ready ? `${ready} reward${ready === 1 ? '' : 's'} ready to claim` : '';
+  claim.hidden = !ready;
+  claim.disabled = questClaimBusy;
+  el.classList.toggle('animate-progress', animate);
   if (!list.length) {
-    el.innerHTML = `<div class="mission-loading">🎯 No ${currentHomeQuestTab} quests right now.</div>`;
-    footer.textContent = 'Check back soon for new missions.';
+    const period = currentHomeQuestTab === 'daily' ? 'daily' : 'monthly';
+    el.innerHTML = `<p class="mission-loading">No ${period} quests right now.</p>`;
+    footer.textContent = '';
     return;
   }
   const done = list.filter(q => q.completed).length;
-  footer.textContent = `${done}/${list.length} complete`;
+  footer.textContent = `${done} of ${list.length} complete` + (ready ? ` · ${ready} to claim` : '');
   const priority = q => q.claimed ? -1 : q.completed ? 101 : q.percent;
   const ranked = [...list].sort((a, b) => priority(b) - priority(a));
   el.innerHTML = ranked.map(q => `
-    <button class="home-quest" onclick="openHomeQuestPeriod()">
-      <div class="home-quest-icon">${escapeHtml(q.emoji)}</div>
-      <div>
-        <div class="home-quest-title">${escapeHtml(q.title)}</div>
-        <div class="home-quest-progress">
-          <div class="home-quest-progress-track"><div class="home-quest-progress-fill ${q.completed ? 'done' : ''}" style="width:${q.percent}%;"></div></div>
+    <button type="button" class="home-quest" onclick="openHomeQuestPeriod()">
+      <span class="home-quest-copy">
+        <span class="home-quest-title">${escapeHtml(q.title)}</span>
+        <span class="home-quest-progress">
+          <span class="home-quest-progress-track" aria-hidden="true">
+            <span class="home-quest-progress-fill ${q.completed ? 'done' : ''}" style="width:${q.percent}%"></span>
+          </span>
           <span class="home-quest-count">${q.progress}/${q.target}</span>
-        </div>
-      </div>
-      <div class="home-quest-reward">${q.claimed ? 'Claimed' : questRewardLabel(q)}</div>
+        </span>
+      </span>
+      <span class="home-quest-reward${q.completed && !q.claimed ? ' ready' : ''}">
+        ${q.claimed ? 'Claimed' : questRewardLabel(q)}
+      </span>
     </button>
   `).join('');
 }
 
 function switchQuestTab(qtype) {
   currentQuestTab = qtype;
-  document.querySelectorAll('.quest-tab').forEach(el => {
-    el.classList.toggle('active', el.dataset.qtab === qtype);
+  document.querySelectorAll('[data-qtab]').forEach(button => {
+    button.setAttribute('aria-pressed', String(button.dataset.qtab === qtype));
   });
   renderQuestList();
 }
@@ -7759,45 +6932,38 @@ function renderQuestList() {
   if (!cachedQuests) return;
   const list = cachedQuests[currentQuestTab] || [];
   if (!list.length) {
-    el.innerHTML = `<div class="empty"><div class="icon">🎯</div>No ${currentQuestTab} quests right now</div>`;
+    el.innerHTML = `<div class="empty">No ${currentQuestTab} quests right now.</div>`;
     return;
   }
-  // Check if any are completed-unclaimed for the bulk claim button
-  const completedUnclaimed = list.filter(q => q.completed && !q.claimed).length;
-  let topBar = '';
-  if (completedUnclaimed > 0) {
-    topBar = `
-      <div style="background:rgba(0,212,170,0.08);border:1px solid var(--green);border-radius:8px;padding:0.5rem 0.7rem;margin-bottom:0.6rem;display:flex;justify-content:space-between;align-items:center;">
-        <span style="font-size:0.85rem;"><b>${completedUnclaimed}</b> quest${completedUnclaimed === 1 ? '' : 's'} ready</span>
-        <button class="quest-claim-btn" onclick="claimAllQuests('${currentQuestTab}')">🎁 Claim all</button>
-      </div>
-    `;
-  }
-  el.innerHTML = topBar + list.map(q => `
-    <div class="quest-row ${q.completed ? 'completed' : ''} ${q.claimed ? 'claimed' : ''}">
-      <div class="quest-row-header">
-        <div class="quest-row-emoji">${escapeHtml(q.emoji)}</div>
-        <div style="flex:1;">
-          <div class="quest-row-title">${escapeHtml(q.title)}</div>
-          ${q.description ? `<div class="quest-row-desc">${escapeHtml(q.description)}</div>` : ''}
-        </div>
-      </div>
-      <div class="quest-progress-wrap">
-        <div class="quest-progress-bar ${q.completed ? 'completed' : ''}" style="width:${q.percent}%;"></div>
-      </div>
-      <div class="quest-meta-row">
-        <span style="color:var(--muted);font-size:0.75rem;">${q.progress} / ${q.target}</span>
-        <span class="quest-rewards">
-          ${q.reward_coins ? `+${q.reward_coins.toLocaleString()}🪙 ` : ''}
-          ${q.reward_gems ? `+${q.reward_gems}💎 ` : ''}
-          ${q.reward_points ? `+${q.reward_points} QP` : ''}
+  const rewardsReady = list.filter(q => q.completed && !q.claimed).length;
+  const claimAll = rewardsReady
+    ? `<div class="quest-claim-all">
+        <span>${rewardsReady} reward${rewardsReady === 1 ? '' : 's'} ready to claim</span>
+        <button type="button" class="quest-claim-btn app-primary" onclick="claimAllQuests('${currentQuestTab}')">Claim all</button>
+      </div>` : '';
+  el.innerHTML = claimAll + '<div class="home-panel">' + list.map(q => {
+    const rewards = [
+      q.reward_coins ? `+${q.reward_coins.toLocaleString()} coins` : '',
+      q.reward_gems ? `+${q.reward_gems} gems` : '',
+      q.reward_points ? `+${q.reward_points} quest points` : '',
+    ].filter(Boolean).join(' · ');
+    const action = q.claimed
+      ? '<span class="quest-claimed">Claimed</span>'
+      : q.completed
+        ? `<button type="button" class="quest-claim-btn app-secondary" onclick="claimQuest(${q.quest_id})">Claim reward</button>`
+        : '';
+    return `<article class="quest-row">
+      <h3 class="quest-row-title">${escapeHtml(q.title)}</h3>
+      ${q.description ? `<p class="quest-row-desc">${escapeHtml(q.description)}</p>` : ''}
+      <div class="quest-progress">
+        <span class="home-quest-progress-track" aria-hidden="true">
+          <span class="home-quest-progress-fill ${q.completed ? 'done' : ''}" style="width:${q.percent}%"></span>
         </span>
+        <span class="home-quest-count">${q.progress}/${q.target}</span>
       </div>
-      ${q.completed && !q.claimed
-        ? `<button class="quest-claim-btn" style="margin-top:0.5rem;width:100%;" onclick="claimQuest(${q.quest_id})">🎁 Claim reward</button>`
-        : (q.claimed ? `<div style="margin-top:0.4rem;color:var(--muted);font-size:0.75rem;text-align:center;">✓ Claimed</div>` : '')}
-    </div>
-  `).join('');
+      <div class="quest-rewards">${rewards}${action}</div>
+    </article>`;
+  }).join('') + '</div>';
 }
 
 // One quest claim at a time, covering both the per-quest buttons and Claim all
@@ -9648,10 +8814,10 @@ window.addEventListener('online', () => {
   if (currentScreen === 'tournament' && !tnDirectoryOpen && !tnArchive) loadTournament(false, true);
 });
 
-function updateTournamentTab(info) {
+function updateTournamentStatus(info) {
   tnLive = (info && info.live && info.tournaments) ? info.tournaments : [];
-  const dot = document.getElementById('tn-live-dot');
-  if (dot) dot.hidden = !tnLive.length;
+  const status = document.getElementById('home-tournament-live');
+  if (status) status.hidden = !tnLive.length;
   if (!tnArchive && tnId && !tnLive.some(t => t.id === tnId)) { tnId = null; tnData = null; tnInvalidateStats(); }
 }
 
@@ -9677,7 +8843,7 @@ async function loadTournament(force = false, background = false) {
     if (request !== tnRequest || id !== tnId || currentScreen !== 'tournament') return;
     if (!ok) throw new Error(data.message || 'Could not load the tournament');
     if (Array.isArray(data.live_tournaments)) {
-      updateTournamentTab({ live: data.live_tournaments.length > 0, tournaments: data.live_tournaments });
+      updateTournamentStatus({ live: data.live_tournaments.length > 0, tournaments: data.live_tournaments });
     }
     if (currentScreen !== 'tournament') return;
     if (!data.live && !data.archive) {
@@ -9788,7 +8954,6 @@ function renderTnDirectory(filter = tnDirectoryFilter) {
     <div class="hub-actions tn-directory-controls" role="group" aria-label="Competitions">
       <button class="hub-button" aria-pressed="${!archive}" onclick="renderTnDirectory('current')">Live</button>
       <button class="hub-button" aria-pressed="${archive}" onclick="renderTnDirectory('archive')">Completed</button>
-      <button class="hub-button" onclick="navigate('auction')">Franchise auction</button>
     </div>${cards || '<div class="empty">' + (archive ? 'No completed tournaments yet.' : 'No tournament is live right now.') + '</div>'}`;
 }
 
@@ -9974,7 +9139,7 @@ function tnTableHtml(rows, qualify) {
     <tbody>${rows.map(r => `
       <tr class="${r.is_mine ? 'me' : ''} ${qualify && r.pos <= qualify ? 'q' : ''} ${qualify && r.pos === qualify && rows.length > qualify ? 'cut' : ''}">
         <td class="pos">${r.pos}</td>
-        <td class="team"><div class="tn-team">${tnLogo(r)}<div style="min-width:0;"><div class="nm">${escapeHtml(r.name)}${r.points_adjust ? ' <span style="color:var(--muted);">*</span>' : ''}${r.qual ? ` <span title="${escapeHtml(r.qual_note || '')}" style="font-weight:700;color:${r.qual === 'Q' ? 'var(--green, #22c55e)' : 'var(--muted)'};">(${r.qual})</span>` : ''}</div>
+        <td class="team"><div class="tn-team">${tnLogo(r)}<div style="min-width:0;"><div class="nm">${escapeHtml(r.name)}${r.points_adjust ? ' <span style="color:var(--muted);">*</span>' : ''}${r.qual ? ` <span title="${escapeHtml(r.qual_note || '')}" style="font-weight:700;color:${r.qual === 'Q' ? 'var(--success)' : 'var(--muted)'};">(${r.qual})</span>` : ''}</div>
           ${r.form && r.form.length ? `<div class="tn-form">${r.form.map(f => `<span class="${f}">${f}</span>`).join('')}</div>` : ''}</div></div></td>
         <td>${r.played}</td><td>${r.won}</td><td>${r.lost}</td><td>${r.no_result + r.tied}</td>
         <td>${tnNrr(r.nrr)}</td><td class="pts">${r.points}</td>
@@ -10173,7 +9338,7 @@ function maybeFantasyRedirect() {
 
 // (2) Telegram start_param (?startapp=spin) used by group t.me deep links.
 function handleHashDeepLink() {
-  const validScreens = ['home', 'matchcentre', 'wallet', 'rewards', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'profile', 'season', 'clubs', 'playerdetail', 'livematch', 'auction', 'tournament'];
+  const validScreens = ['home', 'matchcentre', 'wallet', 'rewards', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'profile', 'season', 'clubs', 'playerdetail', 'livematch', 'tournament'];
   const alias = {
     // 'wheel' and 'gspin' stay mapped: deep links to the old prize wheel are
     // already out there in group chats and still belong on this screen.
@@ -10203,12 +9368,6 @@ function handleHashDeepLink() {
   // Strip an origin-chat suffix (e.g. "home_c-100123") used to echo Mini App
   // activity back to a group; the tab name is everything before "_c<digits>".
   target = target.replace(/_c-?\d+$/, '');
-  const auctionLink = target.match(/^auction_(\d+)$/);
-  if (auctionLink) {
-    AuctionApp.setSeason(Number(auctionLink[1]));
-    navigate('auction');
-    return;
-  }
   target = alias[target] || target;
   // CMU News / poll links from the channel: news_<id>, poll_<id>, news.
   const newsLink = target.match(/^news_(\d+)$/);
@@ -10228,13 +9387,6 @@ function handleHashDeepLink() {
 (function bootstrap() {
   // Fantasy deep link → jump straight to the picker (no dashboard flash).
   if (maybeFantasyRedirect()) return;
-  // Auction owners may not have a collecting-game account. Open the room
-  // directly; its own signed API checks auction access without a /debut gate.
-  const auctionTarget = START_PARAM || (window.location.hash || '').replace(/^#/, '');
-  if (/^auction(?:_\d+)?(?:_c-?\d+)?$/i.test(auctionTarget)) {
-    handleHashDeepLink();
-    return;
-  }
   const ml = resolveMatchLaunch();
   if (ml) {
     handleHashDeepLink();   // opens the match screen immediately
@@ -10245,7 +9397,7 @@ function handleHashDeepLink() {
 })();
 
 </script>
-<script src="{{ url_for('static', filename='js/miniapp_clubhouse.js', v='2') }}"></script>
+<script src="{{ url_for('static', filename='js/miniapp_clubhouse.js', v='3') }}"></script>
 <script src="{{ url_for('static', filename='js/miniapp_player_hub.js', v='1') }}"></script>
 </body>
 </html>

@@ -24,7 +24,7 @@
   function giftCount(count) {
     const badge = document.getElementById('club-gift-count');
     badge.hidden = !count;
-    badge.textContent = count > 99 ? '99+' : String(count);
+    badge.textContent = (count > 99 ? '99+' : count) + ' new';
     badge.setAttribute('aria-label', count + ' gifts to claim');
   }
 

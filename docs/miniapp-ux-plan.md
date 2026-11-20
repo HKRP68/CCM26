@@ -2,25 +2,32 @@
 
 ## Product direction
 
-The Mini App should feel like a daily cricket companion, not a list of unrelated features. Every screen should answer one clear question: **what is the best thing for the player to do next?**
+The Mini App is a daily cricket companion. Players can go from opening the app
+to resuming a match, claiming a reward, or managing their XI in a few taps.
 
-The visual language should stay premium and sport-focused: a deep stadium-night background, gold highlights for progress and value, green for completed actions, purple for special rewards, rounded cards, and short action-oriented copy. Use **Plus Jakarta Sans** for headings and **Outfit** for interface text so the hierarchy remains clear on small screens.
+The interface uses charcoal surfaces, burgundy for live and ready states, and
+willow tones for primary actions. Outfit is self-hosted for headings, interface
+text and score displays. The Quick Match artwork shows a cricket ball and bat;
+the WebP is served with the rest of the app's static assets.
 
-## Home-screen priority order
+## Home and navigation
 
-1. **Resume an active match** when one exists. This remains the highest-priority interruption because the player is already in a live flow.
-2. **Show today's quests immediately** with progress and rewards. Players should not need to open a separate menu to understand their daily plan.
-3. **Offer a Today / Monthly toggle** beside the quest heading. Monthly goals stay discoverable without competing with the daily loop.
-4. **Pop the free-pack reward once per app session** when it is ready. Keep a pulsing `READY` badge on the Free Pack tile after dismissal so the reward remains visible without repeatedly interrupting the player.
-5. **Keep feature tiles below the mission hub** as secondary navigation.
+1. Resume a live match or an active Quick Match from the main match action.
+2. Show a ready Free Pack inline. The shortcut opens the pack screen.
+3. Show quest progress and rewards for Today and Monthly. Players can claim
+   completed quests as a group from Home or open Quests to claim individually.
+4. Keep Home, Matches, Squad, Market and Rewards available in the main
+   navigation. Leaderboard and Tournament centre are under Matches and Home.
 
-## Interaction rules
+## Match flow and motion
 
-- Prefer one-tap navigation from a progress item to its detailed screen.
-- Use haptic feedback only for meaningful moments: toggles, claims, reward reveals, and match actions.
-- Avoid repeated popups. A reward popup may appear once per session; after dismissal, convert it into a visible tile state.
-- Use plain labels such as **Today**, **Monthly**, **View all**, and **Open free pack** instead of unexplained abbreviations.
-- Always show progress numerically as well as visually so the UI remains understandable without relying on color alone.
+- Keep the Quick Match step and score when a player moves between Mini App
+  screens in the same session. Ending a match takes confirmation and uses the
+  existing abandon action.
+- Show the toss outcome and phase scores where the player picks their next
+  tactic. The score update uses a short reveal and leaves the result available.
+- Use numeric progress alongside quest bars. Reduced-motion settings retain
+  selected states and score feedback with static visuals.
 
 ## Next iterations
 
@@ -41,4 +48,4 @@ The visual language should stay premium and sport-focused: a deep stadium-night 
 
 - Add notification preferences for free-pack availability, daily reset, and match reminders.
 - Review color contrast, reduced-motion behavior, keyboard focus, and screen-reader labels across all interactive components.
-- Measure the funnel from home open → quest interaction → claim and from free-pack popup → pack open.
+- Measure the funnel from home open → quest interaction → claim and from Free Pack shortcut → pack open.

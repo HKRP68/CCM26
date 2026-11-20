@@ -1103,17 +1103,17 @@ class AuctionWebappTests(unittest.TestCase):
         self.refresh_db()
         self.assertEqual(self.db.get(AuctionLot,right['id']).acquisition,self.A.ACQ_RELEASED_TRADE)
 
-    def test_switch_links_preserve_season_and_group(self):
-        from services.miniapp_buttons import auction_button, auction_launch
+    def test_website_switch_links_preserve_season_and_group(self):
+        from urllib.parse import parse_qs, urlsplit
+        from services.miniapp_buttons import auction_launch
         from services import auction_rich
-        with patch.dict(os.environ,{'BOT_USERNAME':'TestBot','MINIAPP_NAME':'arena','WEBAPP_URL':'https://app.example/webapp'}):
-            button=auction_button(self.season)
-            self.assertIn(f'startapp=auction_{self.sid}_c{self.season.chat_id}',button.url)
-            self.assertEqual(auction_launch(f'auction_{self.sid}_c{self.season.chat_id}'),dict(season_id=self.sid,chat_id=self.season.chat_id))
-            private=auction_button(self.season,is_private=True)
-            self.assertEqual(private.web_app.url,f'https://app.example/webapp#auction_{self.sid}')
-            keyboard=auction_rich.bid_keyboard(self.season,None)
-            self.assertTrue(any('Switch to Miniapp' in b.text for row in keyboard.inline_keyboard for b in row))
+        self.assertEqual(auction_launch(f'auction_{self.sid}_c{self.season.chat_id}'),
+                         dict(season_id=self.sid, chat_id=self.season.chat_id))
+        with patch.dict(os.environ, {'FRANCHISE_WEBSITE_URL': 'https://auction.example/franchise'}):
+            keyboard = auction_rich.bid_keyboard(self.season, None)
+            button = next(b for row in keyboard.inline_keyboard for b in row if b.url)
+            self.assertEqual(parse_qs(urlsplit(button.url).query), {
+                'season_id': [str(self.sid)], 'chat_id': [str(self.season.chat_id)]})
         data=self.assert_ok(self.read())
         self.assertTrue(data['season']['telegram_url'].startswith('https://t.me/c/'))
 

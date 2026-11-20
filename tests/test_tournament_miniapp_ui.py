@@ -16,7 +16,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync(process.argv[1], 'utf8');
 const start = source.indexOf('const TN_SUBS =');
 const end = source.indexOf('\nasync function loadTnStats()', start);
-const elements = Object.fromEntries(['tn-content', 'tab-tournament'].map(id => [id, {style:{}, innerHTML:''}]));
+const elements = Object.fromEntries(['tn-content', 'home-tournament-live'].map(id => [id, {style:{}, innerHTML:''}]));
 const pending = [];
 const context = vm.createContext({
   document:{hidden:false,getElementById:id => elements[id],addEventListener:() => {}},
@@ -128,7 +128,7 @@ function boot() {
     clearTimeout(id) { timers.delete(id); },
   });
   vm.runInContext(controller + '\n' + navigation, context);
-  vm.runInContext(`updateTournamentTab({live: true, tournaments: ${JSON.stringify(live)}})`, context);
+  vm.runInContext(`updateTournamentStatus({live: true, tournaments: ${JSON.stringify(live)}})`, context);
   return {context, timers, calls, writes, handlers, waiting, payloads, stats, elements,
     run: code => vm.runInContext(code, context),
     holdReads: value => {holdReads = value;}, holdStats: value => {holdStats = value;},

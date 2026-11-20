@@ -12,16 +12,15 @@ class FranchiseWebsiteLinkTests(unittest.TestCase):
     def setUp(self):
         self.season = SimpleNamespace(id=12, chat_id=-1001234567890)
 
-    def test_website_link_is_a_browser_url_in_groups_and_private_chats(self):
+    def test_website_link_is_a_browser_url(self):
         with patch.dict('os.environ', {'FRANCHISE_WEBSITE_URL': 'https://auction.example/franchise'}):
-            for private in (True, False):
-                button = auction_button(self.season, is_private=private)
-                self.assertEqual(button.text, '🌐 Open auction website')
-                self.assertIsNone(button.web_app)
-                url = urlsplit(button.url)
-                self.assertEqual(url.path, '/franchise')
-                self.assertEqual(parse_qs(url.query), {
-                    'season_id': ['12'], 'chat_id': ['-1001234567890']})
+            button = auction_button(self.season)
+            self.assertEqual(button.text, '🌐 Open auction website')
+            self.assertIsNone(button.web_app)
+            url = urlsplit(button.url)
+            self.assertEqual(url.path, '/franchise')
+            self.assertEqual(parse_qs(url.query), {
+                'season_id': ['12'], 'chat_id': ['-1001234567890']})
 
     def test_existing_query_survives_but_old_route_hints_are_replaced(self):
         with patch.dict('os.environ', {'FRANCHISE_WEBSITE_URL':
@@ -39,7 +38,7 @@ class FranchiseWebsiteLinkTests(unittest.TestCase):
                 self.assertEqual(parse_qs(urlsplit(franchise_website_url(season)).query),
                                  {'season_id': ['12']})
 
-    def test_invalid_config_preserves_existing_miniapp_group_and_private_links(self):
+    def test_invalid_config_does_not_publish_a_miniapp_link(self):
         settings = {'BOT_USERNAME': 'test_bot', 'MINIAPP_NAME': 'arena',
                     'WEBAPP_URL': 'https://mini.example/webapp'}
         invalid = ('', 'http://auction.example/', 'https:///franchise',
@@ -51,12 +50,7 @@ class FranchiseWebsiteLinkTests(unittest.TestCase):
             with self.subTest(value=value), patch.dict('os.environ', {
                     **settings, 'FRANCHISE_WEBSITE_URL': value}):
                 self.assertIsNone(franchise_website_url(self.season))
-                group = auction_button(self.season)
-                self.assertEqual(group.text, '📱 Switch to Miniapp')
-                self.assertEqual(group.url,
-                                 'https://t.me/test_bot/arena?startapp=auction_12_c-1001234567890')
-                private = auction_button(self.season, is_private=True)
-                self.assertEqual(private.web_app.url, 'https://mini.example/webapp#auction_12')
+                self.assertIsNone(auction_button(self.season))
 
 
 if __name__ == '__main__':

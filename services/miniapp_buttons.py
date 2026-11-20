@@ -67,8 +67,8 @@ def auction_launch(value):
 def franchise_website_url(season):
     """Build an optional standalone-site link; route hints grant no access.
 
-    Reject unsafe or incomplete configuration and leave the established Mini
-    App available. The website authenticates Telegram users and independently
+    Reject unsafe or incomplete configuration. The website authenticates
+    Telegram users and independently
     verifies their access to the hinted season/group.
     """
     value = os.getenv("FRANCHISE_WEBSITE_URL", "").strip()
@@ -99,9 +99,8 @@ def franchise_website_url(season):
         return None
 
 
-def auction_button(season, *, is_private=False):
+def auction_button(season):
     website_url = franchise_website_url(season)
     if website_url:
         return InlineKeyboardButton('🌐 Open auction website', url=website_url)
-    return miniapp_button('📱 Switch to Miniapp', f'auction_{season.id}',
-                          is_private=is_private, origin_chat_id=season.chat_id)
+    return None

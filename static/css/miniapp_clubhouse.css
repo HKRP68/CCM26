@@ -1,69 +1,53 @@
 .club-shortcuts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 7px;
   margin: 0 0 14px;
 }
 .club-shortcut {
-  min-height: 64px;
-  padding: 8px 4px;
-  display: grid;
-  place-items: center;
-  gap: 3px;
+  min-height: 44px;
+  padding: 6px 8px;
   color: var(--text);
-  background: #121e2d;
-  border: 1px solid #2b3d50;
-  border-radius: 12px;
-  font: 700 .76rem var(--font-family);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: 550 .875rem var(--font-family);
   cursor: pointer;
-  position: relative;
 }
-.club-shortcut span:first-child { font-size: 1.15rem; }
-.club-gift-count {
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  padding: 2px 5px;
-  border-radius: 6px;
-  background: #a7f2d3;
-  color: #14342d;
-  font-size: .62rem;
-}
+.club-shortcut:hover { background: var(--hover); }
 .club-page {
-  --club-mint: #a7f2d3;
-  --club-ink: #0d1923;
-  --club-sub: #abc0d2;
+  --club-success: var(--success);
+  --club-sub: var(--muted);
 }
-.club-hero {
-  padding: 18px;
-  border-radius: 17px;
-  margin: 0 0 13px;
-  background: linear-gradient(135deg, #205344, #142f39 60%, #152336);
-  border: 1px solid #386252;
+.club-page .club-hero {
+  text-align: left;
+  padding: 0;
+  margin: 4px 0 18px;
+  background: transparent;
+  border: 0;
 }
-.club-hero h2 { margin: 0; font: 800 1.5rem/1.15 var(--font-display); }
-.club-hero p { margin: 6px 0 0; font-size: .84rem; color: #d2e3db; }
+.club-hero h2 { margin: 0; font: 650 1.5rem/1.15 var(--font-family); }
+.club-hero p { margin: 6px 0 0; font-size: .9375rem; color: var(--muted); }
 .club-hero .club-link { margin-top: 12px; }
 .club-segment {
   display: flex;
   gap: 4px;
-  background: var(--club-ink);
-  border: 1px solid #27394a;
-  border-radius: 11px;
-  padding: 4px;
-  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
 }
 .club-segment button {
   flex: 1;
   background: transparent;
   color: var(--club-sub);
-  border: 1px solid transparent;
-  border-radius: 8px;
-  min-height: 37px;
-  font: 700 .78rem var(--font-family);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  min-height: 44px;
+  padding-inline: 4px;
+  font: 550 .875rem var(--font-family);
   cursor: pointer;
 }
-.club-segment [aria-pressed=true] { background: #233b46; color: var(--club-mint); border-color: #365857; }
+.club-segment button:hover { color: var(--text); }
+.club-segment [aria-pressed=true] { color: var(--accent); border-color: var(--accent); }
 .club-section { margin: 12px 0 8px; font: 800 .98rem var(--font-display); }
 .club-balance {
   display: grid;
@@ -71,13 +55,13 @@
   gap: 6px;
   margin-bottom: 10px;
 }
-.club-balance div { border: 1px solid #304556; padding: 9px 7px; border-radius: 9px; background: #142534; }
+.club-balance div { border: 1px solid var(--border); padding: 9px 7px; border-radius: 9px; background: var(--card); }
 .club-balance span { display: block; font-size: .72rem; color: var(--club-sub); }
 .club-balance strong { font-size: clamp(.8rem, 3.8vw, 1.12rem); overflow-wrap: anywhere; }
 .club-card {
-  border: 1px solid #2a3a4e;
+  border: 1px solid var(--border);
   border-radius: 12px;
-  background: #131f30;
+  background: var(--card);
   padding: 12px;
   margin: 0 0 7px;
   min-width: 0;
@@ -86,38 +70,39 @@
 .club-card p { margin: 4px 0 0; color: var(--club-sub); font-size: .8rem; }
 .club-row { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
 .club-inner { min-width: 0; flex: 1; }
-.club-result { border-radius: 20px; padding: 4px 8px; font-size: .72rem; font-weight: 700; color: #d8e3eb; background: #26374b; text-align: center; }
-.club-result.win { color: var(--club-mint); background: #224b43; }
+.club-result { border-radius: 6px; padding: 4px 8px; font-size: .72rem; font-weight: 700; color: var(--text); background: var(--card-2); text-align: center; }
+.club-result.win { color: var(--club-success); background: var(--success-bg); }
 .club-result.loss { color: #ffcbc7; background: #512b36; }
 .club-card .club-score { color: #f4f7fa; font-size: 1rem; font-weight: 800; font-variant-numeric: tabular-nums; }
 .club-amount { text-align: right; font-weight: 800; font-size: .84rem; white-space: nowrap; }
-.club-credit { color: var(--club-mint); }
+.club-credit { color: var(--club-success); }
 .club-debit { color: #ffbfae; }
 .club-link {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   text-decoration: none;
-  min-height: 38px;
+  min-height: 44px;
   border-radius: 8px;
   padding: 5px 11px;
-  background: #253c4b;
-  border: 1px solid #3c5666;
-  color: #ecf6f6;
-  font: 750 .8rem var(--font-family);
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font: 550 .875rem var(--font-family);
   cursor: pointer;
 }
-.club-link.primary { background: var(--club-mint); border-color: var(--club-mint); color: #13372e; }
+.club-link.primary { background: var(--club-success); border-color: var(--club-success); color: #291d17; }
+.club-link:hover:not(:disabled) { filter: brightness(1.12); }
 .club-link:disabled { opacity: .6; cursor: wait; }
 .club-card .club-link { margin-top: 9px; }
 .club-empty { padding: 16px 12px; text-align: center; color: var(--club-sub); font-size: .88rem; }
 .club-empty p { margin: 0 0 8px; }
-.club-gift { border-color: #547066; background: linear-gradient(130deg,#173a38,#122330 70%); }
-.club-gift .club-claim-label { color: var(--club-mint); }
+.club-gift { background: var(--card); }
+.club-gift .club-claim-label { color: var(--club-success); }
 .club-gift.is-revealed { animation: club-reveal 600ms ease-out; }
 @keyframes club-reveal {
-  from { box-shadow: 0 0 0 3px #9eeccb8c; }
-  to { box-shadow: 0 0 0 0 #9eeccb00; }
+  from { box-shadow: 0 0 0 3px #ecc39880; }
+  to { box-shadow: 0 0 0 0 #ecc39800; }
 }
 @media (prefers-reduced-motion: reduce) { .club-gift.is-revealed { animation: none; } }
 
@@ -131,7 +116,7 @@
   font-size: 2.1rem;
   line-height: 1;
   padding: 12px;
-  background: #224b43;
+  background: var(--success-bg);
   border-radius: 12px;
 }
 .club-page #club-reward-feedback { color: var(--club-sub); font-size: .85rem; }

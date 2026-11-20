@@ -1,8 +1,7 @@
-# Mini App — Tournament tab
+# Mini App tournament centre
 
-A **🏟️ Tourney** button appears in the Mini App's bottom row **only while a
-tournament is live** (`Tournament.is_active`). When nothing is live the button
-stays hidden, and a player already on the screen is sent back to Home.
+Open **Tournament centre** under **Play & compete** on Home to view live and
+completed tournaments. The shortcut shows **Live** when a tournament is active.
 
 A Challenge League tournament and a Let's Play tournament can be live at the
 same time. When both are, a chip row at the top of the screen switches between

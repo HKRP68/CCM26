@@ -18,7 +18,7 @@ class AuctionMiniappUITests(unittest.TestCase):
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const template=fs.readFileSync(process.argv[1],'utf8');
 const start=template.indexOf('const urlParams =');
-const auth=template.slice(start,template.indexOf('\nlet currentScreen',start));
+const auth=template.slice(start,template.indexOf('\nconst adConfirmation',start));
 function identity(initData,search) {
   return vm.runInNewContext(auth+'\nAUTH_VALUE;', {INIT_DATA:initData,URLSearchParams,window:{location:{search}}});
 }

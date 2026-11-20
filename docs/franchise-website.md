@@ -139,15 +139,14 @@ new service before switching links. Older images that exist only on the bot's
 local disk need to be uploaded/persisted through those durable stores first;
 sharing `DATABASE_URL` does not copy arbitrary files between services.
 
-Leave the existing `WEBAPP_URL` and Mini App configuration in place for other
-bot features. If `FRANCHISE_WEBSITE_URL` is empty or invalid, auction buttons
-keep their existing Mini App behavior. Only HTTPS URLs without login credentials
-or fragments are accepted. Existing query parameters are preserved; season and
-group hints are replaced with the selected auction's values.
+Keep `WEBAPP_URL` configured for the main Mini App. The Telegram auction
+board and `/ainfo` menu show **Open auction website** when
+`FRANCHISE_WEBSITE_URL` is set to a valid HTTPS URL. Season and group hints are
+set from the selected auction. Other query parameters are preserved.
 
-To roll back the doorway, clear `FRANCHISE_WEBSITE_URL` on the bot and restart
-it. No auction data rollback is required: both interfaces use the same records.
-Keep the bot scheduler running during either rollout or rollback.
+Clear `FRANCHISE_WEBSITE_URL` and restart the bot to hide the website button.
+Telegram auction commands use the same records, so the scheduler should keep
+running while the website button is hidden.
 
 ## Local development and checks
 

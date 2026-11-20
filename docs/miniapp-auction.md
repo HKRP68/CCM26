@@ -1,5 +1,9 @@
 # Franchise auction in the Mini App
 
+This is a historical reference for the former Mini App auction interface.
+Franchise Auction and Franchise Draft are available through Telegram and the
+[standalone franchise website](franchise-website.md).
+
 The Mini App and Telegram operate the **same auction**, not separate copies.
 They share lots, bids, ownership, purses, retention, draft turns, RTM stages,
 trades, the ledger and the restart-safe scheduler. Existing Telegram commands

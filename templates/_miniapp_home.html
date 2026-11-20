@@ -1,0 +1,161 @@
+{% from '_miniapp_icons.html' import icon %}
+
+{% macro home_link(label, image, action, description='', description_id='', row_id='') -%}
+<button type="button" class="home-link" {% if row_id %}id="{{ row_id }}"{% endif %} onclick="{{ action }}">
+  {{ icon(image) }}
+  <span class="home-link-copy">
+    <span class="home-link-label">{{ label }}</span>
+    {% if description %}<span class="home-link-description" {% if description_id %}id="{{ description_id }}"{% endif %}>{{ description }}</span>{% endif %}
+  </span>
+  {% if caller is defined %}{{ caller() }}{% endif %}
+  {{ icon('chevron', 'app-icon home-chevron') }}
+</button>
+{%- endmacro %}
+
+<main class="screen active" id="screen-home" aria-labelledby="home-title">
+  <header class="home-heading">
+    <div>
+      <h2 id="home-title">Home</h2>
+      <p id="home-team" hidden></p>
+    </div>
+    <button class="app-secondary home-profile" type="button" onclick="navigate('profile')">
+      {{ icon('user') }}<span id="user-name">Profile</span>{{ icon('chevron', 'app-icon home-chevron') }}
+    </button>
+  </header>
+
+  <section class="home-match" id="home-match" aria-labelledby="home-match-title">
+    <img class="home-match-art" src="{{ url_for('static', filename='miniapp/quick-match.webp') }}" alt=""
+         width="1000" height="667" fetchpriority="high">
+    <div class="home-match-copy">
+      <h3 id="home-match-title">Quick Match</h3>
+      <p id="home-match-detail">Casual match with your squad</p>
+      <button type="button" class="app-primary" id="home-match-action" onclick="navigate('match')">
+        <span id="home-match-action-label">Play now</span>{{ icon('arrow') }}
+      </button>
+    </div>
+  </section>
+
+  <dl class="home-stats" aria-label="Balances and squad size">
+    <div><dt>Coins</dt><dd id="stat-coins">—</dd></div>
+    <div><dt>Gems</dt><dd id="stat-gems">—</dd></div>
+    <div><dt>Quest points</dt><dd id="stat-qp">—</dd></div>
+    <div><dt>Squad</dt><dd id="stat-roster">—</dd></div>
+  </dl>
+
+  <button type="button" class="home-reward-notice" id="home-freepack-notice" hidden onclick="navigate('freepack')">
+    {{ icon('box') }}<span>Free pack ready</span>{{ icon('arrow') }}
+  </button>
+
+  <div class="starter-guide" id="starter-guide" style="display:none;"></div>
+  <div class="event-banner" id="event-banner" style="display:none;"></div>
+
+  <div class="home-columns">
+    <div class="home-column">
+      <section class="home-section" aria-labelledby="mission-hub-title">
+        <div class="home-section-head">
+          <h3 id="mission-hub-title">Quests</h3>
+          <div class="mission-toggle" role="group" aria-label="Quest period">
+            <button type="button" class="mission-toggle-btn" data-home-qtab="daily" aria-pressed="true" onclick="switchHomeQuestTab('daily')">Today</button>
+            <button type="button" class="mission-toggle-btn" data-home-qtab="monthly" aria-pressed="false" onclick="switchHomeQuestTab('monthly')">Monthly</button>
+          </div>
+        </div>
+        <div class="home-panel">
+          <div id="home-quest-list" aria-live="polite"><p class="mission-loading">Loading quests…</p></div>
+          <div class="mission-footer">
+            <span id="home-quest-footer"></span>
+            <div class="mission-actions">
+              <button type="button" class="app-primary quest-claim-btn" id="home-quest-claim" hidden onclick="claimAllQuests(currentHomeQuestTab)">Claim all</button>
+              <button type="button" class="mission-link" onclick="openHomeQuestPeriod()">View all quests {{ icon('arrow') }}</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="home-section" aria-labelledby="home-play-title">
+        <div class="home-section-head"><h3 id="home-play-title">Play &amp; compete</h3></div>
+        <div class="home-panel">
+          {% call home_link('Tournament centre', 'cup', 'openTournamentDirectory()', 'Live competitions and past results') %}
+            <span id="home-tournament-live" class="home-status" hidden>Live</span>
+          {% endcall %}
+          {{ home_link('Season', 'calendar', "navigate('season')", 'Monthly standings', 'season-tile-sub') }}
+          {{ home_link('Leaderboard', 'ranks', "navigate('leaderboard')") }}
+        </div>
+      </section>
+
+      <section class="home-section home-record" aria-labelledby="home-record-title">
+        <div class="home-section-head"><h3 id="home-record-title">Match record</h3></div>
+        <dl class="home-stats" aria-labelledby="home-record-title">
+          <div><dt>Played</dt><dd id="rec-played">—</dd></div>
+          <div><dt>Won</dt><dd id="rec-won">—</dd></div>
+          <div><dt>Lost</dt><dd id="rec-lost">—</dd></div>
+          <div><dt>Win rate</dt><dd id="rec-wr">—</dd></div>
+        </dl>
+      </section>
+    </div>
+
+    <div class="home-column">
+      <section class="home-section" aria-labelledby="home-rewards-title">
+        <div class="home-section-head"><h3 id="home-rewards-title">Rewards &amp; packs</h3></div>
+        <div class="home-panel">
+          {{ home_link('Daily rewards', 'calendar', "navigate('daily')", 'Claim coins and gems', 'daily-tile-sub') }}
+          {{ home_link('Free pack', 'box', "navigate('freepack')", 'Get a player card', 'freepack-tile-sub', 'home-freepack-tile') }}
+          {{ home_link('Lucky Card Pick', 'cards', "navigate('spin')", 'Pick a card to reveal a reward', 'spin-tile-sub') }}
+          {{ home_link('Pack shop', 'market', "navigate('packs')") }}
+          {% call home_link('Gifts & giveaways', 'gift', "navigate('rewards')") %}
+            <span class="home-status" id="club-gift-count" hidden></span>
+          {% endcall %}
+          <button type="button" class="home-link" id="login-streak-banner" style="display:none;" onclick="showLoginStreakModal()">
+            {{ icon('checklist') }}
+            <span class="home-link-copy">
+              <span class="home-link-label"><span id="lsb-streak">0</span>-day login streak</span>
+              <span class="home-link-description" id="lsb-sub"></span>
+            </span>
+            <span class="home-status" id="lsb-cta"></span>
+            {{ icon('chevron', 'app-icon home-chevron') }}
+          </button>
+        </div>
+      </section>
+
+      <section class="home-section" aria-labelledby="home-team-title">
+        <div class="home-section-head"><h3 id="home-team-title">Team &amp; progress</h3></div>
+        <div class="home-panel">
+          {{ home_link('Playing XI', 'checklist', "navigate('xi')") }}
+          {{ home_link('Browse players', 'search', "navigate('browse')") }}
+          {{ home_link('Career Player', 'user', "navigate('career')") }}
+          {{ home_link('Achievements', 'star', "navigate('achievements')") }}
+          {{ home_link('Clubs', 'shield', "navigate('clubs')") }}
+          {{ home_link('Invite & win', 'invite', "navigate('invite')") }}
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <section class="home-section" id="home-community" aria-labelledby="home-community-title" hidden>
+    <div class="home-section-head"><h3 id="home-community-title">Community</h3></div>
+    <div class="top-links" id="top-links" style="display:none;"></div>
+    <div class="suggestion-box cm-card" id="suggestion-box" style="display:none;">
+      <button type="button" class="cm-head" aria-expanded="false" onclick="toggleCommunityCard('suggestion-box')">
+        <span class="cm-title">Suggestions</span><span class="cm-chev" aria-hidden="true">▾</span>
+      </button>
+      <div class="cm-body">
+        <label class="suggestion-sub" for="suggestion-message">Send an idea or report an issue.</label>
+        <textarea class="suggestion-input" id="suggestion-message" maxlength="1000" placeholder="Write your message…"></textarea>
+        <div class="suggestion-actions">
+          <span class="suggestion-count" id="suggestion-count">0/1000</span>
+          <button type="button" class="suggestion-send app-secondary" id="suggestion-send" onclick="sendSuggestion()">Send</button>
+        </div>
+      </div>
+    </div>
+    <div class="news-box cm-card" id="news-box" style="display:none;">
+      <button type="button" class="cm-head" aria-expanded="false" onclick="toggleCommunityCard('news-box')">
+        <span class="cm-title">CMU news</span><span class="news-unread" id="news-unread" style="display:none;"></span>
+        <span class="cm-chev" aria-hidden="true">▾</span>
+      </button>
+      <div class="cm-body">
+        <div id="news-list"><div class="news-row-meta">Loading…</div></div>
+        <button type="button" class="news-submit-btn app-secondary" onclick="openNewsSubmit()">Submit news</button>
+      </div>
+    </div>
+    <div class="poll-box cm-card" id="poll-box" style="display:none;"></div>
+  </section>
+</main>
