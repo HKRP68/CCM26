@@ -173,9 +173,32 @@ def _bias_xi(xi, bat_bias, bowl_bias):
     return out
 
 
+def _pick(mix):
+    """Draw an approach from a ``((key, weight), ...)`` mix."""
+    keys = [k for k, _w in mix]
+    weights = [w for _k, w in mix]
+    return random.choices(keys, weights)[0]
+
+
 def _play_innings_phased(state, S, cm, overs):
-    """Like realism_audit._play_innings, but also splits runs by phase."""
-    from tools import realism_audit as ra
+    """Like realism_audit._play_innings, but also splits runs by phase.
+
+    Approaches are drawn from ``pitch_calibration.REAL_BAT_MIX`` /
+    ``REAL_BOWL_MIX`` — the mix read off ``/pitchstats`` — rather than
+    ``realism_audit``'s own hand-set weights, which are a different
+    distribution (balanced 39% / ultra 17% against the measured ultra 32% /
+    balanced 18%).
+
+    That difference is not cosmetic. ``engine/realism/approaches.py`` is
+    mean-normalised on the MEASURED mix, so benchmarking it against a
+    different one makes the approach layer look systematically below par:
+    measured, it dropped the powerplay wicket rate to 2.69% against a 4.63%
+    baseline and pushed dots to 43%. The benchmark has to play the mix the
+    model is calibrated for, or it is measuring the mismatch rather than the
+    model.
+    """
+    from tools import pitch_calibration as pc
+    from tools import realism_audit as ra  # noqa: F401  (kept for _new_stats)
     guard = 0
     while not cm.is_innings_over(state) and guard < 40:
         guard += 1
@@ -184,8 +207,8 @@ def _play_innings_phased(state, S, cm, overs):
             break
         over_no = state.get("current_over", 1)
         state["current_bowler"] = random.choice(eligible[:4])
-        state["batting_approach"] = random.choices(ra.BAT_APPROACHES, ra.BAT_WEIGHTS)[0]
-        state["bowling_approach"] = random.choices(ra.BOWL_APPROACHES, ra.BOWL_WEIGHTS)[0]
+        state["batting_approach"] = _pick(pc.REAL_BAT_MIX)
+        state["bowling_approach"] = _pick(pc.REAL_BOWL_MIX)
         runs_before = state["total_runs"]
         summary = cm.simulate_over(state) or {}
         marks = summary.get("over_timeline") or []

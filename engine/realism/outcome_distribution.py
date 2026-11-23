@@ -12,6 +12,8 @@ Order of operations, once each:
        wickets[, chase band]) with hierarchical smoothing   [baselines]
     2. rating effect from bat_rating vs bowl_rating          [rating_curve]
     3. bounded condition families, each applied once        [conditions]
+       and, when the captains have actually chosen, the approach
+       trade-off priced against this baseline                [approaches]
     4. the measured downstream gain, which compensates for the legacy layers
        realism mode deliberately keeps (see config "downstream_gain")
     5. normalise, clamp the wicket share, re-normalise
@@ -32,7 +34,7 @@ alongside it.
 
 import logging
 
-from engine.realism import baselines, conditions, rating_curve
+from engine.realism import approaches, baselines, conditions, rating_curve
 from engine.realism.config import get_config
 
 logger = logging.getLogger(__name__)
@@ -100,10 +102,25 @@ def build(ctx, cfg: dict = None, reference=None,
                                      ctx.balls_remaining, ctx.wickets, cfg),
         conditions.style_multipliers(ctx.matchup, cfg),
     ]
+    approach_mult = None
     if apply_tactics:
-        families.append(conditions.tactics_multipliers(
-            ctx.batting_approach, ctx.bowling_approach, cfg))
+        if ctx.batting_approach is None and ctx.bowling_approach is None:
+            # No captaincy to model: the coarse intent family stands in.
+            families.append(conditions.tactics_multipliers(
+                ctx.batting_approach, ctx.bowling_approach, cfg))
+        else:
+            # Real approach picks. engine/realism/approaches prices them as a
+            # trade-off against THIS baseline, which is what makes the same
+            # intent mean different things in the powerplay and at the death
+            # without a phase table. Applied outside `combine` because it has
+            # its own wider bound: an approach is a decision, not a condition,
+            # and Ultra Attack genuinely doubles the six rate.
+            approach_mult = approaches.multipliers(
+                ctx.batting_approach, ctx.bowling_approach, base,
+                bowler_rating=ctx.bowl_rating, cfg=cfg)
     cond = conditions.combine(families, float(c["total_bound"]))
+    if approach_mult:
+        cond = {o: cond[o] * approach_mult.get(o, 1.0) for o in OUTCOMES}
 
     gain = rating_curve.phase_map(
         (cfg.get("integration") or {}).get("downstream_gain") or {}, ctx.phase)
@@ -118,6 +135,7 @@ def build(ctx, cfg: dict = None, reference=None,
             "baseline": base,
             "ratings": ratings,
             "conditions": cond,
+            "approach": approach_mult,
             "gain": {o: float(gain.get(o, 1.0)) for o in OUTCOMES},
             "node": node_key,
             "node_meta": meta,

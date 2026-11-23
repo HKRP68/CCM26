@@ -1260,7 +1260,23 @@ def calculate_outcome(
     if approach_context is not None:
         from engine.approach_modifiers import batting_matchup_delta
 
-        batting = max(1.0, min(100.0, batting + batting_matchup_delta(batter, bowling_type)))
+        # `batting_matchup_delta`'s fallback hashes the player's identity into
+        # a +/-6 rating swing when the dict carries no explicit vs_pace /
+        # vs_spin profile, which makes two identically-rated cards different
+        # players. The realism engine's contract is that they are not, and
+        # this runs BEFORE the rating is handed to the rating curve, so the
+        # switch has to be here rather than inside the realism package.
+        #
+        # Gated on realism actually driving this match, not on the config
+        # value alone. Reading the config unconditionally also switched the
+        # fallback off in LEGACY mode, which is a behaviour change outside
+        # realism mode and broke the mirrored neutral control in
+        # tools/trait_balance (two identical XIs stopped splitting their
+        # mirror 50/50).
+        _allow_identity = (True if not realism_integration.live_for(format_config)
+                           else realism_integration.allow_identity_ability())
+        batting = max(1.0, min(100.0, batting + batting_matchup_delta(
+            batter, bowling_type, allow_identity=_allow_identity)))
         # Retain the initial settling bonus and taper the extra rating driven
         # by runs once a batter is set. Ratings still drive the contest.
         confidence_scale -= 0.55 * min(1.0, max(0.0, (batter_runs - 40) / 25))
@@ -1689,9 +1705,17 @@ def calculate_outcome(
     # without one only the three base approach layers apply.
     if batting_approach is not None or bowling_approach is not None:
         from engine.approach_modifiers import apply_approach_modifiers
+        _ap_ctx = approach_context
+        if _realism_live:
+            # The 5x5 grid, the counters, the named combinations and the
+            # pitch / phase / momentum / fatigue / mind-game layers are all
+            # modelled upstream now (engine/realism/approaches.py and the
+            # baseline itself). Only the allowlisted layers run here.
+            _ap_ctx = dict(_ap_ctx or {},
+                           **realism_integration.approach_context_overrides())
         raw_weights = apply_approach_modifiers(
             raw_weights, batting_approach, bowling_approach,
-            bowler_rating=bowling, context=approach_context)
+            bowler_rating=bowling, context=_ap_ctx)
         total_weight = sum(raw_weights.values())
 
     # 4c) Generic weight hook — used by /letsplay to apply player TRAITS to the

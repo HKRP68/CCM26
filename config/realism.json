@@ -4,44 +4,44 @@
   "_readme": "downstream_gain and rating_curve.normaliser are MEASURED, not chosen. Re-measure in this order after any change to the kept layers or the reference data: python -m tools.compare_realism --calibrate-curve --n 120 ; then --calibrate-gain --n 120. Iterate each until the printed ratios are ~1.00.",
   "downstream_gain": {
    "powerplay": {
-    "Dot": 1.1663,
-    "Single": 0.8338,
-    "Double": 0.6636,
-    "Three": 0.8646,
-    "Four": 0.8284,
-    "Six": 0.8269,
-    "Wicket": 0.6309,
-    "Extras": 0.9988
+    "Dot": 0.8654,
+    "Single": 0.929,
+    "Double": 0.7075,
+    "Three": 1.0865,
+    "Four": 0.9982,
+    "Six": 0.9955,
+    "Wicket": 0.9117,
+    "Extras": 0.9749
    },
    "middle": {
-    "Dot": 1.1393,
-    "Single": 0.8874,
-    "Double": 0.6607,
-    "Three": 0.9645,
-    "Four": 0.7395,
-    "Six": 0.7375,
-    "Wicket": 0.741,
-    "Extras": 1.029
+    "Dot": 0.9277,
+    "Single": 0.915,
+    "Double": 0.7038,
+    "Three": 0.867,
+    "Four": 0.7507,
+    "Six": 0.7685,
+    "Wicket": 1.09,
+    "Extras": 0.8771
    },
    "death": {
-    "Dot": 1.0822,
-    "Single": 1.0846,
-    "Double": 0.7596,
-    "Three": 1.1061,
-    "Four": 0.7162,
-    "Six": 0.587,
-    "Wicket": 0.6045,
-    "Extras": 0.5449
+    "Dot": 0.8557,
+    "Single": 1.135,
+    "Double": 0.7677,
+    "Three": 1.0848,
+    "Four": 0.737,
+    "Six": 0.5974,
+    "Wicket": 0.803,
+    "Extras": 0.5497
    },
    "default": {
-    "Dot": 1.1393,
-    "Single": 0.8874,
-    "Double": 0.6607,
-    "Three": 0.9645,
-    "Four": 0.7395,
-    "Six": 0.7375,
-    "Wicket": 0.741,
-    "Extras": 1.029
+    "Dot": 0.9277,
+    "Single": 0.915,
+    "Double": 0.7038,
+    "Three": 0.867,
+    "Four": 0.7507,
+    "Six": 0.7685,
+    "Wicket": 1.09,
+    "Extras": 0.8771
    }
   }
  },

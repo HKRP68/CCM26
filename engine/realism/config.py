@@ -178,6 +178,11 @@ DEFAULTS = {
         "fatigue_strength": 1.0,
         "pressure_strength": 1.0,
         "milestone_strength": 1.0,
+        # The realism approach model (engine/realism/approaches.py) replaces
+        # the legacy approach tables in realism mode. 0 disables it cleanly
+        # and falls back to a neutral tactics effect.
+        "approach_strength": 1.0,
+        "approach_bound": 2.60,
         # The milestone family gets a wider bound than the condition families.
         # `bound` exists so that no single CONDITION can overwhelm the
         # baseline; the milestone family is not a condition, it is a
@@ -213,6 +218,37 @@ DEFAULTS = {
         "apply_pressure_effects": True,
         "apply_approach_modifiers": True,
         "apply_weight_hook": True,
+        # Which of engine/approach_modifiers' layers still run in realism
+        # mode. An ALLOWLIST, not a denylist, so a layer added there later is
+        # off here until someone decides it does not double-count.
+        #
+        # Everything left out is now modelled better elsewhere: the base
+        # approach tables and the counter matrix by
+        # engine/realism/approaches.py (as a priced trade-off rather than a
+        # hand-set grid), the pitch and phase rules by the baseline's own
+        # pitch family and phase hierarchy level, momentum by the game-state
+        # engine, fatigue by conditions.fatigue_multipliers, and the
+        # read/out-think mind game by the counters.
+        #
+        # What survives models something this engine does not: how readable a
+        # captain has become over several overs, and how settled a batting
+        # pair is.
+        "legacy_approach_layers": ["predictability", "chemistry"],
+        # Result-steering and score-convergence hooks are off in realism
+        # mode (brief §11). Named individually so a deployment can see
+        # exactly what it is turning back on.
+        "drama_hooks": {
+            "score_ceiling": False,
+            "contest": False,
+            "pitch_character": False,
+            "clutch_finale": False,
+            "wicket_mixup": False,
+        },
+        # Hidden per-player ability derived from a player's identity rather
+        # than their card (engine/approach_modifiers.batting_matchup_delta's
+        # stable_unit fallback). Off in realism mode: two cards with the same
+        # ratings and styles must be the same player (brief §9).
+        "identity_derived_ability": False,
         # MEASURED compensation for the net effect of those kept layers.
         #
         # The baseline is an innings average, so it already contains the

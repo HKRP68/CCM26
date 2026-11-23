@@ -53,6 +53,8 @@ from engine.ball_outcome import (DEFAULT_SCORING_MATRIX, PITCH_SCORING_MATRIX,
                                  get_pitch_wicket_multiplier)
 from engine import pitch_registry
 from engine import batter_confidence
+from engine.realism import integration as realism_integration
+from engine.realism import win_probability
 from services import cipl_match
 
 logger = logging.getLogger(__name__)
@@ -239,6 +241,28 @@ def _balls_left(state):
         return max(0, cipl_match.total_balls(state) - cipl_match.balls_bowled(state))
     except Exception:
         return max(0, units_left(state) * 6)
+
+
+def _innings_balls(state):
+    """Legal balls in a full innings of this format."""
+    try:
+        return max(1, int(cipl_match.total_balls(state)))
+    except Exception:
+        return max(1, total_units(state) * _balls_per_unit(state))
+
+
+def _realism_objective(state):
+    """Should the first-innings objective be win probability?
+
+    Only when the realism ball model is actually deciding the deliveries, so
+    the captain is never optimising against a different engine than the one
+    bowling at it. Any failure resolves to the legacy objective.
+    """
+    try:
+        fmt = cipl_match._fmt_to_engine_fmt(None, total_units(state))
+        return realism_integration.live_for(fmt)
+    except Exception:
+        return False
 
 
 def _balls_per_unit(state):
@@ -501,6 +525,34 @@ def over_value(state, dist, *, chase=None, edge=0.0):
             if p <= 0:
                 continue
             value += p * chase_win_prob(req - runs, left - balls, hand - wkts, edge)
+        return value
+
+    if _realism_objective(state):
+        # Batting first in realism mode the objective is the same currency as
+        # the chase: the win probability of the position the over leaves
+        # behind. §10 of the brief — a captain should be maximising the chance
+        # of winning, not the runs in the next six balls.
+        #
+        # This is not a cosmetic change. "Expected runs minus a wicket
+        # penalty" is linear in runs, so it values the 180th run of an innings
+        # exactly as highly as the 80th; the win-probability objective knows
+        # the 180th is worth far more, and that a wicket in the second over
+        # costs about 4.5 runs' worth of win probability against 0.3 in the
+        # last. That is the difference between a captain who attacks on
+        # principle and one who attacks when attacking is right.
+        left = _balls_left(state)
+        innings_balls = _innings_balls(state)
+        edge = float(edge)
+        value = 0.0
+        for (runs, wkts), p in dist.items():
+            if p <= 0:
+                continue
+            value += p * win_probability.first_innings_win_prob(
+                int(state.get("total_runs") or 0) + int(runs),
+                max(0, left - balls),
+                max(0, hand - int(wkts)),
+                innings_balls=innings_balls,
+                edge=edge, opponent_edge=-edge)
         return value
 
     value = 0.0

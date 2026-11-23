@@ -18,6 +18,7 @@ import os
 import random
 
 from engine.ball_outcome import calculate_outcome
+from engine.realism import integration as realism_integration
 from engine import chase_chance
 from engine import chase_model
 from engine import ground_config
@@ -2013,6 +2014,12 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
         engine_overs = overs_total
         engine_fmt = _fmt_to_engine_fmt(None, overs_total)
     pressure_eng = PressureEngine(format_config=engine_fmt)
+    # Does the realism ball model decide this match's deliveries? Resolved
+    # once per over and used below to gate the result-steering hooks, so the
+    # gameplay layers always agree with whichever ball model is running: a
+    # missing reference file must not leave a match on the legacy ball model
+    # with the realism engine's gameplay changes applied anyway.
+    _realism_live = realism_integration.live_for(engine_fmt)
     # Dramatic-finish steering: live for the 2nd innings of an armed 20-over
     # chase, else None (and the per-ball logic below is a no-op).
     scenario_eng = _load_scenario_engine(state)
@@ -2127,6 +2134,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             engine_overs = overs_total
             engine_fmt = _fmt_to_engine_fmt(None, overs_total)
         pressure_eng = PressureEngine(format_config=engine_fmt)
+        _realism_live = realism_integration.live_for(engine_fmt)
 
     while balls_this_over < bpu and not chased:
         if state["total_wickets"] >= state.get("wicket_limit", WICKET_LIMIT):
@@ -2326,25 +2334,44 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             # LetsPlay clutch amplifier — layered AFTER traits so trait deltas
             # (Finisher/Clutch/Death/Yorker) land first, then chase intent scales
             # the six-or-bust spread. None for /cipl and non-finale balls.
+            # Result steering in realism mode (brief §11). These five hooks
+            # all decide what the scoreboard ought to say rather than letting
+            # the probabilities say it: the par-band brake pulls a projecting
+            # innings back toward the pitch's expected total, the contest hook
+            # tightens the bowling when a side is running away, the pitch
+            # character hook re-asserts a surface's reputation on top of the
+            # surface's own modelled effect, the clutch amplifier sharpens the
+            # last over and the mix-up converts the odd dismissal into a run
+            # out. Each is individually switchable in config/realism.json and
+            # each is ON outside realism mode, so exhibition and
+            # admin-controlled matches keep every one of them.
+            _drama = realism_integration.drama_hook_enabled
             clutch_hook = (
                 _make_clutch_hook(
                     runs_needed, balls_left,
                     state.get("wicket_limit", WICKET_LIMIT) - state["total_wickets"],
                     balls_left == 1)
-                if (letsplay_finale and not chase_active) else None)
+                if (letsplay_finale and not chase_active
+                    and (not _realism_live or _drama("clutch_finale"))) else None)
             # Match drama: the surface playing to its name, the 270+ brake, the
             # no-runaway contest layer, pressure on either side and any sledge
             # the striker is still carrying. All bounded, all None when quiet.
-            pitch_hook, pitch_strength = match_drama.make_pitch_character_hook(
-                pitch, phase, innings, bowl_adapted.get("bowling_type"),
-                balls_bowled(state) / float(max(1, innings_balls)))
-            ceiling_hook = (None if chase_active else
-                            match_drama.make_score_ceiling_hook(
+            if _realism_live and not _drama("pitch_character"):
+                pitch_hook, pitch_strength = None, 0.0
+            else:
+                pitch_hook, pitch_strength = match_drama.make_pitch_character_hook(
+                    pitch, phase, innings, bowl_adapted.get("bowling_type"),
+                    balls_bowled(state) / float(max(1, innings_balls)))
+            ceiling_hook = (None if (chase_active or (
+                                _realism_live and not _drama("score_ceiling")))
+                            else match_drama.make_score_ceiling_hook(
                                 pitch, state["total_runs"], balls_bowled(state),
                                 innings_balls, innings, target))
-            contest_hook = match_drama.make_contest_hook(
-                pitch, innings, state["total_runs"], state["total_wickets"],
-                balls_bowled(state), innings_balls, target, chase_active)
+            contest_hook = (
+                None if (_realism_live and not _drama("contest"))
+                else match_drama.make_contest_hook(
+                    pitch, innings, state["total_runs"], state["total_wickets"],
+                    balls_bowled(state), innings_balls, target, chase_active))
             bat_p_hook = match_drama.make_bat_pressure_hook(bat_p)
             big_ask = match_drama.final_over_big_ask(innings, runs_needed, balls_left, bpu)
             bowl_p_hook, bowl_p_kwargs = match_drama.bowl_pressure_effects(bowl_p, big_ask)
@@ -2386,7 +2413,8 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                 },
                 **bowl_p_kwargs))
             # Batting side under the pump: the odd wicket becomes a mix-up.
-            oc = match_drama.maybe_mixup(oc, bat_p, free_hit=is_free_hit_ball)
+            if not _realism_live or _drama("wicket_mixup"):
+                oc = match_drama.maybe_mixup(oc, bat_p, free_hit=is_free_hit_ball)
             if not (state.get('_planned_super_overs') or state.get('_planned_winner_user_id')):
                 oc = _resolve_running_wicket(oc, runs_needed)
 

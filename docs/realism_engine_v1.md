@@ -15,6 +15,14 @@ delivery for delivery.
 - [Rollback](#rollback)
 - [Known limitations](#known-limitations)
 
+> The tactical layer — the five batting and five bowling approaches, the eight
+> pitch types, and the weather, dew, wear, fatigue, momentum and pressure
+> effects around them — is recalibrated in a companion document:
+> **[Realism-first approaches, pitches and conditions](realism_approaches.md)**.
+> Same feature flag, same rollback. It also closes a hole this document
+> claimed was already shut: hidden per-player ability derived from a player's
+> identity (see [limitation 15](#known-limitations)).
+
 ---
 
 ## What it is
@@ -525,7 +533,9 @@ And where it does not — stated plainly, with the rest in
 [Known limitations](#known-limitations):
 
 - **Chase success 42.4% against ~50%**, where legacy sits at 52.8%. This is
-  the one headline metric on which the new engine is worse.
+  the one headline metric on which the new engine is worse. **Fixed by the
+  approaches change** — now 47.5%; see
+  [that document's results](realism_approaches.md#measured-results).
 - **Centuries 0.098 an innings against ~0.034**, where legacy manages 0.066.
 - **Close matches 57.2% against ~22%.** Both engines are wrong here; legacy
   is worse at 66%.
@@ -704,8 +714,13 @@ Partial rollbacks:
    recalibrating those hooks, which would change the legacy engine too, so it
    is out of scope for v1 and recorded here as confirmed and unaddressed.
 
-10. **Chase success is below the real figure.** Measured at 42.4%
-    against a real ~50%, where the legacy engine sits at 52.8%. This is the
+10. **Chase success is below the real figure — since fixed.** Measured at
+    42.4% against a real ~50% in v1, where the legacy engine sits at 52.8%.
+    The approaches change brought it to **47.5%** by removing the
+    result-steering hooks (the clutch amplifier and the contest tightening
+    were both working against the chasing side) and giving the first-innings
+    captain a win-probability objective. The analysis below is kept because
+    it is what led there. This is the
     one headline metric on which the realism engine is *worse* than the one
     it replaces, so it is worth being precise about what is and is not known:
 
@@ -763,3 +778,15 @@ Partial rollbacks:
 14. **Pseudo-count magnitudes are confidence weights, not sample sizes.** They
     are labelled `count_kind: "pseudo"` everywhere, but a reader who ignores
     that label will misread `n`.
+
+15. **Fixed since this document was first written: identity-derived ability
+    was leaking in.** The claim above that "two cards with the same ratings
+    and styles have identical ability distributions" was true of
+    `engine/realism` but not of the delivery as a whole.
+    `engine/approach_modifiers.batting_matchup_delta` hashes a player's
+    roster id — or their *name* — into a ±6 rating swing when the dict has no
+    explicit `vs_pace`/`vs_spin` profile, and it runs **before** the rating
+    reaches the rating curve. So on any `/cipl` delivery the realism engine
+    was being handed a rating that depended on who the player was. It is now
+    off in realism mode; see
+    [the approaches document](realism_approaches.md#no-identity-derived-ability).

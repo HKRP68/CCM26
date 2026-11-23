@@ -137,6 +137,63 @@ def record_shadow(legacy_weights: dict, explained: dict):
                   "realism: shadow recording failed; the match is unaffected")
 
 
+def live_for(format_config=None) -> bool:
+    """Is the realism model actually deciding this match's deliveries?
+
+    Stricter than ``mode_for(...) == LIVE``: it also requires a usable
+    reference, because without one ``calculate_outcome`` silently falls back
+    to the legacy engine. Callers outside ``ball_outcome`` — ``/cipl``
+    suppressing its result-steering hooks, the AI captain choosing an
+    objective — must agree with what the deliveries are actually doing, or a
+    missing reference file would leave a match with the legacy ball model and
+    the realism engine's gameplay layers switched off.
+    """
+    if mode_for(format_config) != LIVE:
+        return False
+    from engine.realism.outcome_distribution import available_for
+
+    fmt = getattr(format_config, "name", None) or "T20"
+    return available_for(fmt)
+
+
+def approach_context_overrides(cfg: dict = None) -> dict:
+    """Context keys that switch the legacy approach layers down to the allowlist.
+
+    Merged into the ``approach_context`` dict ``/cipl`` already builds, so the
+    live over and the AI captain's payoff matrix see the same restriction.
+    """
+    integ = (cfg or rcfg.get_config())["integration"]
+    return {
+        "base_tables": False,
+        "allow_layers": tuple(integ.get("legacy_approach_layers") or ()),
+    }
+
+
+def allow_identity_ability(cfg: dict = None) -> bool:
+    """May a player's identity imply ability their card does not show?"""
+    integ = (cfg or rcfg.get_config())["integration"]
+    return bool(integ.get("identity_derived_ability", False))
+
+
+def drama_hook_enabled(name: str, cfg: dict = None) -> bool:
+    """Is result-steering hook *name* allowed in realism mode?
+
+    ``score_ceiling`` pulls a projecting innings back toward a pitch's par
+    band, ``contest`` tightens the bowling when a side is running away,
+    ``pitch_character`` re-asserts a surface's reputation on top of the
+    surface's own modelled effect, ``clutch_finale`` sharpens the last over
+    and ``wicket_mixup`` converts the odd dismissal into a run out. Every one
+    of them is the engine deciding what the scoreboard ought to say, which is
+    exactly what §11 of the brief removes from competitive realism matches.
+
+    They are not deleted: a deployment can switch any of them back on in
+    ``config/realism.json``, and they remain the default outside realism mode
+    for exhibition and admin-controlled matches.
+    """
+    hooks = (cfg or rcfg.get_config())["integration"].get("drama_hooks") or {}
+    return bool(hooks.get(name, False))
+
+
 def bypass(name: str, cfg: dict = None) -> bool:
     """Is legacy layer *name* bypassed in live mode?
 
