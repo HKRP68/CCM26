@@ -618,6 +618,15 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 batting_position=batting_position,
                 format_config=engine_fmt,
                 weight_hook=maiden_pressure_hook(balls_this_over, over_bowler_runs),
+                # The scoreboard, for the Realism Engine's wickets-lost and
+                # chase-situation baselines. Ignored when realism is off.
+                match_context={
+                    "runs": total_runs,
+                    "wickets": total_wkts,
+                    "balls_bowled": legal_balls,
+                    "target": int(target) if target else None,
+                    "innings_balls": overs * 6,
+                },
             ))
 
             otype = oc.get("type")        # "run" | "wicket" | "extra"

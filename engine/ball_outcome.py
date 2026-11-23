@@ -11,6 +11,7 @@ from engine.ground_config import (
 from engine.game_state_engine import apply_game_state_to_probs
 from engine.format_config import FormatConfig
 from engine import pitch_registry
+from engine.realism import integration as realism_integration
 
 logger = logging.getLogger(__name__)
 
@@ -1198,6 +1199,7 @@ def calculate_outcome(
     drop_mult: float = 1.0,
     misfield_mult: float = 1.0,
     extras_split=None,
+    match_context=None,
 ) -> dict:
     """
     Determines the outcome of a single delivery.
@@ -1208,6 +1210,14 @@ def calculate_outcome(
       - "wicket_type": if a wicket, one of ["Caught","Bowled","LBW","Run Out"], else None
       - "is_extra"   ∈ {True, False}
       - "batter_out" ∈ {True, False}
+
+    ``match_context`` is an optional scoreboard dict — ``{"runs", "wickets",
+    "balls_bowled", "target"}`` — used only by the Realism Engine
+    (``engine/realism``), which needs the actual score to pick its
+    wickets-lost and chase-situation baselines. It defaults to None and is
+    ignored by every legacy code path, so existing callers are unaffected;
+    without it the realism model reconstructs what it can from ``game_state``
+    and treats the rest as unknown.
 
     ``drop_mult`` / ``misfield_mult`` scale the fielding-error chances (only
     when ``fielding_quality`` is given) and ``extras_split`` overrides the
@@ -1288,165 +1298,221 @@ def calculate_outcome(
         pitch_matrix = (_gc_scoring_matrix(pitch, mode_override=game_mode_override, config=_gc)
                         or PITCH_SCORING_MATRIX.get(pitch, DEFAULT_SCORING_MATRIX))
 
-    raw_weights = {}
-    for outcome in pitch_matrix:
-        base = pitch_matrix[outcome]
-        # print(f"\n-- Computing weight for outcome: {outcome} (Base: {base}) --")
+    # 2.5) Realism Engine v1 (engine/realism) — docs/realism_engine_v1.md.
+    #
+    # `mode_for` returns "off" unless SIM_REALISM_ENABLED / _SHADOW_MODE is set
+    # AND this format is listed in SIM_REALISM_FORMATS, so a deployment that
+    # changes nothing keeps this whole block as a single cheap function call
+    # and the delivery is resolved exactly as it always was.
+    #
+    # In LIVE mode the fitted real-data baseline replaces the hand-set pitch
+    # matrix and the rating curve replaces the duel, so the legacy layers that
+    # model the same thing are bypassed below (see engine/realism/integration).
+    # In SHADOW mode the legacy weights still decide the ball and the realism
+    # distribution is only recorded — and because the realism model draws no
+    # random numbers, the match is bit-identical to a realism-off run from the
+    # same seed.
+    _realism_mode = realism_integration.mode_for(format_config)
+    _realism = None
+    if _realism_mode != realism_integration.OFF:
+        _realism = realism_integration.try_build(
+            _realism_mode,
+            batter=batter, bowler=bowler, pitch=pitch,
+            over_number=over_number, innings=innings,
+            batter_runs=batter_runs, balls_faced=balls_faced,
+            batting_position=batting_position, format_config=format_config,
+            game_state=game_state, pitch_wear=pitch_wear,
+            is_day_night=is_day_night, batting_approach=batting_approach,
+            bowling_approach=bowling_approach,
+            approach_context=approach_context, free_hit=free_hit,
+            # The engine has already applied its batting-position scaling and
+            # the caller may have scaled the bowler for fatigue; pass the
+            # post-scaling numbers so the rating curve does not re-apply them.
+            bat_rating_effective=batting, bowl_rating_effective=bowling,
+            match_context=match_context,
+            # /cipl and /letsplay run engine.approach_modifiers on the result,
+            # which models the same captaincy decision as the realism tactics
+            # family; only one of the two may apply.
+            apply_tactics=(batting_approach is None and bowling_approach is None))
+    _realism_live = (_realism is not None
+                     and _realism_mode == realism_integration.LIVE)
 
-        if outcome == "Extras" and not allow_extras:
-            raw_weights[outcome] = 0.0
-            continue
+    if _realism_live:
+        # The realism distribution IS this ball's distribution. It is already
+        # normalised, so the weights below are probabilities; everything
+        # downstream only ever renormalises, so that is interchangeable.
+        raw_weights = dict(_realism["dist"])
+        if not allow_extras:
+            raw_weights["Extras"] = 0.0
+    else:
+        raw_weights = {}
+        for outcome in pitch_matrix:
+            base = pitch_matrix[outcome]
+            # print(f"\n-- Computing weight for outcome: {outcome} (Base: {base}) --")
 
-        # Compute base weight via 60/40 blending
-        # --- Bowling matchup modifier (computed once, applied to wickets + boundaries) ---
-        matchup_boost = 1.0
+            if outcome == "Extras" and not allow_extras:
+                raw_weights[outcome] = 0.0
+                continue
 
-        # 1. Spin turning away from bat — classic cricket advantage
-        if bowling_type in ("Off spin", "Finger spin") and batting_hand == "Left":
-            matchup_boost *= 1.15  # Turning away from left-hander
-        if bowling_type in ("Leg spin", "Wrist spin") and batting_hand == "Right":
-            matchup_boost *= 1.15  # Turning away from right-hander
+            # Compute base weight via 60/40 blending
+            # --- Bowling matchup modifier (computed once, applied to wickets + boundaries) ---
+            matchup_boost = 1.0
 
-        # 2. Pace vs tail-enders — raw pace terrifies lower order
-        if bowling_type in ("Fast", "Fast-medium", "Medium-fast") and batting < 30:
-            matchup_boost *= 1.25
+            # 1. Spin turning away from bat — classic cricket advantage
+            if bowling_type in ("Off spin", "Finger spin") and batting_hand == "Left":
+                matchup_boost *= 1.15  # Turning away from left-hander
+            if bowling_type in ("Leg spin", "Wrist spin") and batting_hand == "Right":
+                matchup_boost *= 1.15  # Turning away from right-hander
 
-        # 3. Left-arm pace angle vs right-handers (all pitches)
-        if (bowling_hand == "Left" and batting_hand == "Right"
-                and bowling_type in ("Fast", "Fast-medium", "Medium-fast")):
-            matchup_boost *= 1.10
-            if pitch == "Green":
-                matchup_boost *= 1.08  # Extra seam movement on Green
+            # 2. Pace vs tail-enders — raw pace terrifies lower order
+            if bowling_type in ("Fast", "Fast-medium", "Medium-fast") and batting < 30:
+                matchup_boost *= 1.25
 
-        # 4. Spin vs lower-order on turning tracks
-        if (bowling_type in ("Off spin", "Leg spin", "Finger spin", "Wrist spin")
-                and pitch == "Dry" and batting < 50):
-            matchup_boost *= 1.10
+            # 3. Left-arm pace angle vs right-handers (all pitches)
+            if (bowling_hand == "Left" and batting_hand == "Right"
+                    and bowling_type in ("Fast", "Fast-medium", "Medium-fast")):
+                matchup_boost *= 1.10
+                if pitch == "Green":
+                    matchup_boost *= 1.08  # Extra seam movement on Green
 
-        # Boundary suppression when bowler has matchup advantage
-        boundary_suppression = 1.0
-        if matchup_boost > 1.0:
-            boundary_suppression = 1.0 / (matchup_boost ** 0.5)  # Mild inverse
+            # 4. Spin vs lower-order on turning tracks
+            if (bowling_type in ("Off spin", "Leg spin", "Finger spin", "Wrist spin")
+                    and pitch == "Dry" and batting < 50):
+                matchup_boost *= 1.10
 
-        if outcome in ("Dot", "Single", "Double", "Three", "Four", "Six"):
-            weight = compute_weighted_prob(
-                outcome, base,
-                batting, bowling, fielding,
-                pitch, bowling_type, streak, batter_runs, balls_faced,
-                format_name=(format_config.name if format_config is not None else None),
-                config=_gc,
-                confidence_scale=confidence_scale,
-            )
-            # Apply boundary suppression when bowler has favorable matchup
-            if outcome in ("Four", "Six") and boundary_suppression < 1.0:
-                weight *= boundary_suppression
+            # Boundary suppression when bowler has matchup advantage
+            boundary_suppression = 1.0
+            if matchup_boost > 1.0:
+                boundary_suppression = 1.0 / (matchup_boost ** 0.5)  # Mild inverse
 
-        elif outcome == "Wicket":
-            weight = compute_weighted_prob(
-                outcome, base,
-                batting, bowling, fielding,
-                pitch, bowling_type, streak, batter_runs, balls_faced,
-                format_name=(format_config.name if format_config is not None else None),
-                config=_gc,
-                confidence_scale=confidence_scale,
-            ) * matchup_boost
-        else:  # "Extras"
-            weight = compute_weighted_prob(
-                outcome, base,
-                batting, bowling, fielding,
-                pitch, bowling_type, streak,
-                format_name=(format_config.name if format_config is not None else None),
-                config=_gc,
-            )
+            if outcome in ("Dot", "Single", "Double", "Three", "Four", "Six"):
+                weight = compute_weighted_prob(
+                    outcome, base,
+                    batting, bowling, fielding,
+                    pitch, bowling_type, streak, batter_runs, balls_faced,
+                    format_name=(format_config.name if format_config is not None else None),
+                    config=_gc,
+                    confidence_scale=confidence_scale,
+                )
+                # Apply boundary suppression when bowler has favorable matchup
+                if outcome in ("Four", "Six") and boundary_suppression < 1.0:
+                    weight *= boundary_suppression
 
-        # --- T20 phase boosts (skipped for ListA — handled via _apply_lista_phase_boosts) ---
-        if not _is_lista:
-            # Load configurable phase boosts with hardcoded fallbacks
-            _phase = _gc_phase_boosts(config=_gc) or {}
-            _pp_cfg = _phase.get("powerplay", {})
-            _death_cfg = _phase.get("death_overs", {})
-            _inn2_cfg = _phase.get("second_innings_death", {})
+            elif outcome == "Wicket":
+                weight = compute_weighted_prob(
+                    outcome, base,
+                    batting, bowling, fielding,
+                    pitch, bowling_type, streak, batter_runs, balls_faced,
+                    format_name=(format_config.name if format_config is not None else None),
+                    config=_gc,
+                    confidence_scale=confidence_scale,
+                ) * matchup_boost
+            else:  # "Extras"
+                weight = compute_weighted_prob(
+                    outcome, base,
+                    batting, bowling, fielding,
+                    pitch, bowling_type, streak,
+                    format_name=(format_config.name if format_config is not None else None),
+                    config=_gc,
+                )
 
-            # Powerplay boosts
-            pp_start = _pp_cfg.get("overs_start", 0)
-            pp_end = _pp_cfg.get("overs_end", 5)
-            # Death-over boosts (last 4 overs: 17-20)
-            death_start = _death_cfg.get("overs_start", 16)
-            death_end = _death_cfg.get("overs_end", 19)
-            # The Hundred (100 balls mapped onto ~17 six-ball overs) carries its
-            # own powerplay (first 25 balls) and death window in the FormatConfig;
-            # honour those instead of the T20 over ranges. Strictly gated to the
-            # Hundred so T20 / custom-over /sim / ListA paths are unchanged.
-            if format_config is not None and format_config.name == "The100":
-                if format_config.powerplay_phases:
-                    pp_start = format_config.powerplay_phases[0].start
-                    pp_end = format_config.powerplay_phases[-1].end
-                if format_config.death_phase is not None:
-                    death_start = format_config.death_phase.start
-                    death_end = format_config.death_phase.end
+            # --- T20 phase boosts (skipped for ListA — handled via _apply_lista_phase_boosts) ---
+            if not _is_lista:
+                # Load configurable phase boosts with hardcoded fallbacks
+                _phase = _gc_phase_boosts(config=_gc) or {}
+                _pp_cfg = _phase.get("powerplay", {})
+                _death_cfg = _phase.get("death_overs", {})
+                _inn2_cfg = _phase.get("second_innings_death", {})
 
-            if pp_start <= over_number <= pp_end:
-                if outcome in ("Four", "Six"):
-                    pp_boost = _pp_cfg.get("boundary_multiplier", 1.25)
-                    logger.debug(f"  [Powerplay] Boosting {outcome} by {pp_boost}x")
-                    weight *= pp_boost
+                # Powerplay boosts
+                pp_start = _pp_cfg.get("overs_start", 0)
+                pp_end = _pp_cfg.get("overs_end", 5)
+                # Death-over boosts (last 4 overs: 17-20)
+                death_start = _death_cfg.get("overs_start", 16)
+                death_end = _death_cfg.get("overs_end", 19)
+                # The Hundred (100 balls mapped onto ~17 six-ball overs) carries its
+                # own powerplay (first 25 balls) and death window in the FormatConfig;
+                # honour those instead of the T20 over ranges. Strictly gated to the
+                # Hundred so T20 / custom-over /sim / ListA paths are unchanged.
+                if format_config is not None and format_config.name == "The100":
+                    if format_config.powerplay_phases:
+                        pp_start = format_config.powerplay_phases[0].start
+                        pp_end = format_config.powerplay_phases[-1].end
+                    if format_config.death_phase is not None:
+                        death_start = format_config.death_phase.start
+                        death_end = format_config.death_phase.end
 
-            in_death = death_start <= over_number <= death_end
+                if pp_start <= over_number <= pp_end:
+                    if outcome in ("Four", "Six"):
+                        pp_boost = _pp_cfg.get("boundary_multiplier", 1.25)
+                        logger.debug(f"  [Powerplay] Boosting {outcome} by {pp_boost}x")
+                        weight *= pp_boost
 
-            if in_death:
-                if outcome in ("Four", "Six"):
-                    # Which boost a surface gets is its registry classification,
-                    # not a hardcoded list: the old `else` branch was commented
-                    # "Green or Dry" but also swallowed Dusty, Bouncy and Even.
-                    if pitch_registry.favours(pitch) == "Batting":
-                        boundary_boost = _death_cfg.get("boundary_boost_batting_pitch", 2.2)
-                    else:   # every surface that still offers the bowlers something
-                        boundary_boost = _death_cfg.get("boundary_boost_bowling_pitch", 1.8)
-                    logger.debug(f"  DeathOver: BOUNDARY ({outcome}) on {pitch} by factor {boundary_boost}")
-                    weight *= boundary_boost
+                in_death = death_start <= over_number <= death_end
 
-                if outcome == "Wicket":
-                    # A surface can carry its own death-overs wicket boost;
-                    # the rest use the shared one.
-                    wicket_boost = (_death_cfg.get("wicket_boost_by_pitch") or {}).get(
-                        pitch, _death_cfg.get("wicket_boost", 1.6))
-                    logger.debug(f"  DeathOver: WICKET on {pitch} by factor {wicket_boost}")
-                    weight *= wicket_boost
+                if in_death:
+                    if outcome in ("Four", "Six"):
+                        # Which boost a surface gets is its registry classification,
+                        # not a hardcoded list: the old `else` branch was commented
+                        # "Green or Dry" but also swallowed Dusty, Bouncy and Even.
+                        if pitch_registry.favours(pitch) == "Batting":
+                            boundary_boost = _death_cfg.get("boundary_boost_batting_pitch", 2.2)
+                        else:   # every surface that still offers the bowlers something
+                            boundary_boost = _death_cfg.get("boundary_boost_bowling_pitch", 1.8)
+                        logger.debug(f"  DeathOver: BOUNDARY ({outcome}) on {pitch} by factor {boundary_boost}")
+                        weight *= boundary_boost
 
-            # Modern Death Surge (v3.0 section 5C): the last three overs on a
-            # true surface go at a rate the rest of the death does not. Layered
-            # on top of the death boosts rather than replacing them, and gated to
-            # the pitches where modern hitting has actually moved the numbers —
-            # a dry or dusty track has not got faster, because it cannot.
-            _surge_cfg = _phase.get("death_surge") or {}
-            if _surge_cfg and pitch in (_surge_cfg.get("pitches") or ()):
-                _surge_start = _surge_cfg.get("overs_start", 17)
-                if over_number >= _surge_start and over_number <= death_end:
-                    _surge_mult = _death_surge_multipliers(
-                        _surge_cfg.get("rpo_boost", 1.0)).get(outcome)
-                    if _surge_mult:
-                        weight *= _surge_mult
+                    if outcome == "Wicket":
+                        # A surface can carry its own death-overs wicket boost;
+                        # the rest use the shared one.
+                        wicket_boost = (_death_cfg.get("wicket_boost_by_pitch") or {}).get(
+                            pitch, _death_cfg.get("wicket_boost", 1.6))
+                        logger.debug(f"  DeathOver: WICKET on {pitch} by factor {wicket_boost}")
+                        weight *= wicket_boost
 
-            # Second innings death-over boosts (mild — chasing advantage already helps)
-            if innings == 2 and in_death:
-                if outcome in ("Single", "Double", "Three", "Four", "Six"):
-                    scoring_boost = _inn2_cfg.get("scoring_boost", 1.05)
-                    weight *= scoring_boost
+                # Modern Death Surge (v3.0 section 5C): the last three overs on a
+                # true surface go at a rate the rest of the death does not. Layered
+                # on top of the death boosts rather than replacing them, and gated to
+                # the pitches where modern hitting has actually moved the numbers —
+                # a dry or dusty track has not got faster, because it cannot.
+                _surge_cfg = _phase.get("death_surge") or {}
+                if _surge_cfg and pitch in (_surge_cfg.get("pitches") or ()):
+                    _surge_start = _surge_cfg.get("overs_start", 17)
+                    if over_number >= _surge_start and over_number <= death_end:
+                        _surge_mult = _death_surge_multipliers(
+                            _surge_cfg.get("rpo_boost", 1.0)).get(outcome)
+                        if _surge_mult:
+                            weight *= _surge_mult
 
-                if outcome == "Wicket":
-                    wicket_boost_2nd = _inn2_cfg.get("wicket_boost", 1.15)
-                    weight *= wicket_boost_2nd
+                # Second innings death-over boosts (mild — chasing advantage already helps)
+                if innings == 2 and in_death:
+                    if outcome in ("Single", "Double", "Three", "Four", "Six"):
+                        scoring_boost = _inn2_cfg.get("scoring_boost", 1.05)
+                        weight *= scoring_boost
 
-        # Ensure no negative weights
-        weight = max(weight, 0.0)
-        raw_weights[outcome] = weight
-        # print(f"  FinalRawWeight[{outcome}]: {weight:.6f}")
+                    if outcome == "Wicket":
+                        wicket_boost_2nd = _inn2_cfg.get("wicket_boost", 1.15)
+                        weight *= wicket_boost_2nd
+
+            # Ensure no negative weights
+            weight = max(weight, 0.0)
+            raw_weights[outcome] = weight
+            # print(f"  FinalRawWeight[{outcome}]: {weight:.6f}")
     
     # 3.25) Apply phase boosts and pitch deterioration.
     # ListA uses its own phase boost table and progressive wear model.
     # T20 uses the existing _apply_pitch_wear (unchanged).
     # All wear layers run BEFORE GSME so the momentum engine sees adjusted weights.
-    if _is_lista:
+    if _realism_live:
+        # Pitch wear is already in the realism distribution
+        # (engine.realism.conditions.pitch_multipliers), and the T20 wicket
+        # realism lift / duel recalibration below exist to drag the hand-set
+        # matrix towards the real wicket rate — which is now a measured
+        # anchor in the baseline itself. Applying either here would be the
+        # double count §5 of the brief rules out.
+        logger.debug("[realism] node=%s comp=%s; legacy wear/recal bypassed",
+                     _realism.get("node"), _realism.get("competition"))
+    elif _is_lista:
         # ListA phase boosts (PP1 / Middle / Death boundary/wicket modifiers)
         raw_weights = _apply_lista_phase_boosts(raw_weights, over_number, pitch,
                                                 innings, format_config)
@@ -1514,8 +1580,16 @@ def calculate_outcome(
     # the exchange reshapes this delivery's weights (engine.rating_duel).
     # State odds are pure functions of the two ratings — a big rating edge
     # wins far more exchanges, which is where extreme dominance comes from.
+    #
+    # In realism mode the duel is bypassed by default: engine.realism
+    # .rating_curve already carries the rating influence, and resolving the
+    # duel would both double-count it and draw two random numbers. Keeping
+    # those draws out is what makes a live realism match reproducible from a
+    # seed in its own right. Set integration.keep_legacy_rating_duel in
+    # config/realism.json to study the difference.
     duel_state = None
-    if not _is_lista:
+    _skip_duel = _realism_live and realism_integration.bypass("rating_duel")
+    if not _is_lista and not _skip_duel:
         try:
             from engine.rating_duel import resolve_duel, approach_risk_class
             duel_state, _dm = resolve_duel(
@@ -1651,6 +1725,14 @@ def calculate_outcome(
             raw_weights["Wicket"] = _wcap
             total_weight = sum(raw_weights.values())
 
+    # 4e) Shadow mode: record how far the realism model would have moved this
+    # delivery, then let the legacy weights decide it anyway. Recorded here —
+    # after every legacy layer, immediately before sampling — so the "legacy"
+    # side of the comparison is the distribution the match actually used.
+    # No random number is drawn, so the live match is unaffected.
+    if _realism is not None and not _realism_live:
+        realism_integration.record_shadow(raw_weights, _realism)
+
     # 5) Normalize weights into probabilities
     # print(f"\n[calculate_outcome] Total raw weight sum: {total_weight:.6f}")
     if total_weight <= 0:
@@ -1677,6 +1759,18 @@ def calculate_outcome(
     }
     if duel_state:
         result["duel"] = duel_state
+    if _realism_live:
+        # Provenance for the audit tools and debug commentary. Additive only:
+        # every existing consumer reads result["type"]/["runs"]/["wicket_type"]
+        # and ignores unknown keys, so no scorecard or state machine changes.
+        result["realism"] = {
+            "node": _realism.get("node"),
+            "competition": _realism.get("competition"),
+            "model_version": _realism.get("model_version"),
+            "phase": _realism.get("phase"),
+            "n": (_realism.get("node_meta") or {}).get("n"),
+            "count_kind": (_realism.get("node_meta") or {}).get("count_kind"),
+        }
 
     if chosen == "Wicket":
         result["type"] = "wicket"

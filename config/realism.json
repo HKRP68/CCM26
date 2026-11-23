@@ -1,0 +1,92 @@
+{
+ "_readme": "CCM26 Realism Engine v1 tuning. Feature flags live in the environment (SIM_REALISM_ENABLED, SIM_REALISM_SHADOW_MODE, SIM_REALISM_REFERENCE_VERSION, SIM_REALISM_FORMATS, SIM_REALISM_BASELINE); everything numeric lives here. Defaults for anything omitted are in engine/realism/config.py DEFAULTS, and config/realism.local.json overlays this file for local experiments without a commit. See docs/realism_engine_v1.md.",
+ "integration": {
+  "_readme": "downstream_gain and rating_curve.normaliser are MEASURED, not chosen. Re-measure in this order after any change to the kept layers or the reference data: python -m tools.compare_realism --calibrate-curve --n 120 ; then --calibrate-gain --n 120. Iterate each until the printed ratios are ~1.00.",
+  "downstream_gain": {
+   "powerplay": {
+    "Dot": 1.1663,
+    "Single": 0.8338,
+    "Double": 0.6636,
+    "Three": 0.8646,
+    "Four": 0.8284,
+    "Six": 0.8269,
+    "Wicket": 0.6309,
+    "Extras": 0.9988
+   },
+   "middle": {
+    "Dot": 1.1393,
+    "Single": 0.8874,
+    "Double": 0.6607,
+    "Three": 0.9645,
+    "Four": 0.7395,
+    "Six": 0.7375,
+    "Wicket": 0.741,
+    "Extras": 1.029
+   },
+   "death": {
+    "Dot": 1.0822,
+    "Single": 1.0846,
+    "Double": 0.7596,
+    "Three": 1.1061,
+    "Four": 0.7162,
+    "Six": 0.587,
+    "Wicket": 0.6045,
+    "Extras": 0.5449
+   },
+   "default": {
+    "Dot": 1.1393,
+    "Single": 0.8874,
+    "Double": 0.6607,
+    "Three": 0.9645,
+    "Four": 0.7395,
+    "Six": 0.7375,
+    "Wicket": 0.741,
+    "Extras": 1.029
+   }
+  }
+ },
+ "rating_curve": {
+  "normaliser": {
+   "death": {
+    "Dot": 1.171,
+    "Single": 0.976,
+    "Double": 0.9421,
+    "Three": 0.9691,
+    "Four": 0.8715,
+    "Six": 0.8546,
+    "Wicket": 1.1953,
+    "Extras": 1.0918
+   },
+   "middle": {
+    "Dot": 1.0152,
+    "Single": 1.0005,
+    "Double": 1.0049,
+    "Three": 1.0015,
+    "Four": 1.0487,
+    "Six": 1.0869,
+    "Wicket": 1.0203,
+    "Extras": 0.9914
+   },
+   "powerplay": {
+    "Dot": 0.8769,
+    "Single": 1.0198,
+    "Double": 1.0633,
+    "Three": 1.0309,
+    "Four": 1.2514,
+    "Six": 1.3662,
+    "Wicket": 0.8597,
+    "Extras": 0.9884
+   },
+   "default": {
+    "Dot": 1.0369,
+    "Single": 0.9969,
+    "Double": 0.9975,
+    "Three": 0.9975,
+    "Four": 1.0366,
+    "Six": 1.075,
+    "Wicket": 1.0437,
+    "Extras": 1.0063
+   }
+  }
+ }
+}

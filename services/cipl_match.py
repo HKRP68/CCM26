@@ -2375,6 +2375,15 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                 batting_approach=bat_app, bowling_approach=bowl_app,
                 approach_context=delivery_ctx,
                 weight_hook=weight_hook,
+                # The scoreboard, for the Realism Engine's wickets-lost and
+                # chase-situation baselines. Ignored when realism is off.
+                match_context={
+                    "runs": state["total_runs"],
+                    "wickets": state["total_wickets"],
+                    "balls_bowled": balls_bowled(state),
+                    "target": int(target) if target else None,
+                    "innings_balls": total_balls(state),
+                },
                 **bowl_p_kwargs))
             # Batting side under the pump: the odd wicket becomes a mix-up.
             oc = match_drama.maybe_mixup(oc, bat_p, free_hit=is_free_hit_ball)
