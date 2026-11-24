@@ -13,7 +13,8 @@ rating, Bowling style, Bowling rating and Overall rating.
 | 3 | Deterministic simulation | One seeded RNG per match; seed + engine version kept as metadata | Done |
 | 4 | Individual innings realism | Early-innings vulnerability, settling, milestone risk and acceleration — all from live match state, mean-neutral | Done |
 | 5 | Fielding realism | Drops / misfields / run-outs scaled by a single team-level `fielding_quality`, no per-fielder attribute | Done |
-| 6–7 | Tactical-AI parity & fairness reports | — | Pending |
+| 6 | Tactical-AI parity | The bot reasons over the engine's own distribution and approach model, not a separate heuristic | Done |
+| 7 | Fairness reports | `tools/fairness_report.py` runs legacy vs realism on symmetry, toss, bat-first and rating monotonicity | Done |
 
 ## Fix 1 — Delivery accounting
 
@@ -162,6 +163,47 @@ Per *chance*, that is a ~16% drop for a poor side down to ~4% for an elite one �
 realistic, and monotone in quality. With no `fielding_quality` supplied the drop
 path is inert (the engine never invents a fallback attribute). Verified in
 `FieldingRealismTests`.
+
+## Fix 6 — Tactical-AI probability-model parity
+
+The bot captain must judge a match-up on the **same numbers the over will be
+played on**, not a separate rating-gap heuristic fitted to the old engine. In
+realism mode (`services/bot_tactics.py`):
+
+* `ball_probabilities` returns the realism engine's own
+  `outcome_distribution.build(ctx, apply_tactics=False)` for a `BallContext`
+  built from live match state — verified byte-for-byte equal to the engine's
+  distribution in `BallModelParityTests`, and verified to differ from the
+  legacy heuristic (so the swap is real, not incidental);
+* `approach_probabilities` shapes that baseline with
+  `engine.realism.approaches.multipliers` — the identical priced trade-off the
+  live over applies — verified equal in `ApproachParityTests`.
+
+With realism off, the legacy compact estimator runs unchanged, so nothing about
+the non-realism bot moves.
+
+## Fix 7 — Legacy-vs-realism fairness reports
+
+`tools/fairness_report.py` runs both engines side by side on controlled
+match-ups and prints the fairness invariants a sim must satisfy however it
+models a ball. Each match runs off one seeded RNG and home/away is alternated so
+a naming bias cancels.
+
+Measured (`--n 60 --pitch Even`, 60 matches/scenario/arm):
+
+| metric | legacy | realism | ideal |
+|--------|-------:|--------:|-------|
+| symmetry win % (equal sides) | 43.3 | 51.7 | ~50 |
+| toss-winner win % | 46.7 | 51.7 | ~50 (no toss edge) |
+| bat-first win % | 46.7 | 51.7 | ~50 (small chase edge ok) |
+| stronger-side win % (+12) | 100.0 | 98.3 | >50 (monotonic) |
+
+Both engines are close to fair at this sample, with realism marginally tighter
+to 50 on all three bias metrics while preserving strong rating monotonicity. (A
+smaller n=30 sample showed legacy symmetry at 70%, which proved to be sampling
+noise once n was raised — recorded here as a reminder that the bands need a
+large n to read precisely; `RealismFairnessTests` therefore asserts only wide
+gross-regression bounds.)
 
 ### Residuals (documented, bounded)
 
