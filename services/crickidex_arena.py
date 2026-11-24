@@ -800,8 +800,20 @@ def _serialize_match_state_impl(session, match, viewer_user):
 
     # ── result (completed) ──
     result = None
+    super_over_summary = None
     if status == "completed":
         result = _build_result(session, state, match, tg_of, host, guest)
+        # Surface the archived Super Over summary (winner + each round's
+        # scorecard and ball-by-ball commentary) so a match decided in a Super
+        # Over shows it on the Mini App result screen — including when reopened
+        # long after the live state was cleaned up. None for ordinary matches.
+        try:
+            from services.match_webapp_service import load_final_scorecard
+            final_sc = load_final_scorecard(session, match_id)
+            if final_sc:
+                super_over_summary = final_sc.get("super_over")
+        except Exception:
+            logger.exception("super over summary load failed (non-fatal)")
         # Enrich the final end_of_innings card with winner/MOTM so the
         # commentary feed's innings-end overlay reads the same as the result.
         if isinstance(commentary, list) and result:
@@ -859,6 +871,7 @@ def _serialize_match_state_impl(session, match, viewer_user):
         "myRole": my_role,
         "isMyTurn": bool(is_my_turn),
         "result": result,
+        "superOver": super_over_summary,
         "impactPlayer": impact_player,
         "liveBatting": live_batting,
         "deliveryOptions": delivery_options,

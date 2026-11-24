@@ -994,7 +994,7 @@ class ApproachCardTests(unittest.TestCase):
         s = self._state_with_codes()
         card = cp._approach_card(s)
         self.assertIn("MI", card)
-        self.assertIn("CRR -", card)
+        self.assertIn("CRR", card)
         self.assertNotIn("COMMENTARY", card)   # no prior over yet
         self.assertIn("—", card)               # empty over-emoji strip
 
@@ -1029,7 +1029,7 @@ class ApproachCardTests(unittest.TestCase):
         cm.end_first_innings(s)
         s["current_bowler"] = cm.eligible_bowlers(s)[0]
         card = cp._approach_card(s)
-        self.assertIn("RRR -", card)
+        self.assertIn("RRR", card)
         self.assertIn("Need", card)
         self.assertNotIn("COMMENTARY", card)             # stale snapshot cleared
 

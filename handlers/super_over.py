@@ -868,6 +868,10 @@ async def _start_innings(context, mid):
                 for r in trio},
         "streak": {int(r): {"boundaries": 0} for r in trio},
         "recent": [],
+        # Full ball-by-ball log for this innings — one entry per resolved
+        # delivery (legal or not), archived with the scorecard so the Mini App
+        # can replay the Super Over. See _record_delivery.
+        "deliveries_log": [],
         "stage": "DELIV",
         "pending": {"delivery": None, "length": None},
         "msg_id": None,
@@ -1227,12 +1231,31 @@ def _record_turning_point(so, inn, outcome, batter_name, free_hit, commentary):
             else 4 if runs == 0 and so.get('target') and inn['legal'] >= 4 else 0)
     if not rank:
         return
+    # A category for the Mini App to badge the moment (🏆 winning boundary,
+    # 🎯 crucial wicket, 🔥 match-changing six …). Derived from what actually
+    # happened on the ball, never invented.
+    if won:
+        kind = "winning_boundary" if runs in (4, 6) else "winning_runs"
+    elif out:
+        kind = "wicket"
+    elif runs == 6:
+        kind = "six"
+    elif runs == 4:
+        kind = "four"
+    elif outcome.get('dropped_catch'):
+        kind = "drop"
+    elif outcome.get('disallowed_wicket'):
+        kind = "reprieve"
+    elif runs == 0:
+        kind = "dot"
+    else:
+        kind = "key"
     text = commentary
     if won:
         text = f'{batter_name} seals the chase. ' + text
     points = so.setdefault('turning_points', [])
     points.append(dict(rank=rank, sequence=sum(d.get('deliveries', 0) for d in so.get('so_innings', [])) + inn['deliveries'],
-                       round=so['so_number'], innings=so['innings_no'],
+                       round=so['so_number'], innings=so['innings_no'], kind=kind,
                        team=so['teams'][so['bat_uid']]['name'], score=f"{inn['runs']}/{inn['wickets']}",
                        ball=f"{inn['legal'] // 6}.{inn['legal'] % 6}", text=text))
     points[:] = sorted(points, key=lambda p: (-p['rank'], p['sequence']))[:6]
@@ -1241,6 +1264,45 @@ def _record_turning_point(so, inn, outcome, batter_name, free_hit, commentary):
 def _turning_points(so):
     points = sorted(so.get('turning_points') or [], key=lambda p: (-p['rank'], p['sequence']))[:3]
     return sorted(points, key=lambda p: p['sequence'])
+
+
+def _record_delivery(so, inn, oc, *, s_rid, batter_name, bowler_name, runs,
+                     otype, extra_type, out, legal, sym, free_hit, commentary):
+    """Append one resolved delivery to the innings' ball-by-ball log.
+
+    Called immediately after the delivery has been scored (runs, wicket, extras
+    and the legal-ball count are already on ``inn``), so the snapshot is the
+    real match output — never reconstructed later. Preserves wides/no-balls as
+    their own entries; an illegal delivery carries the legal-ball label it was
+    *attempting*, so a wide and the re-bowled legal ball share a label. Every
+    entry gets a unique, match-wide sequential index.
+    """
+    # Legal-ball position. A legal delivery takes the number it just completed;
+    # an illegal one (wide / no-ball) shows the number of the ball still to come.
+    legal_num = inn["legal"] if legal else inn["legal"] + 1
+    over_no = (legal_num - 1) // 6      # a Super Over is one 6-ball over
+    ball_no = (legal_num - 1) % 6 + 1
+    so["_delivery_seq"] = int(so.get("_delivery_seq", 0)) + 1
+    inn.setdefault("deliveries_log", []).append({
+        "index": so["_delivery_seq"],
+        "round": so.get("so_number", 1),
+        "innings": so.get("innings_no", 1),
+        "ball": f"{over_no}.{ball_no}",
+        "legal": bool(legal),
+        "legalBalls": inn["legal"],
+        "runs": int(runs or 0),
+        "outcome": otype,
+        "extra": extra_type,
+        "wicket": bool(out),
+        "wicketType": (oc.get("wicket_type") or "Run Out") if out else None,
+        "freeHit": bool(free_hit),
+        "batter": batter_name,
+        "bowler": bowler_name,
+        "scoreRuns": inn["runs"],
+        "scoreWickets": inn["wickets"],
+        "symbol": sym,
+        "commentary": commentary,
+    })
 
 
 # ── Ball resolution (the main match engine, unchanged rules) ───────────
@@ -1494,6 +1556,12 @@ async def _resolve_ball(context, mid, shot):
         oc, _name(so, so["bat_uid"], s_rid),
         _name(so, so["bowl_uid"], inn["bowler_rid"]))
     _record_turning_point(so, inn, oc, _name(so, so['bat_uid'], s_rid), free_hit, commentary)
+    _record_delivery(
+        so, inn, oc, s_rid=s_rid,
+        batter_name=_name(so, so['bat_uid'], s_rid),
+        bowler_name=_name(so, so['bowl_uid'], inn['bowler_rid']),
+        runs=runs, otype=otype, extra_type=extra_type, out=out,
+        legal=legal, sym=sym, free_hit=free_hit, commentary=commentary)
     free_hit_tag = "🆓 <b>FREE HIT</b>\n" if free_hit else ""
     no_ball_tag = ("\n🆓 <i>Free hit coming up — only a run out can dismiss!</i>"
                    if (otype == "extra" and extra_type == "No Ball") else "")
@@ -1624,21 +1692,47 @@ def _capture_innings_detail(so, inn, bat_uid, bowl_uid):
         "runs": inn["runs"], "wickets": inn["wickets"],
         "overs": f"{legal // 6}.{legal % 6}",
         "deliveries": inn['deliveries'],
+        # Which Super Over round this innings belonged to, so repeated (tied)
+        # rounds can be shown separately in the Mini App.
+        "round": so.get("so_number", 1),
+        # The full ball-by-ball log for this innings (real commentary + outcome
+        # per delivery), archived so View Match can replay it.
+        "deliveries_log": list(inn.get("deliveries_log") or []),
         "batters": batters, "bowlers": bowlers,
     }
 
 
+def _so_innings_source(so):
+    """Every captured Super Over innings, in play order.
+
+    Prefers the cross-round accumulator (so a replayed Super Over keeps all
+    rounds); falls back to the current-round list for states written before the
+    accumulator existed."""
+    return so.get("so_all_innings") or so.get("so_innings") or []
+
+
 def _super_over_summary(so, winner_name, margin_text):
-    """Compact Super Over summary for the Mini App result screen: winner +
-    each Super Over innings' total (labelled Innings 1 & 2)."""
+    """Full Super Over summary for the Mini App result screen: winner, and each
+    Super Over innings' total, batting/bowling card and ball-by-ball commentary,
+    tagged with its round so repeated Super Overs can be shown separately.
+
+    Batting/bowling and the delivery log are carried straight from the captured
+    innings detail; an innings archived before ball logging existed simply has
+    an empty ``deliveries`` list and the Mini App shows "Commentary unavailable"
+    rather than inventing any."""
     innings = []
-    for i, d in enumerate(so.get("so_innings") or [], start=1):
+    for i, d in enumerate(_so_innings_source(so), start=1):
         innings.append({
             "label": f"Super Over Innings {i}",
+            "round": int(d.get("round", 1) or 1),
             "team": d["team"], "runs": d["runs"], "wickets": d["wickets"],
+            "overs": d.get("overs"),
+            "batting": d.get("batters") or [],
+            "bowling": d.get("bowlers") or [],
+            "deliveries": list(d.get("deliveries_log") or []),
         })
     return {"winner": winner_name, "marginText": margin_text, "innings": innings,
-            'turningPoints': [{k: p[k] for k in ('round', 'innings', 'team', 'score', 'ball', 'text')}
+            'turningPoints': [{k: p.get(k) for k in ('round', 'innings', 'team', 'score', 'ball', 'text', 'kind')}
                               for p in _turning_points(so)]}
 
 
@@ -1681,7 +1775,7 @@ def _super_over_miniapp_innings(so):
     """Build the Super Over's innings in the Mini App scorecard format so they
     show after the two main-match innings (Super Over Innings 1 & 2)."""
     out = []
-    for i, d in enumerate(so.get("so_innings") or [], start=1):
+    for i, d in enumerate(_so_innings_source(so), start=1):
         bowl_team = so["teams"].get(d.get("opp_uid"), {}).get("name", "")
         batting = [{
             "name": b["name"], "runs": b["runs"], "balls": b["balls"],
@@ -1698,9 +1792,12 @@ def _super_over_miniapp_innings(so):
             "number": 2 + i,                       # after the two main innings
             "label": f"Super Over - Innings {i}",
             "super_over": True,
+            "round": int(d.get("round", 1) or 1),
             "bat_team": d["team"], "bowl_team": bowl_team,
             "runs": d["runs"], "wickets": d["wickets"], "overs": d["overs"],
             "batting": batting, "bowling": bowling,
+            # Ball-by-ball log so the scorecard archive carries the commentary.
+            "deliveries": list(d.get("deliveries_log") or []),
         })
     return out
 
@@ -1761,8 +1858,13 @@ async def _end_innings(context, mid, chase_won=False):
     inn = so["inn"]
     bat_uid = so["bat_uid"]
     so["score"][bat_uid] = (inn["runs"], inn["wickets"])
-    so.setdefault("so_innings", []).append(
-        _capture_innings_detail(so, inn, bat_uid, so["bowl_uid"]))
+    detail = _capture_innings_detail(so, inn, bat_uid, so["bowl_uid"])
+    # ``so_innings`` holds only the CURRENT round (reset each round, read by the
+    # tie-resolution maths). ``so_all_innings`` accumulates every round's detail
+    # and is never reset, so a replayed (tied) Super Over keeps each round's
+    # full scorecard + commentary for the archive and the Mini App.
+    so.setdefault("so_innings", []).append(detail)
+    so.setdefault("so_all_innings", []).append(detail)
     # Bank the players this Super Over actually used, so a replay cannot reuse
     # them: everyone who came to the crease, and the bowler who bowled.
     so["batted"][bat_uid] |= {int(r) for r in inn.get("at_crease", ())}
