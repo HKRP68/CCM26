@@ -28,8 +28,12 @@ FINALS = {"none": "No Final", **SERIES_FORMATS}
 MATCH_COUNTS = {"single": 1, "best_of_3": 3, "best_of_5": 5, "five_matches": 5}
 CLINCH_WINS = {"best_of_3": 2, "best_of_5": 3}
 VIEWS = ("info", "help", "table", "fixtures", "teams", "series", "final", "stats", "player",
-         "awards", "scorecard", "play", "teamfix")
+         "statstour", "tournamentstats", "awards", "scorecard", "play", "teamfix")
 SUBCOMMANDS = (*VIEWS, "playoffs", "teamfixtures", "today", "deadline")
+# Commands that may be missing from a championship created before they existed;
+# ``find_command`` resolves them by suffix so no backfill migration is needed.
+LATE_COMMANDS = {"tournamentstats": "tournamentstats", "statstour": "statstour",
+                 "teamfix": "teamfix"}
 GLOBAL_COMMANDS = {"wtctoday", "matchremind"}
 TERMINAL = {"completed", "forfeited", "cancelled"}
 STATUS = {"upcoming": "Upcoming", "available": "Available to Play", "live": "In Progress",
@@ -46,11 +50,15 @@ def find_command(db, command):
     alias = db.query(Command).filter(Command.command == command).first()
     if alias:
         return alias.championship, alias.view
-    # Championships created before the team fixture command still support it.
-    if command.endswith("teamfix"):
-        championship = db.query(Championship).filter_by(command=command[:-7]).first()
-        if championship:
-            return championship, "teamfix"
+    # Commands added after a championship was created have no alias row for it;
+    # resolve them by suffix (longest first, so ``statstour`` is not mistaken for
+    # the ``stats`` of a prefix that happens to end that way).
+    for suffix, view in sorted(LATE_COMMANDS.items(), key=lambda item: -len(item[0])):
+        if command.endswith(suffix):
+            championship = db.query(Championship).filter_by(
+                command=command[:-len(suffix)]).first()
+            if championship:
+                return championship, view
     return None
 
 
