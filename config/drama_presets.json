@@ -1,0 +1,56 @@
+{
+  "_comment": "Balanced Drama Engine v1 presets (Codex Prompt 05). Three distinct simulation policies. REALISTIC runs the realism engine with no drama overlay; BALANCED adds a bounded drama overlay with no scripted outcomes (the target competitive preset); CINEMATIC raises volatility and re-enables the ScenarioEngine's scripted finales for explicitly designated exhibition/challenge/story modes only. These are initial balancing values, not empirically-verified optima — tools/drama_calibration.py and the benchmarks inform the final numbers. min/max_log_multiplier are +/- ln(1.15).",
+  "default_preset": "REALISTIC",
+  "presets": {
+    "REALISTIC": {
+      "preset": "REALISTIC",
+      "enabled": false,
+      "scripted_outcomes_allowed": false,
+      "forced_finish_allowed": false,
+      "tension": { "enabled": true, "max_score": 100 },
+      "momentum": { "enabled": false, "window_legal_balls": 12, "ema_previous_weight": 0.80, "max_absolute_state": 0.75 },
+      "clutch": { "enabled": false, "max_activations_per_side_per_innings": 1, "max_duration_legal_balls": 6, "max_activation_probability": 0.12 },
+      "rare_volatility": { "enabled": false, "probability_per_eligible_over": 0.015, "max_activations_per_innings": 1 },
+      "effect_limits": { "min_log_multiplier": -0.139762, "max_log_multiplier": 0.139762, "max_absolute_wicket_probability_delta": 0.012, "max_absolute_expected_runs_delta": 0.08 },
+      "highlights": { "enabled": true }
+    },
+    "BALANCED": {
+      "preset": "BALANCED",
+      "enabled": false,
+      "scripted_outcomes_allowed": false,
+      "forced_finish_allowed": false,
+      "tension": { "enabled": true, "max_score": 100 },
+      "momentum": { "enabled": true, "window_legal_balls": 12, "ema_previous_weight": 0.80, "max_absolute_state": 0.75 },
+      "clutch": {
+        "enabled": true,
+        "max_activations_per_side_per_innings": 1,
+        "max_duration_legal_balls": 6,
+        "max_activation_probability": 0.12
+      },
+      "rare_volatility": {
+        "enabled": true,
+        "probability_per_eligible_over": 0.015,
+        "max_activations_per_innings": 1
+      },
+      "effect_limits": {
+        "min_log_multiplier": -0.139762,
+        "max_log_multiplier": 0.139762,
+        "max_absolute_wicket_probability_delta": 0.012,
+        "max_absolute_expected_runs_delta": 0.08
+      },
+      "highlights": { "enabled": true }
+    },
+    "CINEMATIC": {
+      "preset": "CINEMATIC",
+      "enabled": false,
+      "scripted_outcomes_allowed": true,
+      "forced_finish_allowed": true,
+      "tension": { "enabled": true, "max_score": 100 },
+      "momentum": { "enabled": true, "window_legal_balls": 12, "ema_previous_weight": 0.80, "max_absolute_state": 0.85 },
+      "clutch": { "enabled": true, "max_activations_per_side_per_innings": 2, "max_duration_legal_balls": 6, "max_activation_probability": 0.20 },
+      "rare_volatility": { "enabled": true, "probability_per_eligible_over": 0.030, "max_activations_per_innings": 2 },
+      "effect_limits": { "min_log_multiplier": -0.223144, "max_log_multiplier": 0.223144, "max_absolute_wicket_probability_delta": 0.020, "max_absolute_expected_runs_delta": 0.14 },
+      "highlights": { "enabled": true }
+    }
+  }
+}
