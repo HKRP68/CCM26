@@ -20,6 +20,18 @@ import random
 from engine.ball_outcome import calculate_outcome
 from engine.realism import integration as realism_integration
 from engine.sim.rng import SimRng, ENGINE_VERSION
+
+# Drama preset recorded on each match (Codex Prompt 05). Resolved defensively so
+# a missing/invalid drama config can never block match creation.
+_DRAMA_VERSION = "drama-v1"
+
+
+def _drama_preset_at_creation():
+    try:
+        from engine.drama import config as _dcfg
+        return _dcfg.active_preset()
+    except Exception:
+        return "REALISTIC"
 from engine import chase_chance
 from engine import chase_model
 from engine import ground_config
@@ -776,6 +788,14 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         # produced them, for debugging a saved match.
         "rng_seed": random.SystemRandom().randrange(1 << 62),
         "engine_version": ENGINE_VERSION,
+        # Balanced Drama preset recorded at match creation (Codex Prompt 05,
+        # §19/§20), so a competition records the engine version and preset used
+        # and a later global change cannot alter this match. The per-ball drama
+        # OVERLAY is wired into the /sim path; CIPL records the preset here and
+        # keeps its existing (single) momentum mechanism. See
+        # docs/balanced_drama_engine.md for the integration status per mode.
+        "drama_preset": _drama_preset_at_creation(),
+        "drama_engine_version": _DRAMA_VERSION,
     }
 
 
