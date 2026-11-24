@@ -220,7 +220,9 @@ class ApproachCardBlocksTests(unittest.TestCase, BlockTreeAssertions):
     def test_bot_is_not_a_mention(self):
         self.assertEqual(flatten(cp._rich_mention({}, cp.BOT_TG_ID_)), "🤖 Bot")
 
-    def test_chem_and_ovr_share_one_table(self):
+    def test_chem_and_ovr_matchup_not_on_card(self):
+        # The CHEM / OVR match-up table was removed from the approach card; it
+        # must not render even when both sides have chemistry/trait data.
         s = _state(innings=2, overs_played=1)
         chem = ("🟧 61/100", "🟥 51/100")
         boost = ({"base": 85, "effective": 85.3, "bonus": 0.3},
@@ -230,10 +232,8 @@ class ApproachCardBlocksTests(unittest.TestCase, BlockTreeAssertions):
             blocks = cp._approach_card_blocks(s)
         self.assertWellFormed(blocks)
         text = flatten(blocks)
-        self.assertIn("🧪 CHEM", text)
-        # Innings 2: the codes swapped at the break, so CSK is batting (row 1).
-        self.assertIn("CSK 🟧 61 85 → 85.3", text)
-        self.assertIn("MI 🟥 51 83 → 83.0", text)
+        self.assertNotIn("CHEM", text)
+        self.assertNotIn("OVR", text)
 
     def test_no_matchup_table_outside_lets_play(self):
         text = flatten(cp._approach_card_blocks(_state()))

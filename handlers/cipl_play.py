@@ -5149,12 +5149,6 @@ def _approach_card(state):
         f"Last {_unit_word(state)}: {_over_emoji_strip(state)}",
     ]
     lines += _recent_bowler_lines_html(state)
-    chem = _chem_line(state)
-    if chem:
-        lines += [chem]
-    boost = _trait_boost_line(state)
-    if boost:
-        lines += [boost]
     card = "\n".join(line for line in lines if line)
     card += _bowlers_block(state)
     card += _commentary_block(state)
@@ -5302,28 +5296,6 @@ def _build_approach_card_blocks(state, prompt):
         blocks.append(R.details(
             R.bold(f"🎳 Bowlers ({len(brows)}) — tap to expand"),
             [R.table(table, bordered=True, compact=True)]))
-
-    # ── CHEM / OVR match-up (Lets Play only) ──
-    chem = _chem_badges(state)
-    boost = _trait_boost(state)
-    if chem or boost:
-        header = [R.cell(None, header=True)]
-        if chem:
-            header.append(R.cell(R.bold("🧪 CHEM"), header=True, align="right"))
-        if boost:
-            header.append(R.cell(R.bold("⚡ OVR"), header=True, align="right"))
-        rows = [header]
-        for side, code in ((0, bat_code), (1, bowl_code)):
-            row = [R.cell(R.bold(code))]
-            if chem:
-                row.append(R.cell(chem[side].split("/")[0], align="right"))
-            if boost:
-                b = boost[side]
-                row.append(R.cell([f"{b['base']} → ",
-                                   R.bold(f"{b['effective']:.1f}")],
-                                  align="right"))
-            rows.append(row)
-        blocks.append(R.table(rows, bordered=True, compact=True))
 
     # ── Last over, ball by ball ──
     cmt = _commentary_rows(state)
