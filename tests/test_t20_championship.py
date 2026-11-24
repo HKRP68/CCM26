@@ -1221,3 +1221,22 @@ def test_match_announcement_reports_potm_series_and_next(competition):
     assert "Series · " in news         # running series score
     assert cup.match_reference(series.fixtures[1]) in news  # next match reference
     assert "Available to Play" in news  # the next match is open for both teams
+
+
+def test_admin_sets_open_sequential_schedule_availability(roster_admin):
+    client, db, championship, _, _ = roster_admin
+    schedule = f"/world-t20/{championship.id}?tab=schedule"
+    # Open mode needs a shared league deadline; supply one explicitly (IST).
+    response = client.post(schedule, data={"action": "schedule_availability",
+                                           "schedule_mode": "open_sequential",
+                                           "league_deadline": "2099-01-01T12:00"},
+                           follow_redirects=True)
+    assert b"Championship saved." in response.data
+    db.refresh(championship)
+    assert championship.schedule_mode == "open_sequential"
+    assert championship.league_deadline is not None
+    # And can be switched back to the calendar default.
+    client.post(schedule, data={"action": "schedule_availability", "schedule_mode": "calendar"},
+                follow_redirects=True)
+    db.refresh(championship)
+    assert championship.schedule_mode == "calendar"
