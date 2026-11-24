@@ -4755,16 +4755,6 @@ def _commentary_block(state):
     return f'\n🟩 <b>COMMENTARY</b>\n<blockquote expandable>"{body}"</blockquote>'
 
 
-def _crr_line(state):
-    """``CRR - 10.36`` (1st innings) or ``CRR - .. | RRR - .. | Need R off B`` (2nd)."""
-    line = f"CRR - {cipl_match.current_run_rate(state):.2f}"
-    c = cipl_match.chase(state)
-    if c and c["runs_required"] > 0:
-        line += (f" | RRR - {c['rrr']:.2f} | "
-                 f"Need {c['runs_required']} off {c['balls_remaining']}")
-    return line
-
-
 def _pitch_text(state):
     """'🌱 Hard pitch' for the approach card, or '' when no pitch is set.
 
@@ -4875,31 +4865,82 @@ def _partnership_bonus_suffix(state):
     return f" · ✨ {bonus} scoring bonus" if bonus else ""
 
 
-_PROJ_DISCLAIMER = "These numbers are illustrative, not fixed values."
+_PROJ_DISCLAIMER = "Illustrative, not fixed values."
+_OUTLOOK_ICON = {"Above Par": "🔼 ", "Below Par": "🔽 ", "On Par": "▪️ "}
+_RRR_TREND_ICON = {"rising": "📈", "falling": "📉", "flat": "➡️"}
+_RRR_TREND_WORD = {"rising": "rising", "falling": "easing", "flat": "steady"}
 
 
-def _runs_word(n):
-    return "run" if abs(int(n)) == 1 else "runs"
+def _comp_score(side):
+    return (f"{side['runs']}/{side['wkts']}" if side.get("wkts") is not None
+            else str(side["runs"]))
 
 
-def _comparison_status(comp):
-    """``(emoji, sentence)`` for whether the chasing side is ahead/behind/level."""
-    diff = comp["diff"]
-    chasing = comp["chasing"]
+def _unit_short(state):
+    """Compact unit label: 'ov' for an over, 'set' for The Hundred."""
+    return "set" if state.get("ball_format") == "The100" else "ov"
+
+
+def _side_codes(state):
+    """``(defending_code, chasing_code)`` for the 2nd-innings comparison.
+
+    The team that batted first is now bowling (defending); the chasing side is
+    now batting. Short team codes, falling back to the full name.
+    """
+    bat = str(state.get("bat_team_code") or state.get("bat_team_name") or "Bat")
+    bowl = str(state.get("bowl_team_code") or state.get("bowl_team_name") or "Bowl")
+    return bowl, bat
+
+
+def _projected_tag(state):
+    """``'184'`` / ``'~184'`` (approximate) for a live first innings, else None."""
+    proj = score_projection.project_first_innings(state)
+    if not proj or proj.get("complete"):
+        return None
+    return f"~{proj['expected']}" if proj.get("approximate") else str(proj["expected"])
+
+
+def _rate_line_html(state):
+    """One compact line: the chase (2nd inns) or ``CRR | Projected`` (1st)."""
+    crr = cipl_match.current_run_rate(state)
+    c = cipl_match.chase(state)
+    if c and c["runs_required"] > 0:
+        return (f"🎯 <b>Need {c['runs_required']} off {c['balls_remaining']}</b>"
+                f"  ·  RRR {c['rrr']:.2f}  ·  CRR {crr:.2f}")
+    line = f"⚡ <b>CRR</b> {crr:.2f}"
+    tag = _projected_tag(state)
+    if tag is not None:
+        line += f"  |  📊 <b>Projected</b> {tag}"
+    return line
+
+
+def _trend_chance_bits(state):
+    """Compact plain-text bits for the RRR trend and chase win chance (2nd inns)."""
+    bits = []
+    trend = score_projection.rrr_trend(state)
+    if trend:
+        icon = _RRR_TREND_ICON.get(trend["direction"], "➡️")
+        word = _RRR_TREND_WORD.get(trend["direction"], "")
+        bits.append(f"{icon} RRR {trend['then']:.2f}→{trend['now']:.2f}"
+                    + (f" ({word})" if word else ""))
+    chance = score_projection.chase_win_chance(state)
+    if chance is not None:
+        bits.append(f"🏆 {chance}%")
+    return bits
+
+
+def _comparison_status_short(diff, code):
+    """``(emoji, 'TAM 3 behind')`` — compact, code-based ahead/behind/level."""
     if diff > 0:
-        return "🔺", f"{chasing} are {diff} {_runs_word(diff)} ahead."
+        return "🔺", f"{code} {diff} ahead"
     if diff < 0:
-        return "🔻", f"{chasing} are {abs(diff)} {_runs_word(diff)} behind."
-    return "⚖️", "Scores are level."
+        return "🔻", f"{code} {abs(diff)} behind"
+    return "⚖️", "Scores level"
 
 
 def _score_insight_lines(state):
-    """Plain HTML lines for the projection (innings 1) / comparison (innings 2).
-
-    Returns a list of already-escaped HTML strings (no leading rule), or an
-    empty list when there is nothing to show. Never raises — a projection must
-    never be the reason a live card fails to render.
-    """
+    """Compact HTML insight lines — projection detail (1st) / chase comparison
+    (2nd). Returns already-escaped strings; never raises."""
     try:
         inn = int(state.get("innings", 1) or 1)
         if inn == 1:
@@ -4911,66 +4952,49 @@ def _score_insight_lines(state):
     return []
 
 
-_RRR_TREND_ICON = {"rising": "📈", "falling": "📉", "flat": "➡️"}
-_RRR_TREND_WORD = {"rising": "pressure rising", "falling": "pressure easing",
-                   "flat": "holding steady"}
-
-
 def _projection_lines_html(state):
+    """One compact par/range/outlook line + disclaimer (Projected rides on the
+    rate line). Empty when the innings is over or hasn't started."""
     proj = score_projection.project_first_innings(state)
     if not proj or proj.get("complete"):
         return []
-    expected = proj["expected"]
-    outlook = score_projection.par_outlook(state)
-    lines = ["📊 <b>PROJECTED SCORE</b>"]
-    if outlook:
-        lines.append(f"Par Score: <b>{outlook['par']}</b>")
-    if proj.get("approximate"):
-        lines.append(f"Projected: <b>~{expected}</b> <i>(approx)</i>")
-    else:
-        lines.append(f"Projected: <b>{expected}</b>")
+    out = score_projection.par_outlook(state)
+    parts = []
+    if out:
+        parts.append(f"Par <b>{out['par']}</b>")
     if proj.get("low") is not None and proj.get("high") is not None:
-        lines.append(f"Likely range: {proj['low']}–{proj['high']}")
-    if outlook:
-        lines.append(f"Current outlook: <b>{html.escape(outlook['outlook'])}</b>")
+        parts.append(f"Range {proj['low']}–{proj['high']}")
+    if out:
+        parts.append(f"{_OUTLOOK_ICON.get(out['outlook'], '')}"
+                     f"<b>{html.escape(out['outlook'])}</b>")
+    lines = []
+    if parts:
+        lines.append("📊 " + "  ·  ".join(parts))
     lines.append(f"<i>{_PROJ_DISCLAIMER}</i>")
     return lines
 
 
-def _comp_score(side):
-    return (f"{side['runs']}/{side['wkts']}" if side.get("wkts") is not None
-            else str(side["runs"]))
-
-
 def _comparison_lines_html(state):
+    """The chase comparison in up to three compact lines."""
     comp = score_projection.compare_innings(state)
-    if not comp:
-        return []
-    unit = comp["unit_word"].upper() + "S"
-    i1, i2 = comp["inn1"], comp["inn2"]
-    emoji, sentence = _comparison_status(comp)
-    lines = [
-        f"📊 <b>SCORE COMPARISON — {comp['stage']} {unit}</b>",
-        f"🔵 {html.escape(i1['name'])}: {_comp_score(i1)}",
-        f"🟢 {html.escape(i2['name'])}: {_comp_score(i2)}",
-        f"{emoji} {html.escape(sentence)}",
-    ]
-    last = comp.get("last")
-    if last:
-        lines += [
-            f"📈 <b>LAST {last['n']} {unit}</b>",
-            f"{html.escape(i1['name'])}: {last['inn1']} runs",
-            f"{html.escape(i2['name'])}: {last['inn2']} runs",
-        ]
-    trend = score_projection.rrr_trend(state)
-    if trend:
-        icon = _RRR_TREND_ICON.get(trend["direction"], "➡️")
-        word = _RRR_TREND_WORD.get(trend["direction"], "")
-        lines.append(f"{icon} <b>RRR:</b> {trend['then']:.2f} → {trend['now']:.2f}"
-                     + (f" <i>({word})</i>" if word else ""))
-    chance = score_projection.chase_win_chance(state)
-    if chance is not None:
-        lines.append(f"🏆 <b>Chase Chance:</b> {chance}%")
+    lines = []
+    if comp:
+        unit = _unit_short(state)
+        d_code = html.escape(_side_codes(state)[0])
+        c_code = html.escape(_side_codes(state)[1])
+        i1, i2 = comp["inn1"], comp["inn2"]
+        lines.append(f"📊 <b>@{comp['stage']} {unit}</b>  ·  "
+                     f"🔵 {d_code} {_comp_score(i1)}  ·  🟢 {c_code} {_comp_score(i2)}")
+        emoji, short = _comparison_status_short(comp["diff"], c_code)
+        line2 = f"{emoji} {short}"
+        last = comp.get("last")
+        if last:
+            line2 += (f"  ·  📈 L{last['n']}: {d_code} {last['inn1']} /"
+                      f" {c_code} {last['inn2']}")
+        lines.append(line2)
+    extra = _trend_chance_bits(state)
+    if extra:
+        lines.append("  ·  ".join(extra))
     return lines
 
 
@@ -4988,74 +5012,147 @@ def _score_insight_blocks(state):
 
 
 def _projection_blocks(state):
+    """Compact par/range/outlook line + disclaimer. Projected itself rides on
+    the CRR line in the block card, so this never repeats it."""
     proj = score_projection.project_first_innings(state)
     if not proj or proj.get("complete"):
         return []
-    expected = proj["expected"]
-    if proj.get("approximate"):
-        head = R.pullquote(["📊 Projected ", R.bold(f"~{expected}"),
-                            R.italic("  (approx)")])
-    else:
-        head = R.pullquote(["📊 Projected ", R.bold(str(expected))])
-    blocks = [head]
-    outlook = score_projection.par_outlook(state)
-    if outlook:
-        blocks.append(R.paragraph(["📊 Par Score  ", R.bold(str(outlook["par"]))]))
+    out = score_projection.par_outlook(state)
+    row = ["📊 "]
+    if out:
+        row += ["Par ", R.bold(str(out["par"])), "    "]
     if proj.get("low") is not None and proj.get("high") is not None:
-        blocks.append(R.paragraph(["Likely range  ",
-                                   R.bold(f"{proj['low']}–{proj['high']}")]))
-    if outlook:
-        blocks.append(R.paragraph(["Current outlook  ",
-                                   R.bold(outlook["outlook"])]))
+        row += ["Range ", R.bold(f"{proj['low']}–{proj['high']}"), "    "]
+    if out:
+        row.append(R.bold(f"{_OUTLOOK_ICON.get(out['outlook'], '')}{out['outlook']}"))
+    blocks = []
+    if len(row) > 1:
+        blocks.append(R.paragraph(row))
     blocks.append(R.paragraph([R.italic(_PROJ_DISCLAIMER)]))
     return blocks
 
 
 def _comparison_blocks(state):
+    """The chase comparison as a tight two-row table + a status line and, when
+    available, a trend/chance line."""
     comp = score_projection.compare_innings(state)
     if not comp:
         return []
-    unit = comp["unit_word"].upper() + "S"
+    unit = _unit_short(state)
+    d_code, c_code = _side_codes(state)
     i1, i2 = comp["inn1"], comp["inn2"]
-    emoji, sentence = _comparison_status(comp)
-    blocks = [
-        R.paragraph(["📊 ", R.bold(f"SCORE COMPARISON — {comp['stage']} {unit}")]),
-        R.table([
-            [R.cell("🔵"), R.cell(R.bold(i1["name"])),
-             R.cell(R.bold(_comp_score(i1)), align="right")],
-            [R.cell("🟢"), R.cell(R.bold(i2["name"])),
-             R.cell(R.bold(_comp_score(i2)), align="right")],
-        ], bordered=True, compact=True),
-        R.paragraph([f"{emoji} ", sentence]),
-    ]
+    blocks = [R.table([
+        [R.cell("🔵"), R.cell(R.bold(d_code)),
+         R.cell(R.bold(_comp_score(i1)), align="right")],
+        [R.cell("🟢"), R.cell(R.bold(c_code)),
+         R.cell(R.bold(_comp_score(i2)), align="right")],
+    ], bordered=True, compact=True,
+        caption=R.bold(f"📊 Comparison · {comp['stage']} {unit}"))]
+    emoji, short = _comparison_status_short(comp["diff"], c_code)
+    status = [f"{emoji} ", R.bold(short)]
     last = comp.get("last")
     if last:
-        blocks.append(R.paragraph(["📈 ", R.bold(f"LAST {last['n']} {unit}")]))
-        blocks.append(R.table([
-            [R.cell(i1["name"]), R.cell(R.bold(f"{last['inn1']} runs"),
-                                        align="right")],
-            [R.cell(i2["name"]), R.cell(R.bold(f"{last['inn2']} runs"),
-                                        align="right")],
-        ], bordered=True, compact=True))
-    trend = score_projection.rrr_trend(state)
-    if trend:
-        icon = _RRR_TREND_ICON.get(trend["direction"], "➡️")
-        word = _RRR_TREND_WORD.get(trend["direction"], "")
-        line = [f"{icon} ", R.bold("RRR"),
-                f"  {trend['then']:.2f} → {trend['now']:.2f}"]
-        if word:
-            line.append(R.italic(f"  ({word})"))
-        blocks.append(R.paragraph(line))
-    chance = score_projection.chase_win_chance(state)
-    if chance is not None:
-        blocks.append(R.paragraph(["🏆 ", R.bold("Chase Chance"),
-                                   f"  {chance}%"]))
+        status.append(f"    📈 L{last['n']}: {d_code} {last['inn1']} /"
+                      f" {c_code} {last['inn2']}")
+    blocks.append(R.paragraph(status))
+    extra = _trend_chance_bits(state)
+    if extra:
+        blocks.append(R.paragraph(["  ·  ".join(extra)]))
     return blocks
 
 
+def _recent_bowler_entries(state, n=2):
+    """The last ``n`` bowlers used — current first, then the previous unit's
+    bowler, then whoever has bowled most. Each entry has the player ``name``,
+    their bowling ``stats`` row and a ``current`` flag."""
+    bowl_stats = state.get("bowl_stats") or {}
+    by_rid = {str(p.get("roster_id")): p for p in (state.get("bowl_xi") or [])}
+    cur = state.get("current_bowler") or {}
+    cur_rid = str(cur.get("roster_id")) if cur.get("roster_id") is not None else None
+    order = []
+    if cur_rid:
+        order.append(cur_rid)
+    prev = state.get("prev_bowler_rid")
+    if prev is not None and str(prev) != cur_rid:
+        order.append(str(prev))
+    for rid, st in sorted(bowl_stats.items(),
+                          key=lambda kv: -int((kv[1] or {}).get("balls", 0) or 0)):
+        if rid not in order and int((st or {}).get("balls", 0) or 0) > 0:
+            order.append(rid)
+    out = []
+    for rid in order[:n]:
+        p = by_rid.get(rid) or (cur if rid == cur_rid else None)
+        if not p:
+            continue
+        out.append({"name": str(p.get("name", "Player")),
+                    "stats": bowl_stats.get(rid) or {},
+                    "current": rid == cur_rid})
+    return out
+
+
+def _recent_bowler_lines_html(state):
+    """HTML lines for the last two bowlers used (current marked 🎯)."""
+    lines = []
+    for e in _recent_bowler_entries(state):
+        mark = "🎯 " if e["current"] else "▫️ "
+        st = e["stats"]
+        figs = _compact_bowler_figs({"balls": int(st.get("balls", 0) or 0),
+                                     "runs": int(st.get("runs", 0) or 0),
+                                     "wickets": int(st.get("wickets", 0) or 0)})
+        lines.append(f"{mark}{html.escape(e['name'])} - {figs}")
+    return lines
+
+
+def _recent_bowler_table_rows(state):
+    """Rich table rows (header + up to two) for the last bowlers used, or None."""
+    entries = _recent_bowler_entries(state)
+    if not entries:
+        return None
+    rows = [[R.cell(R.bold("BOWLER"), header=True),
+             R.cell(R.bold("O"), header=True, align="right"),
+             R.cell(R.bold("R"), header=True, align="right"),
+             R.cell(R.bold("W"), header=True, align="right"),
+             R.cell(R.bold("ECON"), header=True, align="right")]]
+    for e in entries:
+        st = e["stats"]
+        balls = int(st.get("balls", 0) or 0)
+        overs = f"{balls // 6}.{balls % 6}" if balls % 6 else str(balls // 6)
+        runs = int(st.get("runs", 0) or 0)
+        name = f"{'🎯 ' if e['current'] else ''}{e['name']}"
+        rows.append([
+            R.cell(R.bold(name) if e["current"] else name),
+            R.cell(overs, align="right"),
+            R.cell(str(runs), align="right"),
+            R.cell(R.bold(str(st.get("wickets", 0))), align="right"),
+            R.cell(f"{runs / (balls / 6.0):.2f}" if balls else "—", align="right"),
+        ])
+    return rows
+
+
+def _vs_line_html(state):
+    """``vs 🟢 TAM · Yet to bat`` (1st inns) or ``vs 🟢 TAM 180/6 (20.0)`` (2nd).
+
+    The opponent sits on its own line rather than in the score table, keeping
+    the card's header to one tidy score row plus a context line.
+    """
+    bowl_emoji = state.get("bowl_team_emoji", "🏏")
+    bowl_code = html.escape(str(state.get("bowl_team_code") or "")) or html.escape(
+        str(state["bowl_team_name"]))
+    if state.get("innings", 1) == 2:
+        return (f"<i>vs</i> {bowl_emoji} {bowl_code}  "
+                f"{state.get('inn1_runs', 0)}/{state.get('inn1_wickets', 0)} "
+                f"({state.get('inn1_overs', '')})")
+    return f"<i>vs</i> {bowl_emoji} {bowl_code} · <i>Yet to bat</i>"
+
+
 def _approach_card(state):
-    """Full broadcast-style scorecard card used on the approach-select prompts."""
-    inn = state.get("innings", 1)
+    """Compact broadcast-style scorecard card used on the approach-select prompts.
+
+    Layout (top to bottom): heading · score row + ``vs`` line · CRR|Projected (or
+    the chase) + a one-glance insight · the two batters + partnership · the
+    bowling side with the last two bowlers used · the full attack and the last
+    unit's commentary, both collapsed so the approach buttons stay on screen.
+    """
     bat_name = html.escape(str(state["bat_team_name"]))
     bat_emoji = state.get("bat_team_emoji", "🏏")
     bat_code = html.escape(str(state.get("bat_team_code") or "")) or bat_name
@@ -5066,40 +5163,36 @@ def _approach_card(state):
     striker = state["batting_order"][state["striker_idx"]]
     non_striker = state["batting_order"][state["non_striker_idx"]]
     bs = state["bat_stats"]
-    rule = "—" * 28
+    rule = "—" * 24
 
     lines = [
         _card_heading(state),
         rule,
-        f"{bat_emoji} {bat_code} - <b>{cipl_match.format_score(state)}</b> - "
-        f"{cipl_match.format_overs(state)}",
-        "",
+        # Score row — team · total · progress (the "table" row).
+        f"{bat_emoji} <b>{bat_code}</b>  <b>{cipl_match.format_score(state)}</b>  "
+        f"({_progress(state)})",
+        _vs_line_html(state),
+        rule,
+        _rate_line_html(state),
+    ]
+    lines += _score_insight_lines(state)
+    lines += [
+        rule,
         f"🔹 {_compact_bat_line(striker, bs)}",
         f"      {_compact_bat_line(non_striker, bs)}",
         _partnership_line(state),
         rule,
-        _crr_line(state),
+        f"{bowl_emoji} <b>{bowl_code}</b> Bowl  ·  "
+        f"Last {_unit_word(state)}: {_over_emoji_strip(state)}",
     ]
-    insight = _score_insight_lines(state)
-    if insight:
-        lines += [rule] + insight
-    lines += [
-        rule,
-        f"{bowl_emoji} {bowl_code} | Bowl | {_over_emoji_strip(state)}",
-    ]
-    bowler = state.get("current_bowler")
-    if bowler:
-        bws = state["bowl_stats"].get(str(bowler["roster_id"]))
-        if bws:
-            lines += [rule,
-                      f"{html.escape(str(bowler['name']))} - {_compact_bowler_figs(bws)}"]
+    lines += _recent_bowler_lines_html(state)
     chem = _chem_line(state)
     if chem:
-        lines += [rule, chem]
+        lines += [chem]
     boost = _trait_boost_line(state)
     if boost:
-        lines += ([rule] if not chem else []) + [boost]
-    card = "\n".join(lines)
+        lines += [boost]
+    card = "\n".join(line for line in lines if line)
     card += _bowlers_block(state)
     card += _commentary_block(state)
     return card
@@ -5143,23 +5236,24 @@ def _build_approach_card_blocks(state, prompt):
     if sub:
         blocks.append(R.paragraph([R.italic("  ·  ".join(sub))]))
 
-    # ── Both totals ──
-    score_row = [R.cell(bat_emoji), R.cell(R.bold(bat_code)),
-                 R.cell(R.bold(cipl_match.format_score(state)), align="right"),
-                 R.cell(f"({_progress(state)})", align="right")]
+    # ── Score (batting side) as a single-row table + the opponent on its own
+    #    line, so the header stays one tidy row instead of a two-team block. ──
+    blocks.append(R.table(
+        [[R.cell(bat_emoji), R.cell(R.bold(bat_code)),
+          R.cell(R.bold(cipl_match.format_score(state)), align="right"),
+          R.cell(f"({_progress(state)})", align="right")]],
+        bordered=True, compact=True))
     if inn == 2:
-        rows = [[R.cell(bowl_emoji), R.cell(bowl_code),
-                 R.cell(f"{state.get('inn1_runs', 0)}/"
-                        f"{state.get('inn1_wickets', 0)}", align="right"),
-                 R.cell(f"({state.get('inn1_overs', '')})", align="right")],
-                score_row]
+        blocks.append(R.paragraph(
+            [R.italic("vs "), f"{bowl_emoji} ", R.bold(bowl_code),
+             f"  {state.get('inn1_runs', 0)}/{state.get('inn1_wickets', 0)} "
+             f"({state.get('inn1_overs', '')})"]))
     else:
-        rows = [score_row,
-                [R.cell(bowl_emoji), R.cell(bowl_code),
-                 R.cell(R.italic("Yet to bat"), align="right"), R.cell("")]]
-    blocks.append(R.table(rows, bordered=True, compact=True))
+        blocks.append(R.paragraph(
+            [R.italic("vs "), f"{bowl_emoji} ", R.bold(bowl_code),
+             "  ", R.italic("Yet to bat")]))
 
-    # ── The chase, or the run rate ──
+    # ── The chase (pullquote + rates), or CRR | Projected on one line. ──
     crr = cipl_match.current_run_rate(state)
     c = cipl_match.chase(state)
     if c and c["runs_required"] > 0:
@@ -5173,9 +5267,13 @@ def _build_approach_card_blocks(state, prompt):
              "  ·  RRR ", R.bold(f"{c['rrr']:.2f}"),
              "  ·  CRR ", R.bold(f"{crr:.2f}")]))
     else:
-        blocks.append(R.paragraph(["⚡ ", R.bold("CRR"), f"  {crr:.2f}"]))
+        row = ["⚡ ", R.bold("CRR"), f"  {crr:.2f}"]
+        tag = _projected_tag(state)
+        if tag is not None:
+            row += ["     📊 ", R.bold("Projected"), f"  {tag}"]
+        blocks.append(R.paragraph(row))
 
-    # ── Projected total (1st innings) / score comparison (2nd innings) ──
+    # ── Projected detail (1st innings) / score comparison (2nd innings) ──
     blocks.extend(_score_insight_blocks(state))
 
     # ── At the crease ──
@@ -5206,28 +5304,13 @@ def _build_approach_card_blocks(state, prompt):
                    R.bold(str(p_runs)), f" ({p_balls}){_partnership_bonus_suffix(state)}"]
     blocks.append(R.paragraph(partnership))
 
-    # ── The attack ──
+    # ── The attack: the last two bowlers used (current marked 🎯). ──
     bowl_caption = [R.bold(f"{bowl_emoji} {bowl_code} · Bowl"),
                     f"   Last {unit.lower()}: {_over_emoji_strip(state)}"]
-    bowler = state.get("current_bowler")
-    bws = state["bowl_stats"].get(str(bowler["roster_id"])) if bowler else None
-    if bws:
-        balls = bws.get("balls", 0)
-        overs = f"{balls // 6}.{balls % 6}" if balls % 6 else str(balls // 6)
-        runs = bws.get("runs", 0)
-        blocks.append(R.table([
-            [R.cell(R.bold("BOWLER"), header=True),
-             R.cell(R.bold("O"), header=True, align="right"),
-             R.cell(R.bold("R"), header=True, align="right"),
-             R.cell(R.bold("W"), header=True, align="right"),
-             R.cell(R.bold("ECON"), header=True, align="right")],
-            [R.cell(str(bowler["name"])),
-             R.cell(overs, align="right"),
-             R.cell(str(runs), align="right"),
-             R.cell(R.bold(str(bws.get("wickets", 0))), align="right"),
-             R.cell(f"{runs / (balls / 6.0):.2f}" if balls else "—",
-                    align="right")],
-        ], bordered=True, compact=True, caption=bowl_caption))
+    recent_rows = _recent_bowler_table_rows(state)
+    if recent_rows:
+        blocks.append(R.table(recent_rows, bordered=True, compact=True,
+                              caption=bowl_caption))
     else:
         blocks.append(R.paragraph(bowl_caption))
 

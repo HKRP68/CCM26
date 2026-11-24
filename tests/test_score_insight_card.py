@@ -76,11 +76,11 @@ class ProjectionCardTests(unittest.TestCase, BlockTreeAssertions):
         self.assertIsNotNone(proj)
 
         html_card = cp._approach_card(s)
-        self.assertIn("📊 <b>PROJECTED SCORE</b>", html_card)
-        self.assertIn(f"Projected: <b>{proj['expected']}</b>", html_card)
-        self.assertIn("illustrative, not fixed values", html_card)
+        # Projected now rides on the compact CRR | Projected line.
+        self.assertIn(f"<b>Projected</b> {proj['expected']}", html_card)
+        self.assertIn("Illustrative, not fixed values", html_card)
         if proj["low"] is not None:
-            self.assertIn(f"Likely range: {proj['low']}–{proj['high']}", html_card)
+            self.assertIn(f"Range {proj['low']}–{proj['high']}", html_card)
 
         blocks = cp._approach_card_blocks(s)
         self.assertGreater(self.assertWellFormed(blocks), 0)
@@ -90,28 +90,28 @@ class ProjectionCardTests(unittest.TestCase, BlockTreeAssertions):
 
     def test_no_projection_before_first_ball(self):
         s = _first_innings(0)
-        self.assertNotIn("PROJECTED SCORE", cp._approach_card(s))
+        self.assertNotIn("Projected", cp._approach_card(s))
         self.assertNotIn("Projected", flatten(cp._approach_card_blocks(s)))
 
     def test_projection_updates_after_an_over(self):
         s = _first_innings(6)
         first = sp.project_first_innings(s)["expected"]
-        self.assertIn(f"Projected: <b>{first}</b>", cp._approach_card(s))
+        self.assertIn(f"<b>Projected</b> {first}", cp._approach_card(s))
         for _ in range(4):
             _play_over(s, "aggressive")
         s["current_bowler"] = cm.eligible_bowlers(s)[0]
         later = sp.project_first_innings(s)["expected"]
-        self.assertIn(f"Projected: <b>{later}</b>", cp._approach_card(s))
+        self.assertIn(f"<b>Projected</b> {later}", cp._approach_card(s))
 
     def test_par_score_and_outlook_shown(self):
         s = _first_innings(10)
         outlook = sp.par_outlook(s)
         self.assertIsNotNone(outlook)
         card = cp._approach_card(s)
-        self.assertIn(f"Par Score: <b>{outlook['par']}</b>", card)
-        self.assertIn(f"Current outlook: <b>{outlook['outlook']}</b>", card)
+        self.assertIn(f"Par <b>{outlook['par']}</b>", card)
+        self.assertIn(f"<b>{outlook['outlook']}</b>", card)
         text = flatten(cp._approach_card_blocks(s))
-        self.assertIn("Par Score", text)
+        self.assertIn("Par", text)
         self.assertIn(outlook["outlook"], text)
 
     def test_rrr_trend_and_chase_chance_shown(self):
@@ -119,49 +119,52 @@ class ProjectionCardTests(unittest.TestCase, BlockTreeAssertions):
         card = cp._approach_card(s)
         trend = sp.rrr_trend(s)
         if trend:
-            self.assertIn("RRR:", card)
-            self.assertIn(f"{trend['then']:.2f}", card)
-            self.assertIn(f"{trend['now']:.2f}", card)
+            self.assertIn("RRR", card)
+            self.assertIn(f"{trend['then']:.2f}→{trend['now']:.2f}", card)
         chance = sp.chase_win_chance(s)
         if chance is not None:
-            self.assertIn(f"Chase Chance:</b> {chance}%", card)
+            self.assertIn(f"🏆 {chance}%", card)
 
     def test_comparison_in_html_and_rich(self):
         s = _second_innings(12)
         comp = sp.compare_innings(s)
         self.assertIsNotNone(comp)
         stage = comp["stage"]
+        # Codes used in the compact comparison: defending (bowl) / chasing (bat).
+        d_code = s.get("bowl_team_code")
+        c_code = s.get("bat_team_code")
 
         html_card = cp._approach_card(s)
-        self.assertIn(f"SCORE COMPARISON — {stage} OVERS", html_card)
-        self.assertIn("🔵 Vindhya:", html_card)
-        self.assertIn(f"🟢 {comp['inn2']['name']}:", html_card)
-        # Chase keeps its target / CRR / RRR line.
+        self.assertIn(f"@{stage} ov", html_card)
+        self.assertIn(f"🔵 {d_code} {cp._comp_score(comp['inn1'])}", html_card)
+        self.assertIn(f"🟢 {c_code} {cp._comp_score(comp['inn2'])}", html_card)
+        # Chase keeps its Need / RRR / CRR line.
+        self.assertIn("Need", html_card)
         self.assertIn("RRR", html_card)
 
         blocks = cp._approach_card_blocks(s)
         self.assertGreater(self.assertWellFormed(blocks), 0)
         text = flatten(blocks)
-        self.assertIn("SCORE COMPARISON", text)
-        self.assertIn(comp["inn1"]["name"], text)
-        self.assertIn(comp["inn2"]["name"], text)
+        self.assertIn("Comparison", text)
+        self.assertIn(d_code, text)
+        self.assertIn(c_code, text)
 
     def test_comparison_numbers_match_history(self):
         s = _second_innings(12)
         comp = sp.compare_innings(s)
         html_card = cp._approach_card(s)
-        i1, i2 = comp["inn1"], comp["inn2"]
-        exp1 = f"{i1['runs']}/{i1['wkts']}" if i1["wkts"] is not None else str(i1["runs"])
-        exp2 = f"{i2['runs']}/{i2['wkts']}" if i2["wkts"] is not None else str(i2["runs"])
-        self.assertIn(f"🔵 {i1['name']}: {exp1}", html_card)
-        self.assertIn(f"🟢 {i2['name']}: {exp2}", html_card)
+        d_code = s.get("bowl_team_code")
+        c_code = s.get("bat_team_code")
+        self.assertIn(f"🔵 {d_code} {cp._comp_score(comp['inn1'])}", html_card)
+        self.assertIn(f"🟢 {c_code} {cp._comp_score(comp['inn2'])}", html_card)
 
     def test_last_three_overs_block_when_deep_enough(self):
         s = _second_innings(12)
         comp = sp.compare_innings(s)
         if comp["last"]:
-            self.assertIn("LAST 3 OVERS", cp._approach_card(s))
-            self.assertIn("LAST 3 OVERS", flatten(cp._approach_card_blocks(s)))
+            self.assertIn(f"L{comp['last']['n']}:", cp._approach_card(s))
+            self.assertIn(f"L{comp['last']['n']}:",
+                          flatten(cp._approach_card_blocks(s)))
 
     def test_prompt_and_scorecard_preserved(self):
         # The projection is additive: the batting/bowling scorecard sections and
@@ -176,7 +179,7 @@ class ProjectionCardTests(unittest.TestCase, BlockTreeAssertions):
         self.assertIn("Projected", text)           # new section present too
         html_card = cp._approach_card(s)
         self.assertIn("BOWLERS", html_card)
-        self.assertIn("PROJECTED SCORE", html_card)
+        self.assertIn("Projected", html_card)
 
     def test_the_hundred_projection_renders(self):
         random.seed(3)
@@ -189,8 +192,20 @@ class ProjectionCardTests(unittest.TestCase, BlockTreeAssertions):
             _play_over(s, "aggressive")
         s["current_bowler"] = cm.eligible_bowlers(s)[0]
         card = cp._approach_card(s)
-        self.assertIn("PROJECTED SCORE", card)
+        self.assertIn("Projected", card)
         self.assertGreater(self.assertWellFormed(cp._approach_card_blocks(s)), 0)
+
+    def test_recent_bowlers_show_last_two_used(self):
+        # After a few overs the bowling table lists the last two bowlers used,
+        # current first.
+        s = _first_innings(3)
+        entries = cp._recent_bowler_entries(s)
+        self.assertTrue(entries)
+        self.assertLessEqual(len(entries), 2)
+        self.assertTrue(entries[0]["current"])
+        card = cp._approach_card(s)
+        for e in entries:
+            self.assertIn(e["name"], card)
 
 
 if __name__ == "__main__":
