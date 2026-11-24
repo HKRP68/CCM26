@@ -163,7 +163,9 @@ _CATEGORIES = [
                           ("BEST", _best(r) or "—"), *_m(r)],
          sort=lambda r: (r["bowl_wickets"], -r["bowl_runs"]), eligible=lambda r: r["bowl_wickets"] > 0),
     _Cat("bfig", "💥 Best Figures", "Bowling", "BEST", lambda r: _best(r),
-         cells=lambda r: [("OVERS", stats.overs(r["bowl_balls"]))],
+         # A single spell, so season overs would not describe the ranked figure;
+         # like the Tournament board, nothing rides behind the figure.
+         cells=lambda r: [],
          sort=lambda r: (r["best_bowl_wickets"], -r["best_bowl_runs"]),
          eligible=lambda r: r["best_bowl_runs"] >= 0, matches=False),
     _Cat("bowa", "🛡️ Bowling Average", "Bowling", "AVG", lambda r: f"{_bowl_avg(r):.2f}",
@@ -448,11 +450,18 @@ def _series_rows_for(series_rows, team_id, identity):
     return out
 
 
-def _form_result(fixture):
+def _form_result(fixture, team_id):
+    """The match result from ``team_id``'s point of view.
+
+    ``fixture.result`` is ``"win"`` for a decided match regardless of who won, so
+    recent form must compare the winner against the player's own team.
+    """
     if fixture.result == "tie":
         return "Tie"
     if fixture.result == "no_result":
         return "No result"
+    if fixture.result in ("win", "forfeit"):
+        return "Win" if fixture.winner_id == team_id else "Loss"
     return fixture.result or "—"
 
 
@@ -519,7 +528,7 @@ def player_cards(championship, series_rows, matched):
                         else f'{entry["bat_runs"]}{"" if entry["bat_out"] else "*"} ({entry["bat_balls"]})')
                 bowl = ("Did not bowl" if not entry["bowled"]
                         else f'{entry["bowl_wickets"]}/{entry["bowl_runs"]}')
-                result = _form_result(fixture)
+                result = _form_result(fixture, team_id)
                 cells.append([R.cell(match_reference(fixture)), R.cell(opponent.name),
                               R.cell(runs, align="right"), R.cell(bowl, align="right"), R.cell(result)])
                 html_rows.append(" · ".join(html.escape(str(v)) for v in

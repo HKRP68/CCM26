@@ -1275,3 +1275,56 @@ def test_admin_selects_and_removes_squad_players(roster_admin):
                             "player_id": member.id}, follow_redirects=True)
     db.expire_all()
     assert roster_io.championship_teams(db, championship.id)[0].team.players == []
+
+
+def test_recent_form_result_is_from_the_players_perspective(competition, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from handlers import t20_championship as H
+
+    db, championship = competition
+    championship.final_format = "none"
+    _play_one_match(db, championship)  # India beat Australia
+
+    def card_for(name):
+        reply = AsyncMock()
+        monkeypatch.setattr(H.R, "reply_rich", reply)
+        asyncio.run(H._reply_player_stats(SimpleNamespace(), db, championship, name.split()))
+        return reply.await_args.args[2]
+
+    india = card_for("Abhishek Sharma")   # India won
+    australia = card_for("Mitchell Starc")  # Australia lost
+    assert "Recent Form" in india and "Win" in india
+    assert "Loss" in australia and "Win" not in australia.split("Recent Form")[1]
+
+
+def test_extend_deadline_rejected_for_league_fixture_in_open_mode(competition):
+    from services import t20_championship as cup
+
+    db, championship = competition
+    championship.final_format = "none"
+    now = datetime.utcnow()
+    series = cup.add_series(db, championship, championship.teams[0], championship.teams[1], 3,
+                            date.today() + timedelta(days=5))
+    db.flush()
+    cup.start(championship, now)
+    cup.set_schedule_mode(championship, "open_sequential", now + timedelta(days=30))
+    db.commit()
+    reference = cup.match_reference(series.fixtures[0])
+    with pytest.raises(ValueError, match="open mode"):
+        cup.extend_deadline(db, championship.id, reference, "2099-01-01", now=now)
+
+
+def test_best_figures_board_carries_no_overs_cell():
+    from services import t20_championship_rich as rich
+    from services import t20_championship_stats as stats
+
+    row = stats._new_totals()
+    row.update(team_id=1, name="Bowler", team_name="India",
+               best_bowl_wickets=4, best_bowl_runs=20, bowl_balls=48)
+    board = rich.leaderboard_html(
+        type("C", (), {"name": "World T20", "command": "wt20c", "teams": []})(),
+        rich.category("bfig"), [row])
+    assert "4/20" in board and "OVERS" not in board and "8.0" not in board

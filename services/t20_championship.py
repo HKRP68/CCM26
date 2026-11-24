@@ -182,6 +182,13 @@ def extend_deadline(db, championship_id, reference, value, now=None):
         raise ValueError("Only scheduled or postponed fixtures can have their deadline extended.")
     if not is_postseason(fixture.series):
         editable_schedule(championship)
+        # In open mode a league fixture is gated by the shared league deadline,
+        # not its own, so a per-fixture extension would silently change nothing.
+        if open_mode(championship):
+            raise ValueError(
+                "This championship is in open mode, where one shared league "
+                "deadline governs every league fixture. Change it from the "
+                "Schedule availability setting, not one fixture at a time.")
     if deadline <= max(now, fixture.deadline) or deadline < fixture.opens_at:
         raise ValueError("Choose a future deadline later than the current one.")
     previous = fixture.deadline
