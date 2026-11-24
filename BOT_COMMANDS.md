@@ -461,13 +461,34 @@ Championship commands send rich Telegram replies with an HTML fallback.
 | `/wt20cseries [series ID]` | Tour results and Player of the Series |
 | `/wt20c playoffs` | Semifinal and final bracket, fixtures and results |
 | `/wt20cfinal` | Final format, fixtures and champion |
-| `/wt20cstats [team=ID] [series=ID]` | Batting, bowling, fielding and awards statistics |
-| `/wt20cplayer <name> [team=ID] [series=ID]` | One player's statistics |
+| `/wt20cstats [team=ID] [series=ID]` · `/wt20ctournamentstats` | Championship leaderboards. Grouped Batting, Bowling, Fielding and Performance categories with buttons; each board ranks the top 25 with the first ten open and ranks 11–25 behind a tap. Only the person who opened it can switch categories |
+| `/wt20cstatstour <name> [team=ID] [series=ID]` · `/wt20cplayer <name>` | One player's complete figures in independently collapsible sections: batting, bowling, fielding, awards & performance, additional batting/bowling records, series-by-series and recent form |
 | `/wt20cawards` | Championship award leaders and final awards |
 | `/wt20cscorecard <fixture ID>` | Archived innings and player figures. Accepts a numeric fixture ID or a reference like `S1M1` |
 
-Space-separated commands such as `/wt20c teamfixtures`, `/wt20c table` and
+`/wt20cstats` opens the category **leaderboards** and `/wt20cstatstour NAME` shows
+one **player's** full figures — the same split as the Challenge League Tournament's
+`/tournamentstats` and `/statstour`. Space-separated commands such as
+`/wt20c teamfixtures`, `/wt20c table`, `/wt20c stats`, `/wt20c statstour NAME` and
 `/wt20c scorecard 42` work too.
+
+### Schedule availability
+
+Each championship has a **Schedule availability** mode in the admin **Schedule**
+tab. **Calendar-based** (the default, and what every existing championship keeps)
+makes each league fixture playable only inside its own scheduled window.
+**Publish & open all league fixtures** switches to **open sequential** mode: every
+league fixture is open at once, but each team still progresses series by series
+and match by match — only its current series' next unplayed match is playable, and
+only when both teams are ready. In open mode a shared league-stage deadline applies
+to every league fixture (set explicitly, or inherited from the league end date);
+the postseason keeps its own openings and deadlines. Fixtures that are not yet
+playable show a precise reason — *Locked — Previous Match*, *Locked — Previous
+Series*, *Waiting for Opponent*, *Scheduled — Opens Later* or *Postponed — Deadline
+Passed* — with the blocking fixture or team. Publishing does not start the
+championship and does not bypass squad or stadium checks; those still run when a
+match is set up. Original fixture dates and IDs are kept for history, so the mode
+can be switched back.
 
 ## 12. Tournament Draft
 

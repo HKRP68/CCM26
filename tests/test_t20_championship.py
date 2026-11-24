@@ -1208,3 +1208,16 @@ def test_player_card_shows_both_departments_and_missing_values(competition, monk
     # zeroes (not "—"), and the keeper's one dismissal is recorded.
     assert "🏏 Batting" in card and "🎯 Bowling" in card
     assert "Wkts: 0" in card and "WK dismissals: 1" in card
+
+
+def test_match_announcement_reports_potm_series_and_next(competition):
+    from services import t20_championship as cup
+
+    db, championship = competition
+    championship.final_format = "none"
+    series = _play_one_match(db, championship)
+    news = cup.result_news(series.fixtures[0])
+    assert "POTM · " in news           # Player of the Match contribution
+    assert "Series · " in news         # running series score
+    assert cup.match_reference(series.fixtures[1]) in news  # next match reference
+    assert "Available to Play" in news  # the next match is open for both teams

@@ -388,8 +388,32 @@ def series_name(series):
     return f"{series.away.name} tour of {series.home.name}"
 
 
+def _potm_name(fixture):
+    if not fixture.scorecard:
+        return ""
+    data = json.loads(fixture.scorecard)
+    best = next((p for p in data["players"] if p["roster_id"] == data.get("potm")), None)
+    return f'{best["name"]} ({best["team_name"]})' if best else ""
+
+
+def _next_match_note(championship, series):
+    """The next unplayed match in this series and its availability/lock reason."""
+    upcoming = next((f for f in series.fixtures if f.status not in TERMINAL), None)
+    if upcoming is None:
+        return ""
+    rows = sorted(championship.series, key=lambda row: row.position)
+    label, blocker = lock_reason(championship, upcoming, next_fixtures(rows))
+    note = f"Next · {match_reference(upcoming)} · {label}"
+    return note + (f" ({blocker})" if blocker else "")
+
+
 def result_news(fixture):
-    if fixture is None or not series_complete(fixture.series):
+    """Announce a completed championship match: series score, POTM and what is next.
+
+    Reports on every completed match, not only a series-closing one, so owners
+    see the running series score and whether their next match is open.
+    """
+    if fixture is None:
         return ""
     series = fixture.series
     championship = series.championship
@@ -398,14 +422,27 @@ def result_news(fixture):
         return f"🏆 {winner} won {championship.name}!"
     home, away = series_score(series)
     score = f"{series.home.name} {home}–{away} {series.away.name}"
-    if needs_decider(series):
-        return f"{score} · Decider needed\n/{championship.command} playoffs"
-    if series.semifinal_no:
-        winner = series.home if home > away else series.away
-        return f"{score} · {winner.name} advances to the final\n/{championship.command} playoffs"
-    result = ("Series drawn" if home == away else
-              f"{(series.home if home > away else series.away).name} won the series")
-    return f"{score} · {result}\n/{championship.command}table"
+    lines = []
+    potm = _potm_name(fixture)
+    if potm:
+        lines.append(f"POTM · {potm}")
+    if series_complete(series):
+        if needs_decider(series):
+            lines += [f"{score} · Decider needed", f"/{championship.command} playoffs"]
+        elif series.semifinal_no:
+            winner = series.home if home > away else series.away
+            lines += [f"{score} · {winner.name} advances to the final",
+                      f"/{championship.command} playoffs"]
+        else:
+            result = ("Series drawn" if home == away else
+                      f"{(series.home if home > away else series.away).name} won the series")
+            lines += [f"{score} · {result}", f"/{championship.command}table"]
+        return "\n".join(lines)
+    lines.append(f"Series · {score}")
+    note = _next_match_note(championship, series)
+    if note:
+        lines.append(note)
+    return "\n".join(lines)
 
 
 def next_fixtures(series_rows):

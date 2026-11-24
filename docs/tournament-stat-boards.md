@@ -87,6 +87,35 @@ off figures `tour_service.get_tour_stats` now sums in the same `GROUP BY` that
 was already running. The same board in two places should not be read two
 different ways.
 
+## The World T20 Championship twin
+
+The championship stats commands read the same way, and on purpose: a league and
+a championship should not make the reader learn two layouts.
+
+* `/wt20cstats` (alias `/wt20ctournamentstats`) is the **leaderboards** —
+  `/tournamentstats`' twin. The categories are grouped Batting / Bowling /
+  Fielding / Performance; the buttons show the active group's categories plus a
+  row to switch groups, and navigation is locked to whoever opened the board.
+  Same top-ten-open / ranks-11–25-behind-a-tap split, same medals, same
+  deterministic ties.
+* `/wt20cstatstour NAME` (alias `/wt20cplayer NAME`) is one **player's** full
+  figures — `/statstour`' twin. Batting and bowling are independently
+  collapsible native sections in the exact field order the Tournament card uses
+  (`Inns, Runs, 50s, 100s, 4s/6s, Avg, SR, Ducks, HS` and `Inns, Wkts, 3-Fers,
+  5-Fers, Hattricks, Avg, Econ, SR, BBF, Overs`), with fielding, awards &
+  performance, additional batting/bowling records, series-by-series and recent
+  form as further sections.
+
+The rows come from `t20_championship_stats.aggregate`, which records the extra
+fields the richer scorecards capture (not-outs, 150+, stumpings, run-outs, dot
+balls, four-fers, fastest 50/100/150, boundary data). A figure that was never
+captured — maidens, a legacy scorecard's milestone — shows `—`, kept distinct
+from a real zero. Rate boards carry the Tournament's own qualifications
+(≥20 balls for strike rate, ≥12 for economy, a dismissal for an average).
+
+Career scope spans this championship season only until championships are season
+-linked; the player card says so rather than merging unrelated competitions.
+
 ## Where the pieces live
 
 | File | Role |
@@ -95,4 +124,8 @@ different ways.
 | `services/tournament_service.py` | `stat_leaders` — the rows and the ranking |
 | `services/tour_service.py` | `get_tour_stats` — the tour twin |
 | `handlers/tours.py` | `_leader_lines`, `_bat_detail`, `_bowl_detail` |
+| `services/t20_championship_rich.py` | championship leaderboards + player cards (rich + HTML) |
+| `services/t20_championship_stats.py` | `aggregate`, `series_breakdown`, `recent_form` |
+| `handlers/t20_championship.py` | `_reply_leaderboard`, `leaderboard_callback`, `_reply_player_stats` |
 | `tests/test_tournament_stat_boards.py` | the figures, both renderers, the legacy row |
+| `tests/test_t20_championship.py` | championship boards, player cards, open-mode schedule |
