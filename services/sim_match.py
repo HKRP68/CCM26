@@ -22,6 +22,7 @@ import random
 from datetime import datetime
 
 from engine.ball_outcome import calculate_outcome
+from engine.realism import integration as realism_integration
 from engine.batter_confidence import maiden_pressure_hook
 from engine.pressure_engine import PressureEngine
 from engine.game_state_engine import (
@@ -345,7 +346,8 @@ def _fielder_keeper(bowling_xi):
 def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                      innings_no, batting_team, bowling_team,
                      target=None, commentary=None, feed=None,
-                     fmt=None, run_factor=1.0, scenario=False):
+                     fmt=None, run_factor=1.0, scenario=False, rng=None,
+                     drama=None):
     """Simulate one innings and return its result dict.
 
     Uses the SimCricketX engine (pressure_engine, game_state_engine,
@@ -405,7 +407,36 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
 
     total_runs = 0
     total_wkts = 0
-    extras = {"wides": 0, "noballs": 0, "legbyes": 0}
+    # `byes` is tracked separately from `legbyes` in realism mode (Cricket
+    # Mechanics fix 1): they are different extras and grouping them misreports
+    # the scorecard. Legacy keeps the three-key dict byte-identical.
+    _rlive = realism_integration.live_for(engine_fmt)
+    # Per-match random source (Cricket Mechanics fix 3 — deterministic sim).
+    # ``rng`` is the match's own SimRng, shared across both innings so the ball
+    # loop, fielding picks, extras and wicket types all draw from one seeded,
+    # reproducible stream that never collides with another concurrent match.
+    # None (every legacy caller) falls back to the global ``random`` module, so
+    # legacy behaviour stays byte-identical.
+    _match_rng = rng if rng is not None else random
+    # Balanced Drama overlay (Prompt 05). One engine drives both innings; reset
+    # its per-innings state here. None when no drama preset is active.
+    if drama is not None:
+        drama.new_innings(innings_no)
+        from services import drama_runtime as _drama_rt
+    # Over-to-over variation (Feature 2 — realism layer). Only when realism is
+    # actually driving the deliveries and the flag is on. Drawn from an
+    # independent child of the match RNG, so it is reproducible and does not
+    # shift the ball-outcome stream.
+    _overvol = None
+    if _rlive:
+        from engine.realism import config as _rcfg_ov
+        if _rcfg_ov.over_volatility_enabled():
+            from engine.realism import over_volatility as _ovmod
+            _ov_cfg = dict(_rcfg_ov.over_volatility_config(), enabled=True)
+            _ov_rng = rng.derive("overvol") if rng is not None else None
+            _overvol = _ovmod.OverVolatility(_ov_cfg, _ov_rng)
+    extras = ({"wides": 0, "noballs": 0, "legbyes": 0, "byes": 0} if _rlive
+              else {"wides": 0, "noballs": 0, "legbyes": 0})
     fow = []
     timeline = []
     over_summaries = []
@@ -447,7 +478,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
         if commentary:
             try:
                 line = commentary(event_key, batsman, bowler_name,
-                                  random.choice(fielders), keeper, runs)
+                                  _match_rng.choice(fielders), keeper, runs)
             except Exception:
                 line = None
         if feed is not None:
@@ -541,6 +572,18 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
         balls_this_over = 0
         over_timeline = []
 
+        # Over-to-over variation: draw this over's zero-mean scoring tendency.
+        if _overvol is not None:
+            _overvol.new_over()
+
+        # Drama: decide clutch / rare activation at the start of this over.
+        if drama is not None:
+            _over_ctx = _drama_rt.make_context(
+                innings=innings_no, runs=total_runs, wickets=total_wkts,
+                target=target, innings_balls=overs * 6, balls_bowled=legal_balls,
+                wicket_limit=10)
+            drama.on_over_start(_over_ctx)
+
         while balls_this_over < 6:
             if total_wkts >= 10 or chased:
                 break
@@ -549,6 +592,8 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
             bs = bat_stats[id(striker)]
             striker_name = striker["name"]
             batting_position = striker_i + 1
+            _striker_runs_before = bs["runs"]
+            _runs_before_ball = total_runs
 
             # Build match_state for pressure engine
             balls_left = overs * 6 - legal_balls
@@ -593,13 +638,61 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
             batter_with_form = dict(striker)
 
             # Bowler effectiveness with fatigue
-            fatigue = bowler_mgr.get_fatigue_mult(last_bowler_name)
+            fatigue = bowler_mgr.get_fatigue_mult(bowler)
             bowler_effective = dict(bowler)
             bowler_effective["bowling_rating"] = bowler.get("bowling_rating", 40) * fatigue
 
-            # pitch_wear: fraction of balls bowled this innings
+            # Pitch wear. In realism mode this is MATCH-LONG, not per-innings:
+            # a T20 pitch is bowled on for 40 overs, and resetting wear to zero
+            # for the chase (which the old per-innings formula did) hands the
+            # chasing side a fresh square and makes the two innings mechanically
+            # interchangeable. engine.pitch_state.carry_wear spans innings 1
+            # across 0.0-0.5 and innings 2 across 0.5-1.0, and is keyed on the
+            # innings length so it is correct for any format. The legacy path
+            # keeps the per-innings fraction so its behaviour is unchanged.
+            # Requirement 7 of the Fairness & Simulation Fixes.
             total_balls = overs * 6
-            pitch_wear = min(1.0, legal_balls / max(1, total_balls))
+            if realism_integration.live_for(engine_fmt):
+                from engine import pitch_state as _ps
+                pitch_wear = _ps.carry_wear(innings_no, legal_balls, total_balls)
+            else:
+                pitch_wear = min(1.0, legal_balls / max(1, total_balls))
+
+            # Compose the Balanced Drama overlay onto the maiden-pressure hook
+            # so it is the LAST weight modifier before the single sample (§12).
+            # The shaped weights are captured in _drama_holder for momentum's
+            # expected-runs term.
+            _base_hook = maiden_pressure_hook(balls_this_over, over_bowler_runs)
+            # Over-volatility is a realism-layer shape applied before the drama
+            # overlay (which must stay last). Composed onto the base hook.
+            if _overvol is not None:
+                _bh0 = _base_hook
+
+                def _base_hook(weights, _bh0=_bh0, _ov=_overvol):
+                    w = weights
+                    if _bh0 is not None:
+                        try:
+                            hooked = _bh0(weights)
+                            if hooked:
+                                w = hooked
+                        except Exception:
+                            w = weights
+                    return _ov.apply(w)
+
+            _drama_holder = {}
+            if drama is not None:
+                _edge = (striker.get("batting_rating") or striker.get("rating") or 60.0) \
+                    - (bowler.get("bowling_rating") or 60.0)
+                _dctx = _drama_rt.make_context(
+                    innings=innings_no, runs=total_runs, wickets=total_wkts,
+                    target=target, innings_balls=overs * 6,
+                    balls_bowled=legal_balls, wicket_limit=10,
+                    edge=_edge / 17.0, free_hit=free_hit)
+                _ball_hook = _drama_rt.compose_hook(
+                    _base_hook, drama, _dctx, _drama_holder)
+            else:
+                _dctx = None
+                _ball_hook = _base_hook
 
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_with_form,
@@ -617,7 +710,17 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 pitch_wear=pitch_wear,
                 batting_position=batting_position,
                 format_config=engine_fmt,
-                weight_hook=maiden_pressure_hook(balls_this_over, over_bowler_runs),
+                weight_hook=_ball_hook,
+                # The scoreboard, for the Realism Engine's wickets-lost and
+                # chase-situation baselines. Ignored when realism is off.
+                match_context={
+                    "runs": total_runs,
+                    "wickets": total_wkts,
+                    "balls_bowled": legal_balls,
+                    "target": int(target) if target else None,
+                    "innings_balls": overs * 6,
+                },
+                rng=rng,
             ))
 
             otype = oc.get("type")        # "run" | "wicket" | "extra"
@@ -635,12 +738,24 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 over_had_extra = True
 
                 if extra_type == "Wide":
-                    extras["wides"] += 1
+                    # A wide is worth its penalty PLUS any byes run off it, and
+                    # all of that is "wides" on the scorecard. Recording only
+                    # the penalty (the old `+= 1`) left the extras line short of
+                    # the runs the total already contained, so total != batter
+                    # runs + extras. Legacy keeps the old under-count.
+                    extras["wides"] += (1 + runs) if _rlive else 1
                     timeline.append("WD")
                     over_timeline.append("WD")
                     _emit("wide", striker_name, last_bowler_name, 0, legal_balls)
                 else:  # No Ball
                     extras["noballs"] += 1
+                    # A faced no-ball is a ball faced by the batter (it counts
+                    # towards their balls, just never towards the over's legal
+                    # deliveries), which is how /cipl and /wpm already score it.
+                    # Without this a batter's strike rate is inflated by every
+                    # no-ball they score off. Realism only, to keep legacy SRs.
+                    if _rlive:
+                        bs["balls"] += 1
                     if runs:
                         bs["runs"] += runs
                         if runs == 4:
@@ -667,12 +782,16 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
             bs["balls"] += 1
 
             if is_extra and extra_type in ("Byes", "LegByes", "LegBye", "Leg Byes"):
-                # Leg byes / byes: runs to team, not to bowler, not to batter
+                # Byes and leg byes: runs to the team, not the bowler, not the
+                # batter. They are different extras, so realism mode books a
+                # genuine bye under "byes" and a leg bye under "legbyes";
+                # legacy groups both under legbyes as before.
                 total_runs += runs
-                extras["legbyes"] += runs
+                _is_bye = _rlive and extra_type in ("Byes",)
+                extras["byes" if _is_bye else "legbyes"] += runs
                 over_had_extra = True
-                timeline.append("LB")
-                over_timeline.append("LB")
+                timeline.append("B" if _is_bye else "LB")
+                over_timeline.append("B" if _is_bye else "LB")
                 _emit("extras", striker_name, last_bowler_name, runs, legal_balls)
                 if runs % 2 == 1:
                     striker_i, non_striker_i = non_striker_i, striker_i
@@ -730,6 +849,26 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
             if len(ball_history) > BALL_HISTORY_WINDOW:
                 ball_history = ball_history[-BALL_HISTORY_WINDOW:]
 
+            # Drama: update momentum + detect highlights from the realised
+            # legal delivery (after the ball, never altering it — §8).
+            if drama is not None:
+                _dkey, _is_wkt, _is_bwkt = _drama_rt.outcome_key(
+                    otype, runs, is_extra, wicket_type)
+                drama.get_tension(_dctx)
+                drama.after_delivery(_dctx, {
+                    "key": _dkey,
+                    "runs": total_runs - _runs_before_ball,
+                    "is_wicket": _is_wkt,
+                    "legal": True,
+                    "is_bowler_wicket": _is_bwkt,
+                    "bowler_ref": last_bowler_name,
+                    "team_ref": batting_team,
+                    "striker_ref": striker_name,
+                    "striker_runs_before": _striker_runs_before,
+                    "striker_runs_after": bs["runs"],
+                    "legal_ball_index": legal_balls - 1,
+                }, _drama_holder.get("pre"))
+
             if target is not None and total_runs >= target:
                 chased = True
 
@@ -737,9 +876,15 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
         if balls_this_over >= 6:
             if over_bowler_runs == 0 and not over_had_extra:
                 bw["maidens"] += 1
-            bowler_mgr.record_over_completion(last_bowler_name, over_bowler_runs)
+            bowler_mgr.record_over_completion(bowler, over_bowler_runs)
             _record_over_summary(over_idx + 1, last_bowler_name, over_timeline, legal_balls)
             striker_i, non_striker_i = non_striker_i, striker_i
+            if drama is not None:
+                _oc_ctx = _drama_rt.make_context(
+                    innings=innings_no, runs=total_runs, wickets=total_wkts,
+                    target=target, innings_balls=overs * 6,
+                    balls_bowled=legal_balls, wicket_limit=10)
+                drama.on_over_complete(_oc_ctx, over_idx)
 
     opening_bowler_name = plan[0]["name"] if plan else ""
     opening_striker_name = batting_order[0]["name"] if batting_order else ""
@@ -772,7 +917,8 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
         "overs": _balls_to_overs(legal_balls),
         "balls": legal_balls,
         "extras": extras,
-        "extras_total": extras["wides"] + extras["noballs"] + extras["legbyes"],
+        "extras_total": (extras["wides"] + extras["noballs"] + extras["legbyes"]
+                         + extras.get("byes", 0)),
         "fow": fow,
         "timeline": timeline,
         "over_summaries": over_summaries,
@@ -781,12 +927,17 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
         "bowl_plan": plan,
         "bowl_stats": final_bowl_stats,
         "_order_objs": batting_order,
+        # Drama presentation metadata for this innings (empty when no overlay).
+        "drama": ({"final_tension": drama.state.get("last_tension", 0),
+                   "highlights": drama.get_highlights()}
+                  if drama is not None else None),
     }
 
 
 def simulate_match(home_xi, away_xi, overs, pitch_type,
                    home_name, away_name, toss_winner=None,
-                   toss_decision=None, commentary=None, fmt=None, scenario=True):
+                   toss_decision=None, commentary=None, fmt=None, scenario=True,
+                   seed=None):
     """Simulate a full two-innings match using the SimCricketX engine.
 
     home_xi / away_xi: lists of player dicts with keys: name, rating,
@@ -800,9 +951,49 @@ def simulate_match(home_xi, away_xi, overs, pitch_type,
     pitch_meta = get_pitch_meta(pitch_type)
     run_factor = pitch_meta.get("run_factor", 1.0)
 
+    # Deterministic simulation (Cricket Mechanics & Reliability, fix 3).
+    # When realism is enabled the whole match — toss, both innings' ball loops,
+    # fielding, extras and wicket types — runs off one SimRng seeded from
+    # ``seed`` (a fresh system seed when None). Everything stays on this single
+    # stream, so the same seed replays the match identically and two concurrent
+    # matches never perturb each other through the global ``random`` state.
+    # Legacy (flag off) keeps match_rng=None and the global module, byte-for-byte.
+    from engine.realism import config as _rcfg
+    from engine.sim.rng import SimRng, ENGINE_VERSION
+    _realism_on = _rcfg.realism_enabled()
+    match_rng = SimRng(seed) if _realism_on else None
+    match_seed = match_rng.seed if match_rng is not None else None
+
+    # Balanced Drama overlay (Codex Prompt 05). The preset is resolved ONCE at
+    # match creation and recorded in the result, so flipping a global setting
+    # cannot alter an ongoing match. The engine draws from an independent child
+    # of the match RNG, so turning drama on or off never shifts the ball-outcome
+    # stream (§20 — deterministic child streams). None when the active preset's
+    # overlay is inactive (REALISTIC / disabled), leaving the path untouched.
+    from services import drama_runtime
+    _drama_preset = drama_runtime.resolve_preset()
+    _drama_rng = match_rng.derive("drama") if match_rng is not None else SimRng(seed)
+    drama_eng = drama_runtime.make_engine(
+        _drama_preset, rng=_drama_rng, match_id="sim-%s" % (match_seed or 0))
+
     teams_by_name = {home_name: home_xi, away_name: away_xi}
     if toss_winner not in teams_by_name:
-        toss_winner = home_name
+        # An unspecified toss is a coin spin, not a home-ground gift. The old
+        # default handed the toss — and with it first or second innings on the
+        # pitch's ideal_toss — to the home side every single time, a free and
+        # permanent structural edge to whichever team happened to be named
+        # first. Decide it from the match RNG instead, which is seeded by the
+        # caller, so a seeded /sim stays reproducible while being fair.
+        # Requirement 4 of the Fairness & Simulation Fixes.
+        #
+        # Gated on the realism flag so legacy mode is byte-identical by
+        # default (the prompt wants every correction behind the flag with the
+        # original engine as an immediate rollback). Rolls one RNG draw, so a
+        # seeded realism /sim stays reproducible.
+        if match_rng is not None:
+            toss_winner = match_rng.choice([home_name, away_name])
+        else:
+            toss_winner = home_name
 
     if toss_decision is None:
         normalized_decision = str(pitch_meta.get("ideal_toss", "bat")).strip().lower()
@@ -827,12 +1018,14 @@ def simulate_match(home_xi, away_xi, overs, pitch_type,
     inn1 = simulate_innings(first_bat, first_bowl, overs, pitch_type,
                             1, first_name, second_name,
                             target=None, commentary=commentary, feed=feed,
-                            fmt=fmt, run_factor=run_factor, scenario=scenario)
+                            fmt=fmt, run_factor=run_factor, scenario=scenario,
+                            rng=match_rng, drama=drama_eng)
     target = inn1["runs"] + 1
     inn2 = simulate_innings(first_bowl, first_bat, overs, pitch_type,
                             2, second_name, first_name,
                             target=target, commentary=commentary, feed=feed,
-                            fmt=fmt, run_factor=run_factor, scenario=scenario)
+                            fmt=fmt, run_factor=run_factor, scenario=scenario,
+                            rng=match_rng, drama=drama_eng)
 
     result = _compute_result(inn1, inn2, target)
 
@@ -878,6 +1071,19 @@ def simulate_match(home_xi, away_xi, overs, pitch_type,
         "super_over": super_over,
         "commentary_feed": feed,
         "potm": _player_of_the_match(inn1, inn2, result),
+        # Reproducibility metadata (Cricket Mechanics fix 3): the seed and
+        # engine version needed to replay this match. None in legacy mode.
+        "rng_seed": match_seed,
+        "engine_version": ENGINE_VERSION if _realism_on else None,
+        # Balanced Drama metadata (Prompt 05): the preset this match was created
+        # under, the drama engine version, and the detected highlights. The
+        # preset is always recorded; the version/highlights only when the
+        # overlay was active.
+        "drama_preset": _drama_preset,
+        "drama_engine_version": (drama_runtime.DRAMA_VERSION
+                                 if drama_eng is not None else None),
+        "drama_highlights": (drama_eng.get_highlights()
+                             if drama_eng is not None else []),
     }
 
 
@@ -918,10 +1124,12 @@ def render_innings_card(inn):
             f"{_esc(p['name'])} {mark}{bs['runs']} ({bs['balls']}){dismissal} "
             f"4s:{bs['fours']} 6s:{bs['sixes']} SR:{sr}"
         )
-    body.append(
-        f"Extras: {inn['extras_total']} "
-        f"(wd {e['wides']}, nb {e['noballs']}, lb {e['legbyes']})"
-    )
+    _ex_detail = ("(wd {wd}, nb {nb}, lb {lb}, b {b})".format(
+                      wd=e['wides'], nb=e['noballs'], lb=e['legbyes'],
+                      b=e['byes'])
+                  if 'byes' in e else
+                  f"(wd {e['wides']}, nb {e['noballs']}, lb {e['legbyes']})")
+    body.append(f"Extras: {inn['extras_total']} " + _ex_detail)
     body.append(f"<b>TOTAL: {inn['runs']}/{inn['wickets']} ({inn['overs']} ov)</b>")
     if dnb:
         body.append(f"<i>DNB: {_esc(', '.join(dnb))}</i>")

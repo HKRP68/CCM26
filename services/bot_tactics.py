@@ -53,6 +53,8 @@ from engine.ball_outcome import (DEFAULT_SCORING_MATRIX, PITCH_SCORING_MATRIX,
                                  get_pitch_wicket_multiplier)
 from engine import pitch_registry
 from engine import batter_confidence
+from engine.realism import integration as realism_integration
+from engine.realism import win_probability
 from services import cipl_match
 
 logger = logging.getLogger(__name__)
@@ -241,6 +243,28 @@ def _balls_left(state):
         return max(0, units_left(state) * 6)
 
 
+def _innings_balls(state):
+    """Legal balls in a full innings of this format."""
+    try:
+        return max(1, int(cipl_match.total_balls(state)))
+    except Exception:
+        return max(1, total_units(state) * _balls_per_unit(state))
+
+
+def _realism_objective(state):
+    """Should the first-innings objective be win probability?
+
+    Only when the realism ball model is actually deciding the deliveries, so
+    the captain is never optimising against a different engine than the one
+    bowling at it. Any failure resolves to the legacy objective.
+    """
+    try:
+        fmt = cipl_match._fmt_to_engine_fmt(None, total_units(state))
+        return realism_integration.live_for(fmt)
+    except Exception:
+        return False
+
+
 def _balls_per_unit(state):
     """6 for T20, 5 for The Hundred — how long the over being modelled is."""
     try:
@@ -297,16 +321,67 @@ def _pitch_matrix(pitch, bowler=None):
     return {k: v / total for k, v in scaled.items()}
 
 
+def _realism_context(state, bowler=None):
+    """A realism BallContext built from live match state, or None.
+
+    Returns None unless the realism model is actually driving this match, so
+    the legacy estimator below stays the default. When it is, the bot reasons
+    over the SAME distribution the engine samples (Fairness fix 9), rather than
+    a rating-gap fit that was tuned to the legacy engine.
+    """
+    try:
+        fmt = cipl_match._fmt_to_engine_fmt(None, total_units(state))
+        if not realism_integration.live_for(fmt):
+            return None
+        from engine.realism.context import BallContext
+        from services.cipl_match import approach_bowling_type
+        bowl = bowler if bowler is not None else ((state or {}).get("current_bowler") or {})
+        strik = striker(state) or {}
+        balls_faced, _sr = striker_form(state)
+        innings = int(state.get("innings") or 1)
+        bpu = _balls_per_unit(state)
+        innings_balls = _innings_balls(state)
+        bowled = innings_balls - _balls_left(state)
+        return BallContext(
+            format_name=getattr(fmt, "name", "T20") or "T20",
+            over=max(0, bowled // bpu), innings=innings,
+            balls_per_over=bpu, innings_balls=innings_balls,
+            runs=int(state.get("total_runs") or 0),
+            wickets=int(state.get("total_wickets") or 0),
+            balls_bowled=max(0, bowled),
+            target=int(state["target"]) if state.get("target") else None,
+            bat_rating=rating(strik, "bat_rating", "rating", default=60.0),
+            bowl_rating=rating(bowl, "bowl_rating", default=60.0),
+            bat_style=str(strik.get("bat_hand") or strik.get("bat_style") or "Right"),
+            bowl_style=str(bowl.get("bowl_style") or ""),
+            bowl_hand=str(bowl.get("bowl_hand") or "Right"),
+            bowling_type=approach_bowling_type(bowl),
+            balls_faced=int(balls_faced or 0),
+            pitch=str(state.get("pitch_type") or "Even"))
+    except Exception:
+        return None
+
+
 def ball_probabilities(state, bowler=None):
     """Per-ball outcome probabilities *before* either captain's approach.
 
-    A compact stand-in for ``engine.ball_outcome.calculate_outcome``: the
-    pitch's own scoring matrix, tilted by the fitted rating gap, the phase
-    effects the engine really produces, and how set the striker is. It does not
-    reproduce the engine ball for ball, but it does reproduce its run and wicket
-    rates closely enough that the 25 approach match-ups rank the way they
-    actually play out — which is the only thing the solver needs.
+    In realism mode this is the realism engine's own baseline-plus-conditions
+    distribution for the live context, so the solver ranks the 25 match-ups
+    over exactly the probabilities the engine will sample. Otherwise it is the
+    legacy compact stand-in: the pitch's scoring matrix tilted by the fitted
+    rating gap, the phase effects the engine produces, and how set the
+    striker is — close enough that the match-ups rank the way they play out.
     """
+    _rctx = _realism_context(state, bowler)
+    if _rctx is not None:
+        try:
+            from engine.realism.outcome_distribution import build as _rbuild
+            # No approach here — approach_probabilities adds it, mirroring the
+            # live split between the baseline/conditions and the approach layer.
+            return _normalized(_rbuild(_rctx, apply_tactics=False))
+        except Exception:
+            pass  # fall through to the legacy estimate
+
     pitch = pitch_registry.normalise((state or {}).get("pitch_type"))
     bowl = bowler if bowler is not None else ((state or {}).get("current_bowler") or {})
     base = _pitch_matrix(pitch, bowl)
@@ -366,15 +441,25 @@ def _normalized(probs):
 
 
 def approach_probabilities(base_probs, bat_approach, bowl_approach, bowler_rating,
-                           context=None):
+                           context=None, realism_baseline=None):
     """``base_probs`` with both captains' approaches applied, renormalised.
 
-    The multipliers come straight from ``engine.approach_modifiers``, so this is
-    the same arithmetic the over itself will run — including the situational
-    layers when ``context`` is the one ``cipl_match.approach_context`` will hand
-    the engine. Called without a context this is the bare 5×5 game, which is
-    what the balance tests measure.
+    In realism mode the approach shaping comes from
+    ``engine.realism.approaches`` — the same priced trade-off the engine
+    applies — so the solver sees the real approach effect. ``realism_baseline``
+    is the per-outcome baseline to tilt (the engine tilts the smoothed node,
+    which ``base_probs`` already approximates). Otherwise the legacy approach
+    tables run, exactly as the over will when realism is off.
     """
+    if realism_baseline is not None:
+        try:
+            from engine.realism import approaches as _ra
+            mult = _ra.multipliers(bat_approach, bowl_approach, realism_baseline,
+                                   bowler_rating=bowler_rating)
+            return _normalized({k: max(0.0, base_probs.get(k, 0.0) * mult.get(k, 1.0))
+                                for k in base_probs})
+        except Exception:
+            pass
     return _normalized(apply_approach_modifiers(
         base_probs, batting_approach=bat_approach, bowling_approach=bowl_approach,
         bowler_rating=bowler_rating, context=context))
@@ -503,6 +588,34 @@ def over_value(state, dist, *, chase=None, edge=0.0):
             value += p * chase_win_prob(req - runs, left - balls, hand - wkts, edge)
         return value
 
+    if _realism_objective(state):
+        # Batting first in realism mode the objective is the same currency as
+        # the chase: the win probability of the position the over leaves
+        # behind. §10 of the brief — a captain should be maximising the chance
+        # of winning, not the runs in the next six balls.
+        #
+        # This is not a cosmetic change. "Expected runs minus a wicket
+        # penalty" is linear in runs, so it values the 180th run of an innings
+        # exactly as highly as the 80th; the win-probability objective knows
+        # the 180th is worth far more, and that a wicket in the second over
+        # costs about 4.5 runs' worth of win probability against 0.3 in the
+        # last. That is the difference between a captain who attacks on
+        # principle and one who attacks when attacking is right.
+        left = _balls_left(state)
+        innings_balls = _innings_balls(state)
+        edge = float(edge)
+        value = 0.0
+        for (runs, wkts), p in dist.items():
+            if p <= 0:
+                continue
+            value += p * win_probability.first_innings_win_prob(
+                int(state.get("total_runs") or 0) + int(runs),
+                max(0, left - balls),
+                max(0, hand - int(wkts)),
+                innings_balls=innings_balls,
+                edge=edge, opponent_edge=-edge)
+        return value
+
     value = 0.0
     for (runs, wkts), p in dist.items():
         if p <= 0:
@@ -604,6 +717,10 @@ def payoff_matrix(state, bowler=None):
     bowl_rating = rating(bowl, "bowl_rating", default=60.0) if bowl else 60.0
     edge = match_up_edge(state, bowler)
     ctx = _approach_context(state, bowler)
+    # In realism mode the approach layer tilts the realism baseline, which
+    # `base` already is; passing it switches approach_probabilities onto the
+    # realism approach model so the solver and the engine agree.
+    _rbase = base if _realism_context(state, bowler) is not None else None
 
     ch = _chase(state)
     hand = wickets_in_hand(state)
@@ -614,7 +731,7 @@ def payoff_matrix(state, bowler=None):
         row = []
         for bowl_key in BOWL_KEYS:
             probs = approach_probabilities(base, bat_key, bowl_key, bowl_rating,
-                                           context=ctx)
+                                           context=ctx, realism_baseline=_rbase)
             dist = over_distribution(probs, balls, hand)
             row.append(over_value(state, dist, chase=ch, edge=edge))
         matrix.append(row)

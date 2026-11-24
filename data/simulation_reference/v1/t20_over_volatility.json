@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "format": "T20",
+  "model_version": "realism-v1",
+  "feature": "over_volatility",
+  "description": "Over-to-over variation reference for modern men's T20. Holds the historical over-level distribution targets the zero-mean over-volatility effect is calibrated against, plus the fitted effect parameters. The effect widens the simulated runs-per-over spread to match history without changing the average over score.",
+  "targets": {
+    "_note": "Modern-T20 (IPL/international, ~2016+) over-level aggregates. Values are published-aggregate anchors, not counted in this environment: Cricsheet raw JSON is not reachable from the build sandbox (the proxy blocks cricsheet.org), so these are documented targets with the uncertainty that implies. Regenerate exact counts offline with: python -m tools.build_realism_reference cricsheet --zip <t20s_json.zip> --over-stats",
+    "runs_per_over_mean": 8.3,
+    "runs_per_over_sd": 5.2,
+    "runs_per_over_sd_range": [5.0, 5.5],
+    "maiden_over_rate": 0.018,
+    "low_over_rate_le2": 0.075,
+    "explosive_over_rate_ge18": 0.060,
+    "two_plus_wicket_over_rate": 0.060,
+    "sample_note": "Ranges reflect ground/season variation; treat as a plausible band, not a point target."
+  },
+  "fitted": {
+    "_note": "Fitted so the simulated runs-per-over SD matches the target band with a zero innings-mean impact (verified paired on identical seeds). sigma is the SD of the per-over conditional run-mean shift in runs per legal ball; the effect tilts the over's run outcomes to base_mean + sigma*z with the max-entropy solver, so E over z leaves the innings total unchanged.",
+    "sigma": 0.34,
+    "bound": 2.5,
+    "wicket_coupling": 0.06
+  },
+  "measured_effect": {
+    "_note": "Measured in this repo, 120 matches x 2 innings on an Even pitch (seeds 5000-5119), realism engine. Before = over-volatility off, after = on.",
+    "runs_per_over_sd_before": 4.87,
+    "runs_per_over_sd_after": 5.15,
+    "mean_first_innings_before": 183.06,
+    "mean_first_innings_after": 181.82,
+    "mean_total_shift": -1.23,
+    "mean_total_shift_within_1se": true
+  },
+  "provenance": {
+    "cricsheet_data": "Open Data Commons Open Database Licence (ODbL) 1.0",
+    "cricsheet_url": "https://cricsheet.org/",
+    "generated_by": "manual anchors (Cricsheet unreachable from build sandbox)",
+    "rebuild_command": "python -m tools.build_realism_reference cricsheet --zip <t20s_json.zip> --over-stats --out data/simulation_reference/v1"
+  }
+}

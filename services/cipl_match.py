@@ -18,6 +18,20 @@ import os
 import random
 
 from engine.ball_outcome import calculate_outcome
+from engine.realism import integration as realism_integration
+from engine.sim.rng import SimRng, ENGINE_VERSION
+
+# Drama preset recorded on each match (Codex Prompt 05). Resolved defensively so
+# a missing/invalid drama config can never block match creation.
+_DRAMA_VERSION = "drama-v1"
+
+
+def _drama_preset_at_creation():
+    try:
+        from engine.drama import config as _dcfg
+        return _dcfg.active_preset()
+    except Exception:
+        return "REALISTIC"
 from engine import chase_chance
 from engine import chase_model
 from engine import ground_config
@@ -765,6 +779,23 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         "chase_target_pct": 50,
         # innings-1 archive (filled at the break)
         "inn1_runs": 0, "inn1_wickets": 0, "inn1_overs": "0.0",
+        # Deterministic simulation (Cricket Mechanics & Reliability, fix 3).
+        # A per-match seed persisted in the (JSON-serialised) state. The ball
+        # loop derives an independent stream per delivery from it, so the
+        # realism per-ball draws — outcome, fielding, extras, wicket type — are
+        # reproducible from this seed and never collide with another concurrent
+        # match's global random state. ``engine_version`` pins the engine that
+        # produced them, for debugging a saved match.
+        "rng_seed": random.SystemRandom().randrange(1 << 62),
+        "engine_version": ENGINE_VERSION,
+        # Balanced Drama preset recorded at match creation (Codex Prompt 05,
+        # §19/§20), so a competition records the engine version and preset used
+        # and a later global change cannot alter this match. The per-ball drama
+        # OVERLAY is wired into the /sim path; CIPL records the preset here and
+        # keeps its existing (single) momentum mechanism. See
+        # docs/balanced_drama_engine.md for the integration status per mode.
+        "drama_preset": _drama_preset_at_creation(),
+        "drama_engine_version": _DRAMA_VERSION,
     }
 
 
@@ -2013,6 +2044,28 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
         engine_overs = overs_total
         engine_fmt = _fmt_to_engine_fmt(None, overs_total)
     pressure_eng = PressureEngine(format_config=engine_fmt)
+    # Does the realism ball model decide this match's deliveries? Resolved
+    # once per over and used below to gate the result-steering hooks, so the
+    # gameplay layers always agree with whichever ball model is running: a
+    # missing reference file must not leave a match on the legacy ball model
+    # with the realism engine's gameplay changes applied anyway.
+    _realism_live = realism_integration.live_for(engine_fmt)
+    # Over-to-over variation (Feature 2 — realism layer). One zero-mean scoring
+    # tendency per over, drawn from a child RNG keyed on (innings, over) so it is
+    # reproducible and identical on a pause/resume of the same over, and never
+    # perturbs the ball-outcome stream. None unless realism is live and the flag
+    # is on.
+    _overvol = None
+    if _realism_live:
+        from engine.realism import config as _rcfg_ov
+        if _rcfg_ov.over_volatility_enabled():
+            from engine.realism import over_volatility as _ovmod
+            _ov_seed = state.get("rng_seed")
+            if _ov_seed is not None:
+                _ov_rng = SimRng(_ov_seed).derive("overvol", innings, over_idx)
+                _overvol = _ovmod.OverVolatility(
+                    dict(_rcfg_ov.over_volatility_config(), enabled=True), _ov_rng)
+                _overvol.new_over()
     # Dramatic-finish steering: live for the 2nd innings of an armed 20-over
     # chase, else None (and the per-ball logic below is a no-op).
     scenario_eng = _load_scenario_engine(state)
@@ -2127,6 +2180,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             engine_overs = overs_total
             engine_fmt = _fmt_to_engine_fmt(None, overs_total)
         pressure_eng = PressureEngine(format_config=engine_fmt)
+        _realism_live = realism_integration.live_for(engine_fmt)
 
     while balls_this_over < bpu and not chased:
         if state["total_wickets"] >= state.get("wicket_limit", WICKET_LIMIT):
@@ -2291,8 +2345,20 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             # Anti-cascade: throttle the wicket weight once wickets have already
             # fallen in THIS over, so the recomputed momentum/collapse layers
             # can't stack into a 4-5 wicket over (see _make_wicket_cluster_hook).
-            wicket_hook = _make_wicket_cluster_hook(
-                state["total_wickets"] - wkts_before)
+            #
+            # OFF in realism mode (Fairness fix 5, measured). The throttle was
+            # built for the legacy engine, whose unbounded momentum/collapse
+            # layers could stack a 4-5 wicket over. The realism per-ball wicket
+            # is already bounded and calibrated to the real dismissal rate, and
+            # measured, the throttle then does the opposite of its name: it
+            # SUPPRESSES legitimate clustering. Real T20 has ~6-8% two-plus
+            # wicket overs; unthrottled realism produces ~5.8% (and only ~0.1%
+            # four-wicket overs, so no runaway), while the throttle cuts that
+            # to ~3.3% — flatter than a Poisson process, let alone real
+            # cricket's collapses. So realism keeps the real clustering.
+            wicket_hook = (None if _realism_live else
+                           _make_wicket_cluster_hook(
+                               state["total_wickets"] - wkts_before))
             # A little extra drama in the innings' final over (more boundaries /
             # late wickets), nudged up further when a live chase is on.
             # Still serves the 1st innings' final over and an already-decided
@@ -2326,25 +2392,44 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             # LetsPlay clutch amplifier — layered AFTER traits so trait deltas
             # (Finisher/Clutch/Death/Yorker) land first, then chase intent scales
             # the six-or-bust spread. None for /cipl and non-finale balls.
+            # Result steering in realism mode (brief §11). These five hooks
+            # all decide what the scoreboard ought to say rather than letting
+            # the probabilities say it: the par-band brake pulls a projecting
+            # innings back toward the pitch's expected total, the contest hook
+            # tightens the bowling when a side is running away, the pitch
+            # character hook re-asserts a surface's reputation on top of the
+            # surface's own modelled effect, the clutch amplifier sharpens the
+            # last over and the mix-up converts the odd dismissal into a run
+            # out. Each is individually switchable in config/realism.json and
+            # each is ON outside realism mode, so exhibition and
+            # admin-controlled matches keep every one of them.
+            _drama = realism_integration.drama_hook_enabled
             clutch_hook = (
                 _make_clutch_hook(
                     runs_needed, balls_left,
                     state.get("wicket_limit", WICKET_LIMIT) - state["total_wickets"],
                     balls_left == 1)
-                if (letsplay_finale and not chase_active) else None)
+                if (letsplay_finale and not chase_active
+                    and (not _realism_live or _drama("clutch_finale"))) else None)
             # Match drama: the surface playing to its name, the 270+ brake, the
             # no-runaway contest layer, pressure on either side and any sledge
             # the striker is still carrying. All bounded, all None when quiet.
-            pitch_hook, pitch_strength = match_drama.make_pitch_character_hook(
-                pitch, phase, innings, bowl_adapted.get("bowling_type"),
-                balls_bowled(state) / float(max(1, innings_balls)))
-            ceiling_hook = (None if chase_active else
-                            match_drama.make_score_ceiling_hook(
+            if _realism_live and not _drama("pitch_character"):
+                pitch_hook, pitch_strength = None, 0.0
+            else:
+                pitch_hook, pitch_strength = match_drama.make_pitch_character_hook(
+                    pitch, phase, innings, bowl_adapted.get("bowling_type"),
+                    balls_bowled(state) / float(max(1, innings_balls)))
+            ceiling_hook = (None if (chase_active or (
+                                _realism_live and not _drama("score_ceiling")))
+                            else match_drama.make_score_ceiling_hook(
                                 pitch, state["total_runs"], balls_bowled(state),
                                 innings_balls, innings, target))
-            contest_hook = match_drama.make_contest_hook(
-                pitch, innings, state["total_runs"], state["total_wickets"],
-                balls_bowled(state), innings_balls, target, chase_active)
+            contest_hook = (
+                None if (_realism_live and not _drama("contest"))
+                else match_drama.make_contest_hook(
+                    pitch, innings, state["total_runs"], state["total_wickets"],
+                    balls_bowled(state), innings_balls, target, chase_active))
             bat_p_hook = match_drama.make_bat_pressure_hook(bat_p)
             big_ask = match_drama.final_over_big_ask(innings, runs_needed, balls_left, bpu)
             bowl_p_hook, bowl_p_kwargs = match_drama.bowl_pressure_effects(bowl_p, big_ask)
@@ -2362,7 +2447,38 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                                          confidence_hook,
                                          bat_p_hook, bowl_p_hook, sledge_hook, maiden_hook,
                                          clutch_hook, chase_hook, finisher_hook)
+            # Over-to-over variation: shape every ball of this over to its drawn
+            # tendency, applied last (a realism-layer shape over the composed
+            # hooks). Zero-mean, so the innings level is untouched.
+            if _overvol is not None:
+                _wh_inner = weight_hook
+
+                def weight_hook(_w, _inner=_wh_inner, _ov=_overvol):
+                    out = _inner(_w) if _inner is not None else _w
+                    return _ov.apply(out or _w)
+
             delivery_ctx = dict(approach_ctx, partnership_overs=state.get("partnership_balls", 0) / bpu)
+            # Deterministic per-delivery random stream (Cricket Mechanics fix 3).
+            # Derived from the match seed and this ball's position, so the whole
+            # delivery (outcome, fielding, extras, wicket type) draws from one
+            # reproducible sequence isolated from the global ``random`` state
+            # that other concurrent matches churn. Legacy mode passes None and
+            # keeps the global module, byte-for-byte. Self-heals a pre-seed
+            # state saved before this field existed.
+            _ball_rng = None
+            if _realism_live:
+                _seed = state.get("rng_seed")
+                if _seed is None:
+                    _seed = random.SystemRandom().randrange(1 << 62)
+                    state["rng_seed"] = _seed
+                    state.setdefault("engine_version", ENGINE_VERSION)
+                # A monotonic per-delivery counter — NOT the legal-ball count,
+                # which stays put on a wide/no-ball and would hand the re-bowled
+                # delivery the identical stream. This ticks on every physical
+                # delivery, so each gets its own reproducible draw.
+                _tick = state.get("_rng_tick", 0)
+                state["_rng_tick"] = _tick + 1
+                _ball_rng = SimRng(_seed).derive(innings, _tick)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
                 streak=streak, over_number=eng_over_idx, batter_runs=bs["runs"],
@@ -2375,9 +2491,20 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                 batting_approach=bat_app, bowling_approach=bowl_app,
                 approach_context=delivery_ctx,
                 weight_hook=weight_hook,
+                # The scoreboard, for the Realism Engine's wickets-lost and
+                # chase-situation baselines. Ignored when realism is off.
+                match_context={
+                    "runs": state["total_runs"],
+                    "wickets": state["total_wickets"],
+                    "balls_bowled": balls_bowled(state),
+                    "target": int(target) if target else None,
+                    "innings_balls": total_balls(state),
+                },
+                rng=_ball_rng,
                 **bowl_p_kwargs))
             # Batting side under the pump: the odd wicket becomes a mix-up.
-            oc = match_drama.maybe_mixup(oc, bat_p, free_hit=is_free_hit_ball)
+            if not _realism_live or _drama("wicket_mixup"):
+                oc = match_drama.maybe_mixup(oc, bat_p, free_hit=is_free_hit_ball)
             if not (state.get('_planned_super_overs') or state.get('_planned_winner_user_id')):
                 oc = _resolve_running_wicket(oc, runs_needed)
 

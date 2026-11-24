@@ -1,0 +1,481 @@
+{
+ "schema_version": 1,
+ "format": "ODI",
+ "model_version": "realism-v1",
+ "generated_at": "2026-11-23T08:43:10+00:00",
+ "default_competition": "odi_prior",
+ "outcomes": [
+  "Dot",
+  "Single",
+  "Double",
+  "Three",
+  "Four",
+  "Six",
+  "Wicket",
+  "Extras"
+ ],
+ "nodes": {
+  "root": {
+   "parent": null,
+   "counts": {
+    "Dot": 6283.369106,
+    "Single": 5725.7563,
+    "Double": 1196.824869,
+    "Three": 106.645176,
+    "Four": 1198.986747,
+    "Six": 305.445435,
+    "Wicket": 466.019417,
+    "Extras": 716.95295
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI": {
+   "parent": "root",
+   "counts": {
+    "Dot": 6283.369106,
+    "Single": 5725.7563,
+    "Double": 1196.824869,
+    "Three": 106.645176,
+    "Four": 1198.986747,
+    "Six": 305.445435,
+    "Wicket": 466.019417,
+    "Extras": 716.95295
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior": {
+   "parent": "ODI",
+   "counts": {
+    "Dot": 3141.684553,
+    "Single": 2862.87815,
+    "Double": 598.412434,
+    "Three": 53.322588,
+    "Four": 599.493373,
+    "Six": 152.722718,
+    "Wicket": 233.009709,
+    "Extras": 358.476475
+   },
+   "count_kind": "pseudo",
+   "meta": {
+    "anchor_source": "published aggregate ODI reference figures (prior only)",
+    "anchor_measured": false,
+    "seasons": [],
+    "measured_balls_faced": null
+   }
+  },
+  "ODI/odi_prior/powerplay": {
+   "parent": "ODI/odi_prior",
+   "counts": {
+    "Dot": 694.948355,
+    "Single": 498.979118,
+    "Double": 94.091494,
+    "Three": 8.314896,
+    "Four": 159.204525,
+    "Six": 24.318754,
+    "Wicket": 48.447563,
+    "Extras": 71.695295
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/powerplay/inn1": {
+   "parent": "ODI/odi_prior/powerplay",
+   "counts": {
+    "Dot": 347.474177,
+    "Single": 249.489559,
+    "Double": 47.045747,
+    "Three": 4.157448,
+    "Four": 79.602263,
+    "Six": 12.159377,
+    "Wicket": 24.223782,
+    "Extras": 35.847647
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/powerplay/inn1/w0_2": {
+   "parent": "ODI/odi_prior/powerplay/inn1",
+   "counts": {
+    "Dot": 113.637072,
+    "Single": 82.396511,
+    "Double": 15.690463,
+    "Three": 1.400236,
+    "Four": 27.074391,
+    "Six": 4.217572,
+    "Wicket": 7.754032,
+    "Extras": 11.829724
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/powerplay/inn1/w3_5": {
+   "parent": "ODI/odi_prior/powerplay/inn1",
+   "counts": {
+    "Dot": 114.666478,
+    "Single": 82.331555,
+    "Double": 15.525097,
+    "Three": 1.371958,
+    "Four": 26.268747,
+    "Six": 4.012594,
+    "Wicket": 7.993848,
+    "Extras": 11.829724
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/powerplay/inn1/w6_plus": {
+   "parent": "ODI/odi_prior/powerplay/inn1",
+   "counts": {
+    "Dot": 118.956066,
+    "Single": 81.908267,
+    "Double": 14.811773,
+    "Three": 1.255234,
+    "Four": 23.048077,
+    "Six": 3.237749,
+    "Wicket": 8.95311,
+    "Extras": 11.829724
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/powerplay/inn2": {
+   "parent": "ODI/odi_prior/powerplay",
+   "counts": {
+    "Dot": 347.474177,
+    "Single": 249.489559,
+    "Double": 47.045747,
+    "Three": 4.157448,
+    "Four": 79.602263,
+    "Six": 12.159377,
+    "Wicket": 24.223782,
+    "Extras": 35.847647
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/powerplay/inn2/w0_2": {
+   "parent": "ODI/odi_prior/powerplay/inn2",
+   "counts": {
+    "Dot": 113.637072,
+    "Single": 82.396511,
+    "Double": 15.690463,
+    "Three": 1.400236,
+    "Four": 27.074391,
+    "Six": 4.217572,
+    "Wicket": 7.754032,
+    "Extras": 11.829724
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/powerplay/inn2/w3_5": {
+   "parent": "ODI/odi_prior/powerplay/inn2",
+   "counts": {
+    "Dot": 114.666478,
+    "Single": 82.331555,
+    "Double": 15.525097,
+    "Three": 1.371958,
+    "Four": 26.268747,
+    "Six": 4.012594,
+    "Wicket": 7.993848,
+    "Extras": 11.829724
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/powerplay/inn2/w6_plus": {
+   "parent": "ODI/odi_prior/powerplay/inn2",
+   "counts": {
+    "Dot": 118.956066,
+    "Single": 81.908267,
+    "Double": 14.811773,
+    "Three": 1.255234,
+    "Four": 23.048077,
+    "Six": 3.237749,
+    "Wicket": 8.95311,
+    "Extras": 11.829724
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/middle": {
+   "parent": "ODI/odi_prior",
+   "counts": {
+    "Dot": 1884.556552,
+    "Single": 1896.245658,
+    "Double": 376.319772,
+    "Three": 31.652186,
+    "Four": 234.180226,
+    "Six": 44.301353,
+    "Wicket": 117.658368,
+    "Extras": 215.085885
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/middle/inn1": {
+   "parent": "ODI/odi_prior/middle",
+   "counts": {
+    "Dot": 942.278276,
+    "Single": 948.122829,
+    "Double": 188.159886,
+    "Three": 15.826093,
+    "Four": 117.090113,
+    "Six": 22.150676,
+    "Wicket": 58.829184,
+    "Extras": 107.542942
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/middle/inn1/w0_2": {
+   "parent": "ODI/odi_prior/middle/inn1",
+   "counts": {
+    "Dot": 307.484004,
+    "Single": 313.583996,
+    "Double": 63.075727,
+    "Three": 5.377184,
+    "Four": 40.322488,
+    "Six": 7.836208,
+    "Wicket": 18.831222,
+    "Extras": 35.489171
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/middle/inn1/w3_5": {
+   "parent": "ODI/odi_prior/middle/inn1",
+   "counts": {
+    "Dot": 310.951831,
+    "Single": 312.880534,
+    "Double": 62.092762,
+    "Three": 5.222611,
+    "Four": 38.639737,
+    "Six": 7.309723,
+    "Wicket": 19.413631,
+    "Extras": 35.489171
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/middle/inn1/w6_plus": {
+   "parent": "ODI/odi_prior/middle/inn1",
+   "counts": {
+    "Dot": 325.766266,
+    "Single": 309.138117,
+    "Double": 57.859679,
+    "Three": 4.589694,
+    "Four": 32.025156,
+    "Six": 5.388651,
+    "Wicket": 21.743266,
+    "Extras": 35.489171
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/middle/inn2": {
+   "parent": "ODI/odi_prior/middle",
+   "counts": {
+    "Dot": 942.278276,
+    "Single": 948.122829,
+    "Double": 188.159886,
+    "Three": 15.826093,
+    "Four": 117.090113,
+    "Six": 22.150676,
+    "Wicket": 58.829184,
+    "Extras": 107.542942
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/middle/inn2/w0_2": {
+   "parent": "ODI/odi_prior/middle/inn2",
+   "counts": {
+    "Dot": 307.484004,
+    "Single": 313.583996,
+    "Double": 63.075727,
+    "Three": 5.377184,
+    "Four": 40.322488,
+    "Six": 7.836208,
+    "Wicket": 18.831222,
+    "Extras": 35.489171
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/middle/inn2/w3_5": {
+   "parent": "ODI/odi_prior/middle/inn2",
+   "counts": {
+    "Dot": 310.951831,
+    "Single": 312.880534,
+    "Double": 62.092762,
+    "Three": 5.222611,
+    "Four": 38.639737,
+    "Six": 7.309723,
+    "Wicket": 19.413631,
+    "Extras": 35.489171
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/middle/inn2/w6_plus": {
+   "parent": "ODI/odi_prior/middle/inn2",
+   "counts": {
+    "Dot": 325.766266,
+    "Single": 309.138117,
+    "Double": 57.859679,
+    "Three": 4.589694,
+    "Four": 32.025156,
+    "Six": 5.388651,
+    "Wicket": 21.743266,
+    "Extras": 35.489171
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/death": {
+   "parent": "ODI/odi_prior",
+   "counts": {
+    "Dot": 520.24372,
+    "Single": 522.659617,
+    "Double": 134.905502,
+    "Three": 10.231335,
+    "Four": 185.278382,
+    "Six": 88.082372,
+    "Wicket": 66.903778,
+    "Extras": 71.695295
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/death/inn1": {
+   "parent": "ODI/odi_prior/death",
+   "counts": {
+    "Dot": 260.12186,
+    "Single": 261.329809,
+    "Double": 67.452751,
+    "Three": 5.115668,
+    "Four": 92.639191,
+    "Six": 44.041186,
+    "Wicket": 33.451889,
+    "Extras": 35.847647
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/death/inn1/w0_2": {
+   "parent": "ODI/odi_prior/death/inn1",
+   "counts": {
+    "Dot": 84.850459,
+    "Single": 86.012883,
+    "Double": 22.401208,
+    "Three": 1.714239,
+    "Four": 31.322826,
+    "Six": 15.160712,
+    "Wicket": 10.70795,
+    "Extras": 11.829724
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/death/inn1/w3_5": {
+   "parent": "ODI/odi_prior/death/inn1",
+   "counts": {
+    "Dot": 85.840214,
+    "Single": 86.238837,
+    "Double": 22.259408,
+    "Three": 1.68817,
+    "Four": 30.570933,
+    "Six": 14.533591,
+    "Wicket": 11.039123,
+    "Extras": 11.829724
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/death/inn1/w6_plus": {
+   "parent": "ODI/odi_prior/death/inn1",
+   "counts": {
+    "Dot": 89.981495,
+    "Single": 87.011097,
+    "Double": 21.616964,
+    "Three": 1.577999,
+    "Four": 27.504798,
+    "Six": 12.114106,
+    "Wicket": 12.363818,
+    "Extras": 11.829724
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/death/inn2": {
+   "parent": "ODI/odi_prior/death",
+   "counts": {
+    "Dot": 260.12186,
+    "Single": 261.329809,
+    "Double": 67.452751,
+    "Three": 5.115668,
+    "Four": 92.639191,
+    "Six": 44.041186,
+    "Wicket": 33.451889,
+    "Extras": 35.847647
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/death/inn2/w0_2": {
+   "parent": "ODI/odi_prior/death/inn2",
+   "counts": {
+    "Dot": 84.850459,
+    "Single": 86.012883,
+    "Double": 22.401208,
+    "Three": 1.714239,
+    "Four": 31.322826,
+    "Six": 15.160712,
+    "Wicket": 10.70795,
+    "Extras": 11.829724
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/death/inn2/w3_5": {
+   "parent": "ODI/odi_prior/death/inn2",
+   "counts": {
+    "Dot": 85.840214,
+    "Single": 86.238837,
+    "Double": 22.259408,
+    "Three": 1.68817,
+    "Four": 30.570933,
+    "Six": 14.533591,
+    "Wicket": 11.039123,
+    "Extras": 11.829724
+   },
+   "count_kind": "pseudo"
+  },
+  "ODI/odi_prior/death/inn2/w6_plus": {
+   "parent": "ODI/odi_prior/death/inn2",
+   "counts": {
+    "Dot": 89.981495,
+    "Single": 87.011097,
+    "Double": 21.616964,
+    "Three": 1.577999,
+    "Four": 27.504798,
+    "Six": 12.114106,
+    "Wicket": 12.363818,
+    "Extras": 11.829724
+   },
+   "count_kind": "pseudo"
+  }
+ },
+ "anchors": {
+  "odi_prior": {
+   "runs_per_ball_faced": 0.97,
+   "wickets_per_ball": 0.03,
+   "extras_runs_per_legal": 0.06,
+   "measured": false,
+   "source": "published aggregate ODI reference figures (prior only)",
+   "seasons": []
+  }
+ },
+ "provenance": {
+  "mode": "anchors",
+  "level_source": "published aggregate reference figures only",
+  "level_measured": false,
+  "shape_source": "published aggregate T20/ODI outcome shares; same figures as tools/realism_audit.REAL_BALLS",
+  "shape_measured": false,
+  "fitting": "maximum-entropy exponential tilt of the shape prior onto the measured runs-per-ball anchor; wicket and extras rates taken directly from the anchors",
+  "all_nodes_observed": false,
+  "pseudo_weight": 4000.0,
+  "eras": {
+   "ipl_2008_2013": [
+    2008,
+    2013
+   ],
+   "ipl_2014_2021": [
+    2014,
+    2021
+   ],
+   "ipl_modern": [
+    2022,
+    2026
+   ]
+  },
+  "limitation": "No ball-by-ball deliveries were counted. Phase, innings and wickets structure is a documented prior, not a measurement. Rebuild with the 'cricsheet' mode for observed counts.",
+  "data_licence": "ODbL 1.0 (Cricsheet-derived aggregates)"
+ }
+}

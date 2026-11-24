@@ -504,10 +504,25 @@ FATIGUE = {
 }
 
 
-def batting_matchup_delta(batter, bowling_type):
-    """Small, stable rating adjustment for the batter against pace or spin."""
-    from engine.sim.rng import stable_unit
+def batting_matchup_delta(batter, bowling_type, allow_identity=True):
+    """Small, stable rating adjustment for the batter against pace or spin.
 
+    ``allow_identity`` controls the fallback at the bottom. When no explicit
+    ``vs_pace``/``vs_spin`` profile exists, that fallback invents one by
+    hashing the player's **identity** — their roster id, or failing that their
+    name — into a ±6 rating swing, with a matching weakness on the other side.
+
+    That is a hidden per-player ability difference derived from who the player
+    is rather than from anything on their card, and it means two cards with
+    identical ratings and styles are *not* the same player. The realism
+    engine's contract is that they are, so it passes ``allow_identity=False``
+    and gets 0.0 — see ``config/realism.json``'s
+    ``integration.identity_derived_ability`` and §9 of the brief. An explicit
+    profile on the dict is still honoured either way: a hand-built team file
+    that says a batter is poor against spin is data, not an invention.
+
+    Nothing here reads or writes a stored player field in either mode.
+    """
     spin = bowling_type in ("Off spin", "Leg spin", "Finger spin", "Wrist spin")
     profile = batter.get("vs_spin" if spin else "vs_pace")
     rating = float(batter.get("bat_rating") or batter.get("batting_rating") or batter.get("rating") or 50)
@@ -516,6 +531,10 @@ def batting_matchup_delta(batter, bowling_type):
             return max(-8.0, min(8.0, float(profile) - rating))
         except (TypeError, ValueError):
             pass
+    if not allow_identity:
+        return 0.0
+    from engine.sim.rng import stable_unit
+
     identity = (batter.get("parent_player_id") or batter.get("player_id")
                 or batter.get("roster_id") or batter.get("name"))
     if identity is None:
@@ -729,15 +748,34 @@ def combo_carry(batting_approach, bowling_approach, over_runs, over_wickets):
     return carry
 
 
+#: Every situational layer this module can apply, by the name the realism
+#: config's ``integration.legacy_approach_layers`` allowlist uses. Listed so
+#: that a reader of either file can see the full set in one place.
+SITUATIONAL_LAYERS = ("pitch", "phase", "mind_games", "momentum", "fatigue",
+                      "chemistry", "predictability", "carry")
+
+
 def _situational_multipliers(bat, bowl, context):
-    """Layers 5-9: everything that depends on where and when the over is bowled."""
+    """Layers 5-9: everything that depends on where and when the over is bowled.
+
+    ``context["allow_layers"]`` restricts which of :data:`SITUATIONAL_LAYERS`
+    run. It is absent for every legacy caller, in which case all of them do,
+    exactly as before. The realism engine passes an allowlist holding only
+    the layers it does not already model — see
+    ``engine/realism/integration.approach_context_overrides``.
+    """
     tables = []
+    allow = context.get("allow_layers")
+
+    def on(layer):
+        return allow is None or layer in allow
 
     pitch_rules = _PITCH_RULES.get(str(context.get("pitch") or ""), {})
     phase = context.get("phase")
-    tables.append((pitch_rules.get("bat") or {}).get(bat))
-    tables.append((pitch_rules.get("bowl") or {}).get(bowl))
-    if phase:
+    if on("pitch"):
+        tables.append((pitch_rules.get("bat") or {}).get(bat))
+        tables.append((pitch_rules.get("bowl") or {}).get(bowl))
+    if phase and on("phase"):
         tables.append((pitch_rules.get("bat_phase") or {}).get((bat, phase)))
         phase_rules = _PHASE_RULES.get(phase, {})
         tables.append((phase_rules.get("bat") or {}).get(bat))
@@ -747,33 +785,39 @@ def _situational_multipliers(bat, bowl, context):
             tables.append((phase_rules.get("bat_vs_spin") or {}).get(bat))
             tables.append(phase_rules.get("bowl_spin"))
 
-    if context.get("mind_games", True):
+    if on("mind_games") and context.get("mind_games", True):
         if bowl in _READS.get(bat, ()):
             tables.append(_runs_factor(READ_BONUS))
         else:
             tables.append(OUTTHINK_BONUS)
 
-    if context.get("batting_momentum"):
-        tables.append(_runs_factor(MOMENTUM_BAT))
-    if context.get("bowling_momentum"):
-        tables.append(MOMENTUM_BOWL)
+    if on("momentum"):
+        if context.get("batting_momentum"):
+            tables.append(_runs_factor(MOMENTUM_BAT))
+        if context.get("bowling_momentum"):
+            tables.append(MOMENTUM_BOWL)
 
-    over_index = int(context.get("bowler_over_index") or 0)
-    if over_index >= 3:
-        tables.append(FATIGUE[min(over_index, max(FATIGUE))])
+    if on("fatigue"):
+        over_index = int(context.get("bowler_over_index") or 0)
+        if over_index >= 3:
+            tables.append(FATIGUE[min(over_index, max(FATIGUE))])
 
-    partnership_factor = partnership_scoring_factor(float(context.get("partnership_overs") or 0.0))
-    if partnership_factor > 1.0:
-        tables.append(_runs_factor(partnership_factor))
+    if on("chemistry"):
+        partnership_factor = partnership_scoring_factor(
+            float(context.get("partnership_overs") or 0.0))
+        if partnership_factor > 1.0:
+            tables.append(_runs_factor(partnership_factor))
 
     # Predictability. Applied last, and outside the mind_games switch: reading a
     # pattern over four overs is not the same skill as guessing one hidden pick,
     # and a caller whose picks are not simultaneous can still be repetitive.
-    tables.append(repeat_multipliers(context.get("bat_repeat"),
-                                     context.get("bowl_repeat")))
+    if on("predictability"):
+        tables.append(repeat_multipliers(context.get("bat_repeat"),
+                                         context.get("bowl_repeat")))
 
-    carry = context.get("carry") or {}
-    tables.append(carry.get("mult"))
+    if on("carry"):
+        carry = context.get("carry") or {}
+        tables.append(carry.get("mult"))
 
     return _merge(*tables)
 
@@ -790,17 +834,25 @@ def approach_multipliers(batting_approach=None, bowling_approach=None,
     bat = normalize_batting(batting_approach)
     bowl = normalize_bowling(bowling_approach)
 
-    bowl_tbl = dict(_BOWLING_MULT.get(bowl, {}))
-    if bowl == "mixed":
-        bowl_tbl["Six"] = _mixed_six_mult(bowler_rating)
-
-    # The named combination belongs with the pair, not with the situation: two
-    # captains who pick Ultra into Aggressive are in a shootout on any ground in
-    # any over. So it applies whether or not a context was supplied, and the
-    # base 5×5 balance measurements include it.
-    combo = SPECIAL_COMBOS.get((bat, bowl)) or {}
-    tables = [_BATTING_MULT.get(bat, {}), bowl_tbl, _COUNTER_MULT.get((bat, bowl)),
-              combo.get("mult")]
+    # In realism mode the 5x5 grid, the counter matrix and the named
+    # combinations are all replaced upstream by engine/realism/approaches.py,
+    # which prices the same choices as a monotone trade-off against the
+    # measured baseline instead of a hand-set table. Applying both would be
+    # the double count §3 of the brief rules out, so only the allowlisted
+    # situational layers run here.
+    base_tables = (context or {}).get("base_tables", True)
+    tables = []
+    if base_tables:
+        bowl_tbl = dict(_BOWLING_MULT.get(bowl, {}))
+        if bowl == "mixed":
+            bowl_tbl["Six"] = _mixed_six_mult(bowler_rating)
+        # The named combination belongs with the pair, not with the situation:
+        # two captains who pick Ultra into Aggressive are in a shootout on any
+        # ground in any over. So it applies whether or not a context was
+        # supplied, and the base 5×5 balance measurements include it.
+        combo = SPECIAL_COMBOS.get((bat, bowl)) or {}
+        tables += [_BATTING_MULT.get(bat, {}), bowl_tbl,
+                   _COUNTER_MULT.get((bat, bowl)), combo.get("mult")]
     if context:
         tables.append(_situational_multipliers(bat, bowl, context))
     return _merge(*tables)

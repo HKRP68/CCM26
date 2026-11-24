@@ -1,0 +1,1346 @@
+{
+ "schema_version": 1,
+ "format": "T20",
+ "model_version": "realism-v1",
+ "generated_at": "2026-11-23T08:43:10+00:00",
+ "default_competition": "ipl_modern",
+ "outcomes": [
+  "Dot",
+  "Single",
+  "Double",
+  "Three",
+  "Four",
+  "Six",
+  "Wicket",
+  "Extras"
+ ],
+ "nodes": {
+  "root": {
+   "parent": null,
+   "counts": {
+    "Dot": 5479.521752,
+    "Single": 5179.750231,
+    "Double": 1038.645766,
+    "Three": 81.42697,
+    "Four": 1910.868574,
+    "Six": 954.674154,
+    "Wicket": 802.976157,
+    "Extras": 552.136397
+   },
+   "count_kind": "pseudo"
+  },
+  "T20": {
+   "parent": "root",
+   "counts": {
+    "Dot": 5479.521752,
+    "Single": 5179.750231,
+    "Double": 1038.645766,
+    "Three": 81.42697,
+    "Four": 1910.868574,
+    "Six": 954.674154,
+    "Wicket": 802.976157,
+    "Extras": 552.136397
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013": {
+   "parent": "T20",
+   "counts": {
+    "Dot": 2887.880055,
+    "Single": 2633.033103,
+    "Double": 508.683109,
+    "Three": 38.379167,
+    "Four": 865.794779,
+    "Six": 398.348305,
+    "Wicket": 400.367413,
+    "Extras": 267.514069
+   },
+   "count_kind": "pseudo",
+   "meta": {
+    "anchor_source": "static/ipl16/ipl_master_calibrated.csv",
+    "anchor_measured": true,
+    "seasons": [
+     2008,
+     2009,
+     2010,
+     2011,
+     2012,
+     2013
+    ],
+    "measured_balls_faced": 91677
+   }
+  },
+  "T20/ipl_2008_2013/powerplay": {
+   "parent": "T20/ipl_2008_2013",
+   "counts": {
+    "Dot": 967.293207,
+    "Single": 711.330817,
+    "Double": 127.514796,
+    "Three": 8.614479,
+    "Four": 290.073561,
+    "Six": 112.200749,
+    "Wicket": 102.71817,
+    "Extras": 80.254221
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/powerplay/inn1": {
+   "parent": "T20/ipl_2008_2013/powerplay",
+   "counts": {
+    "Dot": 483.646603,
+    "Single": 355.665408,
+    "Double": 63.757398,
+    "Three": 4.307239,
+    "Four": 145.036781,
+    "Six": 56.100374,
+    "Wicket": 51.359085,
+    "Extras": 40.12711
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/powerplay/inn1/w0_2": {
+   "parent": "T20/ipl_2008_2013/powerplay/inn1",
+   "counts": {
+    "Dot": 158.158153,
+    "Single": 117.258709,
+    "Double": 21.192105,
+    "Three": 1.443386,
+    "Four": 49.000639,
+    "Six": 19.265018,
+    "Wicket": 16.440043,
+    "Extras": 13.241946
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/powerplay/inn1/w3_5": {
+   "parent": "T20/ipl_2008_2013/powerplay/inn1",
+   "counts": {
+    "Dot": 159.603379,
+    "Single": 117.369585,
+    "Double": 21.039941,
+    "Three": 1.421389,
+    "Four": 47.862138,
+    "Six": 18.513124,
+    "Wicket": 16.948498,
+    "Extras": 13.241946
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/powerplay/inn1/w6_plus": {
+   "parent": "T20/ipl_2008_2013/powerplay/inn1",
+   "counts": {
+    "Dot": 165.599762,
+    "Single": 117.634597,
+    "Double": 20.369759,
+    "Three": 1.329279,
+    "Four": 43.237166,
+    "Six": 15.605173,
+    "Wicket": 18.982318,
+    "Extras": 13.241946
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/powerplay/inn2": {
+   "parent": "T20/ipl_2008_2013/powerplay",
+   "counts": {
+    "Dot": 483.646603,
+    "Single": 355.665408,
+    "Double": 63.757398,
+    "Three": 4.307239,
+    "Four": 145.036781,
+    "Six": 56.100374,
+    "Wicket": 51.359085,
+    "Extras": 40.12711
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/powerplay/inn2/w0_2": {
+   "parent": "T20/ipl_2008_2013/powerplay/inn2",
+   "counts": {
+    "Dot": 158.158153,
+    "Single": 117.258709,
+    "Double": 21.192105,
+    "Three": 1.443386,
+    "Four": 49.000639,
+    "Six": 19.265018,
+    "Wicket": 16.440043,
+    "Extras": 13.241946
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/powerplay/inn2/w3_5": {
+   "parent": "T20/ipl_2008_2013/powerplay/inn2",
+   "counts": {
+    "Dot": 159.603379,
+    "Single": 117.369585,
+    "Double": 21.039941,
+    "Three": 1.421389,
+    "Four": 47.862138,
+    "Six": 18.513124,
+    "Wicket": 16.948498,
+    "Extras": 13.241946
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/powerplay/inn2/w6_plus": {
+   "parent": "T20/ipl_2008_2013/powerplay/inn2",
+   "counts": {
+    "Dot": 165.599762,
+    "Single": 117.634597,
+    "Double": 20.369759,
+    "Three": 1.329279,
+    "Four": 43.237166,
+    "Six": 15.605173,
+    "Wicket": 18.982318,
+    "Extras": 13.241946
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/middle": {
+   "parent": "T20/ipl_2008_2013",
+   "counts": {
+    "Dot": 1367.017894,
+    "Single": 1549.585673,
+    "Double": 287.383354,
+    "Three": 21.603293,
+    "Four": 321.410937,
+    "Six": 134.426924,
+    "Wicket": 184.81489,
+    "Extras": 133.757035
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/middle/inn1": {
+   "parent": "T20/ipl_2008_2013/middle",
+   "counts": {
+    "Dot": 683.508947,
+    "Single": 774.792837,
+    "Double": 143.691677,
+    "Three": 10.801646,
+    "Four": 160.705469,
+    "Six": 67.213462,
+    "Wicket": 92.407445,
+    "Extras": 66.878517
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/middle/inn1/w0_2": {
+   "parent": "T20/ipl_2008_2013/middle/inn1",
+   "counts": {
+    "Dot": 223.292499,
+    "Single": 255.627605,
+    "Double": 47.879101,
+    "Three": 3.634934,
+    "Four": 54.617206,
+    "Six": 23.299121,
+    "Wicket": 29.579623,
+    "Extras": 22.069911
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/middle/inn1/w3_5": {
+   "parent": "T20/ipl_2008_2013/middle/inn1",
+   "counts": {
+    "Dot": 225.557953,
+    "Single": 255.681636,
+    "Double": 47.418253,
+    "Three": 3.564543,
+    "Four": 53.032805,
+    "Six": 22.180442,
+    "Wicket": 30.494457,
+    "Extras": 22.069911
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/middle/inn1/w6_plus": {
+   "parent": "T20/ipl_2008_2013/middle/inn1",
+   "counts": {
+    "Dot": 235.160156,
+    "Single": 255.433461,
+    "Double": 45.393792,
+    "Three": 3.269847,
+    "Four": 46.616623,
+    "Six": 17.902419,
+    "Wicket": 34.153792,
+    "Extras": 22.069911
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/middle/inn2": {
+   "parent": "T20/ipl_2008_2013/middle",
+   "counts": {
+    "Dot": 683.508947,
+    "Single": 774.792837,
+    "Double": 143.691677,
+    "Three": 10.801646,
+    "Four": 160.705469,
+    "Six": 67.213462,
+    "Wicket": 92.407445,
+    "Extras": 66.878517
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/middle/inn2/w0_2": {
+   "parent": "T20/ipl_2008_2013/middle/inn2",
+   "counts": {
+    "Dot": 223.292499,
+    "Single": 255.627605,
+    "Double": 47.879101,
+    "Three": 3.634934,
+    "Four": 54.617206,
+    "Six": 23.299121,
+    "Wicket": 29.579623,
+    "Extras": 22.069911
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/middle/inn2/w3_5": {
+   "parent": "T20/ipl_2008_2013/middle/inn2",
+   "counts": {
+    "Dot": 225.557953,
+    "Single": 255.681636,
+    "Double": 47.418253,
+    "Three": 3.564543,
+    "Four": 53.032805,
+    "Six": 22.180442,
+    "Wicket": 30.494457,
+    "Extras": 22.069911
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/middle/inn2/w6_plus": {
+   "parent": "T20/ipl_2008_2013/middle/inn2",
+   "counts": {
+    "Dot": 235.160156,
+    "Single": 255.433461,
+    "Double": 45.393792,
+    "Three": 3.269847,
+    "Four": 46.616623,
+    "Six": 17.902419,
+    "Wicket": 34.153792,
+    "Extras": 22.069911
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/death": {
+   "parent": "T20/ipl_2008_2013",
+   "counts": {
+    "Dot": 482.233122,
+    "Single": 463.681212,
+    "Double": 109.470382,
+    "Three": 7.384239,
+    "Four": 209.201167,
+    "Six": 161.692712,
+    "Wicket": 112.834354,
+    "Extras": 53.502814
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/death/inn1": {
+   "parent": "T20/ipl_2008_2013/death",
+   "counts": {
+    "Dot": 241.116561,
+    "Single": 231.840606,
+    "Double": 54.735191,
+    "Three": 3.692119,
+    "Four": 104.600583,
+    "Six": 80.846356,
+    "Wicket": 56.417177,
+    "Extras": 26.751407
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/death/inn1/w0_2": {
+   "parent": "T20/ipl_2008_2013/death/inn1",
+   "counts": {
+    "Dot": 78.685956,
+    "Single": 76.239476,
+    "Double": 18.137493,
+    "Three": 1.23284,
+    "Four": 35.195338,
+    "Six": 27.621796,
+    "Wicket": 18.059138,
+    "Extras": 8.827964
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/death/inn1/w3_5": {
+   "parent": "T20/ipl_2008_2013/death/inn1",
+   "counts": {
+    "Dot": 79.568465,
+    "Single": 76.5074,
+    "Double": 18.062613,
+    "Three": 1.218399,
+    "Four": 34.518192,
+    "Six": 26.679297,
+    "Wicket": 18.617668,
+    "Extras": 8.827964
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/death/inn1/w6_plus": {
+   "parent": "T20/ipl_2008_2013/death/inn1",
+   "counts": {
+    "Dot": 83.233902,
+    "Single": 77.489177,
+    "Double": 17.713179,
+    "Three": 1.156868,
+    "Four": 31.733695,
+    "Six": 22.993424,
+    "Wicket": 20.851789,
+    "Extras": 8.827964
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/death/inn2": {
+   "parent": "T20/ipl_2008_2013/death",
+   "counts": {
+    "Dot": 241.116561,
+    "Single": 231.840606,
+    "Double": 54.735191,
+    "Three": 3.692119,
+    "Four": 104.600583,
+    "Six": 80.846356,
+    "Wicket": 56.417177,
+    "Extras": 26.751407
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/death/inn2/w0_2": {
+   "parent": "T20/ipl_2008_2013/death/inn2",
+   "counts": {
+    "Dot": 78.685956,
+    "Single": 76.239476,
+    "Double": 18.137493,
+    "Three": 1.23284,
+    "Four": 35.195338,
+    "Six": 27.621796,
+    "Wicket": 18.059138,
+    "Extras": 8.827964
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/death/inn2/w3_5": {
+   "parent": "T20/ipl_2008_2013/death/inn2",
+   "counts": {
+    "Dot": 79.568465,
+    "Single": 76.5074,
+    "Double": 18.062613,
+    "Three": 1.218399,
+    "Four": 34.518192,
+    "Six": 26.679297,
+    "Wicket": 18.617668,
+    "Extras": 8.827964
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2008_2013/death/inn2/w6_plus": {
+   "parent": "T20/ipl_2008_2013/death/inn2",
+   "counts": {
+    "Dot": 83.233902,
+    "Single": 77.489177,
+    "Double": 17.713179,
+    "Three": 1.156868,
+    "Four": 31.733695,
+    "Six": 22.993424,
+    "Wicket": 20.851789,
+    "Extras": 8.827964
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021": {
+   "parent": "T20",
+   "counts": {
+    "Dot": 2775.009631,
+    "Single": 2612.974795,
+    "Double": 521.338474,
+    "Three": 40.622024,
+    "Four": 946.399578,
+    "Six": 464.418664,
+    "Wicket": 394.390304,
+    "Extras": 244.846531
+   },
+   "count_kind": "pseudo",
+   "meta": {
+    "anchor_source": "static/ipl16/ipl_master_calibrated.csv",
+    "anchor_measured": true,
+    "seasons": [
+     2014,
+     2015,
+     2016,
+     2017,
+     2018,
+     2019,
+     2020,
+     2021
+    ],
+    "measured_balls_faced": 110041
+   }
+  },
+  "T20/ipl_2014_2021/powerplay": {
+   "parent": "T20/ipl_2014_2021",
+   "counts": {
+    "Dot": 932.378601,
+    "Single": 707.02909,
+    "Double": 130.694628,
+    "Three": 9.104533,
+    "Four": 316.131886,
+    "Six": 130.022619,
+    "Wicket": 101.184684,
+    "Extras": 73.453959
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/powerplay/inn1": {
+   "parent": "T20/ipl_2014_2021/powerplay",
+   "counts": {
+    "Dot": 466.1893,
+    "Single": 353.514545,
+    "Double": 65.347314,
+    "Three": 4.552266,
+    "Four": 158.065943,
+    "Six": 65.011309,
+    "Wicket": 50.592342,
+    "Extras": 36.72698
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/powerplay/inn1/w0_2": {
+   "parent": "T20/ipl_2014_2021/powerplay/inn1",
+   "counts": {
+    "Dot": 152.335821,
+    "Single": 116.459795,
+    "Double": 21.703285,
+    "Three": 1.524244,
+    "Four": 53.357323,
+    "Six": 22.305021,
+    "Wicket": 16.194609,
+    "Extras": 12.119903
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/powerplay/inn1/w3_5": {
+   "parent": "T20/ipl_2014_2021/powerplay/inn1",
+   "counts": {
+    "Dot": 153.842469,
+    "Single": 116.6598,
+    "Double": 21.564614,
+    "Three": 1.502248,
+    "Four": 52.161761,
+    "Six": 21.453732,
+    "Wicket": 16.695473,
+    "Extras": 12.119903
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/powerplay/inn1/w6_plus": {
+   "parent": "T20/ipl_2014_2021/powerplay/inn1",
+   "counts": {
+    "Dot": 160.086757,
+    "Single": 117.285901,
+    "Double": 20.94651,
+    "Three": 1.409798,
+    "Four": 47.294765,
+    "Six": 18.157436,
+    "Wicket": 18.69893,
+    "Extras": 12.119903
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/powerplay/inn2": {
+   "parent": "T20/ipl_2014_2021/powerplay",
+   "counts": {
+    "Dot": 466.1893,
+    "Single": 353.514545,
+    "Double": 65.347314,
+    "Three": 4.552266,
+    "Four": 158.065943,
+    "Six": 65.011309,
+    "Wicket": 50.592342,
+    "Extras": 36.72698
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/powerplay/inn2/w0_2": {
+   "parent": "T20/ipl_2014_2021/powerplay/inn2",
+   "counts": {
+    "Dot": 152.335821,
+    "Single": 116.459795,
+    "Double": 21.703285,
+    "Three": 1.524244,
+    "Four": 53.357323,
+    "Six": 22.305021,
+    "Wicket": 16.194609,
+    "Extras": 12.119903
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/powerplay/inn2/w3_5": {
+   "parent": "T20/ipl_2014_2021/powerplay/inn2",
+   "counts": {
+    "Dot": 153.842469,
+    "Single": 116.6598,
+    "Double": 21.564614,
+    "Three": 1.502248,
+    "Four": 52.161761,
+    "Six": 21.453732,
+    "Wicket": 16.695473,
+    "Extras": 12.119903
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/powerplay/inn2/w6_plus": {
+   "parent": "T20/ipl_2014_2021/powerplay/inn2",
+   "counts": {
+    "Dot": 160.086757,
+    "Single": 117.285901,
+    "Double": 20.94651,
+    "Three": 1.409798,
+    "Four": 47.294765,
+    "Six": 18.157436,
+    "Wicket": 18.69893,
+    "Extras": 12.119903
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/middle": {
+   "parent": "T20/ipl_2014_2021",
+   "counts": {
+    "Dot": 1312.275718,
+    "Single": 1543.779664,
+    "Double": 297.132504,
+    "Three": 23.180742,
+    "Four": 357.920741,
+    "Six": 161.231589,
+    "Wicket": 182.055777,
+    "Extras": 122.423265
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/middle/inn1": {
+   "parent": "T20/ipl_2014_2021/middle",
+   "counts": {
+    "Dot": 656.137859,
+    "Single": 771.889832,
+    "Double": 148.566252,
+    "Three": 11.590371,
+    "Four": 178.96037,
+    "Six": 80.615795,
+    "Wicket": 91.027888,
+    "Extras": 61.211633
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/middle/inn1/w0_2": {
+   "parent": "T20/ipl_2014_2021/middle/inn1",
+   "counts": {
+    "Dot": 214.231753,
+    "Single": 254.466387,
+    "Double": 49.451746,
+    "Three": 3.895338,
+    "Four": 60.72829,
+    "Six": 27.888621,
+    "Wicket": 29.138027,
+    "Extras": 20.199839
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/middle/inn1/w3_5": {
+   "parent": "T20/ipl_2014_2021/middle/inn1",
+   "counts": {
+    "Dot": 216.525493,
+    "Single": 254.723645,
+    "Double": 49.026863,
+    "Three": 3.824822,
+    "Four": 59.056922,
+    "Six": 26.603212,
+    "Wicket": 30.039203,
+    "Extras": 20.199839
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/middle/inn1/w6_plus": {
+   "parent": "T20/ipl_2014_2021/middle/inn1",
+   "counts": {
+    "Dot": 226.224596,
+    "Single": 255.319603,
+    "Double": 47.144727,
+    "Three": 3.528535,
+    "Four": 52.268262,
+    "Six": 21.670531,
+    "Wicket": 33.643908,
+    "Extras": 20.199839
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/middle/inn2": {
+   "parent": "T20/ipl_2014_2021/middle",
+   "counts": {
+    "Dot": 656.137859,
+    "Single": 771.889832,
+    "Double": 148.566252,
+    "Three": 11.590371,
+    "Four": 178.96037,
+    "Six": 80.615795,
+    "Wicket": 91.027888,
+    "Extras": 61.211633
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/middle/inn2/w0_2": {
+   "parent": "T20/ipl_2014_2021/middle/inn2",
+   "counts": {
+    "Dot": 214.231753,
+    "Single": 254.466387,
+    "Double": 49.451746,
+    "Three": 3.895338,
+    "Four": 60.72829,
+    "Six": 27.888621,
+    "Wicket": 29.138027,
+    "Extras": 20.199839
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/middle/inn2/w3_5": {
+   "parent": "T20/ipl_2014_2021/middle/inn2",
+   "counts": {
+    "Dot": 216.525493,
+    "Single": 254.723645,
+    "Double": 49.026863,
+    "Three": 3.824822,
+    "Four": 59.056922,
+    "Six": 26.603212,
+    "Wicket": 30.039203,
+    "Extras": 20.199839
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/middle/inn2/w6_plus": {
+   "parent": "T20/ipl_2014_2021/middle/inn2",
+   "counts": {
+    "Dot": 226.224596,
+    "Single": 255.319603,
+    "Double": 47.144727,
+    "Three": 3.528535,
+    "Four": 52.268262,
+    "Six": 21.670531,
+    "Wicket": 33.643908,
+    "Extras": 20.199839
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/death": {
+   "parent": "T20/ipl_2014_2021",
+   "counts": {
+    "Dot": 458.437796,
+    "Single": 454.354972,
+    "Double": 110.566822,
+    "Three": 7.687521,
+    "Four": 224.490056,
+    "Six": 184.343685,
+    "Wicket": 111.149843,
+    "Extras": 48.969306
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/death/inn1": {
+   "parent": "T20/ipl_2014_2021/death",
+   "counts": {
+    "Dot": 229.218898,
+    "Single": 227.177486,
+    "Double": 55.283411,
+    "Three": 3.843761,
+    "Four": 112.245028,
+    "Six": 92.171843,
+    "Wicket": 55.574921,
+    "Extras": 24.484653
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/death/inn1/w0_2": {
+   "parent": "T20/ipl_2014_2021/death/inn1",
+   "counts": {
+    "Dot": 74.715477,
+    "Single": 74.624857,
+    "Double": 18.300844,
+    "Three": 1.282303,
+    "Four": 37.73632,
+    "Six": 31.470732,
+    "Wicket": 17.789532,
+    "Extras": 8.079936
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/death/inn1/w3_5": {
+   "parent": "T20/ipl_2014_2021/death/inn1",
+   "counts": {
+    "Dot": 75.642236,
+    "Single": 74.96857,
+    "Double": 18.243526,
+    "Three": 1.268441,
+    "Four": 37.040859,
+    "Six": 30.416708,
+    "Wicket": 18.339724,
+    "Extras": 8.079936
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/death/inn1/w6_plus": {
+   "parent": "T20/ipl_2014_2021/death/inn1",
+   "counts": {
+    "Dot": 79.48724,
+    "Single": 76.256412,
+    "Double": 17.962633,
+    "Three": 1.208914,
+    "Four": 34.172003,
+    "Six": 26.292371,
+    "Wicket": 20.540491,
+    "Extras": 8.079936
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/death/inn2": {
+   "parent": "T20/ipl_2014_2021/death",
+   "counts": {
+    "Dot": 229.218898,
+    "Single": 227.177486,
+    "Double": 55.283411,
+    "Three": 3.843761,
+    "Four": 112.245028,
+    "Six": 92.171843,
+    "Wicket": 55.574921,
+    "Extras": 24.484653
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/death/inn2/w0_2": {
+   "parent": "T20/ipl_2014_2021/death/inn2",
+   "counts": {
+    "Dot": 74.715477,
+    "Single": 74.624857,
+    "Double": 18.300844,
+    "Three": 1.282303,
+    "Four": 37.73632,
+    "Six": 31.470732,
+    "Wicket": 17.789532,
+    "Extras": 8.079936
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/death/inn2/w3_5": {
+   "parent": "T20/ipl_2014_2021/death/inn2",
+   "counts": {
+    "Dot": 75.642236,
+    "Single": 74.96857,
+    "Double": 18.243526,
+    "Three": 1.268441,
+    "Four": 37.040859,
+    "Six": 30.416708,
+    "Wicket": 18.339724,
+    "Extras": 8.079936
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_2014_2021/death/inn2/w6_plus": {
+   "parent": "T20/ipl_2014_2021/death/inn2",
+   "counts": {
+    "Dot": 79.48724,
+    "Single": 76.256412,
+    "Double": 17.962633,
+    "Three": 1.208914,
+    "Four": 34.172003,
+    "Six": 26.292371,
+    "Wicket": 20.540491,
+    "Extras": 8.079936
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern": {
+   "parent": "T20",
+   "counts": {
+    "Dot": 2532.269253,
+    "Single": 2512.638829,
+    "Double": 528.279894,
+    "Three": 43.376582,
+    "Four": 1064.92191,
+    "Six": 580.298981,
+    "Wicket": 411.992078,
+    "Extras": 326.222474
+   },
+   "count_kind": "pseudo",
+   "meta": {
+    "anchor_source": "static/ipl16/ipl_master_calibrated.csv",
+    "anchor_measured": true,
+    "seasons": [
+     2022,
+     2023,
+     2024,
+     2025,
+     2026
+    ],
+    "measured_balls_faced": 84138
+   }
+  },
+  "T20/ipl_modern/powerplay": {
+   "parent": "T20/ipl_modern",
+   "counts": {
+    "Dot": 856.159781,
+    "Single": 682.45449,
+    "Double": 132.607485,
+    "Three": 9.710506,
+    "Four": 354.426657,
+    "Six": 161.073746,
+    "Wicket": 105.700591,
+    "Extras": 97.866742
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/powerplay/inn1": {
+   "parent": "T20/ipl_modern/powerplay",
+   "counts": {
+    "Dot": 428.079891,
+    "Single": 341.227245,
+    "Double": 66.303743,
+    "Three": 4.855253,
+    "Four": 177.213329,
+    "Six": 80.536873,
+    "Wicket": 52.850296,
+    "Extras": 48.933371
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/powerplay/inn1/w0_2": {
+   "parent": "T20/ipl_modern/powerplay/inn1",
+   "counts": {
+    "Dot": 139.712951,
+    "Single": 112.271822,
+    "Double": 21.992791,
+    "Three": 1.623564,
+    "Four": 59.74054,
+    "Six": 27.592941,
+    "Wicket": 16.91738,
+    "Extras": 16.148012
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/powerplay/inn1/w3_5": {
+   "parent": "T20/ipl_modern/powerplay/inn1",
+   "counts": {
+    "Dot": 141.266364,
+    "Single": 112.604991,
+    "Double": 21.880235,
+    "Three": 1.602233,
+    "Four": 58.480398,
+    "Six": 26.577168,
+    "Wicket": 17.440598,
+    "Extras": 16.148012
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/powerplay/inn1/w6_plus": {
+   "parent": "T20/ipl_modern/powerplay/inn1",
+   "counts": {
+    "Dot": 147.696222,
+    "Single": 113.776009,
+    "Double": 21.365225,
+    "Three": 1.511972,
+    "Four": 53.332347,
+    "Six": 22.636744,
+    "Wicket": 19.533469,
+    "Extras": 16.148012
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/powerplay/inn2": {
+   "parent": "T20/ipl_modern/powerplay",
+   "counts": {
+    "Dot": 428.079891,
+    "Single": 341.227245,
+    "Double": 66.303743,
+    "Three": 4.855253,
+    "Four": 177.213329,
+    "Six": 80.536873,
+    "Wicket": 52.850296,
+    "Extras": 48.933371
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/powerplay/inn2/w0_2": {
+   "parent": "T20/ipl_modern/powerplay/inn2",
+   "counts": {
+    "Dot": 139.712951,
+    "Single": 112.271822,
+    "Double": 21.992791,
+    "Three": 1.623564,
+    "Four": 59.74054,
+    "Six": 27.592941,
+    "Wicket": 16.91738,
+    "Extras": 16.148012
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/powerplay/inn2/w3_5": {
+   "parent": "T20/ipl_modern/powerplay/inn2",
+   "counts": {
+    "Dot": 141.266364,
+    "Single": 112.604991,
+    "Double": 21.880235,
+    "Three": 1.602233,
+    "Four": 58.480398,
+    "Six": 26.577168,
+    "Wicket": 17.440598,
+    "Extras": 16.148012
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/powerplay/inn2/w6_plus": {
+   "parent": "T20/ipl_modern/powerplay/inn2",
+   "counts": {
+    "Dot": 147.696222,
+    "Single": 113.776009,
+    "Double": 21.365225,
+    "Three": 1.511972,
+    "Four": 53.332347,
+    "Six": 22.636744,
+    "Wicket": 19.533469,
+    "Extras": 16.148012
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/middle": {
+   "parent": "T20/ipl_modern",
+   "counts": {
+    "Dot": 1198.222833,
+    "Single": 1495.012587,
+    "Double": 305.180465,
+    "Three": 25.251137,
+    "Four": 413.511415,
+    "Six": 209.529338,
+    "Wicket": 190.180988,
+    "Extras": 163.111237
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/middle/inn1": {
+   "parent": "T20/ipl_modern/middle",
+   "counts": {
+    "Dot": 599.111417,
+    "Single": 747.506293,
+    "Double": 152.590233,
+    "Three": 12.625568,
+    "Four": 206.755707,
+    "Six": 104.764669,
+    "Wicket": 95.090494,
+    "Extras": 81.555618
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/middle/inn1/w0_2": {
+   "parent": "T20/ipl_modern/middle/inn1",
+   "counts": {
+    "Dot": 195.44463,
+    "Single": 246.127002,
+    "Double": 50.710677,
+    "Three": 4.234985,
+    "Four": 69.998172,
+    "Six": 36.132712,
+    "Wicket": 30.438467,
+    "Extras": 26.913354
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/middle/inn1/w3_5": {
+   "parent": "T20/ipl_modern/middle/inn1",
+   "counts": {
+    "Dot": 197.706767,
+    "Single": 246.677077,
+    "Double": 50.354777,
+    "Three": 4.166438,
+    "Four": 68.229383,
+    "Six": 34.572341,
+    "Wicket": 31.379863,
+    "Extras": 26.913354
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/middle/inn1/w6_plus": {
+   "parent": "T20/ipl_modern/middle/inn1",
+   "counts": {
+    "Dot": 207.241126,
+    "Single": 248.503433,
+    "Double": 48.752116,
+    "Three": 3.876742,
+    "Four": 61.013034,
+    "Six": 28.554749,
+    "Wicket": 35.145447,
+    "Extras": 26.913354
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/middle/inn2": {
+   "parent": "T20/ipl_modern/middle",
+   "counts": {
+    "Dot": 599.111417,
+    "Single": 747.506293,
+    "Double": 152.590233,
+    "Three": 12.625568,
+    "Four": 206.755707,
+    "Six": 104.764669,
+    "Wicket": 95.090494,
+    "Extras": 81.555618
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/middle/inn2/w0_2": {
+   "parent": "T20/ipl_modern/middle/inn2",
+   "counts": {
+    "Dot": 195.44463,
+    "Single": 246.127002,
+    "Double": 50.710677,
+    "Three": 4.234985,
+    "Four": 69.998172,
+    "Six": 36.132712,
+    "Wicket": 30.438467,
+    "Extras": 26.913354
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/middle/inn2/w3_5": {
+   "parent": "T20/ipl_modern/middle/inn2",
+   "counts": {
+    "Dot": 197.706767,
+    "Single": 246.677077,
+    "Double": 50.354777,
+    "Three": 4.166438,
+    "Four": 68.229383,
+    "Six": 34.572341,
+    "Wicket": 31.379863,
+    "Extras": 26.913354
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/middle/inn2/w6_plus": {
+   "parent": "T20/ipl_modern/middle/inn2",
+   "counts": {
+    "Dot": 207.241126,
+    "Single": 248.503433,
+    "Double": 48.752116,
+    "Three": 3.876742,
+    "Four": 61.013034,
+    "Six": 28.554749,
+    "Wicket": 35.145447,
+    "Extras": 26.913354
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/death": {
+   "parent": "T20/ipl_modern",
+   "counts": {
+    "Dot": 407.777864,
+    "Single": 425.456802,
+    "Double": 108.993844,
+    "Three": 7.97775,
+    "Four": 245.249518,
+    "Six": 223.189229,
+    "Wicket": 116.110498,
+    "Extras": 65.244495
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/death/inn1": {
+   "parent": "T20/ipl_modern/death",
+   "counts": {
+    "Dot": 203.888932,
+    "Single": 212.728401,
+    "Double": 54.496922,
+    "Three": 3.988875,
+    "Four": 122.624759,
+    "Six": 111.594615,
+    "Wicket": 58.055249,
+    "Extras": 32.622247
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/death/inn1/w0_2": {
+   "parent": "T20/ipl_modern/death/inn1",
+   "counts": {
+    "Dot": 66.32995,
+    "Single": 69.752619,
+    "Double": 18.010511,
+    "Three": 1.32869,
+    "Four": 41.168997,
+    "Six": 38.060405,
+    "Wicket": 18.583485,
+    "Extras": 10.765342
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/death/inn1/w3_5": {
+   "parent": "T20/ipl_modern/death/inn1",
+   "counts": {
+    "Dot": 67.283348,
+    "Single": 70.200372,
+    "Double": 17.983984,
+    "Three": 1.316329,
+    "Four": 40.466171,
+    "Six": 36.826223,
+    "Wicket": 19.158232,
+    "Extras": 10.765342
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/death/inn1/w6_plus": {
+   "parent": "T20/ipl_modern/death/inn1",
+   "counts": {
+    "Dot": 71.234578,
+    "Single": 71.912866,
+    "Double": 17.825307,
+    "Three": 1.262407,
+    "Four": 37.550094,
+    "Six": 31.992187,
+    "Wicket": 21.45722,
+    "Extras": 10.765342
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/death/inn2": {
+   "parent": "T20/ipl_modern/death",
+   "counts": {
+    "Dot": 203.888932,
+    "Single": 212.728401,
+    "Double": 54.496922,
+    "Three": 3.988875,
+    "Four": 122.624759,
+    "Six": 111.594615,
+    "Wicket": 58.055249,
+    "Extras": 32.622247
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/death/inn2/w0_2": {
+   "parent": "T20/ipl_modern/death/inn2",
+   "counts": {
+    "Dot": 66.32995,
+    "Single": 69.752619,
+    "Double": 18.010511,
+    "Three": 1.32869,
+    "Four": 41.168997,
+    "Six": 38.060405,
+    "Wicket": 18.583485,
+    "Extras": 10.765342
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/death/inn2/w3_5": {
+   "parent": "T20/ipl_modern/death/inn2",
+   "counts": {
+    "Dot": 67.283348,
+    "Single": 70.200372,
+    "Double": 17.983984,
+    "Three": 1.316329,
+    "Four": 40.466171,
+    "Six": 36.826223,
+    "Wicket": 19.158232,
+    "Extras": 10.765342
+   },
+   "count_kind": "pseudo"
+  },
+  "T20/ipl_modern/death/inn2/w6_plus": {
+   "parent": "T20/ipl_modern/death/inn2",
+   "counts": {
+    "Dot": 71.234578,
+    "Single": 71.912866,
+    "Double": 17.825307,
+    "Three": 1.262407,
+    "Four": 37.550094,
+    "Six": 31.992187,
+    "Wicket": 21.45722,
+    "Extras": 10.765342
+   },
+   "count_kind": "pseudo"
+  }
+ },
+ "anchors": {
+  "ipl_2008_2013": {
+   "runs_per_ball_faced": 1.229065087208351,
+   "wickets_per_ball": 0.05115786947653174,
+   "extras_runs_per_legal": 0.044436895225362455,
+   "balls_faced": 91677,
+   "dismissals": 4690,
+   "legal_balls": 91253,
+   "seasons": [
+    2008,
+    2009,
+    2010,
+    2011,
+    2012,
+    2013
+   ],
+   "source": "static/ipl16/ipl_master_calibrated.csv",
+   "measured": true
+  },
+  "ipl_2014_2021": {
+   "runs_per_ball_faced": 1.3199625594096747,
+   "wickets_per_ball": 0.05029943384738415,
+   "extras_runs_per_legal": 0.04059515230023992,
+   "balls_faced": 110041,
+   "dismissals": 5535,
+   "legal_balls": 109619,
+   "seasons": [
+    2014,
+    2015,
+    2016,
+    2017,
+    2018,
+    2019,
+    2020,
+    2021
+   ],
+   "source": "static/ipl16/ipl_master_calibrated.csv",
+   "measured": true
+  },
+  "ipl_modern": {
+   "runs_per_ball_faced": 1.4690389598041314,
+   "wickets_per_ball": 0.05290118614656873,
+   "extras_runs_per_legal": 0.05445449986866926,
+   "balls_faced": 84138,
+   "dismissals": 4451,
+   "legal_balls": 83758,
+   "seasons": [
+    2022,
+    2023,
+    2024,
+    2025,
+    2026
+   ],
+   "source": "static/ipl16/ipl_master_calibrated.csv",
+   "measured": true
+  }
+ },
+ "provenance": {
+  "mode": "anchors",
+  "level_source": "static/ipl16/ipl_master_calibrated.csv (real IPL player-season aggregates, summed to competition level; Cricsheet registry ids)",
+  "level_measured": true,
+  "shape_source": "published aggregate T20/ODI outcome shares; same figures as tools/realism_audit.REAL_BALLS",
+  "shape_measured": false,
+  "fitting": "maximum-entropy exponential tilt of the shape prior onto the measured runs-per-ball anchor; wicket and extras rates taken directly from the anchors",
+  "all_nodes_observed": false,
+  "pseudo_weight": 4000.0,
+  "eras": {
+   "ipl_2008_2013": [
+    2008,
+    2013
+   ],
+   "ipl_2014_2021": [
+    2014,
+    2021
+   ],
+   "ipl_modern": [
+    2022,
+    2026
+   ]
+  },
+  "limitation": "No ball-by-ball deliveries were counted. Phase, innings and wickets structure is a documented prior, not a measurement. Rebuild with the 'cricsheet' mode for observed counts.",
+  "data_licence": "ODbL 1.0 (Cricsheet-derived aggregates)"
+ }
+}

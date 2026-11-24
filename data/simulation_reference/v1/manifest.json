@@ -1,0 +1,36 @@
+{
+ "schema_version": 1,
+ "model_version": "realism-v1",
+ "generated_at": "2026-11-23T07:35:56+00:00",
+ "builder": "tools/build_realism_reference.py",
+ "formats": {
+  "T20": {
+   "file": "t20_baselines.json",
+   "mode": "anchors",
+   "nodes": 86,
+   "default_competition": "ipl_modern",
+   "competitions": [
+    "ipl_2008_2013",
+    "ipl_2014_2021",
+    "ipl_modern"
+   ],
+   "level_measured": true
+  },
+  "ODI": {
+   "file": "odi_baselines.json",
+   "mode": "anchors",
+   "nodes": 30,
+   "default_competition": "odi_prior",
+   "competitions": [
+    "odi_prior"
+   ],
+   "level_measured": false
+  }
+ },
+ "licensing": {
+  "cricsheet_data": "Open Data Commons Open Database Licence (ODbL) 1.0",
+  "cricsheet_url": "https://cricsheet.org/",
+  "notice": "Reference files derived from Cricsheet ball-by-ball data are a Derivative Database under ODbL 1.0 and must be redistributed under the same licence, with attribution to Cricsheet and a copy of the licence. Files built in 'anchors' mode derive from static/ipl16/ipl_master_calibrated.csv, itself keyed to the Cricsheet player registry, and carry the same obligation.",
+  "code_attribution": "Data-layout and context-counting approach informed by HalcyonVector/Cricket-Intelligence-Lab (MIT licence); no code copied verbatim."
+ }
+}
