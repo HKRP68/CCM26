@@ -738,7 +738,7 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         # (engine.approach_modifiers.combo_carry). None for all but a few overs.
         "approach_carry": None,
         "bat_stats": bat_stats, "bowl_stats": bowl_stats,
-        "timeline": [], "over_runs": [], "fow": [],
+        "timeline": [], "over_runs": [], "over_wkts": [], "fow": [],
         "ball_history": [], "batter_streaks": {},
         "free_hit": False,
         # Narrative inputs for the commentary engine.
@@ -2852,6 +2852,11 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
     bws["overs_done"] = bws["balls"] // bpu
     bws["this_over_balls"] = 0
     state["over_runs"].append(over_runs)
+    # Per-over wickets, parallel to over_runs. Lets the 2nd-innings score
+    # comparison read each innings' wicket count at the same over without
+    # re-deriving it from the fall-of-wickets list. Purely additive
+    # bookkeeping — no RNG is drawn and no simulation probability changes.
+    state.setdefault("over_wkts", []).append(over_wkts)
     # Snapshot this over for the approach-prompt scorecard card.
     state["last_over_timeline"] = list(over_timeline)
     state["last_over_commentary"] = list(state.get("commentary_log", [])[cmt_start:])
@@ -3404,6 +3409,8 @@ def end_first_innings(state):
     state["inn1_fow"] = state["fow"]
     state["inn1_timeline"] = state["timeline"]
     state["inn1_over_runs"] = list(state.get("over_runs") or [])
+    # Per-over wickets snapshot, frozen for the 2nd-innings score comparison.
+    state["inn1_over_wkts"] = list(state.get("over_wkts") or [])
     # v3.0 traces, frozen for the match analysis report. The chase history and
     # the pitch-state trace are 2nd-innings-only, so there is nothing to archive.
     state["inn1_momentum_history"] = list(state.get("momentum_history") or [])
@@ -3469,6 +3476,7 @@ def end_first_innings(state):
     state["approach_carry"] = None
     state["timeline"] = []
     state["over_runs"] = []
+    state["over_wkts"] = []
     state["fow"] = []
     state["ball_history"] = []
     state["batter_streaks"] = {}
