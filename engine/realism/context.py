@@ -16,12 +16,15 @@ from typing import Optional
 
 from engine.realism import styles
 
+from engine.realism import phases
+
 # Phase keys. These are the hierarchy level-3 node names in the reference
 # files, and they are format-agnostic: a 100-ball innings has a powerplay and
-# a death too, they are just shorter.
-POWERPLAY = "powerplay"
-MIDDLE = "middle"
-DEATH = "death"
+# a death too, they are just shorter. Re-exported from engine.realism.phases,
+# the single source of truth for the phase boundaries.
+POWERPLAY = phases.POWERPLAY
+MIDDLE = phases.MIDDLE
+DEATH = phases.DEATH
 
 
 def wickets_bucket(wickets: int) -> str:
@@ -101,19 +104,11 @@ class BallContext:
     def phase(self) -> str:
         """Powerplay / middle / death, scaled to the innings length.
 
-        Expressed as a *fraction* of the innings rather than hardcoded over
-        numbers so T20, The Hundred and a custom-over /sim all land sensibly
-        without a per-format table. T20 maps to 0-5 / 6-15 / 16-19, which is
-        exactly the existing engine's split.
+        The thresholds live in :mod:`engine.realism.phases`, which is the
+        single source of truth shared with the reference builder so a
+        delivery is always looked up under the node it was filed under.
         """
-        total = max(1, int(self.innings_balls))
-        done = min(total - 1, max(0, int(self.balls_bowled)))
-        frac = done / float(total)
-        if frac < 0.30:
-            return POWERPLAY
-        if frac < 0.80:
-            return MIDDLE
-        return DEATH
+        return phases.phase_for_ball(self.balls_bowled, self.innings_balls)
 
     @property
     def innings_key(self) -> str:

@@ -12,6 +12,7 @@ from engine.game_state_engine import apply_game_state_to_probs
 from engine.format_config import FormatConfig
 from engine import pitch_registry
 from engine.realism import integration as realism_integration
+from engine.realism import diagnostics as realism_diagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -889,6 +890,10 @@ _LEVEL_WICKET_BAT_EXP = 0.15
 # layer landed: state-mixing + momentum feedback pushed parity scores up
 # ~30 runs and wickets down; this pulls the anchor back to ~210 @ ~4.5.
 T20_WICKET_REALISM_MULT = 1.15
+
+# Maximum normalised per-ball Wicket share (the "4d" safety valve below).
+# Evaluated against real dismissal patterns and retained — see that block.
+T20_WICKET_SHARE_CAP = 0.12
 # Companion re-anchor applied alongside the wicket lift (duel state-mixing
 # inflates boundary conversion at parity; trim it back to the calibration).
 T20_DUEL_RECAL = {"Four": 0.90, "Six": 0.88, "Dot": 1.10}
@@ -1280,6 +1285,15 @@ def calculate_outcome(
         # Retain the initial settling bonus and taper the extra rating driven
         # by runs once a batter is set. Ratings still drive the contest.
         confidence_scale -= 0.55 * min(1.0, max(0.0, (batter_runs - 40) / 25))
+    # The realism engine gets the rating BEFORE the batting-position penalty.
+    # `_POS_BATTING_MULT` scales a tail-ender's rating down to 0.75, which is
+    # an artificial skill penalty: a number 9 is not a worse *player* than a
+    # number 3, they bat lower because the order put them there. Requirement 6
+    # of the Fairness & Simulation Fixes keeps batting-order effects, but
+    # through match state (wickets in hand, balls faced, the win-probability
+    # captain's resource model) rather than by secretly lowering the card.
+    # The legacy T20 path keeps `_pos_mult` so its behaviour is unchanged.
+    _bat_rating_no_pos = batting
     batting *= _pos_mult
 
     # 2) Select scoring matrix — format-aware.
@@ -1341,15 +1355,28 @@ def calculate_outcome(
             is_day_night=is_day_night, batting_approach=batting_approach,
             bowling_approach=bowling_approach,
             approach_context=approach_context, free_hit=free_hit,
-            # The engine has already applied its batting-position scaling and
-            # the caller may have scaled the bowler for fatigue; pass the
-            # post-scaling numbers so the rating curve does not re-apply them.
-            bat_rating_effective=batting, bowl_rating_effective=bowling,
+            # The caller may have scaled the bowler for fatigue, so that
+            # post-scaling number is passed. The BATTER rating is passed
+            # WITHOUT the position penalty (see _bat_rating_no_pos): the
+            # realism engine models batting order through resources, not by
+            # lowering a tail-ender's card.
+            bat_rating_effective=_bat_rating_no_pos, bowl_rating_effective=bowling,
             match_context=match_context,
-            # /cipl and /letsplay run engine.approach_modifiers on the result,
-            # which models the same captaincy decision as the realism tactics
-            # family; only one of the two may apply.
-            apply_tactics=(batting_approach is None and bowling_approach is None))
+            # The realism approach model (engine/realism/approaches) IS the
+            # approach layer in realism mode: it prices Ultra/Defensive/etc as
+            # a trade-off against the baseline. It must run whether or not the
+            # captains made explicit picks, so apply_tactics is always on here.
+            #
+            # This does not double-count with engine.approach_modifiers, which
+            # also runs downstream: in realism mode that layer is reduced to
+            # its allowlist (predictability + chemistry only — see
+            # integration.approach_context_overrides), so the base approach
+            # tables and counters it would otherwise apply are off. An earlier
+            # version passed `both approaches None` here, which switched the
+            # realism approach model OFF for every over that had explicit
+            # picks — i.e. every real /cipl over — leaving no approach effect
+            # at all. The per-delivery diagnostics (fix 8) surfaced it.
+            apply_tactics=True)
     _realism_live = (_realism is not None
                      and _realism_mode == realism_integration.LIVE)
 
@@ -1736,12 +1763,23 @@ def calculate_outcome(
     # GSME collapse x pressure x realism lift) can stack the wicket weight
     # into instant-cascade territory in long auto-sims that lack /cipl's
     # anti-cluster hook. Real T20 per-ball dismissal probability never
-    # sustains past ~12-13%; cap the NORMALIZED wicket share at 12% so
+    # sustains past ~12-13%; cap the NORMALIZED wicket share at this value so
     # collapses stay possible but a side can no longer fold inside five overs
     # at rating parity. Capping the share (not the raw weight) means solving
     # w/(w+other) = share for the max wicket weight, i.e. share/(1-share)*other.
+    #
+    # EVALUATED, NOT ASSUMED (Fairness fix 5). Measured over ~9,500 realism
+    # deliveries, this cap binds on ~5% of balls and the pre-cap 95th/99th
+    # percentile wicket share sits right at it — i.e. it is shaping the tail,
+    # not an inert guard. The 0.12 value matches the real-world ceiling on
+    # sustained per-ball dismissal (~12-13%), so it is retained rather than
+    # removed: the prompt's own rule is not to assume a hardcoded heuristic is
+    # defective. It stays below the realism distribution's own 0.14 clamp
+    # (rating_curve.max_wicket_share), so in realism mode this is the single
+    # effective ceiling and the two do not double-count — the looser clamp
+    # only ever binds when this one is disabled (free hits, ListA).
     if not _is_lista and not free_hit:
-        _share = 0.12
+        _share = T20_WICKET_SHARE_CAP
         _w = raw_weights.get("Wicket", 0.0)
         _other = max(0.0, total_weight - _w)
         _wcap = (_share / (1.0 - _share)) * _other
@@ -1795,6 +1833,19 @@ def calculate_outcome(
             "n": (_realism.get("node_meta") or {}).get("n"),
             "count_kind": (_realism.get("node_meta") or {}).get("count_kind"),
         }
+        # Opt-in per-delivery diagnostics (Fairness fix 8). Off by default and
+        # free when off: `enabled()` is one env read. When on, record every
+        # modifier stage, the pre/post distributions and the sampled outcome,
+        # and attach the same record to the result so a single delivery can be
+        # inspected in place. Any failure here must never affect the match.
+        if realism_diagnostics.enabled():
+            try:
+                _diag = realism_diagnostics.build_record(
+                    _realism, _realism["ctx"], raw_weights, sampled=chosen)
+                realism_diagnostics.record(_diag)
+                result["realism"]["diagnostics"] = _diag
+            except Exception:
+                logger.exception("realism diagnostics failed; ignoring")
 
     if chosen == "Wicket":
         result["type"] = "wicket"

@@ -22,6 +22,7 @@ import random
 from datetime import datetime
 
 from engine.ball_outcome import calculate_outcome
+from engine.realism import integration as realism_integration
 from engine.batter_confidence import maiden_pressure_hook
 from engine.pressure_engine import PressureEngine
 from engine.game_state_engine import (
@@ -597,9 +598,21 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
             bowler_effective = dict(bowler)
             bowler_effective["bowling_rating"] = bowler.get("bowling_rating", 40) * fatigue
 
-            # pitch_wear: fraction of balls bowled this innings
+            # Pitch wear. In realism mode this is MATCH-LONG, not per-innings:
+            # a T20 pitch is bowled on for 40 overs, and resetting wear to zero
+            # for the chase (which the old per-innings formula did) hands the
+            # chasing side a fresh square and makes the two innings mechanically
+            # interchangeable. engine.pitch_state.carry_wear spans innings 1
+            # across 0.0-0.5 and innings 2 across 0.5-1.0, and is keyed on the
+            # innings length so it is correct for any format. The legacy path
+            # keeps the per-innings fraction so its behaviour is unchanged.
+            # Requirement 7 of the Fairness & Simulation Fixes.
             total_balls = overs * 6
-            pitch_wear = min(1.0, legal_balls / max(1, total_balls))
+            if realism_integration.live_for(engine_fmt):
+                from engine import pitch_state as _ps
+                pitch_wear = _ps.carry_wear(innings_no, legal_balls, total_balls)
+            else:
+                pitch_wear = min(1.0, legal_balls / max(1, total_balls))
 
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_with_form,
@@ -811,7 +824,23 @@ def simulate_match(home_xi, away_xi, overs, pitch_type,
 
     teams_by_name = {home_name: home_xi, away_name: away_xi}
     if toss_winner not in teams_by_name:
-        toss_winner = home_name
+        # An unspecified toss is a coin spin, not a home-ground gift. The old
+        # default handed the toss — and with it first or second innings on the
+        # pitch's ideal_toss — to the home side every single time, a free and
+        # permanent structural edge to whichever team happened to be named
+        # first. Decide it from the match RNG instead, which is seeded by the
+        # caller, so a seeded /sim stays reproducible while being fair.
+        # Requirement 4 of the Fairness & Simulation Fixes.
+        #
+        # Gated on the realism flag so legacy mode is byte-identical by
+        # default (the prompt wants every correction behind the flag with the
+        # original engine as an immediate rollback). Rolls one RNG draw, so a
+        # seeded realism /sim stays reproducible.
+        from engine.realism import config as _rcfg
+        if _rcfg.realism_enabled():
+            toss_winner = random.choice([home_name, away_name])
+        else:
+            toss_winner = home_name
 
     if toss_decision is None:
         normalized_decision = str(pitch_meta.get("ideal_toss", "bat")).strip().lower()

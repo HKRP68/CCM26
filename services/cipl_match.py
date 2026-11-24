@@ -2299,8 +2299,20 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             # Anti-cascade: throttle the wicket weight once wickets have already
             # fallen in THIS over, so the recomputed momentum/collapse layers
             # can't stack into a 4-5 wicket over (see _make_wicket_cluster_hook).
-            wicket_hook = _make_wicket_cluster_hook(
-                state["total_wickets"] - wkts_before)
+            #
+            # OFF in realism mode (Fairness fix 5, measured). The throttle was
+            # built for the legacy engine, whose unbounded momentum/collapse
+            # layers could stack a 4-5 wicket over. The realism per-ball wicket
+            # is already bounded and calibrated to the real dismissal rate, and
+            # measured, the throttle then does the opposite of its name: it
+            # SUPPRESSES legitimate clustering. Real T20 has ~6-8% two-plus
+            # wicket overs; unthrottled realism produces ~5.8% (and only ~0.1%
+            # four-wicket overs, so no runaway), while the throttle cuts that
+            # to ~3.3% — flatter than a Poisson process, let alone real
+            # cricket's collapses. So realism keeps the real clustering.
+            wicket_hook = (None if _realism_live else
+                           _make_wicket_cluster_hook(
+                               state["total_wickets"] - wkts_before))
             # A little extra drama in the innings' final over (more boundaries /
             # late wickets), nudged up further when a live chase is on.
             # Still serves the 1st innings' final over and an already-decided

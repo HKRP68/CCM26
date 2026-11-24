@@ -4,43 +4,43 @@
   "_readme": "downstream_gain and rating_curve.normaliser are MEASURED, not chosen. Re-measure in this order after any change to the kept layers or the reference data: python -m tools.compare_realism --calibrate-curve --n 120 ; then --calibrate-gain --n 120. Iterate each until the printed ratios are ~1.00.",
   "downstream_gain": {
    "powerplay": {
-    "Dot": 0.8654,
-    "Single": 0.929,
+    "Dot": 0.926,
+    "Single": 0.864,
     "Double": 0.7075,
     "Three": 1.0865,
     "Four": 0.9982,
     "Six": 0.9955,
-    "Wicket": 0.9117,
+    "Wicket": 0.8625,
     "Extras": 0.9749
    },
    "middle": {
-    "Dot": 0.9277,
-    "Single": 0.915,
+    "Dot": 0.9926,
+    "Single": 0.851,
     "Double": 0.7038,
     "Three": 0.867,
     "Four": 0.7507,
     "Six": 0.7685,
-    "Wicket": 1.09,
+    "Wicket": 1.0312,
     "Extras": 0.8771
    },
    "death": {
-    "Dot": 0.8557,
-    "Single": 1.135,
+    "Dot": 0.9156,
+    "Single": 1.0555,
     "Double": 0.7677,
     "Three": 1.0848,
     "Four": 0.737,
     "Six": 0.5974,
-    "Wicket": 0.803,
+    "Wicket": 0.7597,
     "Extras": 0.5497
    },
    "default": {
-    "Dot": 0.9277,
-    "Single": 0.915,
+    "Dot": 0.9926,
+    "Single": 0.851,
     "Double": 0.7038,
     "Three": 0.867,
     "Four": 0.7507,
     "Six": 0.7685,
-    "Wicket": 1.09,
+    "Wicket": 1.0312,
     "Extras": 0.8771
    }
   }
@@ -48,34 +48,34 @@
  "rating_curve": {
   "normaliser": {
    "death": {
-    "Dot": 1.171,
-    "Single": 0.976,
-    "Double": 0.9421,
-    "Three": 0.9691,
-    "Four": 0.8715,
-    "Six": 0.8546,
-    "Wicket": 1.1953,
-    "Extras": 1.0918
+    "Dot": 1.1681,
+    "Single": 0.9764,
+    "Double": 0.9399,
+    "Three": 0.9685,
+    "Four": 0.8498,
+    "Six": 0.816,
+    "Wicket": 1.1942,
+    "Extras": 1.1019
    },
    "middle": {
-    "Dot": 1.0152,
-    "Single": 1.0005,
-    "Double": 1.0049,
-    "Three": 1.0015,
-    "Four": 1.0487,
-    "Six": 1.0869,
-    "Wicket": 1.0203,
-    "Extras": 0.9914
+    "Dot": 1.0329,
+    "Single": 0.9975,
+    "Double": 0.9933,
+    "Three": 0.9961,
+    "Four": 0.9935,
+    "Six": 1.0024,
+    "Wicket": 1.041,
+    "Extras": 0.9911
    },
    "powerplay": {
-    "Dot": 0.8769,
-    "Single": 1.0198,
-    "Double": 1.0633,
-    "Three": 1.0309,
-    "Four": 1.2514,
-    "Six": 1.3662,
-    "Wicket": 0.8597,
-    "Extras": 0.9884
+    "Dot": 0.9184,
+    "Single": 1.0125,
+    "Double": 1.04,
+    "Three": 1.0196,
+    "Four": 1.1534,
+    "Six": 1.2184,
+    "Wicket": 0.9065,
+    "Extras": 0.9894
    },
    "default": {
     "Dot": 1.0369,

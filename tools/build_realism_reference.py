@@ -196,6 +196,22 @@ DEFAULT_ERAS = {
 DEFAULT_COMPETITION = "ipl_modern"
 
 
+def _phase_for_fraction(frac):
+    """Phase bucket for a delivery, from engine.realism.phases when importable.
+
+    The builder runs offline and may be invoked without the package on the
+    path; the literal fallback is the SAME 0.30 / 0.80 split the central
+    module defines, so a reference built either way files deliveries under the
+    identical nodes the live engine looks up.
+    """
+    try:
+        from engine.realism import phases
+        return phases.phase_for_fraction(frac)
+    except Exception:
+        return ("powerplay" if frac < 0.30
+                else ("middle" if frac < 0.80 else "death"))
+
+
 # ==========================================================================
 # Mode 1: Cricsheet ball-by-ball ETL
 # ==========================================================================
@@ -321,8 +337,7 @@ def build_from_cricsheet(paths, format_name, era_map, min_year=None,
                 for d in over.get("deliveries") or []:
                     outcome = _delivery_outcome(d)
                     frac = min(0.999, legal / float(max(1, innings_balls)))
-                    phase = ("powerplay" if frac < 0.30
-                             else ("middle" if frac < 0.80 else "death"))
+                    phase = _phase_for_fraction(frac)
                     wb = "w0_2" if wkts <= 2 else ("w3_5" if wkts <= 5 else "w6_plus")
                     path = [format_name, comp, phase, inn_key, wb]
                     if inn_no == 2 and target:

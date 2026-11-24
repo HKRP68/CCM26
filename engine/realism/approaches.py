@@ -333,6 +333,21 @@ def mix_correction(baseline, cfg=None):
 
 def clear_cache():
     _MIX_CACHE.clear()
+    _MULT_CACHE.clear()
+
+
+_MULT_CACHE = {}
+_MULT_CACHE_MAX = 4096
+
+
+def _mult_cache_key(bat, bowl, baseline, bowler_rating, c):
+    # Mixed bowling's six suppression is the only place bowler_rating enters,
+    # and it is a 3-way bucket; everything else is discrete per node.
+    six_bucket = (2 if (bowler_rating or 0) >= 80
+                  else 1 if (bowler_rating or 0) >= 65 else 0)
+    return (_baseline_key(baseline), _norm_bat(bat), _norm_bowl(bowl),
+            six_bucket, round(float(c.get("approach_strength", 1.0)), 4),
+            round(float(c.get("approach_bound", 2.60)), 4))
 
 
 def multipliers(batting_approach, bowling_approach, baseline,
@@ -348,6 +363,17 @@ def multipliers(batting_approach, bowling_approach, baseline,
     bound = float(c.get("approach_bound", 2.60))
     if float(c.get("approach_strength", 1.0)) <= 0.0:
         return {o: 1.0 for o in OUTCOMES}
+
+    # The tilt solver below is iterative and now runs on every live delivery,
+    # so memoise it: the baseline is fixed per reference node and approaches
+    # are discrete, so a handful of distinct keys cover a whole match.
+    _ck = None
+    if not explain:
+        _ck = _mult_cache_key(batting_approach, bowling_approach, baseline,
+                              bowler_rating, c)
+        _hit = _MULT_CACHE.get(_ck)
+        if _hit is not None:
+            return dict(_hit)
 
     want = dict(targets(batting_approach, bowling_approach, cfg))
     fix = mix_correction(baseline, cfg)
@@ -374,6 +400,10 @@ def multipliers(batting_approach, bowling_approach, baseline,
     out = {o: max(1.0 / bound, min(bound, v)) for o, v in out.items()}
     if explain:
         return out, dict(info, targets=want)
+    if _ck is not None:
+        if len(_MULT_CACHE) >= _MULT_CACHE_MAX:
+            _MULT_CACHE.clear()
+        _MULT_CACHE[_ck] = dict(out)
     return out
 
 
