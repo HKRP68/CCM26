@@ -419,3 +419,137 @@ def compare_innings(state, *, last_n=3):
         "defending": str(defending),
         "last": last,
     }
+
+
+# ── live match intelligence ──────────────────────────────────────────────────
+
+def _calibrated_par_total(state):
+    """The calibrated expected first-innings total for this pitch & format,
+    scaled to the match's over count.  Returns ``(par, approximate)`` — ``par``
+    is ``None`` when no calibrated curve is available.
+
+    Drawn from the format par curve (``engine.format_config``) at the match's
+    full length, times the pitch's par factor; the pitch's calibrated par band
+    (``scoring_dynamics``) refines it to the band midpoint when present.  No
+    historical average is invented: without calibrated data this returns
+    ``(None, True)`` and the caller labels any fallback approximate.
+    """
+    innings_balls = _total_balls(state)
+    fmt = _format_config(innings_balls)
+    curve = getattr(fmt, "par_scores", None) if fmt else None
+    native = getattr(fmt, "overs", None) if fmt else None
+    if not curve or not native:
+        return None, True
+    factor = fmt.pitch_par_factors.get(state.get("pitch_type"), 1.0)
+    over_pos_end = innings_balls / 6.0
+    par = _par_at(curve, native, over_pos_end) * factor
+    full_par = curve[native] * factor
+    band = _pitch_band(state.get("pitch_type"))
+    approximate = band is None
+    if band and "par_low" in band and "par_high" in band and full_par:
+        # Refine with the pitch's calibrated band midpoint, scaled to length.
+        length_scale = par / full_par if full_par else 1.0
+        par = (band["par_low"] + band["par_high"]) / 2.0 * length_scale
+    return int(round(par)), approximate
+
+
+def par_outlook(state):
+    """First-innings par score, projection and outlook for the live card.
+
+    Returns ``None`` outside a live first innings (or before a ball is bowled).
+    Dict shape::
+
+        {"par": int, "projected": int,
+         "outlook": "Above Par" | "On Par" | "Below Par",
+         "approximate": bool}
+
+    ``outlook`` compares the projection against the calibrated par total, so it
+    reads the same way the two numbers shown do.  ``approximate`` is True when
+    the projection or the par figure fell back off calibrated data.
+    """
+    proj = project_first_innings(state)
+    if not proj or proj.get("complete"):
+        return None
+    par, par_approx = _calibrated_par_total(state)
+    if par is None:
+        return None
+    projected = proj["expected"]
+    thr = max(4, int(round(0.03 * par)))
+    if projected > par + thr:
+        outlook = "Above Par"
+    elif projected < par - thr:
+        outlook = "Below Par"
+    else:
+        outlook = "On Par"
+    return {"par": par, "projected": projected, "outlook": outlook,
+            "approximate": bool(proj.get("approximate") or par_approx)}
+
+
+def rrr_trend(state, *, back=3):
+    """How the required run rate has moved over the last ``back`` completed overs.
+
+    Second innings only.  Returns ``None`` when there is no live chase or fewer
+    than ``back`` completed overs exist (nothing to trend).  Dict shape::
+
+        {"then": float, "now": float, "delta": float,
+         "direction": "rising" | "falling" | "flat", "overs": int}
+
+    ``direction`` describes chase pressure: a required rate that has climbed is
+    ``rising`` (pressure building on the chasing side); one that has dropped is
+    ``falling`` (pressure easing).  All figures come from the recorded over
+    history and the real target — nothing is invented.
+    """
+    if not state or int(state.get("innings", 0) or 0) != 2:
+        return None
+    target = state.get("target")
+    if not target:
+        return None
+    bpu = _bpu(state)
+    innings_balls = _total_balls(state)
+    over_runs = list(state.get("over_runs") or [])
+    completed = min(len(over_runs), _balls_bowled(state) // bpu)
+    if completed < back:
+        return None
+
+    def _rrr(runs_scored, balls_bowled_then):
+        runs_needed = int(target) - int(runs_scored)
+        balls_left = innings_balls - balls_bowled_then
+        if balls_left <= 0:
+            return None
+        return max(0.0, runs_needed * 6.0 / balls_left)
+
+    now = _rrr(sum(int(r or 0) for r in over_runs[:completed]), completed * bpu)
+    then_stage = completed - back
+    then = _rrr(sum(int(r or 0) for r in over_runs[:then_stage]), then_stage * bpu)
+    if now is None or then is None:
+        return None
+    delta = now - then
+    direction = "rising" if delta > 0.05 else "falling" if delta < -0.05 else "flat"
+    return {"then": round(then, 2), "now": round(now, 2),
+            "delta": round(delta, 2), "direction": direction, "overs": back}
+
+
+def chase_win_chance(state):
+    """The chasing side's win probability (%) from CCM26's existing chase model,
+    or ``None`` when no valid live estimate applies.
+
+    A thin read-only wrapper over :func:`services.cipl_match.chase_chance_now`
+    (the same model that steers the simulation), so this never computes a second
+    opinion and never influences the result.
+    """
+    if not state or int(state.get("innings", 0) or 0) != 2:
+        return None
+    try:
+        from services import cipl_match
+        info = cipl_match.chase_chance_now(state)
+    except Exception:
+        return None
+    if not info:
+        return None
+    pct = info.get("chasing_chance")
+    if pct is None:
+        return None
+    try:
+        return int(round(pct))
+    except (TypeError, ValueError):
+        return None

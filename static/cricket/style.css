@@ -2282,6 +2282,34 @@ body {
 .mh-leg-dot.inn1-dot { background: #e5384d; }
 .mh-leg-dot.inn2-dot { background: #3b82f6; }
 
+/* Cumulative-score comparison worm (reuses the Manhattan legend colours) */
+.cum-chart-wrap { margin-top: 10px; }
+.cum-title {
+  font-size: 0.68rem;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
+.cum-svg {
+  width: 100%;
+  height: 90px;
+  display: block;
+  overflow: visible;
+}
+.cum-line {
+  fill: none;
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.cum-line.cum-inn1 { stroke: #e5384d; }
+.cum-line.cum-inn2 { stroke: #3b82f6; }
+.cum-dot { vector-effect: non-scaling-stroke; }
+.cum-dot.cum-inn1 { fill: #e5384d; }
+.cum-dot.cum-inn2 { fill: #3b82f6; }
+
 .mh-chart {
   display: flex;
   align-items: flex-end;
@@ -2822,6 +2850,108 @@ body {
   font-weight: 700;
   font-size: 0.9rem;
 }
+
+/* Super Over — full scorecards + ball-by-ball commentary (View Match) */
+.so-round-title {
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 1px;
+  color: #ffb3b3;
+  opacity: 0.9;
+  margin: 8px 0 4px;
+}
+details.so-innings {
+  border: 1px solid rgba(255, 92, 92, 0.28);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
+  margin: 4px 0;
+  overflow: hidden;
+}
+details.so-innings > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 0.84rem;
+}
+details.so-innings > summary::-webkit-details-marker { display: none; }
+details.so-innings > summary::after {
+  content: '▾';
+  margin-left: auto;
+  opacity: 0.7;
+  transition: transform 0.15s ease;
+}
+details.so-innings[open] > summary::after { transform: rotate(180deg); }
+.so-inn-label { font-weight: 700; color: #ff8a8a; }
+.so-inn-score { font-weight: 700; text-align: right; }
+.so-innings-body { padding: 4px 10px 10px; }
+table.so-card-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  margin: 4px 0 8px;
+}
+table.so-card-table th,
+table.so-card-table td {
+  padding: 3px 4px;
+  text-align: right;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+table.so-card-table th:first-child,
+table.so-card-table td:first-child { text-align: left; }
+table.so-card-table th { color: #ff8a8a; font-weight: 600; opacity: 0.85; }
+.so-how { font-size: 0.68rem; opacity: 0.6; }
+.so-commentary { display: flex; flex-direction: column; gap: 3px; }
+.so-ball {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 0.8rem;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.so-ball-num {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  opacity: 0.85;
+  min-width: 2.2em;
+}
+.so-ball-text { flex: 1 1 auto; line-height: 1.3; }
+.so-badge {
+  flex: 0 0 auto;
+  font-size: 0.64rem;
+  font-weight: 700;
+  padding: 0 5px;
+  border-radius: 6px;
+  line-height: 1.5;
+}
+.so-badge-w { background: #c0392b; color: #fff; }
+.so-badge-six { background: #8e44ad; color: #fff; }
+.so-badge-four { background: #2e86de; color: #fff; }
+.so-badge-ex { background: rgba(255,255,255,0.18); color: #fff; }
+.so-badge-fh { background: #f39c12; color: #1a1a1a; }
+.so-unavailable { opacity: 0.6; font-style: italic; font-size: 0.8rem; }
+.so-turning-title {
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 1px;
+  margin: 8px 0 4px;
+  color: #ffb3b3;
+}
+.so-turn {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 0.78rem;
+  padding: 2px 0;
+}
+.so-turn-ball { flex: 0 0 auto; font-weight: 700; min-width: 2.6em; opacity: 0.85; }
+.so-turn-text { flex: 1 1 auto; }
+.so-turn-score { flex: 0 0 auto; opacity: 0.7; }
 
 /* ═══════════════════════════════════════════════════════════════
    Over-by-over "Approach" play (approach.js) — /lpbot, /ciplbot

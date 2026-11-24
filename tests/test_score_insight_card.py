@@ -77,7 +77,7 @@ class ProjectionCardTests(unittest.TestCase, BlockTreeAssertions):
 
         html_card = cp._approach_card(s)
         self.assertIn("📊 <b>PROJECTED SCORE</b>", html_card)
-        self.assertIn(f"Expected: <b>{proj['expected']}</b>", html_card)
+        self.assertIn(f"Projected: <b>{proj['expected']}</b>", html_card)
         self.assertIn("illustrative, not fixed values", html_card)
         if proj["low"] is not None:
             self.assertIn(f"Likely range: {proj['low']}–{proj['high']}", html_card)
@@ -96,12 +96,35 @@ class ProjectionCardTests(unittest.TestCase, BlockTreeAssertions):
     def test_projection_updates_after_an_over(self):
         s = _first_innings(6)
         first = sp.project_first_innings(s)["expected"]
-        self.assertIn(f"Expected: <b>{first}</b>", cp._approach_card(s))
+        self.assertIn(f"Projected: <b>{first}</b>", cp._approach_card(s))
         for _ in range(4):
             _play_over(s, "aggressive")
         s["current_bowler"] = cm.eligible_bowlers(s)[0]
         later = sp.project_first_innings(s)["expected"]
-        self.assertIn(f"Expected: <b>{later}</b>", cp._approach_card(s))
+        self.assertIn(f"Projected: <b>{later}</b>", cp._approach_card(s))
+
+    def test_par_score_and_outlook_shown(self):
+        s = _first_innings(10)
+        outlook = sp.par_outlook(s)
+        self.assertIsNotNone(outlook)
+        card = cp._approach_card(s)
+        self.assertIn(f"Par Score: <b>{outlook['par']}</b>", card)
+        self.assertIn(f"Current outlook: <b>{outlook['outlook']}</b>", card)
+        text = flatten(cp._approach_card_blocks(s))
+        self.assertIn("Par Score", text)
+        self.assertIn(outlook["outlook"], text)
+
+    def test_rrr_trend_and_chase_chance_shown(self):
+        s = _second_innings(8)
+        card = cp._approach_card(s)
+        trend = sp.rrr_trend(s)
+        if trend:
+            self.assertIn("RRR:", card)
+            self.assertIn(f"{trend['then']:.2f}", card)
+            self.assertIn(f"{trend['now']:.2f}", card)
+        chance = sp.chase_win_chance(s)
+        if chance is not None:
+            self.assertIn(f"Chase Chance:</b> {chance}%", card)
 
     def test_comparison_in_html_and_rich(self):
         s = _second_innings(12)

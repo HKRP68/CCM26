@@ -246,5 +246,96 @@ class SecondInningsComparisonTests(unittest.TestCase):
         self.assertEqual(comp["unit_word"], "set")
 
 
+# ── live match intelligence (par outlook / RRR trend / chase chance) ──────────
+
+class ParOutlookTests(unittest.TestCase):
+
+    def test_none_outside_first_innings(self):
+        self.assertIsNone(sp.par_outlook(_inn1(50, 1, 6)) and None)  # sanity
+        s = _inn1(108, 3, 13)
+        s["innings"] = 2
+        self.assertIsNone(sp.par_outlook(s))
+
+    def test_par_projected_and_outlook(self):
+        out = sp.par_outlook(_inn1(108, 3, 13, pitch="Even"))
+        self.assertIsNotNone(out)
+        self.assertIn(out["outlook"], ("Above Par", "On Par", "Below Par"))
+        self.assertGreater(out["par"], 0)
+        self.assertEqual(out["projected"],
+                         sp.project_first_innings(_inn1(108, 3, 13, pitch="Even"))["expected"])
+
+    def test_outlook_direction_follows_projection_vs_par(self):
+        # A flying start on a low-scoring deck projects above that deck's par.
+        hot = sp.par_outlook(_inn1(90, 0, 7, pitch="Dusty"))
+        self.assertEqual(hot["outlook"], "Above Par")
+        # A crawl on a high-scoring deck projects below par.
+        cold = sp.par_outlook(_inn1(30, 4, 9, pitch="Flat"))
+        self.assertEqual(cold["outlook"], "Below Par")
+
+    def test_none_when_complete(self):
+        self.assertIsNone(sp.par_outlook(_inn1(150, 10, 18)))
+
+
+class RrrTrendTests(unittest.TestCase):
+
+    def _chase(self, over_runs, over, target=187):
+        return {"innings": 2, "overs": 20, "ball_format": "T20",
+                "current_over": over, "current_ball": 0, "target": target,
+                "over_runs": list(over_runs)}
+
+    def test_none_before_enough_overs(self):
+        self.assertIsNone(sp.rrr_trend(self._chase([9, 10], over=3)))
+
+    def test_falling_when_runs_flow(self):
+        # Heavy scoring in the last 3 overs drops the required rate.
+        t = sp.rrr_trend(self._chase([6, 6, 6, 20, 20, 20], over=7))
+        self.assertIsNotNone(t)
+        self.assertLess(t["now"], t["then"])
+        self.assertEqual(t["direction"], "falling")
+
+    def test_rising_when_runs_dry_up(self):
+        t = sp.rrr_trend(self._chase([20, 20, 20, 2, 2, 2], over=7))
+        self.assertGreater(t["now"], t["then"])
+        self.assertEqual(t["direction"], "rising")
+
+    def test_none_without_target(self):
+        s = self._chase([9, 10, 11, 12], over=5)
+        s["target"] = None
+        self.assertIsNone(sp.rrr_trend(s))
+
+    def test_the_hundred_uses_set_accounting(self):
+        # 5-ball sets, 100-ball innings; 6 sets done, trend over last 3.
+        s = {"innings": 2, "overs": 20, "ball_format": "The100",
+             "current_over": 7, "current_ball": 0, "target": 121,
+             "over_runs": [5, 6, 5, 9, 10, 11]}
+        t = sp.rrr_trend(s)
+        self.assertIsNotNone(t)
+        self.assertEqual(t["overs"], 3)
+
+
+class ChaseWinChanceTests(unittest.TestCase):
+
+    def test_none_outside_second_innings(self):
+        self.assertIsNone(sp.chase_win_chance(_inn1(50, 1, 6)))
+
+    def test_delegates_to_model(self):
+        import unittest.mock as mock
+        from services import cipl_match
+        s = {"innings": 2, "target": 150, "total_runs": 80, "total_wickets": 2,
+             "overs": 20, "ball_format": "T20", "current_over": 13, "current_ball": 0}
+        with mock.patch.object(cipl_match, "chase_chance_now",
+                               return_value={"chasing_chance": 43,
+                                             "defending_chance": 57}):
+            self.assertEqual(sp.chase_win_chance(s), 43)
+
+    def test_none_when_model_returns_none(self):
+        import unittest.mock as mock
+        from services import cipl_match
+        s = {"innings": 2, "target": 150, "total_runs": 80, "total_wickets": 2,
+             "overs": 20, "ball_format": "T20", "current_over": 13, "current_ball": 0}
+        with mock.patch.object(cipl_match, "chase_chance_now", return_value=None):
+            self.assertIsNone(sp.chase_win_chance(s))
+
+
 if __name__ == "__main__":
     unittest.main()

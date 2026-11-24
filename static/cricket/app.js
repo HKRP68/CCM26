@@ -2764,6 +2764,121 @@ function renderPostMatchCoaching(coaching) {
   }
 }
 
+// ==SUPER_OVER_RENDER_START==
+// Pure helpers for the View Match → result screen Super Over block. No DOM or
+// module globals are touched, so they can be unit-tested in isolation. Every
+// value that originates from match data (team / player names, commentary,
+// winner, margin text, turning points) is escaped before it enters the markup.
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function soBallRow(d) {
+  const num = escapeHtml(d.ball || '');
+  // The stored commentary IS the real match output; never fabricate one.
+  const text = escapeHtml(d.commentary || (`${d.runs || 0} run(s)`));
+  let badge = '';
+  if (d.wicket) badge = '<span class="so-badge so-badge-w">W</span>';
+  else if (Number(d.runs) === 6) badge = '<span class="so-badge so-badge-six">6</span>';
+  else if (Number(d.runs) === 4) badge = '<span class="so-badge so-badge-four">4</span>';
+  else if (d.extra) badge = `<span class="so-badge so-badge-ex">${escapeHtml(String(d.extra))}</span>`;
+  const fh = d.freeHit ? '<span class="so-badge so-badge-fh">FH</span>' : '';
+  return `<div class="so-ball"><span class="so-ball-num">${num}</span>${badge}${fh}` +
+         `<span class="so-ball-text">${text}</span></div>`;
+}
+
+function soBattingTable(rows) {
+  if (!Array.isArray(rows) || !rows.length) return '';
+  let h = '<table class="so-card-table"><thead><tr><th>Batter</th><th>R</th><th>B</th>' +
+          '<th>4s</th><th>6s</th></tr></thead><tbody>';
+  rows.forEach(b => {
+    const how = b.out ? escapeHtml(b.how_out || 'out') : 'not out';
+    h += `<tr><td>${escapeHtml(b.name)} <span class="so-how">${how}</span></td>` +
+         `<td>${b.runs | 0}</td><td>${b.balls | 0}</td>` +
+         `<td>${b.fours | 0}</td><td>${b.sixes | 0}</td></tr>`;
+  });
+  return h + '</tbody></table>';
+}
+
+function soBowlingTable(rows) {
+  if (!Array.isArray(rows) || !rows.length) return '';
+  let h = '<table class="so-card-table"><thead><tr><th>Bowler</th><th>O</th><th>R</th>' +
+          '<th>W</th></tr></thead><tbody>';
+  rows.forEach(w => {
+    h += `<tr><td>${escapeHtml(w.name)}</td><td>${escapeHtml(String(w.overs || '0.0'))}</td>` +
+         `<td>${w.runs | 0}</td><td>${w.wickets | 0}</td></tr>`;
+  });
+  return h + '</tbody></table>';
+}
+
+function soInningsBlock(inn, idxInRound) {
+  const team = escapeHtml(inn.team || '');
+  const score = `${inn.runs | 0}/${inn.wickets | 0}`;
+  const overs = inn.overs ? ` (${escapeHtml(String(inn.overs))})` : '';
+  const label = `Super Over Innings ${idxInRound}`;
+  const dels = Array.isArray(inn.deliveries) ? inn.deliveries : [];
+  let body = soBattingTable(inn.batting) + soBowlingTable(inn.bowling);
+  if (dels.length) {
+    body += '<div class="so-commentary">' + dels.map(soBallRow).join('') + '</div>';
+  } else {
+    // Old matches archived with totals only: never invent commentary.
+    body += '<div class="so-commentary so-unavailable">Commentary unavailable</div>';
+  }
+  return `<details class="so-innings"><summary>` +
+         `<span class="so-inn-label">${escapeHtml(label)}</span>` +
+         `<span class="so-inn-score">${team} ${score}${overs}</span></summary>` +
+         `<div class="so-innings-body">${body}</div></details>`;
+}
+
+function buildSuperOverHtml(so) {
+  const inns = (so && Array.isArray(so.innings)) ? so.innings : [];
+  if (!inns.length) return '';
+  const order = [];
+  const byRound = {};
+  inns.forEach(inn => {
+    const r = Number(inn.round || 1);
+    if (!byRound[r]) { byRound[r] = []; order.push(r); }
+    byRound[r].push(inn);
+  });
+  let html = '<div class="result-super-over-title">🔥 SUPER OVER</div>';
+  order.forEach(r => {
+    html += `<div class="so-round-title">ROUND ${escapeHtml(String(r))}</div>`;
+    byRound[r].forEach((inn, i) => { html += soInningsBlock(inn, i + 1); });
+  });
+  if (so && so.winner) {
+    html += `<div class="result-super-over-win">🏆 ${escapeHtml(so.winner)} won the match` +
+            `${so.marginText ? ' ' + escapeHtml(so.marginText) : ''}</div>`;
+  }
+  const tps = (so && Array.isArray(so.turningPoints)) ? so.turningPoints : [];
+  if (tps.length) {
+    html += '<div class="so-turning-title">🎬 Turning points</div><div class="so-turning">';
+    html += tps.map(p => {
+      const multi = order.length > 1;
+      const rtag = multi ? `R${escapeHtml(String(p.round || 1))} ` : '';
+      return `<div class="so-turn"><span class="so-turn-ball">${rtag}${escapeHtml(String(p.ball || ''))}</span>` +
+             `<span class="so-turn-text">${soTurnIcon(p.kind)}${escapeHtml(String(p.text || ''))}</span>` +
+             `<span class="so-turn-score">${escapeHtml(String(p.team || ''))} ${escapeHtml(String(p.score || ''))}</span></div>`;
+    }).join('');
+    html += '</div>';
+  }
+  return html;
+}
+
+function soTurnIcon(kind) {
+  // Badge a recorded turning point by what actually happened on the ball.
+  const map = {
+    winning_boundary: '🏆 ', winning_runs: '🏆 ', wicket: '🎯 ',
+    six: '🔥 ', four: '💥 ', drop: '🧤 ', reprieve: '🙌 ', dot: '🧱 ',
+  };
+  return map[kind] || '⭐ ';
+}
+// ==SUPER_OVER_RENDER_END==
+
 function renderResultScreen() {
   const overlay = document.getElementById('result-overlay');
   overlay.classList.remove('hidden');
@@ -2807,18 +2922,26 @@ function renderResultScreen() {
     const so = matchState.superOver || result?.superOver;
     const soInns = so && Array.isArray(so.innings) ? so.innings : [];
     if (soInns.length) {
-      let html = '<div class="result-super-over-title">🔥 SUPER OVER</div>';
-      soInns.forEach((s, i) => {
-        const label = s.label || `Super Over Innings ${i + 1}`;
-        const team = s.team ? `${s.team} ` : '';
-        html += `<div class="result-super-over-row"><span>${label}</span>` +
-                `<span>${team}${s.runs}/${s.wickets}</span></div>`;
-      });
-      if (so.winner) {
-        html += `<div class="result-super-over-win">🏆 ${so.winner} won the match` +
-                `${so.marginText ? ' ' + so.marginText : ''}</div>`;
+      try {
+        // Full Super Over: per-round collapsible innings with batting/bowling
+        // stats, ball-by-ball commentary and turning points (all escaped).
+        soEl.innerHTML = buildSuperOverHtml(so);
+      } catch (e) {
+        // Defensive fallback to the compact totals view if anything in the
+        // richer render throws — the result screen must still show the result.
+        let html = '<div class="result-super-over-title">🔥 SUPER OVER</div>';
+        soInns.forEach((s, i) => {
+          const label = escapeHtml(s.label || `Super Over Innings ${i + 1}`);
+          const team = s.team ? `${escapeHtml(s.team)} ` : '';
+          html += `<div class="result-super-over-row"><span>${label}</span>` +
+                  `<span>${team}${s.runs | 0}/${s.wickets | 0}</span></div>`;
+        });
+        if (so.winner) {
+          html += `<div class="result-super-over-win">🏆 ${escapeHtml(so.winner)} won the match` +
+                  `${so.marginText ? ' ' + escapeHtml(so.marginText) : ''}</div>`;
+        }
+        soEl.innerHTML = html;
       }
-      soEl.innerHTML = html;
       soEl.classList.remove('hidden');
     } else {
       soEl.classList.add('hidden');
@@ -3094,6 +3217,54 @@ async function runAutoplayAction() {
   }
 }
 
+// ==CUMULATIVE_CHART_START==
+// Cumulative-score comparison worm for the scorecard tab. Pure (no DOM/global
+// state) so it can be unit-tested; it reuses the over-by-over run arrays the
+// Manhattan chart already consumes, plotting each innings' running total
+// against completed overs/sets (so it is correct for The Hundred too).
+function cumulativeSeries(overRuns) {
+  const out = [];
+  let total = 0;
+  (Array.isArray(overRuns) ? overRuns : []).forEach(r => {
+    total += Number(r || 0);
+    out.push(total);
+  });
+  return out;
+}
+
+function buildCumulativeChart(inn1OverRuns, inn2OverRuns, name1, name2, unitLabel) {
+  const c1 = cumulativeSeries(inn1OverRuns);
+  const c2 = cumulativeSeries(inn2OverRuns);
+  const n = Math.max(c1.length, c2.length);
+  if (n === 0) return '';
+  const maxCum = Math.max(c1[c1.length - 1] || 0, c2[c2.length - 1] || 0, 1);
+  const W = 100, H = 60;
+  const x = i => (n <= 1 ? 0 : (i / (n - 1)) * W);
+  const y = v => H - (v / maxCum) * H;
+  const poly = c => c.map((v, i) => `${x(i).toFixed(2)},${y(v).toFixed(2)}`).join(' ');
+  const dot = (c, cls) => (c.length
+    ? `<circle class="${cls}" cx="${x(c.length - 1).toFixed(2)}" cy="${y(c[c.length - 1]).toFixed(2)}" r="1.6" />`
+    : '');
+  const line1 = c1.length ? `<polyline class="cum-line cum-inn1" points="${poly(c1)}" />` : '';
+  const line2 = c2.length ? `<polyline class="cum-line cum-inn2" points="${poly(c2)}" />` : '';
+  const unit = escapeHtml(unitLabel || 'overs');
+  const n1 = escapeHtml(String(name1 || 'Inn 1')).substring(0, 10);
+  const n2 = escapeHtml(String(name2 || 'Inn 2')).substring(0, 10);
+  const end1 = c1.length ? ` ${c1[c1.length - 1]}` : '';
+  const end2 = c2.length ? ` ${c2[c2.length - 1]}` : '';
+  return `<div class="cum-chart-wrap">
+      <div class="cum-title">Cumulative runs · by ${unit}</div>
+      <svg class="cum-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+        ${line1}${line2}${dot(c1, 'cum-dot cum-inn1')}${dot(c2, 'cum-dot cum-inn2')}
+      </svg>
+      <div class="mh-legend">
+        <span class="mh-leg-dot inn1-dot"></span><span>${n1}${end1}</span>
+        <span class="mh-leg-dot inn2-dot" style="margin-left:12px"></span><span>${n2}${end2}</span>
+      </div>
+    </div>`;
+}
+// ==CUMULATIVE_CHART_END==
+
 // Manhattan Bar Chart (over-by-over runs)
 function renderManhattanChart() {
   const container = document.getElementById('manhattan-chart-container');
@@ -3133,12 +3304,14 @@ function renderManhattanChart() {
   const hostName = matchState.host ? (matchState.host.teamName || 'Host') : 'Inn 1';
   const guestName = matchState.guest ? (matchState.guest.teamName || 'Guest') : 'Inn 2';
 
+  const unitLabel = isHundredFormat() ? 'sets' : 'overs';
   container.innerHTML = `
     <div class="mh-legend">
       <span class="mh-leg-dot inn1-dot"></span><span>${hostName.substring(0,8)}</span>
       <span class="mh-leg-dot inn2-dot" style="margin-left:12px"></span><span>${guestName.substring(0,8)}</span>
     </div>
     <div class="mh-chart">${bars}</div>
+    ${buildCumulativeChart(inn1, inn2, hostName, guestName, unitLabel)}
   `;
 }
 

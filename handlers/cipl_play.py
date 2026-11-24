@@ -4911,18 +4911,28 @@ def _score_insight_lines(state):
     return []
 
 
+_RRR_TREND_ICON = {"rising": "📈", "falling": "📉", "flat": "➡️"}
+_RRR_TREND_WORD = {"rising": "pressure rising", "falling": "pressure easing",
+                   "flat": "holding steady"}
+
+
 def _projection_lines_html(state):
     proj = score_projection.project_first_innings(state)
     if not proj or proj.get("complete"):
         return []
     expected = proj["expected"]
+    outlook = score_projection.par_outlook(state)
     lines = ["📊 <b>PROJECTED SCORE</b>"]
+    if outlook:
+        lines.append(f"Par Score: <b>{outlook['par']}</b>")
     if proj.get("approximate"):
-        lines.append(f"Expected: <b>~{expected}</b> <i>(approx)</i>")
+        lines.append(f"Projected: <b>~{expected}</b> <i>(approx)</i>")
     else:
-        lines.append(f"Expected: <b>{expected}</b>")
+        lines.append(f"Projected: <b>{expected}</b>")
     if proj.get("low") is not None and proj.get("high") is not None:
         lines.append(f"Likely range: {proj['low']}–{proj['high']}")
+    if outlook:
+        lines.append(f"Current outlook: <b>{html.escape(outlook['outlook'])}</b>")
     lines.append(f"<i>{_PROJ_DISCLAIMER}</i>")
     return lines
 
@@ -4952,6 +4962,15 @@ def _comparison_lines_html(state):
             f"{html.escape(i1['name'])}: {last['inn1']} runs",
             f"{html.escape(i2['name'])}: {last['inn2']} runs",
         ]
+    trend = score_projection.rrr_trend(state)
+    if trend:
+        icon = _RRR_TREND_ICON.get(trend["direction"], "➡️")
+        word = _RRR_TREND_WORD.get(trend["direction"], "")
+        lines.append(f"{icon} <b>RRR:</b> {trend['then']:.2f} → {trend['now']:.2f}"
+                     + (f" <i>({word})</i>" if word else ""))
+    chance = score_projection.chase_win_chance(state)
+    if chance is not None:
+        lines.append(f"🏆 <b>Chase Chance:</b> {chance}%")
     return lines
 
 
@@ -4979,9 +4998,15 @@ def _projection_blocks(state):
     else:
         head = R.pullquote(["📊 Projected ", R.bold(str(expected))])
     blocks = [head]
+    outlook = score_projection.par_outlook(state)
+    if outlook:
+        blocks.append(R.paragraph(["📊 Par Score  ", R.bold(str(outlook["par"]))]))
     if proj.get("low") is not None and proj.get("high") is not None:
         blocks.append(R.paragraph(["Likely range  ",
                                    R.bold(f"{proj['low']}–{proj['high']}")]))
+    if outlook:
+        blocks.append(R.paragraph(["Current outlook  ",
+                                   R.bold(outlook["outlook"])]))
     blocks.append(R.paragraph([R.italic(_PROJ_DISCLAIMER)]))
     return blocks
 
@@ -5012,6 +5037,19 @@ def _comparison_blocks(state):
             [R.cell(i2["name"]), R.cell(R.bold(f"{last['inn2']} runs"),
                                         align="right")],
         ], bordered=True, compact=True))
+    trend = score_projection.rrr_trend(state)
+    if trend:
+        icon = _RRR_TREND_ICON.get(trend["direction"], "➡️")
+        word = _RRR_TREND_WORD.get(trend["direction"], "")
+        line = [f"{icon} ", R.bold("RRR"),
+                f"  {trend['then']:.2f} → {trend['now']:.2f}"]
+        if word:
+            line.append(R.italic(f"  ({word})"))
+        blocks.append(R.paragraph(line))
+    chance = score_projection.chase_win_chance(state)
+    if chance is not None:
+        blocks.append(R.paragraph(["🏆 ", R.bold("Chase Chance"),
+                                   f"  {chance}%"]))
     return blocks
 
 
