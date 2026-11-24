@@ -11,7 +11,8 @@ rating, Bowling style, Bowling rating and Overall rating.
 | 1 | Delivery accounting | Byes tracked as their own extra in realism; innings total reconciles to `Σ batter runs + extras_total` | Done |
 | 2 | Bowler identity | Quota / fatigue / last-bowler lock keyed on a stable id, not the name | Done |
 | 3 | Deterministic simulation | One seeded RNG per match; seed + engine version kept as metadata | Done |
-| 4–5 | Individual innings & fielding realism | — | Pending |
+| 4 | Individual innings realism | Early-innings vulnerability, settling, milestone risk and acceleration — all from live match state, mean-neutral | Done |
+| 5 | Fielding realism | Drops / misfields / run-outs scaled by a single team-level `fielding_quality`, no per-fielder attribute | Done |
 | 6–7 | Tactical-AI parity & fairness reports | — | Pending |
 
 ## Fix 1 — Delivery accounting
@@ -92,6 +93,75 @@ matches.
 
 The isolation test (global churn → identical result) also confirms that in
 realism-live mode the funnel is the sole source of per-delivery randomness.
+
+## Fix 4 — Individual innings realism
+
+A batter's innings is shaped **only** by live match state — balls faced and
+runs scored this innings — never by a stored or hidden player attribute. Two
+cards with the same ratings on the same score and ball count are treated
+identically. Each layer is **mean-neutral by construction** (`_solve_neutral_band`
+pins the share-weighted mean of every column to 1.0), so shaping an individual
+innings never moves the team total off its measured anchor.
+
+* **Early-innings vulnerability & settling** — `conditions.wicket_pressure_multipliers`,
+  keyed on balls faced: a new batter is more likely to be dismissed and scores
+  slower; a set batter correspondingly less so. The curve is mean-neutral over
+  the measured balls-faced band shares (the 7+-down excess is carried as a
+  separate, separately-neutralised tail factor).
+* **Milestone risk (the century cap)** — `conditions.milestone_multipliers`,
+  keyed on runs scored. **Wicket-only**: it raises dismissal risk as a batter
+  climbs (1.0 → 2.20 across the bands) but leaves every scoring row at 1.0, so
+  there is no scoring→higher-band→more-scoring feedback loop. This is what stops
+  a set batter running away to a hundred without touching the team total.
+* **Acceleration & strike rotation** — carried by the settling curve (keyed on
+  balls faced, a quantity nothing in the model can inflate) and by the phase
+  baseline, which already encodes the real single/double/boundary split per
+  phase. No extra layer or attribute is needed.
+
+Invariants verified in `tests/test_realism_individual_fielding.py`: new batter
+more vulnerable than a set one; settling share-weighted wicket mean ≈ 1.0;
+milestone risk monotone in runs, scoring rows untouched, share-weighted wicket
+mean = 1.0 (±0.005).
+
+**Measured distribution** (`compare_realism --n 60 --pitch Even`, realism arm,
+120 innings):
+
+| metric | realism | reference |
+|--------|--------:|----------:|
+| 50s / innings | 1.09 | 0.75 (prior) |
+| 100s / innings | 0.083 | 0.035 (prior) |
+| median individual score | 12.0 | — |
+| wickets / innings | 6.29 | 6.35 (measured) |
+
+The mechanism is in place and mean-neutral (wickets/innings sits on its anchor,
+confirming the team total is undisturbed). The century **conversion** still runs
+above the real reference in this high-scoring test configuration (strong XIs,
+Even pitch); because the milestone family is mean-neutral, tightening it would
+curb centuries without moving the total, but that recalibration needs a
+large-n run (n ≥ 300 for stable century estimates) and is flagged for a
+dedicated calibration pass rather than tuned here on a noisy n=60 sample.
+
+## Fix 5 — Fielding realism
+
+Drops, misfields and run-outs are a **team-level** effect. The only fielding
+input to `calculate_outcome` is the scalar `fielding_quality` (plus the pressure
+`drop_mult` / `misfield_mult` the chasing-pressure layer raises); there is no
+per-fielder attribute anywhere, in keeping with the database constraint. A
+weaker side drops more, and a side under pressure drops more.
+
+Measured drop rate (share of all deliveries converted from a catch to runs,
+strong bowler vs weak batter so chances are frequent):
+
+| team fielding_quality | drop rate | under 2× pressure |
+|----------------------:|----------:|------------------:|
+| 30 (poor) | 0.90% | — |
+| 60 (average) | 0.65% | 0.92% |
+| 95 (elite) | 0.30% | — |
+
+Per *chance*, that is a ~16% drop for a poor side down to ~4% for an elite one —
+realistic, and monotone in quality. With no `fielding_quality` supplied the drop
+path is inert (the engine never invents a fallback attribute). Verified in
+`FieldingRealismTests`.
 
 ### Residuals (documented, bounded)
 
