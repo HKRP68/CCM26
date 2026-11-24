@@ -397,9 +397,13 @@ running. When several are running, they list each tournament's own commands.
 
 In the admin site, open **World T20 Championships** and create a championship with
 a name and an unused command prefix such as `/wt20c`. Add teams with their logo,
-colours, owner, co-owner and home stadium from Stadium Data. Paste one player name per line to select the
-highest-rated active version of each player. Participating teams need at least
-11 squad members to start.
+colours, owner, co-owner and home stadium from Stadium Data. On each team card,
+**Select a player to add** picks one player from the Player Data dropdown
+(players already in that squad are disabled), the same quick-add as Challenge
+Data; **Add several players by name** still takes one name per line and selects
+the highest-rated active version of each. Every squad member has a **Remove**
+button. Squads are editable until the championship starts. Participating teams
+need at least 11 squad members to start.
 
 Use **Teams → Bulk teams and squads** to download a CSV or JSON template, import
 teams and their squads, or export the current setup. CSV uses one row per

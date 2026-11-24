@@ -1240,3 +1240,38 @@ def test_admin_sets_open_sequential_schedule_availability(roster_admin):
                 follow_redirects=True)
     db.refresh(championship)
     assert championship.schedule_mode == "calendar"
+
+
+def test_admin_selects_and_removes_squad_players(roster_admin):
+    from models import Player
+    from services import t20_championship_io as roster_io
+
+    client, db, championship, _, _ = roster_admin
+    base = f"/world-t20/{championship.id}?tab=teams"
+    client.post(base, data={"action": "add_team", "team_name": "India", "owner": 555,
+                            "home_stadium": "MCG"}, follow_redirects=True)
+    db.expire_all()
+    team = roster_io.championship_teams(db, championship.id)[0]
+    maxwell = db.query(Player).filter_by(name="Glenn Maxwell", version="Base").one()
+
+    # Select a player from the picker and add them.
+    response = client.post(base, data={"action": "add_player", "team_id": team.id,
+                                       "source_player_id": maxwell.id}, follow_redirects=True)
+    assert b"Added Glenn Maxwell" in response.data
+    db.expire_all()
+    squad = roster_io.championship_teams(db, championship.id)[0].team.players
+    assert [p.name for p in squad] == ["Glenn Maxwell"]
+
+    # The same card cannot be added twice.
+    response = client.post(base, data={"action": "add_player", "team_id": team.id,
+                                       "source_player_id": maxwell.id}, follow_redirects=True)
+    assert b"already in this squad" in response.data
+    db.expire_all()
+    assert len(roster_io.championship_teams(db, championship.id)[0].team.players) == 1
+
+    # Remove the player again.
+    member = roster_io.championship_teams(db, championship.id)[0].team.players[0]
+    client.post(base, data={"action": "remove_player", "team_id": team.id,
+                            "player_id": member.id}, follow_redirects=True)
+    db.expire_all()
+    assert roster_io.championship_teams(db, championship.id)[0].team.players == []

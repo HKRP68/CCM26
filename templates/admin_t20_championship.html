@@ -136,12 +136,28 @@
   </details>
   {% endif %}
   {% if not championship.started_at %}
-  <form method="post">
+  {% set team_source_ids = entry.team.players | map(attribute='source_player_id') | select | list %}
+  <form method="post" class="t20-player-pick">
     {{ hidden(tab, team_id=entry.id) }}
-    <label>Player names, one per line<textarea name="player_names" rows="3" required></textarea></label>
-    <p>The highest-rated active version is selected automatically.</p>
-    <button class="action-btn accent-btn" name="action" value="add_players">Add players</button>
+    <label>Select a player to add
+      <select name="source_player_id" required>
+        <option value="">Choose a player…</option>
+        {% for p in t20_master_players %}
+        <option value="{{ p.id }}"{{ ' disabled' if p.id in team_source_ids else '' }}>{{ p.name }}{% if p.version %} · {{ p.version }}{% endif %} · {{ p.rating }} OVR{{ ' — in squad' if p.id in team_source_ids else '' }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="action-btn accent-btn" name="action" value="add_player">Add player</button>
   </form>
+  <details>
+    <summary>Add several players by name</summary>
+    <form method="post">
+      {{ hidden(tab, team_id=entry.id) }}
+      <label>Player names, one per line<textarea name="player_names" rows="3" required></textarea></label>
+      <p>The highest-rated active version is selected automatically.</p>
+      <button class="action-btn accent-btn" name="action" value="add_players">Add players</button>
+    </form>
+  </details>
   {% endif %}
   {% if entry.team.players %}
   <details>

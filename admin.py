@@ -17046,6 +17046,17 @@ def _t20_venue():
     return request.form.get("venue", "").strip()[:120] or None
 
 
+def _t20_master_players(db):
+    """Active, non-Career player cards for the squad quick-add picker."""
+    from models import Player
+    from services.player_service import not_career
+
+    return (not_career(db.query(Player))
+            .filter(Player.is_active == True)  # noqa: E712 (SQLAlchemy needs ==)
+            .order_by(Player.rating.desc(), Player.name.asc())
+            .all())
+
+
 def _t20_team(db, championship, existing=None):
     from models import T20ChampionshipTeam
     from services.t20_championship import validate_stadium
@@ -17191,8 +17202,8 @@ def _t20_mutation(db, championship):
             raise ValueError("Select a team in this championship.")
         return team
 
-    if action in ("add_team", "edit_team", "add_players", "remove_player", "remove_team"):
-        if action in ("add_team", "add_players", "remove_player", "remove_team") and championship.started_at:
+    if action in ("add_team", "edit_team", "add_players", "add_player", "remove_player", "remove_team"):
+        if action in ("add_team", "add_players", "add_player", "remove_player", "remove_team") and championship.started_at:
             raise ValueError("Squad membership is locked once the championship starts.")
         if action == "add_team":
             _t20_team(db, championship)
@@ -17208,6 +17219,10 @@ def _t20_mutation(db, championship):
         elif action == "add_players":
             from services.t20_championship_io import add_players_by_name
             add_players_by_name(db, team.team, request.form.get("player_names", "").splitlines())
+        elif action == "add_player":
+            from services.t20_championship_io import add_player_by_source
+            added = add_player_by_source(db, team.team, _t20_number("source_player_id"))
+            flash(f"Added {added.name} to {team.name}.", "info")
         elif action == "remove_player":
             member = db.get(ChallengePlayer, _t20_number("player_id"))
             if not member or member.team_id != team.challenge_team_id:
@@ -17401,6 +17416,8 @@ def admin_t20_championship(championship_id):
             schedule_today=(datetime.utcnow() + IST_OFFSET).date(),
             local=lambda dt: (dt + IST_OFFSET) if dt else None, format_ist=format_ist,
             stadiums=all_rows() if tab in ("teams", "settings") else [],
+            t20_master_players=(_t20_master_players(db)
+                                if tab == "teams" and not championship.started_at else []),
             command_help=views.command_help(championship.command), player_rows=player_rows,
             player_figures=stats.player_figures, filter_team=filter_team, filter_series=filter_series,
             award_lines=views.render(db, championship, "awards", []) if tab == "stats" else [],
