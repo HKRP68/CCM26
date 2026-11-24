@@ -402,8 +402,12 @@ colours, owner, co-owner and home stadium from Stadium Data. On each team card,
 (players already in that squad are disabled), the same quick-add as Challenge
 Data; **Add several players by name** still takes one name per line and selects
 the highest-rated active version of each. Every squad member has a **Remove**
-button. Squads are editable until the championship starts. Participating teams
-need at least 11 squad members to start.
+button. Squads stay editable during the championship, not only before it
+starts — add or remove players mid-tournament from the same controls. A team
+that is in a live match must finish it before its squad changes, and a side in
+a started championship must keep at least 11 members. Whole teams can still only
+be added or removed before kickoff. Participating teams need at least 11 squad
+members to start.
 
 Use **Teams → Bulk teams and squads** to download a CSV or JSON template, import
 teams and their squads, or export the current setup. CSV uses one row per

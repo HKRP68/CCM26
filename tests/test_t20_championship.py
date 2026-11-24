@@ -1328,3 +1328,54 @@ def test_best_figures_board_carries_no_overs_cell():
         type("C", (), {"name": "World T20", "command": "wt20c", "teams": []})(),
         rich.category("bfig"), [row])
     assert "4/20" in board and "OVERS" not in board and "8.0" not in board
+
+
+def test_admin_squad_edits_allowed_during_championship(competition):
+    import admin
+    from models import Player
+    from services import t20_championship as cup
+
+    db, championship = competition
+    india, australia, _ = championship.teams
+    championship.final_format = "none"
+    series = cup.add_series(db, championship, india, australia, 3, date.today())
+    db.flush()
+    cup.start(championship)  # championship is now in progress
+    db.flush()
+
+    card = Player(name="Shubman Gill", version="Base", rating=88, is_active=True,
+                  category="Batsman", country="India", bat_hand="Right",
+                  bowl_hand="Right", bowl_style="Fast", bat_rating=88, bowl_rating=30)
+    db.add(card)
+    db.flush()
+
+    def mutate(data):
+        with admin.app.test_request_context(method="POST", data=data):
+            admin._t20_mutation(db, championship)
+        db.flush()
+        db.expire_all()
+
+    # Add a player mid-championship (no live match) — allowed.
+    mutate({"action": "add_player", "team_id": india.id, "source_player_id": card.id})
+    assert [p.name for p in india.team.players].count("Shubman Gill") == 1
+    assert len(india.team.players) == 12
+
+    # Remove back down to 11 — allowed.
+    gill = next(p for p in india.team.players if p.name == "Shubman Gill")
+    mutate({"action": "remove_player", "team_id": india.id, "player_id": gill.id})
+    assert len(india.team.players) == 11
+
+    # Removing below 11 during the championship is blocked.
+    with pytest.raises(ValueError, match="at least 11"):
+        mutate({"action": "remove_player", "team_id": india.id,
+                "player_id": india.team.players[0].id})
+
+    # A team in a live match has its squad frozen until the match finishes.
+    series.fixtures[0].status = "live"
+    db.flush()
+    with pytest.raises(ValueError, match="current match"):
+        mutate({"action": "add_player", "team_id": india.id, "source_player_id": card.id})
+
+    # Whole teams still cannot be added or removed once started.
+    with pytest.raises(ValueError, match="before the championship starts"):
+        mutate({"action": "remove_team", "team_id": australia.id})

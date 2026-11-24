@@ -135,7 +135,8 @@
     {% endif %}
   </details>
   {% endif %}
-  {% if not championship.started_at %}
+  {% if not championship.completed_at %}
+  {% if championship.started_at %}<p class="t20-squad-note">Squads stay editable during the championship. A team playing a live match must finish it first, and a side must keep at least 11 members.</p>{% endif %}
   {% set team_source_ids = entry.team.players | map(attribute='source_player_id') | select | list %}
   <form method="post" class="t20-player-pick">
     {{ hidden(tab, team_id=entry.id) }}
@@ -165,7 +166,7 @@
     <ul>
     {% for player in entry.team.players %}
       <li>{{ player.name }}{% if player.source_player %} · {{ player.source_player.version or "Base" }} · {{ player.source_player.rating }} OVR{% endif %}
-      {% if not championship.started_at %}
+      {% if not championship.completed_at %}
       <form method="post" class="inline-form">
         {{ hidden(tab, team_id=entry.id) }}<input type="hidden" name="player_id" value="{{ player.id }}">
         <button class="action-btn outline-btn" name="action" value="remove_player">Remove {{ player.name }}</button>
