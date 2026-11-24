@@ -773,6 +773,8 @@ def _migrate_add_columns():
     _try_add("t20_championships", "playoff_deadline", "TIMESTAMP")
     _try_add("t20_championships", "max_matches_per_series", "INTEGER")
     _try_add("t20_championships", "pitch_mode", "VARCHAR(12) NOT NULL DEFAULT 'home'")
+    _try_add("t20_championships", "schedule_mode", "VARCHAR(16) NOT NULL DEFAULT 'calendar'")
+    _try_add("t20_championships", "league_deadline", "TIMESTAMP")
     _try_add("t20_championship_teams", "home_stadium", "VARCHAR(120)")
     _try_add("t20_championship_series", "semifinal_no", "INTEGER")
     _try_add("t20_championship_fixtures", "random_pitch", "VARCHAR(20)")

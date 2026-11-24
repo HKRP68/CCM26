@@ -221,6 +221,26 @@ def add_players_by_name(db, team, names):
     _append_players(team, cards)
 
 
+def add_player_by_source(db, team, source_player_id):
+    """Add one specific player card chosen from the picker, like Challenge data.
+
+    Resolves the master :class:`Player` by id, rejects inactive or Career cards,
+    skips a player already in the squad (by card or name), and appends it with
+    the same overseas/details handling as every other add path.
+    """
+    from models import Player
+
+    source = db.get(Player, source_player_id) if source_player_id else None
+    if source is None or not source.is_active or getattr(source, "is_career", False):
+        raise ValueError("Choose an active player card to add.")
+    present_ids = {player.source_player_id for player in team.players}
+    present_names = {player.name.casefold() for player in team.players}
+    if source.id in present_ids or source.name.casefold() in present_names:
+        raise ValueError(f"{source.name} is already in this squad.")
+    _append_players(team, [source])
+    return source
+
+
 def import_teams(db, championship, rows):
     """Validate the file together, then merge by team name without deleting squad members."""
     from models import ChallengeTeam, T20ChampionshipTeam

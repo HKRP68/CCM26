@@ -51,11 +51,43 @@ def capture(state, teams_by_user, winner_name, *, award_potm=True):
 def _new_totals():
     return dict(user_id=None, player_id=None, roster_id=None, name=None, team_name=None,
                 matches=0, bat_innings=0, bat_runs=0, bat_balls=0, bat_fours=0,
-                bat_sixes=0, bat_outs=0, highest_score=0, highest_score_not_out=False,
-                fifties=0, hundreds=0, ducks=0, bowl_innings=0, bowl_wickets=0,
-                bowl_runs=0, bowl_balls=0, best_bowl_wickets=0, best_bowl_runs=-1,
-                three_fers=0, five_fers=0, hattricks=0, catches=0, dismissals=0,
+                bat_sixes=0, bat_outs=0, not_outs=0, highest_score=0, highest_score_not_out=False,
+                highest_score_balls=0, fifties=0, hundreds=0, hundred_fifties=0, ducks=0,
+                fastest_fifty=None, fastest_hundred=None, fastest_one_fifty=None,
+                bowl_innings=0, bowl_wickets=0,
+                bowl_runs=0, bowl_balls=0, bowl_dots=0, best_bowl_wickets=0, best_bowl_runs=-1,
+                three_fers=0, four_fers=0, five_fers=0, hattricks=0,
+                catches=0, keeper_catches=0, stumpings=0, runouts=0, dismissals=0,
                 keeper_dismissals=0, potm=0, pots=0, batting=0.0, bowling=0.0, mvp=0.0)
+
+
+# Fields the aggregate only knows from the richer scorecards this upgrade
+# records. A championship that has only legacy scorecards leaves them ``None``
+# so a board can say "not recorded" instead of claiming a real zero.
+def _fold_extras(acc, line, before_hs):
+    """Fold the extra per-match figures ``_apply_line`` does not touch.
+
+    ``before_hs`` is ``acc``'s highest score before :func:`_apply_line` ran, so
+    the balls faced in a new career-best knock can be captured off the same line.
+    """
+    if line.get("batted"):
+        runs = int(line.get("bat_runs", 0) or 0)
+        acc["not_outs"] += int(not line.get("bat_out"))
+        acc["hundred_fifties"] += int(runs >= 150)
+        for milestone, field in ((50, "fastest_fifty"), (100, "fastest_hundred"),
+                                 (150, "fastest_one_fifty")):
+            balls = line.get(f"balls_to_{milestone}")
+            if balls is not None and (acc[field] is None or balls < acc[field]):
+                acc[field] = int(balls)
+        if (acc["highest_score"], acc["highest_score_not_out"]) != before_hs \
+                and acc["highest_score"] == runs:
+            acc["highest_score_balls"] = int(line.get("bat_balls", 0) or 0)
+    if line.get("bowled"):
+        acc["bowl_dots"] += int(line.get("bowl_dots", 0) or 0)
+        acc["four_fers"] += int(int(line.get("bowl_wickets", 0) or 0) >= 4)
+    acc["keeper_catches"] += int(line.get("keeper_catches", 0) or 0)
+    acc["stumpings"] += int(line.get("stumpings", 0) or 0)
+    acc["runouts"] += int(line.get("runouts", 0) or 0)
 
 
 def _performance_key(row):
@@ -84,7 +116,9 @@ def aggregate(series_rows, *, team_id=None, series_id=None):
                     result_bonus = 0
                 for acc in (totals[key], series_totals[key]):
                     acc["team_id"] = line["team_id"]
+                    before_hs = (acc["highest_score"], acc["highest_score_not_out"])
                     _apply_line(acc, line)
+                    _fold_extras(acc, line, before_hs)
                     # Everyone in the XI gets an appearance, even DNB.
                     acc["matches"] += int(not (line["batted"] or line["bowled"]))
                     acc["catches"] += line["catches"]
@@ -136,8 +170,71 @@ def player_label(row):
     return f'{row["name"]} ({row["team_name"]})'
 
 
+def player_key(row):
+    """The ``(team_id, identity)`` an aggregate row belongs to.
+
+    ``player_identity`` reads the same ``roster_id``/``player_id``/``name`` keys
+    off an aggregate row that it reads off a raw scorecard line, so a leaderboard
+    row and the lines behind it resolve to the same player on the same team.
+    """
+    from services.tournament_service import player_identity
+    return row["team_id"], player_identity(row)
+
+
+def _match_lines(series_rows, team_id, identity):
+    """Every scorecard line for one player on one team, oldest first."""
+    from services.tournament_service import player_identity
+    out = []
+    for series in series_rows:
+        for fixture in series.fixtures:
+            if not fixture.scorecard:
+                continue
+            data = json.loads(fixture.scorecard)
+            for line in data["players"]:
+                if line["team_id"] == team_id and player_identity(line) == identity:
+                    out.append((series, fixture, line, data))
+    return out
+
+
+def series_breakdown(series_rows, team_id, identity):
+    """Per-series aggregate rows for one player, in schedule order."""
+    from services.tournament_service import player_identity
+    out = []
+    for series in series_rows:
+        rows = aggregate([series])
+        row = next((r for r in rows if r["team_id"] == team_id
+                    and player_identity(r) == identity), None)
+        if row is not None:
+            out.append((series, row))
+    return out
+
+
+def recent_form(series_rows, team_id, identity, limit=5):
+    """The player's most recent matches, newest first, as per-match dicts."""
+    lines = _match_lines(series_rows, team_id, identity)
+    form = []
+    for series, fixture, line, _ in lines:
+        batted, bowled = bool(line.get("batted")), bool(line.get("bowled"))
+        form.append(dict(
+            series=series, fixture=fixture,
+            batted=batted, bowled=bowled,
+            bat_runs=int(line.get("bat_runs", 0) or 0),
+            bat_balls=int(line.get("bat_balls", 0) or 0),
+            bat_out=bool(line.get("bat_out")),
+            bowl_wickets=int(line.get("bowl_wickets", 0) or 0),
+            bowl_runs=int(line.get("bowl_runs", 0) or 0),
+            bowl_balls=int(line.get("bowl_balls", 0) or 0)))
+    return form[-limit:][::-1]
+
+
 def safe_rate(number, denominator, multiplier=1):
     return f"{number * multiplier / denominator:.2f}" if denominator else "–"
+
+
+def overs(balls):
+    """Balls as cricket overs — 110 balls is ``18.2``, never ``18.33``."""
+    balls = int(balls or 0)
+    return f"{balls // 6}.{balls % 6}"
 
 
 def player_figures(row):

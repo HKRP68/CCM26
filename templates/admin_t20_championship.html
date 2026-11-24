@@ -136,12 +136,28 @@
   </details>
   {% endif %}
   {% if not championship.started_at %}
-  <form method="post">
+  {% set team_source_ids = entry.team.players | map(attribute='source_player_id') | select | list %}
+  <form method="post" class="t20-player-pick">
     {{ hidden(tab, team_id=entry.id) }}
-    <label>Player names, one per line<textarea name="player_names" rows="3" required></textarea></label>
-    <p>The highest-rated active version is selected automatically.</p>
-    <button class="action-btn accent-btn" name="action" value="add_players">Add players</button>
+    <label>Select a player to add
+      <select name="source_player_id" required>
+        <option value="">Choose a player…</option>
+        {% for p in t20_master_players %}
+        <option value="{{ p.id }}"{{ ' disabled' if p.id in team_source_ids else '' }}>{{ p.name }}{% if p.version %} · {{ p.version }}{% endif %} · {{ p.rating }} OVR{{ ' — in squad' if p.id in team_source_ids else '' }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="action-btn accent-btn" name="action" value="add_player">Add player</button>
   </form>
+  <details>
+    <summary>Add several players by name</summary>
+    <form method="post">
+      {{ hidden(tab, team_id=entry.id) }}
+      <label>Player names, one per line<textarea name="player_names" rows="3" required></textarea></label>
+      <p>The highest-rated active version is selected automatically.</p>
+      <button class="action-btn accent-btn" name="action" value="add_players">Add players</button>
+    </form>
+  </details>
   {% endif %}
   {% if entry.team.players %}
   <details>
@@ -208,6 +224,37 @@
     <button class="action-btn play-btn" name="action" value="start">Start championship</button>
   </form>
   {% endif %}
+</section>
+{% endif %}
+{% if not championship.completed_at and rows %}
+<section class="section-card">
+  <h2>Schedule availability</h2>
+  <p>Current mode: <strong>{{ cup.SCHEDULE_MODES[championship.schedule_mode or 'calendar'] }}</strong>.
+    {% if cup.open_mode(championship) %}
+    Every league fixture is published and open; each team still progresses series by series and match by match.
+    Shared league deadline: {{ format_ist(championship.league_deadline or championship.end_at) }}.
+    {% else %}
+    League fixtures become playable on their scheduled opening dates.
+    {% endif %}
+  </p>
+  <form method="post" onsubmit="return confirm('Apply this schedule availability setting? Original fixture dates and IDs are kept for history, and this does not start the championship.')">
+    {{ hidden(tab) }}
+    <div class="form-grid">
+      <label>Schedule availability
+        <select name="schedule_mode">
+          {% for value, label in cup.SCHEDULE_MODES.items() %}
+          <option value="{{ value }}"{% if (championship.schedule_mode or 'calendar') == value %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Shared league deadline (IST — open mode)
+        <input name="league_deadline" type="datetime-local" value="{{ local(championship.league_deadline).strftime('%Y-%m-%dT%H:%M') if championship.league_deadline else (local(championship.end_at).strftime('%Y-%m-%dT%H:%M') if championship.end_at else '') }}">
+      </label>
+    </div>
+    <p>Open mode opens every league fixture for play at once but does not start an unstarted championship and does not bypass roster or stadium checks — those still run when a match is set up. Postseason openings and deadlines are kept separate.</p>
+    <button class="action-btn accent-btn" name="action" value="schedule_availability">Save schedule availability</button>
+    <button class="action-btn play-btn" name="action" value="schedule_availability" onclick="this.form.schedule_mode.value='open_sequential'">Publish &amp; open all league fixtures</button>
+  </form>
 </section>
 {% endif %}
 {% if not championship.completed_at and not postseason_started and championship.teams|length >= 2 %}

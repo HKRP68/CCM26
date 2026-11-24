@@ -10,6 +10,7 @@ from models import T20Championship, User
 from services import rich_message as R
 from services.rich_message_html import inline
 from services import t20_championship as cup
+from services import t20_championship_rich as cup_rich
 from services import t20_championship_stats as stats
 from services.admin_ids import is_admin
 from utils.message_chunks import chunk_blocks
@@ -18,7 +19,8 @@ from utils.tournament_time import IST_OFFSET, format_ist
 VIEW_TITLES = {
     "help": "Commands", "info": "Overview", "table": "Standings",
     "fixtures": "Match schedule", "teams": "Teams and squads", "series": "Series",
-    "playoffs": "Playoffs", "final": "Championship final", "stats": "Player statistics",
+    "playoffs": "Playoffs", "final": "Championship final", "stats": "Championship leaderboards",
+    "tournamentstats": "Championship leaderboards", "statstour": "Player statistics",
     "player": "Player statistics", "awards": "Awards", "scorecard": "Scorecard",
     "today": "Today's fixtures",
 }
@@ -41,8 +43,10 @@ def command_help(prefix):
         f"/{prefix}series [ID] — bilateral series scores and results",
         f"/{prefix} playoffs — semifinal bracket, fixtures and results",
         f"/{prefix}final — final format, fixtures and champion",
-        f"/{prefix}stats [team=ID] [series=ID] — player statistics",
-        f"/{prefix}player NAME [team=ID] [series=ID] — one player's figures",
+        f"/{prefix}stats [team=ID] [series=ID] — championship leaderboards by category",
+        f"/{prefix}tournamentstats — alias for championship leaderboards",
+        f"/{prefix}statstour NAME [team=ID] [series=ID] — one player's full figures",
+        f"/{prefix}player NAME — alias for one player's full figures",
         f"/{prefix}awards — player awards",
         f"/{prefix}scorecard FIXTURE_ID — match scorecard",
         f"/{prefix}help — command list",
@@ -153,13 +157,20 @@ def _fixture_sections(championship, rows, selected, team_id=0, day_ids=None):
         for fixture in series.fixtures:
             if day_ids is not None and fixture.id not in day_ids:
                 continue
-            status = cup.STATUS[cup.fixture_status(championship, fixture, next_by_team)]
+            status, blocker = cup.lock_reason(championship, fixture, next_by_team)
+            if blocker:
+                status = f"{status} · {blocker}"
             result = result_label(fixture)
             pitch = fixture.match.pitch_type if fixture.match else (
                 fixture.random_pitch if championship.pitch_mode == "random" else None)
             details = " · ".join(filter(None, (status, result, pitch)))
+            deadline = cup.effective_deadline(championship, fixture)
+            if cup.open_mode(championship) and not cup.is_postseason(series):
+                timing = f"Deadline {format_ist(deadline)}"
+            else:
+                timing = f"Opens {format_ist(fixture.opens_at)} · Deadline {format_ist(deadline)}"
             lines.append(f"Match {fixture.number} · #{fixture.id} · {cup.match_reference(fixture)} · {details}\n"
-                         f"Opens {format_ist(fixture.opens_at)} · Deadline {format_ist(fixture.deadline)}")
+                         f"{timing}")
         yield title, lines
 
 
@@ -197,21 +208,6 @@ def _fixture_filters(championship, rows, view, args):
     if view == "series" and query and not query.isdecimal():
         raise ValueError(f"Use /{championship.command}series ID.")
     return filters.get("team_id", 0), int(query) if view == "series" and query else 0
-
-
-def _player_block(row):
-    fig = stats.player_figures(row)
-    return (
-        f'\n{stats.player_label(row)} · Matches {row["matches"]}\n'
-        f'Batting · Inn {row["bat_innings"]} · Runs {row["bat_runs"]} · Avg {fig["average"]} · '
-        f'SR {fig["strike_rate"]} · HS {fig["highest"]} · 50s {row["fifties"]} · 100s {row["hundreds"]} · '
-        f'4s {row["bat_fours"]} · 6s {row["bat_sixes"]}\n'
-        f'Bowling · Wkts {row["bowl_wickets"]} · Econ {fig["economy"]} · Avg {fig["bowling_average"]} · '
-        f'SR {fig["bowling_strike_rate"]} · Best {fig["best"]} · 3-fers {row["three_fers"]} · '
-        f'5-fers {row["five_fers"]} · Hat-tricks {row["hattricks"]}\n'
-        f'Fielding · Catches {row["catches"]} · Dismissals {row["dismissals"]}\n'
-        f'Awards · POTM {row["potm"]} · POTS {row["pots"]} · MVP points {row["mvp"]:.1f}'
-    )
 
 
 def _standing_tables(table):
@@ -271,20 +267,17 @@ def render(db, championship, view, args):
             raise ValueError(f"Use /{prefix}scorecard FIXTURE_ID. Find the ID in /{prefix}fixtures.")
         match = cup.find_fixture(rows, args[0])
         return scorecard(match) if match else ["Fixture not found."]
-    query, filters = _filters(championship, rows, args, allowed={"team", "series"})
+    # Leaderboards (stats/tournamentstats) and individual figures
+    # (statstour/player) are rendered as native rich boards by ``dispatch``; only
+    # the award summary still flows through here.
+    _, filters = _filters(championship, rows, args, allowed={"team", "series"})
     totals = stats.aggregate(rows, **filters)
-    if view == "awards":
-        awards = stats.awards(championship, rows, totals)
-        captain = championship.champion_captain
-        if captain:
-            awards["Champion Captain"] = person_names(db, [captain]).get(captain, captain)
-        return ["Final awards" if championship.completed_at else "Award leaders",
-                *(f"{key} · {value or '–'}" for key, value in awards.items())]
-    if view == "player":
-        if not query:
-            raise ValueError(f"Use /{prefix}player NAME.")
-        totals = [r for r in totals if query.casefold() in r["name"].casefold()]
-    return [_player_block(row) for row in totals] or ["No player figures for this selection yet."]
+    awards = stats.awards(championship, rows, totals)
+    captain = championship.champion_captain
+    if captain:
+        awards["Champion Captain"] = person_names(db, [captain]).get(captain, captain)
+    return ["Final awards" if championship.completed_at else "Award leaders",
+            *(f"{key} · {value or '–'}" for key, value in awards.items())]
 
 
 def _series_award(series, series_id):
@@ -517,6 +510,118 @@ async def _reply_standings(message, championship, table):
             await R.reply_rich(message, blocks, "\n".join(fallback))
 
 
+def _stats_cb(championship_id, cat_key, team_id, series_id, opener):
+    return f"wt20s:{championship_id}:{cat_key}:{team_id}:{series_id}:{opener}"
+
+
+def _stats_keyboard(championship, active_key, team_id, series_id, opener):
+    """Category buttons for the active group, then a row to switch groups.
+
+    Navigation is locked to ``opener`` in the callback, and the championship,
+    filters and category all ride in the callback data so a board stays itself
+    when several championships or filtered views are open at once.
+    """
+    cat = cup_rich.category(active_key)
+    rows, row = [], []
+    for key, label in cup_rich.group_categories(cat.group):
+        mark = "● " if key == active_key else ""
+        row.append(InlineKeyboardButton(
+            f"{mark}{label}", callback_data=_stats_cb(championship.id, key, team_id, series_id, opener)))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(
+        ("• " if group == cat.group else "") + group,
+        callback_data=_stats_cb(championship.id, cup_rich.GROUP_DEFAULT[group], team_id, series_id, opener))
+        for group in cup_rich.GROUPS])
+    return InlineKeyboardMarkup(rows)
+
+
+async def _reply_leaderboard(message, db, championship, args, opener):
+    rows = cup.series_list(db, championship)
+    title = f"{championship.name} · {VIEW_TITLES['stats']}"
+    try:
+        _, filters = _filters(championship, rows, args, allowed={"team", "series"})
+    except ValueError as exc:
+        await _reply(message, title, str(exc))
+        return
+    team_id, series_id = filters.get("team_id", 0), filters.get("series_id", 0)
+    agg = stats.aggregate(rows, **filters)
+    cat = cup_rich.category(cup_rich.DEFAULT_CATEGORY)
+    scope = cup_rich.scope_label(championship, team_id, series_id, rows)
+    blocks = cup_rich.leaderboard_blocks(championship, cat, agg, scope)
+    fallback = cup_rich.leaderboard_html(championship, cat, agg, scope)
+    markup = _stats_keyboard(championship, cat.key, team_id, series_id, opener)
+    await R.reply_rich(message, blocks, fallback, reply_markup=markup)
+
+
+async def leaderboard_callback(update, context):
+    query = update.callback_query
+    try:
+        _, cid, cat_key, team, series, opener = query.data.split(":")
+        championship_id, team_id, series_id, opener = map(int, (cid, team, series, opener))
+    except (ValueError, AttributeError):
+        await query.answer("This stats board is unavailable.", show_alert=True)
+        return
+    if not cup_rich.is_category(cat_key):
+        await query.answer("Unknown category.", show_alert=True)
+        return
+    if query.from_user.id != opener:
+        await query.answer("Only the person who opened this can use these buttons.", show_alert=True)
+        return
+    with get_session() as db:
+        championship = db.get(T20Championship, championship_id)
+        teams = {team.id for team in championship.teams} if championship else set()
+        if not championship or (team_id and team_id not in teams):
+            await query.answer("This stats board is unavailable.", show_alert=True)
+            return
+        rows = cup.series_list(db, championship)
+        filters = {key: value for key, value in (("team_id", team_id), ("series_id", series_id)) if value}
+        agg = stats.aggregate(rows, **filters)
+        cat = cup_rich.category(cat_key)
+        scope = cup_rich.scope_label(championship, team_id, series_id, rows)
+        blocks = cup_rich.leaderboard_blocks(championship, cat, agg, scope)
+        fallback = cup_rich.leaderboard_html(championship, cat, agg, scope)
+        markup = _stats_keyboard(championship, cat.key, team_id, series_id, opener)
+    await query.answer()
+    await R.edit_rich(query, blocks, fallback, reply_markup=markup)
+
+
+async def _reply_player_stats(message, db, championship, args):
+    rows = cup.series_list(db, championship)
+    title = f"{championship.name} · {VIEW_TITLES['statstour']}"
+    try:
+        query, filters = _filters(championship, rows, args, allowed={"team", "series"})
+    except ValueError as exc:
+        await _reply(message, title, str(exc))
+        return
+    if not query:
+        await _reply(message, title,
+                     [f"/{championship.command}statstour NAME [team=ID] [series=ID]",
+                      f"Championship leaderboards · /{championship.command}stats"])
+        return
+    agg = stats.aggregate(rows, **filters)
+    matched = [row for row in agg if query.casefold() in row["name"].casefold()]
+    exact = [row for row in matched if row["name"].casefold() == query.casefold()]
+    matched = sorted(exact or matched,
+                     key=lambda row: (-row["matches"], -row["bat_runs"], row["name"].casefold()))
+    if not matched:
+        await _reply(message, title, f"No player figures for “{query}” in this championship yet.")
+        return
+    extra = matched[3:]
+    scope_rows = [series for series in rows
+                  if not filters.get("series_id") or series.id == filters["series_id"]]
+    blocks, fallback = cup_rich.player_cards(championship, scope_rows, matched[:3])
+    if extra:
+        hint = ("More players match — add team=ID to narrow: "
+                + ", ".join(f'{row["name"]} (#{row["team_id"]})' for row in extra[:5]))
+        blocks.append(R.footer(hint))
+        fallback += "\n\n<i>" + inline(hint) + "</i>"
+    await R.reply_rich(message, blocks, fallback)
+
+
 def _split_sections(lines):
     lead, sections = [], []
     section_start = False
@@ -552,7 +657,7 @@ async def _reply_view(message, title, view, lines):
                     *(inline(_line(line)) for line in rest if line)]
         await R.reply_rich(message, blocks, "\n".join(fallback))
         return
-    if view in ("teams", "stats", "player", "scorecard"):
+    if view in ("teams", "scorecard"):
         lead, sections = _split_sections(lines)
         if sections:
             heading = inline(R.bold(title))
@@ -560,7 +665,7 @@ async def _reply_view(message, title, view, lines):
             prefix = "\n".join([heading, *(inline(_line(line)) for line in lead)])
             limit = R.CHUNK_LIMIT - len(prefix) - 25
             cards = (card for label, body in sections
-                     for card in _section_cards(label, body, limit, expanded=view == "player"))
+                     for card in _section_cards(label, body, limit))
             for page in _pack_cards(cards, limit):
                 blocks = [R.heading(title), *opening, *(block for block, _ in page)]
                 await R.reply_rich(message, blocks, "\n".join([prefix, *(html for _, html in page)]))
@@ -635,6 +740,11 @@ async def dispatch(update, context, db, command):
                                    args, viewer.id if viewer else None, day=day)
     elif view == "deadline":
         await _deadline(update, db, championship, args)
+    elif view in ("stats", "tournamentstats"):
+        viewer = getattr(update, "effective_user", None)
+        await _reply_leaderboard(message, db, championship, args, viewer.id if viewer else 0)
+    elif view in ("statstour", "player"):
+        await _reply_player_stats(message, db, championship, args)
     elif view in FIXTURE_VIEWS:
         rows = cup.series_list(db, championship)
         try:
