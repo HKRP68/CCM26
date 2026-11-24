@@ -17203,18 +17203,21 @@ def _t20_mutation(db, championship):
         return team
 
     if action in ("add_team", "edit_team", "add_players", "add_player", "remove_player", "remove_team"):
-        if action in ("add_team", "add_players", "add_player", "remove_player", "remove_team") and championship.started_at:
-            raise ValueError("Squad membership is locked once the championship starts.")
+        # Whole teams can only come and go before kickoff; individual squad
+        # members can be added or removed during the championship too.
+        if action in ("add_team", "remove_team") and championship.started_at:
+            raise ValueError("Teams can only be added or removed before the championship starts.")
         if action == "add_team":
             _t20_team(db, championship)
             return
         team = team_field("team_id")
+        team_is_live = any(f.status == "live" for row in rows for f in row.fixtures
+                           if team.id in (row.home_id, row.away_id))
+        if action in ("edit_team", "add_players", "add_player", "remove_player") and team_is_live:
+            raise ValueError("Finish the team's current match before changing its squad.")
         if action == "edit_team":
             if championship.started_at and request.form.get("team_name", "").strip() != team.name:
                 raise ValueError("Team names are locked once the championship starts.")
-            if any(f.status == "live" for row in rows for f in row.fixtures
-                   if team.id in (row.home_id, row.away_id)):
-                raise ValueError("Finish the team's current match before changing its details.")
             _t20_team(db, championship, team)
         elif action == "add_players":
             from services.t20_championship_io import add_players_by_name
@@ -17227,6 +17230,10 @@ def _t20_mutation(db, championship):
             member = db.get(ChallengePlayer, _t20_number("player_id"))
             if not member or member.team_id != team.challenge_team_id:
                 raise ValueError("Choose a player on this team.")
+            # A started championship must keep a fieldable XI for future fixtures.
+            if championship.started_at and len(team.team.players) <= 11:
+                raise ValueError("A team in progress needs at least 11 squad members. "
+                                 "Add a replacement before removing this player.")
             db.delete(member)
         elif action == "remove_team":
             if any(team.id in (row.home_id, row.away_id) for row in rows):
@@ -17417,7 +17424,7 @@ def admin_t20_championship(championship_id):
             local=lambda dt: (dt + IST_OFFSET) if dt else None, format_ist=format_ist,
             stadiums=all_rows() if tab in ("teams", "settings") else [],
             t20_master_players=(_t20_master_players(db)
-                                if tab == "teams" and not championship.started_at else []),
+                                if tab == "teams" and not championship.completed_at else []),
             command_help=views.command_help(championship.command), player_rows=player_rows,
             player_figures=stats.player_figures, filter_team=filter_team, filter_series=filter_series,
             award_lines=views.render(db, championship, "awards", []) if tab == "stats" else [],
