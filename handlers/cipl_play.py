@@ -59,6 +59,7 @@ from services.match_state_store import (
     A_COMPLETED,
 )
 from services import cipl_match
+from services import score_projection
 from services import impact_player
 from services import concussion_substitute as medical
 from services import milestones
@@ -4874,6 +4875,146 @@ def _partnership_bonus_suffix(state):
     return f" · ✨ {bonus} scoring bonus" if bonus else ""
 
 
+_PROJ_DISCLAIMER = "These numbers are illustrative, not fixed values."
+
+
+def _runs_word(n):
+    return "run" if abs(int(n)) == 1 else "runs"
+
+
+def _comparison_status(comp):
+    """``(emoji, sentence)`` for whether the chasing side is ahead/behind/level."""
+    diff = comp["diff"]
+    chasing = comp["chasing"]
+    if diff > 0:
+        return "🔺", f"{chasing} are {diff} {_runs_word(diff)} ahead."
+    if diff < 0:
+        return "🔻", f"{chasing} are {abs(diff)} {_runs_word(diff)} behind."
+    return "⚖️", "Scores are level."
+
+
+def _score_insight_lines(state):
+    """Plain HTML lines for the projection (innings 1) / comparison (innings 2).
+
+    Returns a list of already-escaped HTML strings (no leading rule), or an
+    empty list when there is nothing to show. Never raises — a projection must
+    never be the reason a live card fails to render.
+    """
+    try:
+        inn = int(state.get("innings", 1) or 1)
+        if inn == 1:
+            return _projection_lines_html(state)
+        if inn == 2:
+            return _comparison_lines_html(state)
+    except Exception:
+        logger.exception("cipl score-insight HTML failed")
+    return []
+
+
+def _projection_lines_html(state):
+    proj = score_projection.project_first_innings(state)
+    if not proj or proj.get("complete"):
+        return []
+    expected = proj["expected"]
+    lines = ["📊 <b>PROJECTED SCORE</b>"]
+    if proj.get("approximate"):
+        lines.append(f"Expected: <b>~{expected}</b> <i>(approx)</i>")
+    else:
+        lines.append(f"Expected: <b>{expected}</b>")
+    if proj.get("low") is not None and proj.get("high") is not None:
+        lines.append(f"Likely range: {proj['low']}–{proj['high']}")
+    lines.append(f"<i>{_PROJ_DISCLAIMER}</i>")
+    return lines
+
+
+def _comp_score(side):
+    return (f"{side['runs']}/{side['wkts']}" if side.get("wkts") is not None
+            else str(side["runs"]))
+
+
+def _comparison_lines_html(state):
+    comp = score_projection.compare_innings(state)
+    if not comp:
+        return []
+    unit = comp["unit_word"].upper() + "S"
+    i1, i2 = comp["inn1"], comp["inn2"]
+    emoji, sentence = _comparison_status(comp)
+    lines = [
+        f"📊 <b>SCORE COMPARISON — {comp['stage']} {unit}</b>",
+        f"🔵 {html.escape(i1['name'])}: {_comp_score(i1)}",
+        f"🟢 {html.escape(i2['name'])}: {_comp_score(i2)}",
+        f"{emoji} {html.escape(sentence)}",
+    ]
+    last = comp.get("last")
+    if last:
+        lines += [
+            f"📈 <b>LAST {last['n']} {unit}</b>",
+            f"{html.escape(i1['name'])}: {last['inn1']} runs",
+            f"{html.escape(i2['name'])}: {last['inn2']} runs",
+        ]
+    return lines
+
+
+def _score_insight_blocks(state):
+    """RichText blocks for the projection / comparison section, or ``[]``."""
+    try:
+        inn = int(state.get("innings", 1) or 1)
+        if inn == 1:
+            return _projection_blocks(state)
+        if inn == 2:
+            return _comparison_blocks(state)
+    except Exception:
+        logger.exception("cipl score-insight blocks failed")
+    return []
+
+
+def _projection_blocks(state):
+    proj = score_projection.project_first_innings(state)
+    if not proj or proj.get("complete"):
+        return []
+    expected = proj["expected"]
+    if proj.get("approximate"):
+        head = R.pullquote(["📊 Projected ", R.bold(f"~{expected}"),
+                            R.italic("  (approx)")])
+    else:
+        head = R.pullquote(["📊 Projected ", R.bold(str(expected))])
+    blocks = [head]
+    if proj.get("low") is not None and proj.get("high") is not None:
+        blocks.append(R.paragraph(["Likely range  ",
+                                   R.bold(f"{proj['low']}–{proj['high']}")]))
+    blocks.append(R.paragraph([R.italic(_PROJ_DISCLAIMER)]))
+    return blocks
+
+
+def _comparison_blocks(state):
+    comp = score_projection.compare_innings(state)
+    if not comp:
+        return []
+    unit = comp["unit_word"].upper() + "S"
+    i1, i2 = comp["inn1"], comp["inn2"]
+    emoji, sentence = _comparison_status(comp)
+    blocks = [
+        R.paragraph(["📊 ", R.bold(f"SCORE COMPARISON — {comp['stage']} {unit}")]),
+        R.table([
+            [R.cell("🔵"), R.cell(R.bold(i1["name"])),
+             R.cell(R.bold(_comp_score(i1)), align="right")],
+            [R.cell("🟢"), R.cell(R.bold(i2["name"])),
+             R.cell(R.bold(_comp_score(i2)), align="right")],
+        ], bordered=True, compact=True),
+        R.paragraph([f"{emoji} ", sentence]),
+    ]
+    last = comp.get("last")
+    if last:
+        blocks.append(R.paragraph(["📈 ", R.bold(f"LAST {last['n']} {unit}")]))
+        blocks.append(R.table([
+            [R.cell(i1["name"]), R.cell(R.bold(f"{last['inn1']} runs"),
+                                        align="right")],
+            [R.cell(i2["name"]), R.cell(R.bold(f"{last['inn2']} runs"),
+                                        align="right")],
+        ], bordered=True, compact=True))
+    return blocks
+
+
 def _approach_card(state):
     """Full broadcast-style scorecard card used on the approach-select prompts."""
     inn = state.get("innings", 1)
@@ -4901,6 +5042,9 @@ def _approach_card(state):
         rule,
         _crr_line(state),
     ]
+    insight = _score_insight_lines(state)
+    if insight:
+        lines += [rule] + insight
     lines += [
         rule,
         f"{bowl_emoji} {bowl_code} | Bowl | {_over_emoji_strip(state)}",
@@ -4992,6 +5136,9 @@ def _build_approach_card_blocks(state, prompt):
              "  ·  CRR ", R.bold(f"{crr:.2f}")]))
     else:
         blocks.append(R.paragraph(["⚡ ", R.bold("CRR"), f"  {crr:.2f}"]))
+
+    # ── Projected total (1st innings) / score comparison (2nd innings) ──
+    blocks.extend(_score_insight_blocks(state))
 
     # ── At the crease ──
     bs = state["bat_stats"]
