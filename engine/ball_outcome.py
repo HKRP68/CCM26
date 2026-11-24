@@ -1205,6 +1205,7 @@ def calculate_outcome(
     misfield_mult: float = 1.0,
     extras_split=None,
     match_context=None,
+    rng=None,
 ) -> dict:
     """
     Determines the outcome of a single delivery.
@@ -1242,6 +1243,15 @@ def calculate_outcome(
     # print(f"Batter: {batter['name']}, BattingRating: {batter['batting_rating']}, BattingHand: {batter['batting_hand']}")
     # print(f"Bowler: {bowler['name']}, BowlingRating: {bowler['bowling_rating']}, FieldingRating: {bowler['fielding_rating']}, BowlingHand: {bowler['bowling_hand']}, BowlingType: {bowler['bowling_type']}")
     # print(f"Pitch type: {pitch}, Current Streak: {streak}")
+
+    # ``rng`` is an optional per-match random source (engine.sim.rng.SimRng or
+    # anything exposing the random-module subset used below: random, choice,
+    # choices). When None — every legacy caller — draws come from the global
+    # ``random`` module exactly as before, so legacy behaviour is byte-identical.
+    # A seeded match passes its own stream so fielding, extras and wicket types
+    # all share one reproducible sequence and concurrent matches never steal
+    # numbers from one another (Requirement 3, Cricket Mechanics & Reliability).
+    _rng = rng if rng is not None else random
 
     # 1) Unpack numeric ratings & attributes
     # Feature 9: batting position context — top-order batters have a higher
@@ -1806,7 +1816,7 @@ def calculate_outcome(
         # logger.debug(f"[calculate_outcome] Normalized weights:")
         for o, nw in zip(raw_weights.keys(), normalized_weights):
             logger.debug(f"  {o}: {nw:.4f}")
-        chosen = random.choices(list(raw_weights.keys()), weights=normalized_weights)[0]
+        chosen = _rng.choices(list(raw_weights.keys()), weights=normalized_weights)[0]
 
     # print(f"[calculate_outcome] Chosen outcome: {chosen}")
 
@@ -1866,7 +1876,7 @@ def calculate_outcome(
             # is a run out — bowled/caught/LBW/stumped do not count.
             wicket_choice = "Run Out"
         else:
-            wicket_choice = random.choices(types, weights=weights_pct)[0]
+            wicket_choice = _rng.choices(types, weights=weights_pct)[0]
 
         result["wicket_type"] = wicket_choice
 
@@ -1881,12 +1891,12 @@ def calculate_outcome(
             drop_prob = max(0.02, 0.22 - (fielding_quality / 100.0) * 0.19)
             if drop_mult != 1.0:
                 drop_prob = min(0.35, drop_prob * max(0.0, drop_mult))
-            if random.random() < drop_prob:
+            if _rng.random() < drop_prob:
                 # Dropped! Convert wicket into runs
                 result["batter_out"] = False
                 result["wicket_type"] = None
                 result["type"] = "run"
-                result["runs"] = random.choices([1, 2, 4], weights=[35, 35, 30])[0]
+                result["runs"] = _rng.choices([1, 2, 4], weights=[35, 35, 30])[0]
                 result["dropped_catch"] = True
                 result["description"] = "DROPPED! The chance goes begging — a costly miss in the field!"
                 logger.debug("[Fielding] Catch dropped (quality=%.1f, drop_prob=%.3f)", fielding_quality, drop_prob)
@@ -1917,7 +1927,7 @@ def calculate_outcome(
     ]
 
         # Use commentary template for Wicket
-        template = random.choice(wicket_descriptions)
+        template = _rng.choice(wicket_descriptions)
         result["description"] = template
 
         # print(f"[calculate_outcome] WICKET! Type: {wicket_choice}, Description: {template}")
@@ -1939,7 +1949,7 @@ def calculate_outcome(
             extra_weights = [0.40,   0.25,      0.20,      0.15]
         if extras_split:
             extra_weights = list(extras_split)
-        extra_choice  = random.choices(extra_types, weights=extra_weights)[0]
+        extra_choice  = _rng.choices(extra_types, weights=extra_weights)[0]
 
         # A4: Variable runs per extra type
         if extra_choice == "Wide":
@@ -1947,12 +1957,12 @@ def calculate_outcome(
         elif extra_choice == "No Ball":
             result["runs"] = 1
         elif extra_choice == "Leg Bye":
-            result["runs"] = random.choices([1, 2], weights=[0.80, 0.20])[0]
+            result["runs"] = _rng.choices([1, 2], weights=[0.80, 0.20])[0]
         elif extra_choice == "Byes":
-            result["runs"] = random.choices([1, 2, 4], weights=[0.85, 0.10, 0.05])[0]
+            result["runs"] = _rng.choices([1, 2, 4], weights=[0.85, 0.10, 0.05])[0]
 
         result["extra_type"] = extra_choice
-        template = random.choice(commentary_templates["Extras"])
+        template = _rng.choice(commentary_templates["Extras"])
         result["description"] = f"{template} ({extra_choice})"
 
     else:
@@ -1970,7 +1980,7 @@ def calculate_outcome(
         result["batter_out"] = False
 
         # Use commentary template for run outcomes
-        template = random.choice(commentary_templates[chosen])
+        template = _rng.choice(commentary_templates[chosen])
         result["description"] = f"{template}"
 
         # FIELDING: Misfield mechanic — poor fielding teams give away extra runs.
@@ -1980,7 +1990,7 @@ def calculate_outcome(
             misfield_prob = max(0.01, 0.115 - (fielding_quality / 100.0) * 0.105)
             if misfield_mult != 1.0:
                 misfield_prob = min(0.25, misfield_prob * max(0.0, misfield_mult))
-            if random.random() < misfield_prob:
+            if _rng.random() < misfield_prob:
                 result["runs"] += 1
                 result["misfield"] = True
                 result["description"] += " — misfield, they steal an extra!"

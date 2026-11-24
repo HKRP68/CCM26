@@ -11,6 +11,11 @@ who wins.
 import hashlib
 import random
 
+# Engine-version marker persisted alongside a match's seed, so a saved result
+# can be replayed against the same engine that produced it. Bump this whenever
+# a change alters the random draw order or outcome distribution.
+ENGINE_VERSION = "realism-v1"
+
 
 def _seed_int(*parts):
     h = hashlib.sha256("|".join(str(p) for p in parts).encode("utf-8")).digest()
@@ -47,6 +52,17 @@ class SimRng:
 
     def choice(self, seq):
         return self._r.choice(list(seq))
+
+    def choices(self, population, weights=None, *, cum_weights=None, k=1):
+        """``random.choices``-compatible weighted sampling with replacement.
+
+        Present so a :class:`SimRng` can be passed wherever the engine used
+        the global ``random`` module, keeping the whole delivery — outcome,
+        fielding error, extra type, wicket type — on one reproducible stream.
+        """
+        return self._r.choices(
+            list(population), weights=weights, cum_weights=cum_weights, k=k
+        )
 
     def chance(self, p):
         return self._r.random() < p

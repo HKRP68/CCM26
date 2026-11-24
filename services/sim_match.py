@@ -346,7 +346,7 @@ def _fielder_keeper(bowling_xi):
 def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                      innings_no, batting_team, bowling_team,
                      target=None, commentary=None, feed=None,
-                     fmt=None, run_factor=1.0, scenario=False):
+                     fmt=None, run_factor=1.0, scenario=False, rng=None):
     """Simulate one innings and return its result dict.
 
     Uses the SimCricketX engine (pressure_engine, game_state_engine,
@@ -406,7 +406,19 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
 
     total_runs = 0
     total_wkts = 0
-    extras = {"wides": 0, "noballs": 0, "legbyes": 0}
+    # `byes` is tracked separately from `legbyes` in realism mode (Cricket
+    # Mechanics fix 1): they are different extras and grouping them misreports
+    # the scorecard. Legacy keeps the three-key dict byte-identical.
+    _rlive = realism_integration.live_for(engine_fmt)
+    # Per-match random source (Cricket Mechanics fix 3 — deterministic sim).
+    # ``rng`` is the match's own SimRng, shared across both innings so the ball
+    # loop, fielding picks, extras and wicket types all draw from one seeded,
+    # reproducible stream that never collides with another concurrent match.
+    # None (every legacy caller) falls back to the global ``random`` module, so
+    # legacy behaviour stays byte-identical.
+    _match_rng = rng if rng is not None else random
+    extras = ({"wides": 0, "noballs": 0, "legbyes": 0, "byes": 0} if _rlive
+              else {"wides": 0, "noballs": 0, "legbyes": 0})
     fow = []
     timeline = []
     over_summaries = []
@@ -448,7 +460,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
         if commentary:
             try:
                 line = commentary(event_key, batsman, bowler_name,
-                                  random.choice(fielders), keeper, runs)
+                                  _match_rng.choice(fielders), keeper, runs)
             except Exception:
                 line = None
         if feed is not None:
@@ -594,7 +606,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
             batter_with_form = dict(striker)
 
             # Bowler effectiveness with fatigue
-            fatigue = bowler_mgr.get_fatigue_mult(last_bowler_name)
+            fatigue = bowler_mgr.get_fatigue_mult(bowler)
             bowler_effective = dict(bowler)
             bowler_effective["bowling_rating"] = bowler.get("bowling_rating", 40) * fatigue
 
@@ -640,6 +652,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                     "target": int(target) if target else None,
                     "innings_balls": overs * 6,
                 },
+                rng=rng,
             ))
 
             otype = oc.get("type")        # "run" | "wicket" | "extra"
@@ -657,12 +670,24 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
                 over_had_extra = True
 
                 if extra_type == "Wide":
-                    extras["wides"] += 1
+                    # A wide is worth its penalty PLUS any byes run off it, and
+                    # all of that is "wides" on the scorecard. Recording only
+                    # the penalty (the old `+= 1`) left the extras line short of
+                    # the runs the total already contained, so total != batter
+                    # runs + extras. Legacy keeps the old under-count.
+                    extras["wides"] += (1 + runs) if _rlive else 1
                     timeline.append("WD")
                     over_timeline.append("WD")
                     _emit("wide", striker_name, last_bowler_name, 0, legal_balls)
                 else:  # No Ball
                     extras["noballs"] += 1
+                    # A faced no-ball is a ball faced by the batter (it counts
+                    # towards their balls, just never towards the over's legal
+                    # deliveries), which is how /cipl and /wpm already score it.
+                    # Without this a batter's strike rate is inflated by every
+                    # no-ball they score off. Realism only, to keep legacy SRs.
+                    if _rlive:
+                        bs["balls"] += 1
                     if runs:
                         bs["runs"] += runs
                         if runs == 4:
@@ -689,12 +714,16 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
             bs["balls"] += 1
 
             if is_extra and extra_type in ("Byes", "LegByes", "LegBye", "Leg Byes"):
-                # Leg byes / byes: runs to team, not to bowler, not to batter
+                # Byes and leg byes: runs to the team, not the bowler, not the
+                # batter. They are different extras, so realism mode books a
+                # genuine bye under "byes" and a leg bye under "legbyes";
+                # legacy groups both under legbyes as before.
                 total_runs += runs
-                extras["legbyes"] += runs
+                _is_bye = _rlive and extra_type in ("Byes",)
+                extras["byes" if _is_bye else "legbyes"] += runs
                 over_had_extra = True
-                timeline.append("LB")
-                over_timeline.append("LB")
+                timeline.append("B" if _is_bye else "LB")
+                over_timeline.append("B" if _is_bye else "LB")
                 _emit("extras", striker_name, last_bowler_name, runs, legal_balls)
                 if runs % 2 == 1:
                     striker_i, non_striker_i = non_striker_i, striker_i
@@ -759,7 +788,7 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
         if balls_this_over >= 6:
             if over_bowler_runs == 0 and not over_had_extra:
                 bw["maidens"] += 1
-            bowler_mgr.record_over_completion(last_bowler_name, over_bowler_runs)
+            bowler_mgr.record_over_completion(bowler, over_bowler_runs)
             _record_over_summary(over_idx + 1, last_bowler_name, over_timeline, legal_balls)
             striker_i, non_striker_i = non_striker_i, striker_i
 
@@ -794,7 +823,8 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
         "overs": _balls_to_overs(legal_balls),
         "balls": legal_balls,
         "extras": extras,
-        "extras_total": extras["wides"] + extras["noballs"] + extras["legbyes"],
+        "extras_total": (extras["wides"] + extras["noballs"] + extras["legbyes"]
+                         + extras.get("byes", 0)),
         "fow": fow,
         "timeline": timeline,
         "over_summaries": over_summaries,
@@ -808,7 +838,8 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
 
 def simulate_match(home_xi, away_xi, overs, pitch_type,
                    home_name, away_name, toss_winner=None,
-                   toss_decision=None, commentary=None, fmt=None, scenario=True):
+                   toss_decision=None, commentary=None, fmt=None, scenario=True,
+                   seed=None):
     """Simulate a full two-innings match using the SimCricketX engine.
 
     home_xi / away_xi: lists of player dicts with keys: name, rating,
@@ -821,6 +852,19 @@ def simulate_match(home_xi, away_xi, overs, pitch_type,
 
     pitch_meta = get_pitch_meta(pitch_type)
     run_factor = pitch_meta.get("run_factor", 1.0)
+
+    # Deterministic simulation (Cricket Mechanics & Reliability, fix 3).
+    # When realism is enabled the whole match — toss, both innings' ball loops,
+    # fielding, extras and wicket types — runs off one SimRng seeded from
+    # ``seed`` (a fresh system seed when None). Everything stays on this single
+    # stream, so the same seed replays the match identically and two concurrent
+    # matches never perturb each other through the global ``random`` state.
+    # Legacy (flag off) keeps match_rng=None and the global module, byte-for-byte.
+    from engine.realism import config as _rcfg
+    from engine.sim.rng import SimRng, ENGINE_VERSION
+    _realism_on = _rcfg.realism_enabled()
+    match_rng = SimRng(seed) if _realism_on else None
+    match_seed = match_rng.seed if match_rng is not None else None
 
     teams_by_name = {home_name: home_xi, away_name: away_xi}
     if toss_winner not in teams_by_name:
@@ -836,9 +880,8 @@ def simulate_match(home_xi, away_xi, overs, pitch_type,
         # default (the prompt wants every correction behind the flag with the
         # original engine as an immediate rollback). Rolls one RNG draw, so a
         # seeded realism /sim stays reproducible.
-        from engine.realism import config as _rcfg
-        if _rcfg.realism_enabled():
-            toss_winner = random.choice([home_name, away_name])
+        if match_rng is not None:
+            toss_winner = match_rng.choice([home_name, away_name])
         else:
             toss_winner = home_name
 
@@ -865,12 +908,14 @@ def simulate_match(home_xi, away_xi, overs, pitch_type,
     inn1 = simulate_innings(first_bat, first_bowl, overs, pitch_type,
                             1, first_name, second_name,
                             target=None, commentary=commentary, feed=feed,
-                            fmt=fmt, run_factor=run_factor, scenario=scenario)
+                            fmt=fmt, run_factor=run_factor, scenario=scenario,
+                            rng=match_rng)
     target = inn1["runs"] + 1
     inn2 = simulate_innings(first_bowl, first_bat, overs, pitch_type,
                             2, second_name, first_name,
                             target=target, commentary=commentary, feed=feed,
-                            fmt=fmt, run_factor=run_factor, scenario=scenario)
+                            fmt=fmt, run_factor=run_factor, scenario=scenario,
+                            rng=match_rng)
 
     result = _compute_result(inn1, inn2, target)
 
@@ -916,6 +961,10 @@ def simulate_match(home_xi, away_xi, overs, pitch_type,
         "super_over": super_over,
         "commentary_feed": feed,
         "potm": _player_of_the_match(inn1, inn2, result),
+        # Reproducibility metadata (Cricket Mechanics fix 3): the seed and
+        # engine version needed to replay this match. None in legacy mode.
+        "rng_seed": match_seed,
+        "engine_version": ENGINE_VERSION if _realism_on else None,
     }
 
 
@@ -956,10 +1005,12 @@ def render_innings_card(inn):
             f"{_esc(p['name'])} {mark}{bs['runs']} ({bs['balls']}){dismissal} "
             f"4s:{bs['fours']} 6s:{bs['sixes']} SR:{sr}"
         )
-    body.append(
-        f"Extras: {inn['extras_total']} "
-        f"(wd {e['wides']}, nb {e['noballs']}, lb {e['legbyes']})"
-    )
+    _ex_detail = ("(wd {wd}, nb {nb}, lb {lb}, b {b})".format(
+                      wd=e['wides'], nb=e['noballs'], lb=e['legbyes'],
+                      b=e['byes'])
+                  if 'byes' in e else
+                  f"(wd {e['wides']}, nb {e['noballs']}, lb {e['legbyes']})")
+    body.append(f"Extras: {inn['extras_total']} " + _ex_detail)
     body.append(f"<b>TOTAL: {inn['runs']}/{inn['wickets']} ({inn['overs']} ov)</b>")
     if dnb:
         body.append(f"<i>DNB: {_esc(', '.join(dnb))}</i>")

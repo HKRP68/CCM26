@@ -77,19 +77,50 @@ class BowlerManager:
         10: 0.70,   # bowling 10th over — significant wear
     }
 
+    @staticmethod
+    def _key(bowler) -> str:
+        """A STABLE identity for a bowler — roster/player id, not the name.
+
+        Cricket Mechanics fix 2: quota and fatigue were keyed on the bowler's
+        name, so two bowlers in one XI with the same name shared a quota (one
+        could bowl eight overs, both counted under the name) and shared a
+        fatigue counter. Keying on a roster or player id fixes that. The name
+        is the last-resort fallback for a dict that carries no id and for the
+        legacy string API, so a line-up of uniquely-named players without ids
+        behaves exactly as before.
+        """
+        if isinstance(bowler, dict):
+            return str(bowler.get("roster_id") or bowler.get("player_id")
+                       or bowler.get("id") or bowler.get("name") or id(bowler))
+        return str(bowler)
+
     def __init__(self, bowling_xi: list, format_config: FormatConfig):
         self.fmt = format_config
         self._quota: Dict[str, int] = {}          # overs completed this innings
-        self._last_bowler: Optional[str] = None   # name of bowler in prev over
+        self._last_bowler: Optional[str] = None   # KEY of bowler in prev over
         self._prev_over_runs: Dict[str, int] = {} # runs given per completed over
 
         # Build eligible set once — only players flagged will_bowl
         self._eligible_xi: List[dict] = [
             p for p in bowling_xi if p.get("will_bowl", False)
         ]
-        # Initialise quota to 0 for each eligible bowler
+        # Map a (unique) name to its stable key so the legacy string API still
+        # resolves to the right counter. A colliding name maps to None and the
+        # string call then falls back to the name itself — callers that pass
+        # the dict (the hot paths now do) are never ambiguous.
+        self._name_to_key: Dict[str, Optional[str]] = {}
         for p in self._eligible_xi:
-            self._quota[p["name"]] = 0
+            k = self._key(p)
+            self._quota[k] = 0
+            nm = str(p.get("name") or "")
+            self._name_to_key[nm] = None if nm in self._name_to_key else k
+
+    def _resolve(self, bowler) -> str:
+        """Resolve a dict OR a legacy name string to a stable key."""
+        if isinstance(bowler, dict):
+            return self._key(bowler)
+        mapped = self._name_to_key.get(str(bowler))
+        return mapped if mapped is not None else str(bowler)
 
     # ------------------------------------------------------------------ #
     # Public query interface                                               #
@@ -129,16 +160,16 @@ class BowlerManager:
         # --- Primary pool: quota + no-consecutive ---
         strict: List[dict] = []
         for p in self._eligible_xi:
-            name = p["name"]
-            if self._quota.get(name, 0) >= max_q:
+            key = self._key(p)
+            if self._quota.get(key, 0) >= max_q:
                 continue
-            if no_consec and name == self._last_bowler:
+            if no_consec and key == self._last_bowler:
                 continue
             strict.append(p)
 
         # --- Fresh-bowler override ---
         # If all remaining overs must be taken up by unbowled bowlers, force them.
-        fresh = [p for p in strict if self._quota.get(p["name"], 0) == 0]
+        fresh = [p for p in strict if self._quota.get(self._key(p), 0) == 0]
         if fresh and len(fresh) == overs_remaining_in_innings:
             logger.debug(
                 "BowlerManager: forcing fresh bowlers %s (overs_remaining=%d)",
@@ -152,7 +183,7 @@ class BowlerManager:
         # --- Fallback 1: relax quota, never consecutive ---
         non_consecutive: List[dict] = [
             p for p in self._eligible_xi
-            if not (no_consec and p["name"] == self._last_bowler)
+            if not (no_consec and self._key(p) == self._last_bowler)
         ]
         if non_consecutive:
             logger.warning(
@@ -162,7 +193,7 @@ class BowlerManager:
             )
             return sorted(
                 non_consecutive,
-                key=lambda p: self._quota.get(p["name"], 0)
+                key=lambda p: self._quota.get(self._key(p), 0)
             )
 
         # --- Fallback 2: no legal non-consecutive bowler exists ---
@@ -173,56 +204,61 @@ class BowlerManager:
         )
         return []
 
-    def overs_remaining(self, bowler_name: str) -> int:
-        """Overs this bowler can still bowl in the current innings."""
-        done = self._quota.get(bowler_name, 0)
+    def overs_remaining(self, bowler) -> int:
+        """Overs this bowler can still bowl in the current innings.
+
+        Accepts the bowler dict (preferred — collision-proof) or a legacy
+        name string.
+        """
+        done = self._quota.get(self._resolve(bowler), 0)
         return max(0, self.fmt.max_bowler_overs - done)
 
-    def overs_bowled(self, bowler_name: str) -> int:
+    def overs_bowled(self, bowler) -> int:
         """Overs this bowler has completed in the current innings."""
-        return self._quota.get(bowler_name, 0)
+        return self._quota.get(self._resolve(bowler), 0)
 
-    def get_fatigue_mult(self, bowler_name: str) -> float:
+    def get_fatigue_mult(self, bowler) -> float:
         """
         Return the effectiveness multiplier for a bowler's *next* delivery,
         based on how many overs they have already bowled this innings.
         """
-        done = self._quota.get(bowler_name, 0)
+        done = self._quota.get(self._resolve(bowler), 0)
         return self._FATIGUE_TABLE.get(
             min(done, self.fmt.max_bowler_overs),
             self._FATIGUE_TABLE[self.fmt.max_bowler_overs]
         )
 
-    def prev_over_runs(self, bowler_name: str) -> int:
+    def prev_over_runs(self, bowler) -> int:
         """
         Runs conceded by this bowler in their most recent completed over.
         Returns -1 if this is their first over (no history yet).
         """
-        return self._prev_over_runs.get(bowler_name, -1)
+        return self._prev_over_runs.get(self._resolve(bowler), -1)
 
     def last_bowler(self) -> Optional[str]:
-        """Name of the bowler who bowled the previous over, or None."""
+        """Stable key of the bowler who bowled the previous over, or None."""
         return self._last_bowler
 
-    def at_quota(self, bowler_name: str) -> bool:
+    def at_quota(self, bowler) -> bool:
         """True if this bowler has exhausted their bowling quota."""
-        return self._quota.get(bowler_name, 0) >= self.fmt.max_bowler_overs
+        return self._quota.get(self._resolve(bowler), 0) >= self.fmt.max_bowler_overs
 
-    def is_consecutive(self, bowler_name: str) -> bool:
+    def is_consecutive(self, bowler) -> bool:
         """True if this bowler bowled the previous over."""
-        return bowler_name == self._last_bowler
+        return self._resolve(bowler) == self._last_bowler
 
     def quota_summary(self) -> Dict[str, Dict]:
         """
         Returns a dict of {bowler_name: {bowled, remaining, at_quota}}
         for all eligible bowlers.  Used for UI display and debug logging.
         """
-        max_q = self.fmt.max_bowler_overs
+        # Key the lookups on the stable id (self._quota is keyed that way since
+        # Cricket Mechanics fix 2), not the name — otherwise every row reads 0.
         return {
             p["name"]: {
-                "bowled":    self._quota.get(p["name"], 0),
-                "remaining": self.overs_remaining(p["name"]),
-                "at_quota":  self.at_quota(p["name"]),
+                "bowled":    self._quota.get(self._key(p), 0),
+                "remaining": self.overs_remaining(p),
+                "at_quota":  self.at_quota(p),
             }
             for p in self._eligible_xi
         }
@@ -231,7 +267,7 @@ class BowlerManager:
     # State mutation                                                       #
     # ------------------------------------------------------------------ #
 
-    def record_over_completion(self, bowler_name: str, runs_conceded: int) -> None:
+    def record_over_completion(self, bowler, runs_conceded: int) -> None:
         """
         Call this at the end of every over (after updating bowler_stats).
 
@@ -240,13 +276,14 @@ class BowlerManager:
         - last_bowler tracker (for consecutive-over enforcement)
         - per-bowler previous-over run tally (for performance feedback)
         """
-        self._quota[bowler_name] = self._quota.get(bowler_name, 0) + 1
-        self._last_bowler = bowler_name
-        self._prev_over_runs[bowler_name] = runs_conceded
+        key = self._resolve(bowler)
+        self._quota[key] = self._quota.get(key, 0) + 1
+        self._last_bowler = key
+        self._prev_over_runs[key] = runs_conceded
         logger.debug(
             "BowlerManager: %s completed over — quota now %d/%d",
-            bowler_name,
-            self._quota[bowler_name],
+            key,
+            self._quota[key],
             self.fmt.max_bowler_overs,
         )
 
@@ -261,7 +298,12 @@ class BowlerManager:
         self._eligible_xi = [
             p for p in new_bowling_xi if p.get("will_bowl", False)
         ]
-        self._quota = {p["name"]: 0 for p in self._eligible_xi}
+        self._quota = {self._key(p): 0 for p in self._eligible_xi}
+        self._name_to_key = {}
+        for p in self._eligible_xi:
+            nm = str(p.get("name") or "")
+            self._name_to_key[nm] = (None if nm in self._name_to_key
+                                     else self._key(p))
         self._last_bowler = None
         self._prev_over_runs = {}
         logger.debug(

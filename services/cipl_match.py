@@ -19,6 +19,7 @@ import random
 
 from engine.ball_outcome import calculate_outcome
 from engine.realism import integration as realism_integration
+from engine.sim.rng import SimRng, ENGINE_VERSION
 from engine import chase_chance
 from engine import chase_model
 from engine import ground_config
@@ -766,6 +767,15 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         "chase_target_pct": 50,
         # innings-1 archive (filled at the break)
         "inn1_runs": 0, "inn1_wickets": 0, "inn1_overs": "0.0",
+        # Deterministic simulation (Cricket Mechanics & Reliability, fix 3).
+        # A per-match seed persisted in the (JSON-serialised) state. The ball
+        # loop derives an independent stream per delivery from it, so the
+        # realism per-ball draws — outcome, fielding, extras, wicket type — are
+        # reproducible from this seed and never collide with another concurrent
+        # match's global random state. ``engine_version`` pins the engine that
+        # produced them, for debugging a saved match.
+        "rng_seed": random.SystemRandom().randrange(1 << 62),
+        "engine_version": ENGINE_VERSION,
     }
 
 
@@ -2402,6 +2412,27 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                                          bat_p_hook, bowl_p_hook, sledge_hook, maiden_hook,
                                          clutch_hook, chase_hook, finisher_hook)
             delivery_ctx = dict(approach_ctx, partnership_overs=state.get("partnership_balls", 0) / bpu)
+            # Deterministic per-delivery random stream (Cricket Mechanics fix 3).
+            # Derived from the match seed and this ball's position, so the whole
+            # delivery (outcome, fielding, extras, wicket type) draws from one
+            # reproducible sequence isolated from the global ``random`` state
+            # that other concurrent matches churn. Legacy mode passes None and
+            # keeps the global module, byte-for-byte. Self-heals a pre-seed
+            # state saved before this field existed.
+            _ball_rng = None
+            if _realism_live:
+                _seed = state.get("rng_seed")
+                if _seed is None:
+                    _seed = random.SystemRandom().randrange(1 << 62)
+                    state["rng_seed"] = _seed
+                    state.setdefault("engine_version", ENGINE_VERSION)
+                # A monotonic per-delivery counter — NOT the legal-ball count,
+                # which stays put on a wide/no-ball and would hand the re-bowled
+                # delivery the identical stream. This ticks on every physical
+                # delivery, so each gets its own reproducible draw.
+                _tick = state.get("_rng_tick", 0)
+                state["_rng_tick"] = _tick + 1
+                _ball_rng = SimRng(_seed).derive(innings, _tick)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
                 streak=streak, over_number=eng_over_idx, batter_runs=bs["runs"],
@@ -2423,6 +2454,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                     "target": int(target) if target else None,
                     "innings_balls": total_balls(state),
                 },
+                rng=_ball_rng,
                 **bowl_p_kwargs))
             # Batting side under the pump: the odd wicket becomes a mix-up.
             if not _realism_live or _drama("wicket_mixup"):
