@@ -39,6 +39,21 @@ TERMINAL = {"completed", "forfeited", "cancelled"}
 STATUS = {"upcoming": "Upcoming", "available": "Available to Play", "live": "In Progress",
           "completed": "Completed", "postponed": "Postponed", "forfeited": "Forfeited",
           "cancelled": "Cancelled"}
+SCHEDULE_MODES = {"calendar": "Calendar-based", "open_sequential": "Open — sequential progression"}
+
+# Precise display labels for a fixture that is scheduled but not yet playable.
+# ``fixture_status`` still returns the coarse ``upcoming``; ``lock_reason``
+# explains which gate is holding a fixture so a schedule can say "Locked —
+# Previous Series" rather than a bare "Upcoming".
+LOCK_PREVIOUS_MATCH = "Locked — Previous Match"
+LOCK_PREVIOUS_SERIES = "Locked — Previous Series"
+LOCK_WAITING_OPPONENT = "Waiting for Opponent"
+LOCK_OPENS_LATER = "Scheduled — Opens Later"
+LOCK_NOT_STARTED = "Scheduled — Opens Later"
+
+
+def open_mode(championship):
+    return (getattr(championship, "schedule_mode", None) or "calendar") == "open_sequential"
 
 
 def all_commands(championship):
@@ -404,16 +419,104 @@ def next_fixtures(series_rows):
     return next_by_team
 
 
+def effective_deadline(championship, fixture):
+    """The deadline that actually gates a fixture for its mode and stage.
+
+    In open sequential mode a league fixture's own date and per-fixture deadline
+    are ignored for eligibility: the shared league-stage deadline applies
+    instead, safely inheriting the league end date when none is set explicitly.
+    Postseason fixtures always keep their own configured deadline.
+    """
+    if open_mode(championship) and not is_postseason(fixture.series):
+        return championship.league_deadline or championship.end_at or fixture.deadline
+    return fixture.deadline
+
+
+def _league_open(championship, fixture):
+    """True when a league fixture's own opening date no longer gates it."""
+    return open_mode(championship) and not is_postseason(fixture.series)
+
+
 def fixture_status(championship, fixture, next_by_team, now=None):
     if fixture.status != "scheduled":
         return fixture.status
     now = now or datetime.utcnow()
-    if not championship.started_at or now < fixture.opens_at:
+    if not championship.started_at:
+        return "upcoming"
+    if not _league_open(championship, fixture) and now < fixture.opens_at:
         return "upcoming"
     series = fixture.series
     if all(next_by_team.get(team_id) == fixture.id for team_id in (series.home_id, series.away_id)):
-        return "available" if now <= fixture.deadline else "postponed"
+        return "available" if now <= effective_deadline(championship, fixture) else "postponed"
     return "upcoming"
+
+
+def lock_reason(championship, fixture, next_by_team, now=None):
+    """A precise display label and optional blocking reference for a fixture.
+
+    Returns ``(label, blocking_reference)``. For an available/live/terminal
+    fixture the label is the ordinary status and the reference is empty; for a
+    fixture that is scheduled but not yet playable it explains exactly why.
+    """
+    status = fixture_status(championship, fixture, next_by_team, now)
+    if status == "postponed" and fixture.status == "scheduled":
+        # Derived rather than admin-set: the effective deadline has passed.
+        return "Postponed — Deadline Passed", ""
+    if status != "upcoming":
+        return STATUS[status], ""
+    now = now or datetime.utcnow()
+    if not championship.started_at:
+        return LOCK_NOT_STARTED, ""
+    series = fixture.series
+    # An earlier unfinished match in this same series blocks this one.
+    earlier = next((f for f in series.fixtures
+                    if f.number < fixture.number and f.status not in TERMINAL), None)
+    if earlier is not None:
+        return LOCK_PREVIOUS_MATCH, match_reference(earlier)
+
+    def blocking(team_id):
+        pending = next_by_team.get(team_id)
+        if pending is None or pending == fixture.id:
+            return None
+        return next((f for row in series.championship.series for f in row.fixtures
+                     if f.id == pending), None)
+
+    home_ready = next_by_team.get(series.home_id) == fixture.id
+    away_ready = next_by_team.get(series.away_id) == fixture.id
+    # One side is ready and waiting on the other to finish its current series.
+    if home_ready != away_ready:
+        waiting_for = series.away if home_ready else series.home
+        return LOCK_WAITING_OPPONENT, waiting_for.name
+    # Neither side has reached this fixture: it sits behind an earlier series.
+    for team_id in (series.home_id, series.away_id):
+        blocker = blocking(team_id)
+        if blocker is not None and not is_postseason(blocker.series):
+            team = series.home if series.home_id == team_id else series.away
+            return LOCK_PREVIOUS_SERIES, f"{team.name} · {match_reference(blocker)}"
+    if not _league_open(championship, fixture) and now < fixture.opens_at:
+        return LOCK_OPENS_LATER, ""
+    return LOCK_WAITING_OPPONENT, ""
+
+
+def set_schedule_mode(championship, mode, deadline=None):
+    """Switch the schedule availability mode, keeping the original calendar.
+
+    Does not start the championship and does not touch fixture opening dates or
+    individual deadlines — those stay as history and for switching back. In open
+    mode a shared league-stage deadline is required: it is taken from ``deadline``
+    when given, else the current league deadline, else the league end date.
+    """
+    if mode not in SCHEDULE_MODES:
+        raise ValueError("Choose a schedule availability mode.")
+    if championship.completed_at:
+        raise ValueError("The schedule mode is locked once the championship ends.")
+    if mode == "open_sequential":
+        deadline = deadline or championship.league_deadline or championship.end_at
+        if deadline is None:
+            raise ValueError("Set a league-stage deadline, or generate the schedule first so one can be inherited.")
+        championship.league_deadline = deadline
+    championship.schedule_mode = mode
+    return championship
 
 
 def _teams_for_fixture(fixture):

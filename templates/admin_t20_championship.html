@@ -210,6 +210,37 @@
   {% endif %}
 </section>
 {% endif %}
+{% if not championship.completed_at and rows %}
+<section class="section-card">
+  <h2>Schedule availability</h2>
+  <p>Current mode: <strong>{{ cup.SCHEDULE_MODES[championship.schedule_mode or 'calendar'] }}</strong>.
+    {% if cup.open_mode(championship) %}
+    Every league fixture is published and open; each team still progresses series by series and match by match.
+    Shared league deadline: {{ format_ist(championship.league_deadline or championship.end_at) }}.
+    {% else %}
+    League fixtures become playable on their scheduled opening dates.
+    {% endif %}
+  </p>
+  <form method="post" onsubmit="return confirm('Apply this schedule availability setting? Original fixture dates and IDs are kept for history, and this does not start the championship.')">
+    {{ hidden(tab) }}
+    <div class="form-grid">
+      <label>Schedule availability
+        <select name="schedule_mode">
+          {% for value, label in cup.SCHEDULE_MODES.items() %}
+          <option value="{{ value }}"{% if (championship.schedule_mode or 'calendar') == value %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Shared league deadline (IST — open mode)
+        <input name="league_deadline" type="datetime-local" value="{{ local(championship.league_deadline).strftime('%Y-%m-%dT%H:%M') if championship.league_deadline else (local(championship.end_at).strftime('%Y-%m-%dT%H:%M') if championship.end_at else '') }}">
+      </label>
+    </div>
+    <p>Open mode opens every league fixture for play at once but does not start an unstarted championship and does not bypass roster or stadium checks — those still run when a match is set up. Postseason openings and deadlines are kept separate.</p>
+    <button class="action-btn accent-btn" name="action" value="schedule_availability">Save schedule availability</button>
+    <button class="action-btn play-btn" name="action" value="schedule_availability" onclick="this.form.schedule_mode.value='open_sequential'">Publish &amp; open all league fixtures</button>
+  </form>
+</section>
+{% endif %}
 {% if not championship.completed_at and not postseason_started and championship.teams|length >= 2 %}
 <section class="section-card">
   <details>

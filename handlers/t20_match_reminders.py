@@ -42,16 +42,27 @@ def _pending(db, championship, day, now):
     if not championship or not championship.started_at or championship.completed_at:
         return []
     rows = cup.series_list(db, championship, refresh=True)
-    fixtures = (f for f in cup.fixtures_on_day(rows, day)
-                if f.status == "scheduled" and f.deadline >= now
-                and not on_cooldown(f.last_reminded_at, now))
-    return sorted(fixtures, key=lambda f: (f.deadline, f.opens_at, f.id))
+    if cup.open_mode(championship):
+        # Every league fixture is open at once, so a date no longer selects a
+        # handful of matches. Remind only about fixtures that are playable right
+        # now — the sequential progression keeps this to about one per team, so
+        # owners are not flooded with locked-match reminders.
+        pending = cup.next_fixtures(rows)
+        fixtures = [f for series in rows for f in series.fixtures
+                    if cup.fixture_status(championship, f, pending, now) == "available"
+                    and not on_cooldown(f.last_reminded_at, now)]
+    else:
+        fixtures = [f for f in cup.fixtures_on_day(rows, day)
+                    if f.status == "scheduled" and f.deadline >= now
+                    and not on_cooldown(f.last_reminded_at, now)]
+    return sorted(fixtures, key=lambda f: (cup.effective_deadline(championship, f), f.opens_at, f.id))
 
 
-def _fixture_line(fixture):
+def _fixture_line(championship, fixture):
     series = fixture.series
     return [R.code(cup.match_reference(fixture)),
-            f" · {series.home.name} vs {series.away.name}\nDue {format_ist(fixture.deadline)}"]
+            f" · {series.home.name} vs {series.away.name}\n"
+            f"Due {format_ist(cup.effective_deadline(championship, fixture))}"]
 
 
 def _preview_token(fixtures):
@@ -93,7 +104,7 @@ async def matchremind_handler(update, context):
                 batch = fixtures[:MAX_FIXTURES]
                 people = {uid for fixture in batch for uid in _recipients(fixture)}
                 names = person_names(db, people)
-                lines.extend(_fixture_line(f) for f in batch)
+                lines.extend(_fixture_line(championship, f) for f in batch)
                 lines.append(f"Owners and co-owners to notify · {len(people)}")
                 if people:
                     lines.append(", ".join(str(names.get(uid, uid)) for uid in sorted(people)))
@@ -126,7 +137,7 @@ def _claim_reminders(db, championship_id, day, now, token, in_group):
     for fixture in fixtures:
         fixture.last_reminded_at = now
         recipients = _recipients(fixture)
-        line = _fixture_line(fixture)
+        line = _fixture_line(championship, fixture)
         group_line = list(line)
         if in_group and recipients:
             group_line.append("\n")

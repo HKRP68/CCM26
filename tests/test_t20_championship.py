@@ -969,3 +969,242 @@ def test_long_series_is_paged_without_splitting_html_sections(competition):
             break
         page += 1
     assert page > 0 and seen == {fixture.id for fixture in tour.fixtures}
+
+
+def test_open_sequential_opens_every_fixture_but_keeps_order(competition):
+    from services import t20_championship as cup
+
+    db, championship = competition
+    india, australia, england = championship.teams
+    championship.final_format = "none"
+    now = datetime.utcnow()
+    future = date.today() + timedelta(days=30)
+    s1 = cup.add_series(db, championship, india, australia, 3, future)
+    s2 = cup.add_series(db, championship, india, england, 3, future + timedelta(days=10))
+    db.flush()
+    cup.start(championship, now)
+    db.flush()
+    rows = cup.series_list(db, championship)
+    pending = cup.next_fixtures(rows)
+
+    # Calendar mode: the future-dated opener is not yet playable.
+    assert cup.fixture_status(championship, s1.fixtures[0], pending, now) == "upcoming"
+    assert cup.lock_reason(championship, s1.fixtures[0], pending, now)[0] == cup.LOCK_OPENS_LATER
+
+    cup.set_schedule_mode(championship, "open_sequential", now + timedelta(days=60))
+    assert cup.open_mode(championship)
+    pending = cup.next_fixtures(rows)
+    # Every league fixture is open, so S1M1 is playable at once despite its date.
+    assert cup.fixture_status(championship, s1.fixtures[0], pending, now) == "available"
+    assert cup.effective_deadline(championship, s1.fixtures[0]) == now + timedelta(days=60)
+    # The next match in the series stays locked behind the opener.
+    assert cup.fixture_status(championship, s1.fixtures[1], pending, now) == "upcoming"
+    assert cup.lock_reason(championship, s1.fixtures[1], pending, now) == (
+        cup.LOCK_PREVIOUS_MATCH, cup.match_reference(s1.fixtures[0]))
+    # England is ready for S2M1 but India is busy in S1, so it waits.
+    assert cup.lock_reason(championship, s2.fixtures[0], pending, now)[0] == cup.LOCK_WAITING_OPPONENT
+
+    # Finishing S1 unlocks S2's opener; subsequent matches stay locked.
+    for fixture in s1.fixtures:
+        cup.set_result(db, championship, fixture, "win", india.id)
+    pending = cup.next_fixtures(rows)
+    assert cup.fixture_status(championship, s2.fixtures[0], pending, now) == "available"
+    assert cup.fixture_status(championship, s2.fixtures[1], pending, now) == "upcoming"
+    # Past the shared deadline a scheduled fixture reads as deadline-passed.
+    late = now + timedelta(days=61)
+    assert cup.fixture_status(championship, s2.fixtures[0], pending, late) == "postponed"
+    assert cup.lock_reason(championship, s2.fixtures[0], pending, late)[0] == "Postponed — Deadline Passed"
+
+
+def test_unrelated_teams_progress_simultaneously_in_open_mode(competition):
+    from models import ChallengePlayer, ChallengeTeam, T20ChampionshipTeam, User
+    from services import t20_championship as cup
+
+    db, championship = competition
+    india, australia, england = championship.teams
+    championship.final_format = "none"
+    club = ChallengeTeam(league=championship.league, name="South Africa")
+    club.players = [ChallengePlayer(name=f"SA p{j}") for j in range(11)]
+    sa = T20ChampionshipTeam(championship=championship, team=club, owner_id=4,
+                             home_stadium="Newlands Cricket Ground")
+    db.add(sa)
+    db.add(User(telegram_id=4, first_name="South Africa"))
+    db.flush()
+    now = datetime.utcnow()
+    future = date.today() + timedelta(days=20)
+    india_aus = cup.add_series(db, championship, india, australia, 3, future)
+    eng_sa = cup.add_series(db, championship, england, sa, 3, future + timedelta(days=3))
+    db.flush()
+    cup.start(championship, now)
+    cup.set_schedule_mode(championship, "open_sequential", now + timedelta(days=40))
+    rows = cup.series_list(db, championship)
+    pending = cup.next_fixtures(rows)
+    # Two disjoint series both open at once — no global round barrier.
+    assert cup.fixture_status(championship, india_aus.fixtures[0], pending, now) == "available"
+    assert cup.fixture_status(championship, eng_sa.fixtures[0], pending, now) == "available"
+
+
+def test_set_schedule_mode_inherits_and_validates(competition):
+    from services import t20_championship as cup
+
+    db, championship = competition
+    with pytest.raises(ValueError, match="availability mode"):
+        cup.set_schedule_mode(championship, "bogus")
+    championship.end_at = None
+    championship.league_deadline = None
+    with pytest.raises(ValueError, match="league-stage deadline"):
+        cup.set_schedule_mode(championship, "open_sequential")
+    now = datetime.utcnow()
+    championship.end_at = now + timedelta(days=5)
+    cup.set_schedule_mode(championship, "open_sequential")  # safely inherits the league end
+    assert championship.league_deadline == championship.end_at
+    cup.set_schedule_mode(championship, "calendar")
+    assert championship.schedule_mode == "calendar" and cup.open_mode(championship) is False
+    championship.completed_at = now
+    with pytest.raises(ValueError, match="locked once the championship ends"):
+        cup.set_schedule_mode(championship, "open_sequential")
+
+
+def test_stats_command_aliases_resolve_with_and_without_rows(competition):
+    from models import T20ChampionshipCommand
+    from services import t20_championship as cup
+
+    db, championship = competition
+    assert cup.find_command(db, "wt20cstats") == (championship, "stats")
+    assert cup.find_command(db, "wt20ctournamentstats") == (championship, "tournamentstats")
+    assert cup.find_command(db, "wt20cstatstour") == (championship, "statstour")
+    assert cup.find_command(db, "wt20cplayer") == (championship, "player")
+    # A championship created before these commands existed has no alias rows.
+    db.query(T20ChampionshipCommand).filter(
+        T20ChampionshipCommand.command.in_(("wt20cstatstour", "wt20ctournamentstats"))
+    ).delete(synchronize_session=False)
+    db.flush()
+    assert cup.find_command(db, "wt20cstatstour") == (championship, "statstour")
+    assert cup.find_command(db, "wt20ctournamentstats") == (championship, "tournamentstats")
+
+
+def _play_one_match(db, championship):
+    """Record one completed India-vs-Australia match and return its series."""
+    from models import Match, User
+    from services.match_constants import PITCH_TYPES
+    from services import t20_championship as cup
+
+    india, australia, _ = championship.teams
+    now = datetime.utcnow()
+    series = cup.add_series(db, championship, australia, india, 3, date.today())
+    for fixture in series.fixtures:
+        fixture.opens_at, fixture.deadline = now - timedelta(hours=1), now + timedelta(hours=1)
+    db.flush()
+    cup.start(championship, now)
+    db.flush()
+    host = db.query(User).filter_by(telegram_id=india.owner_id).one()
+    guest = db.query(User).filter_by(telegram_id=australia.owner_id).one()
+    game = Match(user1_id=guest.id, user2_id=host.id, status="active",
+                 stadium=australia.home_stadium, pitch_type=PITCH_TYPES[0])
+    db.add(game)
+    db.flush()
+    tag = dict(championship_id=championship.id, fixture_id=series.fixtures[0].id,
+               users=[guest.id, host.id], teams=[australia.id, india.id],
+               pitch_mode="home", stadium=australia.home_stadium)
+    cup.bind(db, tag, game, guest, host)
+    db.flush()
+    state = {
+        "match_id": game.id, "t20_championship": tag, "inn1_team": india.name,
+        "inn1_bat_team": india.name, "inn1_bowl_team": australia.name,
+        "inn1_bat_team_id": host.id, "inn1_bowl_team_id": guest.id,
+        "inn1_runs": 186, "inn1_wickets": 4, "total_runs": 150, "total_wickets": 10,
+        "bat_team_id": guest.id, "bowl_team_id": host.id,
+        "bat_team_name": australia.name, "bowl_team_name": india.name,
+        "inn1_bat_xi": [{"roster_id": 1, "name": "Abhishek Sharma"}],
+        "inn1_bowl_xi": [{"roster_id": 2, "name": "Mitchell Starc"}],
+        "bat_xi": [{"roster_id": 2, "name": "Mitchell Starc"}],
+        "bowl_xi": [{"roster_id": 1, "name": "Abhishek Sharma"},
+                    {"roster_id": 3, "name": "India keeper"}],
+        "inn1_bat_stats": {"1": {"runs": 125, "balls": 60, "out": False, "fours": 10,
+                                  "sixes": 8, "balls_to_50": 22, "balls_to_100": 48}},
+        "inn1_bowl_stats": {"2": {"balls": 24, "runs": 40, "wickets": 1, "dots": 8}},
+        "bat_stats": {"2": {"runs": 10, "balls": 8, "out": True}},
+        "bowl_stats": {"1": {"balls": 24, "runs": 20, "wickets": 4, "dots": 12}},
+        "record_deliveries": [{"wicket": True, "opponent": india.name,
+                               "fielder": "India keeper", "how": "caught behind", "keeper": True}],
+    }
+    game.status, game.winner_id = "completed", host.id
+    cup.record_played(db, state, winner_user_id=host.id)
+    db.flush()
+    return series
+
+
+def test_stats_commands_render_leaderboards_and_player_cards(competition, monkeypatch):
+    import asyncio
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from handlers import t20_championship as H
+
+    db, championship = competition
+    india, australia, england = championship.teams
+    championship.final_format = "none"
+    _play_one_match(db, championship)
+
+    message = SimpleNamespace()
+
+    # /wt20cstats is a ranked category board, not a per-player dump.
+    reply = AsyncMock()
+    monkeypatch.setattr(H.R, "reply_rich", reply)
+    asyncio.run(H._reply_leaderboard(message, db, championship, [], opener=india.owner_id))
+    fallback = reply.await_args.args[2]
+    assert "Championship Stats" in fallback and "Most Runs" in fallback
+    assert "Abhishek Sharma" in fallback and "🥇" in fallback
+    assert reply.await_args.kwargs["reply_markup"] is not None
+
+    # /wt20cstatstour NAME is the full, independently collapsible player card.
+    reply = AsyncMock()
+    monkeypatch.setattr(H.R, "reply_rich", reply)
+    asyncio.run(H._reply_player_stats(message, db, championship, ["Abhishek", "Sharma"]))
+    card = reply.await_args.args[2]
+    for needed in ("This Season Stats", "🏏 Batting", "🎯 Bowling", "🧤 Fielding",
+                   "Awards &amp; Performance", "Additional Batting Records",
+                   "Additional Bowling Records", "Recent Form",
+                   "HS: 125*", "SR: 208.33", "Overs: 4.0", "Fastest 50: 22",
+                   "Boundary %: 70.4%", "Dot-ball %: 50.0%", "Maidens: —"):
+        assert needed in card, needed
+    # Batting and bowling (and the other sections) each get their own collapsible.
+    assert card.count("<blockquote expandable>") >= 6
+
+    # Category navigation is requester-locked and switches the board.
+    @contextmanager
+    def _session():
+        yield db
+    monkeypatch.setattr(H, "get_session", _session)
+    edit = AsyncMock()
+    monkeypatch.setattr(H.R, "edit_rich", edit)
+    data = H._stats_cb(championship.id, "wkts", 0, 0, india.owner_id)
+    opener_q = SimpleNamespace(data=data, from_user=SimpleNamespace(id=india.owner_id),
+                               answer=AsyncMock())
+    asyncio.run(H.leaderboard_callback(SimpleNamespace(callback_query=opener_q), None))
+    assert "Most Wickets" in edit.await_args.args[2]
+    stranger_q = SimpleNamespace(data=data, from_user=SimpleNamespace(id=999999), answer=AsyncMock())
+    asyncio.run(H.leaderboard_callback(SimpleNamespace(callback_query=stranger_q), None))
+    assert "Only the person who opened" in stranger_q.answer.await_args.args[0]
+
+
+def test_player_card_shows_both_departments_and_missing_values(competition, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from handlers import t20_championship as H
+
+    db, championship = competition
+    championship.final_format = "none"
+    _play_one_match(db, championship)
+    # Mitchell Starc batted and bowled; the keeper never batted or bowled.
+    reply = AsyncMock()
+    monkeypatch.setattr(H.R, "reply_rich", reply)
+    asyncio.run(H._reply_player_stats(message := SimpleNamespace(), db, championship, ["India", "keeper"]))
+    card = reply.await_args.args[2]
+    # Both departments are present as headings even for a pure fielder, with real
+    # zeroes (not "—"), and the keeper's one dismissal is recorded.
+    assert "🏏 Batting" in card and "🎯 Bowling" in card
+    assert "Wkts: 0" in card and "WK dismissals: 1" in card

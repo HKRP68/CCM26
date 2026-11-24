@@ -17131,6 +17131,15 @@ def _t20_mutation(db, championship):
             raise ValueError("Choose a pitch selection mode.")
         championship.pitch_mode = mode
         return
+    if action == "schedule_availability":
+        mode = request.form.get("schedule_mode")
+        deadline = (_t20_form_time("league_deadline", optional=True)
+                    if mode == "open_sequential" else None)
+        cup.set_schedule_mode(championship, mode, deadline)
+        if mode == "open_sequential":
+            flash("Every league fixture is now open. Each team still progresses "
+                  "series by series and match by match.", "info")
+        return
     rows = cup.series_list(db, championship)
     if action == "final_settings":
         mode = request.form.get("final_format")

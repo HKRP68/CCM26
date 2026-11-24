@@ -2818,6 +2818,12 @@ class T20Championship(Base):
     max_matches_per_series = Column(Integer, default=5)
     rest_days = Column(Integer, nullable=False, default=0)
     pitch_mode = Column(String(12), nullable=False, default="home", server_default="home")
+    # CALENDAR_BASED (default) keeps per-fixture opening dates; OPEN_SEQUENTIAL
+    # opens every league fixture at once but still progresses each team series by
+    # series and match by match. ``league_deadline`` is the shared effective
+    # league-stage deadline used in open mode.
+    schedule_mode = Column(String(16), nullable=False, default="calendar", server_default="calendar")
+    league_deadline = Column(DateTime)
     points = Column(Text, nullable=False)
     playoff_format = Column(String(12), nullable=False, default="none", server_default="none")
     playoff_deadline = Column(DateTime)

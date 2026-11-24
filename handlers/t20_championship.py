@@ -157,13 +157,20 @@ def _fixture_sections(championship, rows, selected, team_id=0, day_ids=None):
         for fixture in series.fixtures:
             if day_ids is not None and fixture.id not in day_ids:
                 continue
-            status = cup.STATUS[cup.fixture_status(championship, fixture, next_by_team)]
+            status, blocker = cup.lock_reason(championship, fixture, next_by_team)
+            if blocker:
+                status = f"{status} · {blocker}"
             result = result_label(fixture)
             pitch = fixture.match.pitch_type if fixture.match else (
                 fixture.random_pitch if championship.pitch_mode == "random" else None)
             details = " · ".join(filter(None, (status, result, pitch)))
+            deadline = cup.effective_deadline(championship, fixture)
+            if cup.open_mode(championship) and not cup.is_postseason(series):
+                timing = f"Deadline {format_ist(deadline)}"
+            else:
+                timing = f"Opens {format_ist(fixture.opens_at)} · Deadline {format_ist(deadline)}"
             lines.append(f"Match {fixture.number} · #{fixture.id} · {cup.match_reference(fixture)} · {details}\n"
-                         f"Opens {format_ist(fixture.opens_at)} · Deadline {format_ist(fixture.deadline)}")
+                         f"{timing}")
         yield title, lines
 
 
