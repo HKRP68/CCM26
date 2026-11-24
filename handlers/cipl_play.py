@@ -4865,8 +4865,6 @@ def _partnership_bonus_suffix(state):
     return f" · ✨ {bonus} scoring bonus" if bonus else ""
 
 
-_PROJ_DISCLAIMER = "Illustrative, not fixed values."
-_OUTLOOK_ICON = {"Above Par": "🔼 ", "Below Par": "🔽 ", "On Par": "▪️ "}
 _RRR_TREND_ICON = {"rising": "📈", "falling": "📉", "flat": "➡️"}
 _RRR_TREND_WORD = {"rising": "rising", "falling": "easing", "flat": "steady"}
 
@@ -4938,44 +4936,13 @@ def _comparison_status_short(diff, code):
     return "⚖️", "Scores level"
 
 
-def _score_insight_lines(state):
-    """Compact HTML insight lines — projection detail (1st) / chase comparison
-    (2nd). Returns already-escaped strings; never raises."""
-    try:
-        inn = int(state.get("innings", 1) or 1)
-        if inn == 1:
-            return _projection_lines_html(state)
-        if inn == 2:
-            return _comparison_lines_html(state)
-    except Exception:
-        logger.exception("cipl score-insight HTML failed")
-    return []
+def _comparison_inner_lines_html(state):
+    """The chase comparison as compact HTML lines (no wrapper) — 2nd innings.
 
-
-def _projection_lines_html(state):
-    """One compact par/range/outlook line + disclaimer (Projected rides on the
-    rate line). Empty when the innings is over or hasn't started."""
-    proj = score_projection.project_first_innings(state)
-    if not proj or proj.get("complete"):
-        return []
-    out = score_projection.par_outlook(state)
-    parts = []
-    if out:
-        parts.append(f"Par <b>{out['par']}</b>")
-    if proj.get("low") is not None and proj.get("high") is not None:
-        parts.append(f"Range {proj['low']}–{proj['high']}")
-    if out:
-        parts.append(f"{_OUTLOOK_ICON.get(out['outlook'], '')}"
-                     f"<b>{html.escape(out['outlook'])}</b>")
-    lines = []
-    if parts:
-        lines.append("📊 " + "  ·  ".join(parts))
-    lines.append(f"<i>{_PROJ_DISCLAIMER}</i>")
-    return lines
-
-
-def _comparison_lines_html(state):
-    """The chase comparison in up to three compact lines."""
+    The first-innings projection *detail* (par / range / outlook) is
+    deliberately not surfaced on the card; only the Projected figure on the
+    rate line remains. Returns [] when there is nothing to compare yet.
+    """
     comp = score_projection.compare_innings(state)
     lines = []
     if comp:
@@ -4983,7 +4950,7 @@ def _comparison_lines_html(state):
         d_code = html.escape(_side_codes(state)[0])
         c_code = html.escape(_side_codes(state)[1])
         i1, i2 = comp["inn1"], comp["inn2"]
-        lines.append(f"📊 <b>@{comp['stage']} {unit}</b>  ·  "
+        lines.append(f"<b>@{comp['stage']} {unit}</b>  ·  "
                      f"🔵 {d_code} {_comp_score(i1)}  ·  🟢 {c_code} {_comp_score(i2)}")
         emoji, short = _comparison_status_short(comp["diff"], c_code)
         line2 = f"{emoji} {short}"
@@ -4998,43 +4965,26 @@ def _comparison_lines_html(state):
     return lines
 
 
-def _score_insight_blocks(state):
-    """RichText blocks for the projection / comparison section, or ``[]``."""
+def _comparison_collapsible_html(state):
+    """The 2nd-innings comparison / last-3 / trend / chance folded behind a
+    Telegram expandable quote so the card stays short. '' when nothing to show.
+    """
     try:
-        inn = int(state.get("innings", 1) or 1)
-        if inn == 1:
-            return _projection_blocks(state)
-        if inn == 2:
-            return _comparison_blocks(state)
+        inner = _comparison_inner_lines_html(state)
     except Exception:
-        logger.exception("cipl score-insight blocks failed")
-    return []
-
-
-def _projection_blocks(state):
-    """Compact par/range/outlook line + disclaimer. Projected itself rides on
-    the CRR line in the block card, so this never repeats it."""
-    proj = score_projection.project_first_innings(state)
-    if not proj or proj.get("complete"):
-        return []
-    out = score_projection.par_outlook(state)
-    row = ["📊 "]
-    if out:
-        row += ["Par ", R.bold(str(out["par"])), "    "]
-    if proj.get("low") is not None and proj.get("high") is not None:
-        row += ["Range ", R.bold(f"{proj['low']}–{proj['high']}"), "    "]
-    if out:
-        row.append(R.bold(f"{_OUTLOOK_ICON.get(out['outlook'], '')}{out['outlook']}"))
-    blocks = []
-    if len(row) > 1:
-        blocks.append(R.paragraph(row))
-    blocks.append(R.paragraph([R.italic(_PROJ_DISCLAIMER)]))
-    return blocks
+        logger.exception("cipl comparison HTML failed")
+        return ""
+    if not inner:
+        return ""
+    body = "\n".join(inner)
+    return ("📊 <b>SCORE INSIGHT</b> <i>(tap to expand)</i>\n"
+            f"<blockquote expandable>{body}</blockquote>")
 
 
 def _comparison_blocks(state):
-    """The chase comparison as a tight two-row table + a status line and, when
-    available, a trend/chance line."""
+    """The chase comparison: a tight two-row table (emoji in the team cell), a
+    status line, and — when available — a trend/chance line. The inner content
+    of the collapsible rich block."""
     comp = score_projection.compare_innings(state)
     if not comp:
         return []
@@ -5042,9 +4992,9 @@ def _comparison_blocks(state):
     d_code, c_code = _side_codes(state)
     i1, i2 = comp["inn1"], comp["inn2"]
     blocks = [R.table([
-        [R.cell("🔵"), R.cell(R.bold(d_code)),
+        [R.cell(R.bold(f"🔵 {d_code}")),
          R.cell(R.bold(_comp_score(i1)), align="right")],
-        [R.cell("🟢"), R.cell(R.bold(c_code)),
+        [R.cell(R.bold(f"🟢 {c_code}")),
          R.cell(R.bold(_comp_score(i2)), align="right")],
     ], bordered=True, compact=True,
         caption=R.bold(f"📊 Comparison · {comp['stage']} {unit}"))]
@@ -5059,6 +5009,15 @@ def _comparison_blocks(state):
     if extra:
         blocks.append(R.paragraph(["  ·  ".join(extra)]))
     return blocks
+
+
+def _comparison_details_block(state):
+    """The 2nd-innings comparison wrapped in a collapsible ``details`` so the
+    approach buttons stay on screen. None when there is nothing to compare."""
+    inner = _comparison_blocks(state)
+    if not inner:
+        return None
+    return R.details(R.bold("📊 Score insight — tap to expand"), inner)
 
 
 def _recent_bowler_entries(state, n=2):
@@ -5130,19 +5089,19 @@ def _recent_bowler_table_rows(state):
 
 
 def _vs_line_html(state):
-    """``vs 🟢 TAM · Yet to bat`` (1st inns) or ``vs 🟢 TAM 180/6 (20.0)`` (2nd).
+    """``vs 🟢 TAM — Yet to bat`` (1st inns) or ``vs 🟢 TAM 180/6 (20.0)`` (2nd).
 
-    The opponent sits on its own line rather than in the score table, keeping
-    the card's header to one tidy score row plus a context line.
+    The opponent's row of the score "table" — the team emoji rides inside its
+    name rather than in a column of its own.
     """
     bowl_emoji = state.get("bowl_team_emoji", "🏏")
     bowl_code = html.escape(str(state.get("bowl_team_code") or "")) or html.escape(
         str(state["bowl_team_name"]))
     if state.get("innings", 1) == 2:
-        return (f"<i>vs</i> {bowl_emoji} {bowl_code}  "
+        return (f"<i>vs {bowl_emoji} {bowl_code}</i>  "
                 f"{state.get('inn1_runs', 0)}/{state.get('inn1_wickets', 0)} "
                 f"({state.get('inn1_overs', '')})")
-    return f"<i>vs</i> {bowl_emoji} {bowl_code} · <i>Yet to bat</i>"
+    return f"<i>vs {bowl_emoji} {bowl_code} — Yet to bat</i>"
 
 
 def _approach_card(state):
@@ -5175,7 +5134,11 @@ def _approach_card(state):
         rule,
         _rate_line_html(state),
     ]
-    lines += _score_insight_lines(state)
+    # 2nd-innings score insight (comparison / last-3 / RRR trend / chase chance)
+    # folded behind a tap; nothing extra in the 1st innings beyond Projected.
+    comparison = _comparison_collapsible_html(state)
+    if comparison:
+        lines.append(comparison)
     lines += [
         rule,
         f"🔹 {_compact_bat_line(striker, bs)}",
@@ -5236,22 +5199,21 @@ def _build_approach_card_blocks(state, prompt):
     if sub:
         blocks.append(R.paragraph([R.italic("  ·  ".join(sub))]))
 
-    # ── Score (batting side) as a single-row table + the opponent on its own
-    #    line, so the header stays one tidy row instead of a two-team block. ──
-    blocks.append(R.table(
-        [[R.cell(bat_emoji), R.cell(R.bold(bat_code)),
-          R.cell(R.bold(cipl_match.format_score(state)), align="right"),
-          R.cell(f"({_progress(state)})", align="right")]],
-        bordered=True, compact=True))
+    # ── Score table: a row per side. The team emoji rides inside its name
+    #    cell (not a column of its own); the opponent's row spans all three
+    #    columns with its total (2nd inns) or "Yet to bat". ──
     if inn == 2:
-        blocks.append(R.paragraph(
-            [R.italic("vs "), f"{bowl_emoji} ", R.bold(bowl_code),
-             f"  {state.get('inn1_runs', 0)}/{state.get('inn1_wickets', 0)} "
-             f"({state.get('inn1_overs', '')})"]))
+        opp = [R.bold(f"vs {bowl_emoji} {bowl_code}"),
+               f"  {state.get('inn1_runs', 0)}/{state.get('inn1_wickets', 0)} "
+               f"({state.get('inn1_overs', '')})"]
     else:
-        blocks.append(R.paragraph(
-            [R.italic("vs "), f"{bowl_emoji} ", R.bold(bowl_code),
-             "  ", R.italic("Yet to bat")]))
+        opp = [R.italic(f"vs {bowl_emoji} {bowl_code} — Yet to bat")]
+    blocks.append(R.table(
+        [[R.cell(R.bold(f"{bat_emoji} {bat_code}")),
+          R.cell(R.bold(cipl_match.format_score(state)), align="right"),
+          R.cell(f"({_progress(state)})", align="right")],
+         [R.cell(opp, colspan=3, align="left")]],
+        bordered=True, compact=True))
 
     # ── The chase (pullquote + rates), or CRR | Projected on one line. ──
     crr = cipl_match.current_run_rate(state)
@@ -5273,8 +5235,10 @@ def _build_approach_card_blocks(state, prompt):
             row += ["     📊 ", R.bold("Projected"), f"  {tag}"]
         blocks.append(R.paragraph(row))
 
-    # ── Projected detail (1st innings) / score comparison (2nd innings) ──
-    blocks.extend(_score_insight_blocks(state))
+    # ── 2nd-innings score insight, folded behind a tap (nothing for the 1st). ──
+    comparison = _comparison_details_block(state)
+    if comparison is not None:
+        blocks.append(comparison)
 
     # ── At the crease ──
     bs = state["bat_stats"]

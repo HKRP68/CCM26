@@ -76,11 +76,11 @@ class ProjectionCardTests(unittest.TestCase, BlockTreeAssertions):
         self.assertIsNotNone(proj)
 
         html_card = cp._approach_card(s)
-        # Projected now rides on the compact CRR | Projected line.
+        # Projected rides on the compact CRR | Projected line; the par/range/
+        # outlook detail and the disclaimer are intentionally not on the card.
         self.assertIn(f"<b>Projected</b> {proj['expected']}", html_card)
-        self.assertIn("Illustrative, not fixed values", html_card)
-        if proj["low"] is not None:
-            self.assertIn(f"Range {proj['low']}–{proj['high']}", html_card)
+        self.assertNotIn("Illustrative", html_card)
+        self.assertNotIn("Range ", html_card)
 
         blocks = cp._approach_card_blocks(s)
         self.assertGreater(self.assertWellFormed(blocks), 0)
@@ -103,16 +103,18 @@ class ProjectionCardTests(unittest.TestCase, BlockTreeAssertions):
         later = sp.project_first_innings(s)["expected"]
         self.assertIn(f"<b>Projected</b> {later}", cp._approach_card(s))
 
-    def test_par_score_and_outlook_shown(self):
+    def test_par_outlook_detail_not_shown_on_first_innings_card(self):
+        # The par/range/outlook detail (and disclaimer) are deliberately kept
+        # off the first-innings card; only the Projected figure is surfaced.
         s = _first_innings(10)
-        outlook = sp.par_outlook(s)
-        self.assertIsNotNone(outlook)
+        self.assertIsNotNone(sp.par_outlook(s))   # the helper still works
         card = cp._approach_card(s)
-        self.assertIn(f"Par <b>{outlook['par']}</b>", card)
-        self.assertIn(f"<b>{outlook['outlook']}</b>", card)
+        self.assertNotIn("Par ", card)
+        self.assertNotIn("Current outlook", card)
+        self.assertNotIn("Illustrative", card)
         text = flatten(cp._approach_card_blocks(s))
-        self.assertIn("Par", text)
-        self.assertIn(outlook["outlook"], text)
+        self.assertNotIn("Illustrative", text)
+        self.assertNotIn("Current outlook", text)
 
     def test_rrr_trend_and_chase_chance_shown(self):
         s = _second_innings(8)
