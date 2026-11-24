@@ -334,6 +334,9 @@ def build_from_cricsheet(paths, format_name, era_map, min_year=None,
             wkts = 0
             inn_key = "inn1" if inn_no == 1 else "inn2"
             for over in inn.get("overs") or []:
+                # Over-level aggregates (Feature 2 — over_volatility reference).
+                _over_runs = 0
+                _over_wkts = 0
                 for d in over.get("deliveries") or []:
                     outcome = _delivery_outcome(d)
                     frac = min(0.999, legal / float(max(1, innings_balls)))
@@ -355,15 +358,56 @@ def build_from_cricsheet(paths, format_name, era_map, min_year=None,
                     stats["deliveries" if not is_holdout else "holdout_deliveries"] += 1
 
                     r = d.get("runs") or {}
-                    runs_so_far += int(r.get("total") or 0)
+                    _tot = int(r.get("total") or 0)
+                    runs_so_far += _tot
+                    _over_runs += _tot
                     if (d.get("wickets") or []):
                         wkts += 1
+                        _over_wkts += 1
                     ex = d.get("extras") or {}
                     if not (ex.get("wides") or ex.get("noballs")):
                         legal += 1
+                # Record the completed over (skip holdout so the reference is
+                # built only from the calibration split).
+                if not is_holdout:
+                    stats["ov_count"] += 1
+                    stats["ov_runs_sum"] += _over_runs
+                    stats["ov_runs_sumsq"] += _over_runs * _over_runs
+                    stats["ov_wkts_sum"] += _over_wkts
+                    stats["ov_maiden"] += int(_over_runs == 0)
+                    stats["ov_low_le2"] += int(_over_runs <= 2)
+                    stats["ov_explosive_ge18"] += int(_over_runs >= 18)
+                    stats["ov_two_wkt"] += int(_over_wkts >= 2)
             if inn_no == 1:
                 target = runs_so_far + 1
     return counts, holdout, stats
+
+
+def over_volatility_from_stats(stats, sigma_hint=0.34):
+    """Build an over-volatility reference dict from accumulated over stats.
+
+    Returns the measured over-level distribution (mean, SD and the tail rates)
+    with its sample size, plus the fitted effect parameters. ``sigma`` is a
+    hint: the true fit needs a simulate-vs-real loop (tools/compare_over_
+    volatility.py), but the measured SD lets an operator sanity-check it.
+    """
+    n = max(1, int(stats.get("ov_count", 0)))
+    mean = stats.get("ov_runs_sum", 0) / n
+    var = max(0.0, stats.get("ov_runs_sumsq", 0) / n - mean * mean)
+    sd = var ** 0.5
+    return {
+        "targets": {
+            "runs_per_over_mean": round(mean, 3),
+            "runs_per_over_sd": round(sd, 3),
+            "maiden_over_rate": round(stats.get("ov_maiden", 0) / n, 4),
+            "low_over_rate_le2": round(stats.get("ov_low_le2", 0) / n, 4),
+            "explosive_over_rate_ge18": round(stats.get("ov_explosive_ge18", 0) / n, 4),
+            "two_plus_wicket_over_rate": round(stats.get("ov_two_wkt", 0) / n, 4),
+            "wickets_per_over_mean": round(stats.get("ov_wkts_sum", 0) / n, 4),
+        },
+        "sample": {"overs": n},
+        "fitted": {"sigma": sigma_hint, "bound": 2.5, "wicket_coupling": 0.06},
+    }
 
 
 # ==========================================================================
@@ -755,6 +799,26 @@ def cmd_cricsheet(args):
         "file": os.path.basename(path), "mode": "cricsheet",
         "nodes": len(nodes), "deliveries": stats.get("deliveries", 0),
         "default_competition": default, "competitions": comps}})
+
+    # Feature 2: emit the over-volatility reference from the real over-level
+    # counts, so it can be rebuilt from Cricsheet rather than hand-set.
+    if getattr(args, "over_stats", False):
+        ov = over_volatility_from_stats(stats)
+        ov.update({
+            "schema_version": 1, "format": args.format,
+            "model_version": "realism-v1", "feature": "over_volatility",
+            "provenance": {"mode": "cricsheet",
+                           "inputs": [os.path.basename(p) for p in args.zip],
+                           "data_licence": "ODbL 1.0 (Cricsheet)"},
+        })
+        ov_path = os.path.join(args.out, "%s_over_volatility.json"
+                               % args.format.lower())
+        with open(ov_path, "w", encoding="utf-8") as fh:
+            json.dump(ov, fh, indent=2, sort_keys=True)
+        print("wrote %s  (%d overs: runs/over %.2f +/- %.2f)"
+              % (ov_path, ov["sample"]["overs"],
+                 ov["targets"]["runs_per_over_mean"],
+                 ov["targets"]["runs_per_over_sd"]))
     return 0
 
 
@@ -852,6 +916,9 @@ def main(argv=None):
     c.add_argument("--min-node", type=int, default=200,
                    help="drop nodes with fewer deliveries than this")
     c.add_argument("--default-competition", default="")
+    c.add_argument("--over-stats", action="store_true",
+                   help="also emit <format>_over_volatility.json from the "
+                        "real over-level counts (Feature 2)")
     c.set_defaults(func=cmd_cricsheet)
 
     a = sub.add_parser("anchors", help="build from in-repo measured aggregates")

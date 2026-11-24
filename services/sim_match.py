@@ -423,6 +423,18 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
     if drama is not None:
         drama.new_innings(innings_no)
         from services import drama_runtime as _drama_rt
+    # Over-to-over variation (Feature 2 — realism layer). Only when realism is
+    # actually driving the deliveries and the flag is on. Drawn from an
+    # independent child of the match RNG, so it is reproducible and does not
+    # shift the ball-outcome stream.
+    _overvol = None
+    if _rlive:
+        from engine.realism import config as _rcfg_ov
+        if _rcfg_ov.over_volatility_enabled():
+            from engine.realism import over_volatility as _ovmod
+            _ov_cfg = dict(_rcfg_ov.over_volatility_config(), enabled=True)
+            _ov_rng = rng.derive("overvol") if rng is not None else None
+            _overvol = _ovmod.OverVolatility(_ov_cfg, _ov_rng)
     extras = ({"wides": 0, "noballs": 0, "legbyes": 0, "byes": 0} if _rlive
               else {"wides": 0, "noballs": 0, "legbyes": 0})
     fow = []
@@ -560,6 +572,10 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
         balls_this_over = 0
         over_timeline = []
 
+        # Over-to-over variation: draw this over's zero-mean scoring tendency.
+        if _overvol is not None:
+            _overvol.new_over()
+
         # Drama: decide clutch / rare activation at the start of this over.
         if drama is not None:
             _over_ctx = _drama_rt.make_context(
@@ -647,6 +663,22 @@ def simulate_innings(batting_xi, bowling_xi, overs, pitch_type,
             # The shaped weights are captured in _drama_holder for momentum's
             # expected-runs term.
             _base_hook = maiden_pressure_hook(balls_this_over, over_bowler_runs)
+            # Over-volatility is a realism-layer shape applied before the drama
+            # overlay (which must stay last). Composed onto the base hook.
+            if _overvol is not None:
+                _bh0 = _base_hook
+
+                def _base_hook(weights, _bh0=_bh0, _ov=_overvol):
+                    w = weights
+                    if _bh0 is not None:
+                        try:
+                            hooked = _bh0(weights)
+                            if hooked:
+                                w = hooked
+                        except Exception:
+                            w = weights
+                    return _ov.apply(w)
+
             _drama_holder = {}
             if drama is not None:
                 _edge = (striker.get("batting_rating") or striker.get("rating") or 60.0) \

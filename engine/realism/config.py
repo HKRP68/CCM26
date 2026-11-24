@@ -59,6 +59,21 @@ def shadow_mode_enabled() -> bool:
     return _env_flag("SIM_REALISM_SHADOW_MODE", False)
 
 
+def over_volatility_enabled() -> bool:
+    """Is the zero-mean over-to-over variation layer active? (Feature 2.)
+
+    Independent of the main realism flag so it can be shadow-measured or rolled
+    out on its own, but it only has an effect when realism is actually driving
+    the deliveries (it shapes the realism distribution).
+    """
+    return _env_flag("SIM_REALISM_OVER_VOL", False)
+
+
+def over_volatility_config() -> dict:
+    """Tuning for engine.realism.over_volatility (merged DEFAULTS < file)."""
+    return dict(get_config().get("over_volatility", {}))
+
+
 def reference_version() -> str:
     return (os.getenv("SIM_REALISM_REFERENCE_VERSION") or "v1").strip() or "v1"
 
@@ -283,6 +298,20 @@ DEFAULTS = {
         # If the reference is missing/invalid, revert to the legacy engine.
         "legacy_on_missing_reference": True,
         "log_once": True,
+    },
+    # Over-to-over variation (Feature 2 — engine.realism.over_volatility).
+    # ``sigma`` is the standard deviation of the per-over scoring-tendency draw;
+    # it was fitted so the simulated runs-per-over spread and maiden-over rate
+    # match modern-T20 history (see data/simulation_reference/v1/
+    # t20_over_volatility.json and tools/compare_over_volatility.py). Zero-mean,
+    # so the innings total is unchanged. Re-fit with that tool.
+    "over_volatility": {
+        # SD of the per-over conditional run-mean shift (runs per legal ball),
+        # fitted so the runs-per-over spread matches modern-T20 history. Zero
+        # innings-mean impact by construction.
+        "sigma": 0.34,
+        "bound": 2.5,
+        "wicket_coupling": 0.06,
     },
 }
 

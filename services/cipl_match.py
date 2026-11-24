@@ -2050,6 +2050,22 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
     # missing reference file must not leave a match on the legacy ball model
     # with the realism engine's gameplay changes applied anyway.
     _realism_live = realism_integration.live_for(engine_fmt)
+    # Over-to-over variation (Feature 2 — realism layer). One zero-mean scoring
+    # tendency per over, drawn from a child RNG keyed on (innings, over) so it is
+    # reproducible and identical on a pause/resume of the same over, and never
+    # perturbs the ball-outcome stream. None unless realism is live and the flag
+    # is on.
+    _overvol = None
+    if _realism_live:
+        from engine.realism import config as _rcfg_ov
+        if _rcfg_ov.over_volatility_enabled():
+            from engine.realism import over_volatility as _ovmod
+            _ov_seed = state.get("rng_seed")
+            if _ov_seed is not None:
+                _ov_rng = SimRng(_ov_seed).derive("overvol", innings, over_idx)
+                _overvol = _ovmod.OverVolatility(
+                    dict(_rcfg_ov.over_volatility_config(), enabled=True), _ov_rng)
+                _overvol.new_over()
     # Dramatic-finish steering: live for the 2nd innings of an armed 20-over
     # chase, else None (and the per-ball logic below is a no-op).
     scenario_eng = _load_scenario_engine(state)
@@ -2431,6 +2447,16 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                                          confidence_hook,
                                          bat_p_hook, bowl_p_hook, sledge_hook, maiden_hook,
                                          clutch_hook, chase_hook, finisher_hook)
+            # Over-to-over variation: shape every ball of this over to its drawn
+            # tendency, applied last (a realism-layer shape over the composed
+            # hooks). Zero-mean, so the innings level is untouched.
+            if _overvol is not None:
+                _wh_inner = weight_hook
+
+                def weight_hook(_w, _inner=_wh_inner, _ov=_overvol):
+                    out = _inner(_w) if _inner is not None else _w
+                    return _ov.apply(out or _w)
+
             delivery_ctx = dict(approach_ctx, partnership_overs=state.get("partnership_balls", 0) / bpu)
             # Deterministic per-delivery random stream (Cricket Mechanics fix 3).
             # Derived from the match seed and this ball's position, so the whole
