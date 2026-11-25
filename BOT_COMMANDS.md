@@ -702,11 +702,13 @@ most one paid season every 48 hours, and not if you conceded a match.
 | `/su` 👥 | — | Start the Unscramble game (host only) |
 | `/eu` 👥 | — | Leave the Unscramble lobby |
 | `/cu` 👥 | — | Cancel the Unscramble lobby (host only) |
-| `/wordchase` 👥 | `/wc` | Host a word-guessing game |
-| `/endchase` 👥 | `/ewc` | End the running Word Chase (host only) |
+| `/wordchase [cricket\|bot]` 👥 | `/wc` | Start Word Chase with mixed answers, or choose cricket or CCM26 Bot answers only |
+| `/endchase` 👥 | `/ewc` | End Word Chase and show the top scores (current host only) |
 | `/bluff` 👥 | — | Cricket trivia bluff duel — reply to your opponent |
 | `/mole` 👥 | — | Mole Hunt social deduction game |
 | `/cartel` 👥 | — | Cricket Cartel multi-role deduction game |
+
+Word Chase sends the host a secret answer by DM and shows the category and word lengths in the group. Players reply to the round message with their guesses. The first player to guess correctly earns one point and becomes the next host. If the winner can't receive DMs, the current host stays on when possible.
 
 ## 16. Quests, achievements & referrals
 

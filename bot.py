@@ -642,7 +642,7 @@ BOT_MENU_COMMANDS = (
     ("lucky7", "Bet on two dice summing below/above/exactly 7"),
     ("powerplay", "Crash game — bet on a multiplier before it crashes"),
     ("score21", "Play Blackjack against the dealer"),
-    ("wordchase", "Host a word-guessing game (group)"),
+    ("wordchase", "Guess cricket and CCM26 terms (group)"),
     ("endchase", "End the running Word Chase game (host only)"),
     ("bluff", "Challenge someone to a cricket trivia bluff duel"),
     ("mole", "Start a Mole Hunt social deduction game (group)"),
