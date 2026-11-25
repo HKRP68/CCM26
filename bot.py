@@ -114,6 +114,15 @@ from handlers.coins2gems import coins2gems_handler, coins2gems_callback
 from handlers.grant import grant_handler
 from handlers.givepack import givepack_handler
 from handlers.giveaway import giveaway_join_callback, giveaway_command
+from handlers.community import (
+    checkin_handler as gc_checkin_handler,
+    cxp_handler as gc_cxp_handler,
+    community_handler as gc_community_handler,
+    gcgames_handler, gclevels_handler, gcrewards_handler, gchelp_handler,
+    gctop_handler, gctop_callback,
+    gcevent_handler, gcstop_handler, gcsettings_handler,
+)
+from handlers.community_games import community_game_answer_handler
 from handlers.cmushop import cmushop_handler, cmushop_callback
 from handlers.cmucareer import cmucareer_handler, cmucareer_callback
 from handlers.undo import cmuundo_handler
@@ -432,6 +441,10 @@ ADMIN_MENU_COMMANDS = (
     ("frwd_prvt", "Admin: forward a replied message to all users"),
     ("cdraftset", "Admin: set the /cdraft rating range and allowed editions"),
     ("testwpm", "Admin: Mini App match diagnostic"),
+    # CMU Community Arena — admin controls (exempt from the player-menu clamp).
+    ("gcevent", "Admin: launch a community game in the Official Group"),
+    ("gcstop", "Admin: cancel the active community game"),
+    ("gcsettings", "Admin: toggle and view Community Arena settings"),
     # Tournament Draft. A dozen commands is a lot for a player menu that is
     # already at Telegram's ceiling — but the admin bucket is published only into
     # admins' own DMs and is exempt from the clamp, so they cost nothing there.
@@ -1305,6 +1318,46 @@ def main():
             except Exception:
                 pass
         app.add_handler(TypeHandler(_TGUpdate, _track_chat), group=-40)
+
+        # ── Community Arena activity middleware (group=-39) ──
+        # Chat XP + inactivity tracking for the Official GC only. Cheap: a fast
+        # in-memory path handles the vast majority of messages with no DB cost,
+        # and everything here is best-effort so it can never block gameplay.
+        async def _community_activity(update, context):
+            try:
+                from services import community_config_service as _C
+                if not _C.is_enabled():
+                    return
+                from services.gc_gate import official_group_id as _ogid
+                gid = _ogid()
+                chat = getattr(update, "effective_chat", None)
+                if gid is None or chat is None or getattr(chat, "id", None) != gid:
+                    return
+                user = getattr(update, "effective_user", None)
+                # Only genuine NEW messages count — not callback queries or
+                # edited messages (both of which surface via effective_message).
+                msg = getattr(update, "message", None)
+                if (user is None or getattr(user, "is_bot", False) or msg is None
+                        or getattr(update, "callback_query", None) is not None):
+                    return
+                from services import community_game_service as _G
+                from services import community_scheduler as _S
+                from services import community_chat_service as _CC
+                text = getattr(msg, "text", None) or ""
+                is_cmd = text.lstrip().startswith("/")
+                active = _G.has_active_game(chat.id)
+                # Genuine human conversation feeds the inactivity timer.
+                if (text and not is_cmd and not active
+                        and not getattr(msg, "forward_origin", None)
+                        and not getattr(msg, "forward_date", None)):
+                    _S.note_human_activity(chat.id)
+                # Chat XP (service applies all eligibility + throttles).
+                await _CC.maybe_award_chat_xp(
+                    update, tg_user_id=user.id, chat_id=chat.id,
+                    config=_C.get_config())
+            except Exception:
+                pass
+        app.add_handler(TypeHandler(_TGUpdate, _community_activity), group=-39)
 
         # ── Maintenance middleware (group=-30) ──
         async def _maintenance_check(update, context):
@@ -2624,6 +2677,26 @@ def main():
             bluff_answer_message,
         ), group=2)
 
+        # ── CMU Community Arena ──────────────────────────────────────
+        app.add_handler(CommandHandler("community", gc_community_handler))
+        app.add_handler(CommandHandler("cxp", gc_cxp_handler))
+        app.add_handler(CommandHandler("checkin", gc_checkin_handler))
+        app.add_handler(CommandHandler("gctop", gctop_handler))
+        app.add_handler(CommandHandler("gcgames", gcgames_handler))
+        app.add_handler(CommandHandler("gclevels", gclevels_handler))
+        app.add_handler(CommandHandler("gcrewards", gcrewards_handler))
+        app.add_handler(CommandHandler("gchelp", gchelp_handler))
+        app.add_handler(CommandHandler("gcevent", gcevent_handler))
+        app.add_handler(CommandHandler("gcstop", gcstop_handler))
+        app.add_handler(CommandHandler("gcsettings", gcsettings_handler))
+        app.add_handler(CallbackQueryHandler(gctop_callback, pattern=r"^gctop:"))
+        # Group answer router for active community games (own group so it runs
+        # alongside the other social-game handlers; never stops propagation).
+        app.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
+            community_game_answer_handler,
+        ), group=11)
+
         # /setmilestone — admin-configured in-match milestone messages + media.
         # Capture active editor replies in private chats and groups before
         # gameplay handlers. The router stops processing only consumed replies.
@@ -2660,6 +2733,13 @@ def main():
             start_giveaway_scheduler(app)
         except Exception:
             logger.exception("Failed to start giveaway scheduler")
+
+        # Start the CMU Community Arena scheduler (auto games + game reveals).
+        try:
+            from services.community_scheduler import start_community_scheduler
+            start_community_scheduler(app)
+        except Exception:
+            logger.exception("Failed to start community scheduler")
 
         # The draft pick clock. DB-backed and swept rather than a run_once per
         # pick, because a redeploy mid-draft would otherwise strand every team

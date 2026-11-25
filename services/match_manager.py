@@ -454,6 +454,15 @@ class MatchManager:
         finally:
             session.close()
 
+        # CMU Community Arena: award Community XP for a completed match in the
+        # Official GC (reads the committed Match row for trusted chat/origin).
+        # Best-effort and fully isolated — never affects the match result.
+        try:
+            from services.community_hooks import on_match_completed
+            on_match_completed(self.match_id)
+        except Exception:
+            logger.debug("community match hook failed (non-fatal)", exc_info=True)
+
         # Win streaks / active days are handled inside award_match_rewards_core
         # above, so every mode that pays match rewards moves them identically.
 

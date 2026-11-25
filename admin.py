@@ -28360,6 +28360,15 @@ from services.auction_webapp_routes import register as _register_auction_webapp
 _register_auction_webapp(app, _webapp_auth, csrf_exempt, _tg_call)
 
 
+# CMU Community Arena — admin dashboard + Mini App API.
+try:
+    from admin_community import register_community_admin as _register_community
+    _register_community(app, login_required=login_required, get_session=get_session,
+                        webapp_auth=_webapp_auth, csrf_exempt=csrf_exempt)
+except Exception:
+    logger.exception("Community Arena admin routes failed to register")
+
+
 if __name__ == "__main__":
     init_db()
     port = int(os.getenv("ADMIN_PORT", 5000))

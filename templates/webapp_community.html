@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CMU Community Arena</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root{
+    --bg:#f6f1e7; --card:#fffdf8; --text:#1d2630; --muted:#7a8591;
+    --border:rgba(48,127,196,.16); --brand:#307fc4; --brand2:#f9d160;
+    --accent:#2ecc71; --bar-bg:rgba(48,127,196,.15);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#12161b; --card:#1a2027; --text:#eef2f6; --muted:#9aa6b2;
+      --border:rgba(249,209,96,.16); --brand:#5aa6e8; --brand2:#f9d160;
+      --bar-bg:rgba(255,255,255,.08); }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,sans-serif;
+    padding:16px;padding-bottom:40px;}
+  h1{font-size:1.25rem;margin:.2rem 0 1rem;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;
+    padding:14px 16px;margin-bottom:12px;box-shadow:0 2px 8px rgba(0,0,0,.05);}
+  .row{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+  .muted{color:var(--muted);font-size:.8rem;}
+  .big{font-size:1.9rem;font-weight:800;line-height:1;}
+  .pill{display:inline-block;background:var(--bar-bg);color:var(--brand);
+    border-radius:999px;padding:3px 10px;font-size:.75rem;font-weight:700;}
+  .bar{height:10px;background:var(--bar-bg);border-radius:999px;overflow:hidden;margin:6px 0;}
+  .bar > i{display:block;height:100%;background:linear-gradient(90deg,var(--brand),var(--brand2));}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .stat{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px;}
+  .stat b{font-size:1.3rem;}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;}
+  .tab{flex:1;text-align:center;padding:8px;border-radius:10px;border:1px solid var(--border);
+    background:var(--card);font-size:.8rem;font-weight:700;cursor:pointer;color:var(--text);}
+  .tab.active{background:linear-gradient(90deg,var(--brand),var(--brand2));color:#13181d;border-color:transparent;}
+  .lb-row{display:flex;justify-content:space-between;padding:7px 0;border-top:1px solid var(--border);font-size:.9rem;}
+  .lb-row:first-child{border-top:none;}
+  .ach{display:inline-block;margin:3px;padding:5px 9px;border-radius:999px;font-size:.72rem;
+    border:1px solid var(--border);background:var(--card);}
+  .ach.on{background:var(--accent);color:#06281a;border-color:transparent;font-weight:700;}
+  button.primary{width:100%;padding:12px;border:none;border-radius:12px;font-weight:800;
+    background:linear-gradient(90deg,var(--brand),var(--brand2));color:#13181d;font-size:1rem;}
+  .hide{display:none;}
+  .err{color:#e67e22;font-size:.85rem;}
+</style>
+</head>
+<body>
+<h1>🏟️ CMU Community Arena</h1>
+<div id="err" class="err hide"></div>
+
+<div id="app" class="hide">
+  <!-- Profile -->
+  <div class="card">
+    <div class="row">
+      <div>
+        <div id="name" style="font-weight:800;font-size:1.05rem;"></div>
+        <div class="muted" id="levelline"></div>
+      </div>
+      <div class="pill" id="rank"></div>
+    </div>
+    <div class="bar"><i id="progbar" style="width:0%"></i></div>
+    <div class="muted" id="progtext"></div>
+    <div class="grid" style="margin-top:10px;">
+      <div class="stat"><b id="xp_life">0</b><div class="muted">Lifetime CXP</div></div>
+      <div class="stat"><b id="xp_week">0</b><div class="muted">This week</div></div>
+    </div>
+  </div>
+
+  <!-- Check-in -->
+  <div class="card">
+    <div class="row">
+      <div><b>📅 Daily Check-in</b><div class="muted" id="checkinline"></div></div>
+      <div class="pill" id="streakpill">🔥 0</div>
+    </div>
+    <div class="muted" style="margin-top:6px;">Use <b>/checkin</b> in the Official Group to claim today's +20 CXP.</div>
+  </div>
+
+  <!-- Active game -->
+  <div class="card" id="activecard">
+    <b>🎮 Live Game</b>
+    <div id="activebody" class="muted" style="margin-top:6px;">No game running right now.</div>
+  </div>
+
+  <!-- Leaderboard -->
+  <div class="card">
+    <b>🏆 Leaderboard</b>
+    <div class="tabs" id="cattabs" style="margin-top:8px;">
+      <div class="tab active" data-cat="cxp">XP</div>
+      <div class="tab" data-cat="wins">Wins</div>
+      <div class="tab" data-cat="streak">Streak</div>
+      <div class="tab" data-cat="messages">Msgs</div>
+    </div>
+    <div class="tabs" id="pertabs">
+      <div class="tab" data-per="today">Today</div>
+      <div class="tab" data-per="week">Week</div>
+      <div class="tab" data-per="month">Month</div>
+      <div class="tab active" data-per="all">All</div>
+    </div>
+    <div id="lb"></div>
+    <div class="muted" id="lbme" style="margin-top:8px;"></div>
+  </div>
+
+  <!-- Game stats -->
+  <div class="card">
+    <b>🎯 Your Games</b>
+    <div class="grid" style="margin-top:8px;">
+      <div class="stat"><b id="g_plays">0</b><div class="muted">Played</div></div>
+      <div class="stat"><b id="g_wins">0</b><div class="muted">Wins</div></div>
+    </div>
+    <div id="g_bytype" class="muted" style="margin-top:8px;"></div>
+  </div>
+
+  <!-- Achievements -->
+  <div class="card">
+    <b>🏅 Achievements</b>
+    <div id="ach" style="margin-top:8px;"></div>
+  </div>
+
+  <!-- Milestone rewards -->
+  <div class="card">
+    <b>🎁 Milestone Rewards</b>
+    <div id="rewards" style="margin-top:8px;"></div>
+  </div>
+</div>
+
+<script>
+const TG = window.Telegram ? window.Telegram.WebApp : null;
+if (TG){ try{ TG.ready(); TG.expand(); }catch(e){} }
+const INIT = (TG && TG.initData) ? TG.initData : "";
+
+function authHeaders(){ return { "Authorization": "tma " + INIT }; }
+async function api(path){
+  const r = await fetch(path, { headers: authHeaders() });
+  if(!r.ok){ throw new Error("HTTP " + r.status); }
+  return await r.json();
+}
+function fmt(n){ return (n||0).toLocaleString(); }
+function showErr(m){ const e=document.getElementById("err"); e.textContent=m; e.classList.remove("hide"); }
+
+let STATE = { cat:"cxp", per:"all" };
+
+async function loadOverview(){
+  const d = await api("/api/webapp/community/overview");
+  if(!d.ok){ showErr("Could not load your profile."); return; }
+  if(!d.enabled){ showErr("The Community Arena is currently disabled."); }
+  const p = d.profile, pr = p.progress;
+  document.getElementById("name").textContent = p.name;
+  document.getElementById("levelline").textContent = "Level "+p.level+" — "+p.title;
+  document.getElementById("rank").textContent = p.rank ? ("#"+p.rank) : "—";
+  document.getElementById("xp_life").textContent = fmt(p.lifetime_xp);
+  document.getElementById("xp_week").textContent = fmt(p.week);
+  if(pr.next_level){
+    document.getElementById("progbar").style.width = pr.pct.toFixed(1)+"%";
+    document.getElementById("progtext").textContent =
+      "Progress to L"+pr.next_level+" ("+pr.next_title+"): "+pr.pct.toFixed(1)+"% · "+fmt(pr.remaining)+" CXP to go";
+  } else {
+    document.getElementById("progbar").style.width = "100%";
+    document.getElementById("progtext").textContent = "Maximum level reached 🏆";
+  }
+  const ci = d.checkin;
+  document.getElementById("streakpill").textContent = "🔥 "+ci.streak;
+  document.getElementById("checkinline").textContent = ci.done_today ? "✅ Checked in today" : "Not checked in yet";
+
+  const ab = document.getElementById("activebody");
+  if(d.active_game){
+    const g = d.active_game;
+    ab.innerHTML = "<b>"+g.label+"</b> · "+g.reward+" CXP · "+g.remaining_seconds+"s left<br>Answer in the Official Group!";
+  } else { ab.textContent = "No game running right now."; }
+
+  // rewards
+  const rw = document.getElementById("rewards");
+  rw.innerHTML = d.rewards.map(r =>
+    '<div class="lb-row"><span>'+(r.claimed?'✅':(r.reached?'🎁':'🔒'))+' L'+r.level+' '+r.title+'</span><span class="muted">'+r.reward+'</span></div>'
+  ).join("");
+}
+
+async function loadGames(){
+  const d = await api("/api/webapp/community/games");
+  if(!d.ok) return;
+  document.getElementById("g_plays").textContent = fmt(d.games.plays);
+  document.getElementById("g_wins").textContent = fmt(d.games.wins);
+  document.getElementById("g_bytype").innerHTML = d.games.by_type.map(x => x[0]+": "+x[1]).join(" · ");
+  const unlocked = new Set(d.achievements.unlocked.map(a=>a.code));
+  document.getElementById("ach").innerHTML = d.achievements.all.map(a =>
+    '<span class="ach '+(unlocked.has(a.code)?'on':'')+'" title="'+a.req+'">'+(unlocked.has(a.code)?'🏅 ':'')+a.name+'</span>'
+  ).join("");
+}
+
+async function loadLeaderboard(){
+  const d = await api("/api/webapp/community/leaderboard?category="+STATE.cat+"&period="+STATE.per);
+  if(!d.ok) return;
+  const lb = d.leaderboard;
+  const medal = r => r===1?"🥇":r===2?"🥈":r===3?"🥉":(r+".");
+  const val = v => lb.category==="streak" ? (v+" days") : lb.category==="ff_records" ? ((v/1000).toFixed(2)+"s") : fmt(v);
+  document.getElementById("lb").innerHTML = lb.rows.length ? lb.rows.map(r =>
+    '<div class="lb-row"><span>'+medal(r.rank)+' '+r.name+'</span><b>'+val(r.value)+'</b></div>'
+  ).join("") : '<div class="muted">No entries yet.</div>';
+  document.getElementById("lbme").textContent = lb.me ? ("Your rank: #"+lb.me.rank+" — "+val(lb.me.value)) : "";
+}
+
+document.querySelectorAll("#cattabs .tab").forEach(t => t.onclick = () => {
+  document.querySelectorAll("#cattabs .tab").forEach(x=>x.classList.remove("active"));
+  t.classList.add("active"); STATE.cat = t.dataset.cat; loadLeaderboard();
+});
+document.querySelectorAll("#pertabs .tab").forEach(t => t.onclick = () => {
+  document.querySelectorAll("#pertabs .tab").forEach(x=>x.classList.remove("active"));
+  t.classList.add("active"); STATE.per = t.dataset.per; loadLeaderboard();
+});
+
+(async function(){
+  if(!INIT){ showErr("Open this page from the CMU bot inside Telegram."); }
+  try{
+    await loadOverview();
+    await loadGames();
+    await loadLeaderboard();
+    document.getElementById("app").classList.remove("hide");
+  }catch(e){
+    showErr("Could not load the Community Arena. Open it from the bot in Telegram.");
+  }
+})();
+</script>
+</body>
+</html>

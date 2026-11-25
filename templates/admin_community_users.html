@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Community Members{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>👤 Community Members</h2>
+  <a href="{{ url_for('admin_community') }}" class="btn btn-ghost btn-sm">← Dashboard</a>
+</div>
+
+<form method="GET" action="{{ url_for('admin_community_users') }}" style="margin-bottom:1rem;display:flex;gap:.5rem;">
+  <input type="text" name="q" value="{{ query }}" placeholder="Search by @username or Telegram ID"
+         style="flex:1;max-width:420px;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+  <button class="btn btn-primary btn-sm">🔍 Search</button>
+</form>
+
+<div style="display:grid;grid-template-columns:{{ '1fr 1.2fr' if detail else '1fr' }};gap:1rem;">
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.6rem;overflow:auto;">
+    <table style="width:100%;border-collapse:collapse;font-size:.85rem;">
+      <tr style="text-align:left;color:var(--muted);"><th>Manager</th><th>Lvl</th><th>CXP</th><th>Streak</th><th></th></tr>
+      {% for u in users %}
+      <tr style="border-top:1px solid var(--border);{{ 'opacity:.5;' if u.suspended }}">
+        <td>{{ u.name or ('#' ~ u.user_id) }}{% if u.suspended %} 🚫{% endif %}</td>
+        <td>{{ u.level }}</td>
+        <td>{{ '{:,}'.format(u.lifetime_xp) }}</td>
+        <td>{{ u.streak }}</td>
+        <td><a href="{{ url_for('admin_community_users', q=query, user_id=u.user_id) }}" class="btn btn-ghost btn-sm">Open</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" style="color:var(--muted);padding:.6rem;">No members found.</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  {% if detail %}
+  {% set s = detail.summary %}
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem;">
+    <h3 style="margin:0 0 .3rem;">{{ s.name }} {% if detail.suspended %}<span style="color:#e74c3c;">🚫 Suspended</span>{% endif %}</h3>
+    <p style="color:var(--muted);font-size:.85rem;margin:0 0 .8rem;">
+      Level {{ s.level }} — {{ s.title }} · Lifetime {{ '{:,}'.format(s.lifetime_xp) }} CXP · Rank {{ s.rank or '—' }}<br>
+      Today {{ s.today }} · Week {{ s.week }} · Month {{ s.month }} ·
+      Messages {{ s.activity.chat_messages }} · Matches {{ s.activity.pvp_matches + s.activity.ai_matches }} ·
+      Claims {{ s.activity.claims }} · Check-ins {{ s.activity.total_checkins }} (streak {{ s.activity.current_streak }})
+    </p>
+
+    <form method="POST" action="{{ url_for('admin_community_user_adjust') }}" style="margin-bottom:.8rem;border-top:1px solid var(--border);padding-top:.7rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="user_id" value="{{ s.user_id }}">
+      <b style="font-size:.9rem;">Adjust CXP</b>
+      <div style="display:flex;gap:.4rem;margin-top:.3rem;flex-wrap:wrap;">
+        <input type="number" name="delta" placeholder="+/- amount" required
+               style="width:120px;padding:.4rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+        <input type="text" name="reason" placeholder="Reason (required)" required
+               style="flex:1;min-width:160px;padding:.4rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+        <button class="btn btn-primary btn-sm">Apply</button>
+      </div>
+    </form>
+
+    <form method="POST" action="{{ url_for('admin_community_user_suspend') }}" style="margin-bottom:.8rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="user_id" value="{{ s.user_id }}">
+      <input type="hidden" name="action" value="{{ 'unsuspend' if detail.suspended else 'suspend' }}">
+      <input type="text" name="reason" placeholder="Reason"
+             style="width:60%;padding:.4rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      <button class="btn btn-sm {{ 'btn-ghost' if detail.suspended else '' }}" style="{{ '' if detail.suspended else 'background:#e74c3c;color:#fff;' }}">
+        {{ '✅ Re-enable rewards' if detail.suspended else '🚫 Suspend rewards' }}
+      </button>
+    </form>
+
+    <form method="POST" action="{{ url_for('admin_community_user_reset_games') }}" style="margin-bottom:1rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="user_id" value="{{ s.user_id }}">
+      <input type="text" name="confirm" placeholder="Type RESET"
+             style="width:120px;padding:.4rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      <button class="btn btn-sm btn-ghost">♻️ Reset game stats</button>
+    </form>
+
+    <b style="font-size:.9rem;">Recent XP ledger</b>
+    <div style="max-height:260px;overflow:auto;margin-top:.3rem;">
+      <table style="width:100%;border-collapse:collapse;font-size:.78rem;">
+        {% for e in detail.ledger %}
+        <tr style="border-top:1px solid var(--border);">
+          <td style="color:var(--muted);">{{ e.created_at.strftime('%m-%d %H:%M') }}</td>
+          <td>{{ e.activity }}</td>
+          <td style="text-align:right;{{ 'color:#2ecc71;' if e.delta>=0 else 'color:#e74c3c;' }}">{{ '%+d'|format(e.delta) }}</td>
+          <td style="color:var(--muted);">{{ e.detail or '' }}</td>
+        </tr>
+        {% else %}<tr><td style="color:var(--muted);padding:.4rem;">No ledger entries.</td></tr>{% endfor %}
+      </table>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

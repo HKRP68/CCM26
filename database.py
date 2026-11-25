@@ -234,6 +234,11 @@ def init_db():
         AuctionLedgerEntry, AuctionEvent, AuctionRetentionOffer, AuctionAdmin,
         AuctionTrade, AuctionTradeBlock,
         LeagueSeries, LeagueSeason,
+        CommunityProfile, CommunityXPLedger, CommunityDailyCounter,
+        CommunityGame, CommunityGameParticipant, CommunityGameStat,
+        CommunityLevel, CommunityMilestoneReward, CommunityMilestoneClaim,
+        CommunityAchievement, CommunityConfig, CommunitySchedulerState,
+        CommunityAuditLog,
     )
     import logging
     import time as _time
@@ -246,6 +251,7 @@ def init_db():
     t2 = _time.perf_counter()
     _seed_traits()
     _seed_competition_templates()
+    _seed_community_arena()
     t3 = _time.perf_counter()
     _restore_uploaded_assets()
     t4 = _time.perf_counter()
@@ -256,6 +262,54 @@ def init_db():
         "assets %.1fs | total %.1fs",
         t1 - t0, t2 - t1, t3 - t2, t4 - t3, t4 - t0,
     )
+
+
+def _seed_community_arena():
+    """Seed the Community Arena level ladder + milestone reward placeholders.
+
+    Only fills tables that are empty, so administrator edits are never
+    overwritten on redeploy. Best-effort: a seeding problem must never stop the
+    bot booting or touch core gameplay.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        from models import CommunityLevel, CommunityMilestoneReward
+        session = SessionLocal()
+        try:
+            if session.query(CommunityLevel.id).first() is None:
+                ladder = [
+                    (1, "Newcomer", 0), (2, "Rookie", 100), (3, "Cricket Fan", 250),
+                    (4, "Regular Member", 500), (5, "Cricket Enthusiast", 1000),
+                    (6, "Club Veteran", 2000), (7, "Pro Manager", 3500),
+                    (8, "Community Elite", 5000), (9, "Cricket Mastermind", 7500),
+                    (10, "Community Star", 10000), (11, "CMU Icon", 15000),
+                    (12, "CMU Legend", 25000), (13, "CMU Immortal", 50000),
+                    (14, "Hall of Famer", 75000), (15, "CMU GOAT", 100000),
+                ]
+                for lvl, title, req in ladder:
+                    session.add(CommunityLevel(level=lvl, title=title, required_xp=req))
+            if session.query(CommunityMilestoneReward.id).first() is None:
+                # Cosmetic badge/title per level; monetary rewards start disabled.
+                for lvl, title, _req in [
+                    (1, "Newcomer", 0), (2, "Rookie", 0), (3, "Cricket Fan", 0),
+                    (4, "Regular Member", 0), (5, "Cricket Enthusiast", 0),
+                    (6, "Club Veteran", 0), (7, "Pro Manager", 0),
+                    (8, "Community Elite", 0), (9, "Cricket Mastermind", 0),
+                    (10, "Community Star", 0), (11, "CMU Icon", 0),
+                    (12, "CMU Legend", 0), (13, "CMU Immortal", 0),
+                    (14, "Hall of Famer", 0), (15, "CMU GOAT", 0),
+                ]:
+                    session.add(CommunityMilestoneReward(
+                        level=lvl, title=title, badge=title, enabled=False))
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    except Exception:
+        log.exception("Community Arena seed skipped (non-fatal)")
 
 
 def _restore_uploaded_assets():

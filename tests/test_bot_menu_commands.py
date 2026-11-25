@@ -228,6 +228,13 @@ UNPUBLISHED_ON_PURPOSE = {
     # dedicated forward-only menu. Also callable in normal mode; the normal
     # admin menu is already full, so these do not displace more entries.
     "frwd", "frwd_chnl",
+    # CMU Community Arena — player commands. Both player scopes are already at
+    # Telegram's ceiling, so publishing these would cost existing commands their
+    # entry. They are surfaced instead by /gchelp, the Community Arena buttons,
+    # and the in-group game posts. The admin controls (gcevent/gcstop/
+    # gcsettings) ARE published, via the clamp-exempt admin bucket.
+    "community", "cxp", "checkin", "gctop", "gcgames", "gclevels",
+    "gcrewards", "gchelp",
 }
 
 

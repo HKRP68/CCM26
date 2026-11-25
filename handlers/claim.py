@@ -429,6 +429,16 @@ async def claim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      coins_change=coin_reward, player_name=p["name"], player_rating=p["rating"])
         session.commit()
 
+        # CMU Community Arena: award Community XP for a successful claim in the
+        # Official GC (only after the claim transaction above has committed).
+        # Isolated + best-effort; never affects the claim.
+        try:
+            from services.community_hooks import on_claim_success
+            on_claim_success(user_id, update.effective_chat.id,
+                             claim_seq=f"{p['id']}:{int(datetime.utcnow().timestamp())}")
+        except Exception:
+            logger.debug("community claim hook failed (non-fatal)", exc_info=True)
+
         # Build text from dict (safe after commit)
         mention = f"@{tg_user.username}" if tg_user.username else (tg_user.first_name or "You")
         text = _build_card_text(p, coin_reward=coin_reward, mention=mention)
