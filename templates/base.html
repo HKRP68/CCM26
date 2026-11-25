@@ -489,6 +489,10 @@ hr.pitch-line { border: none; height: 1px; background: linear-gradient(90deg, tr
     <a href="{{ url_for('admin_franchise_drafts_list') }}" class="{{ 'active' if request.endpoint == 'admin_franchise_drafts_list' or franchise_draft }}">🏏 Franchise Drafts</a>
     <a href="{{ url_for('admin_league_seasons') }}" class="{{ 'active' if request.endpoint in ('admin_league_seasons','admin_league_series','admin_league_season_release','admin_league_season_manual') }}">🏟 League Seasons</a>
 
+    <div class="section-label">Community</div>
+    <a href="{{ url_for('admin_community') }}" class="{{ 'active' if request.endpoint == 'admin_community' }}">🏟️ Community Engagement</a>
+    <a href="{{ url_for('admin_community_users') }}" class="{{ 'active' if request.endpoint == 'admin_community_users' }}">👤 Community Members</a>
+
     <div class="section-label">Economy & Rewards</div>
     <a href="{{ url_for('admin_economy') }}" class="{{ 'active' if request.endpoint == 'admin_economy' }}">💰 Economy</a>
     <a href="{{ url_for('admin_lucky_card_rewards') }}" class="{{ 'active' if request.endpoint == 'admin_lucky_card_rewards' }}">🎴 Lucky Card Rewards</a>

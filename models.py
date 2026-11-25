@@ -5856,3 +5856,19 @@ class TournamentChannelPost(Base):
     message_ids_json = Column(Text, nullable=True)
     last_error = Column(String(500), nullable=True)
     __table_args__ = (UniqueConstraint('tournament_id', 'event_key', 'chat_id', name='uq_tournament_channel_event'),)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# CMU COMMUNITY ARENA
+# ══════════════════════════════════════════════════════════════════════
+# Defined in a dedicated module to keep this file reviewable. Imported here so
+# ``import models`` registers every Community Arena table on Base.metadata and
+# database.init_db() creates them like any other table. Additive only — nothing
+# in that module alters an existing table.
+from models_community import (  # noqa: E402,F401
+    CommunityProfile, CommunityXPLedger, CommunityDailyCounter,
+    CommunityGame, CommunityGameParticipant, CommunityGameStat,
+    CommunityLevel, CommunityMilestoneReward, CommunityMilestoneClaim,
+    CommunityAchievement, CommunityConfig, CommunitySchedulerState,
+    CommunityAuditLog,
+)

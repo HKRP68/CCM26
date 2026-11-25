@@ -3276,6 +3276,15 @@ def finalize_webapp_match(session, match_id):
 
     session.commit()
 
+    # CMU Community Arena: Community XP for a completed Mini App match in the
+    # Official GC. The match origin is validated server-side from the committed
+    # Match row, never from client data. Isolated + best-effort.
+    try:
+        from services.community_hooks import on_match_completed
+        on_match_completed(match_id, counts=not bool((state or {}).get("stats_disabled")))
+    except Exception:
+        logger.debug("community match hook failed (non-fatal)", exc_info=True)
+
     payload = {"ok": True, "result": result, "rewards": rewards,
                "player_of_match": pom}
     if tour_announcement:

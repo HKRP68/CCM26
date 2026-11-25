@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}Community Engagement{% endblock %}
+{% block content %}
+{% macro fld(name, value, w='100%') %}
+<input type="number" name="{{ name }}" value="{{ value }}"
+       style="width:{{ w }};padding:.45rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+{% endmacro %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🏟️ Community Engagement</h2>
+  <div>
+    <a href="{{ url_for('admin_community_users') }}" class="btn btn-ghost btn-sm">👤 Members</a>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
+  </div>
+</div>
+
+<div style="margin-bottom:1rem;padding:.7rem 1rem;border-radius:10px;border:1px solid var(--border);background:var(--card);">
+  <b>Status:</b>
+  {% if cfg.enabled %}<span style="color:#2ecc71;">🟢 Enabled</span>{% else %}<span style="color:#e74c3c;">🔴 Disabled</span>{% endif %}
+  &nbsp;·&nbsp; <b>Auto games:</b> {{ '🟢 On' if cfg.auto_enabled else '🔴 Off' }}
+  &nbsp;·&nbsp; <b>Official group:</b>
+  {% if official_group %}<code>{{ official_group }}</code>{% else %}<span style="color:#e67e22;">⚠️ not configured (set under Branding)</span>{% endif %}
+</div>
+
+<!-- ─ Analytics ─ -->
+<div style="display:flex;gap:.4rem;margin-bottom:.8rem;flex-wrap:wrap;">
+  {% for p in ['today','week','month','all'] %}
+    <a href="{{ url_for('admin_community', period=p) }}"
+       class="btn btn-sm {{ 'btn-primary' if period==p else 'btn-ghost' }}">{{ p|capitalize }}</a>
+  {% endfor %}
+</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.7rem;margin-bottom:1rem;">
+  {% macro stat(label, value) %}
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.8rem;">
+    <div style="font-size:1.4rem;font-weight:800;">{{ value if value is not none else 'n/a' }}</div>
+    <div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">{{ label }}</div>
+  </div>
+  {% endmacro %}
+  {{ stat('Active members', stats.active_members) }}
+  {{ stat('CXP awarded', '{:,}'.format(stats.cxp_awarded)) }}
+  {{ stat('Eligible messages', stats.rewarded_messages) }}
+  {{ stat('Completed matches', stats.completed_matches) }}
+  {{ stat('Successful claims', stats.claims) }}
+  {{ stat('Check-ins', stats.checkins) }}
+  {{ stat('Games launched', stats.games_launched) }}
+  {{ stat('Games won', stats.games_won) }}
+  {{ stat('Unanswered games', stats.games_unanswered) }}
+  {{ stat('Completion rate %', stats.completion_rate) }}
+  {{ stat('Avg win time (s)', stats.avg_winning_response_s) }}
+  {{ stat('Avg participants', stats.avg_participants) }}
+  {{ stat('Unique participants', stats.unique_game_participants) }}
+  {{ stat('New members', stats.new_members) }}
+  {{ stat('Returning members', stats.returning_members) }}
+  {{ stat('Retention %', stats.retention_pct) }}
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:.8rem;margin-bottom:1.3rem;">
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.8rem;">
+    <h4 style="margin:0 0 .5rem;">CXP by activity</h4>
+    {% for r in stats.cxp_by_activity %}
+      <div style="display:flex;justify-content:space-between;font-size:.85rem;padding:.15rem 0;">
+        <span>{{ r.activity }}</span><b>{{ '{:,}'.format(r.cxp) }}</b></div>
+    {% else %}<span style="color:var(--muted);">No data yet.</span>{% endfor %}
+  </div>
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.8rem;">
+    <h4 style="margin:0 0 .5rem;">Peak hours (IST) · Most popular: {{ stats.most_popular_game or 'n/a' }}</h4>
+    {% for h in stats.peak_hours %}
+      <div style="display:flex;justify-content:space-between;font-size:.85rem;padding:.15rem 0;">
+        <span>{{ '%02d:00'|format(h.hour) }}</span><b>{{ h.count }}</b></div>
+    {% else %}<span style="color:var(--muted);">No data yet.</span>{% endfor %}
+    <p style="color:var(--muted);font-size:.7rem;margin:.5rem 0 0;">{{ stats.retention_note }}</p>
+  </div>
+</div>
+
+<!-- ─ Event management ─ -->
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem;margin-bottom:1.3rem;">
+  <h3 style="margin:0 0 .6rem;">🎮 Event management</h3>
+  {% if active_games %}
+    {% for g in active_games %}
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:.3rem 0;border-bottom:1px solid var(--border);">
+        <span>▶️ <b>{{ game_labels.get(g.game_type, g.game_type) }}</b> — chat {{ g.chat_id }} · {{ g.participant_count }} players · ends {{ g.deadline.strftime('%H:%M:%S') }} UTC</span>
+        <form method="POST" action="{{ url_for('admin_community_cancel') }}" style="margin:0;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="game_id" value="{{ g.id }}">
+          <button class="btn btn-sm btn-ghost">🛑 Cancel</button>
+        </form>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p style="color:var(--muted);font-size:.85rem;margin:0 0 .6rem;">No active game right now.</p>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('admin_community_launch') }}" style="margin-top:.7rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <select name="game_type" style="padding:.45rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      {% for t in game_types %}<option value="{{ t }}">{{ game_labels.get(t, t) }}</option>{% endfor %}
+    </select>
+    <select name="difficulty" style="padding:.45rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      <option value="">default difficulty</option><option>easy</option><option>medium</option><option>hard</option>
+    </select>
+    <button class="btn btn-primary btn-sm" {{ '' if bridge_available else 'disabled' }}>🚀 Launch now</button>
+    {% if not bridge_available %}<span style="color:#e67e22;font-size:.78rem;">Bot bridge offline — use /gcevent in the group.</span>{% endif %}
+  </form>
+</div>
+
+<!-- ─ Settings ─ -->
+<form method="POST" action="{{ url_for('admin_community_save') }}" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.2rem;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:1rem;">
+    <label><input type="checkbox" name="enabled" {{ 'checked' if cfg.enabled }}> <b>Enable Community Arena</b></label>
+    <label><input type="checkbox" name="auto_enabled" {{ 'checked' if cfg.auto_enabled }}> <b>Automatic engagement (auto games)</b></label>
+    <label><input type="checkbox" name="fuzzy_matching" {{ 'checked' if cfg.fuzzy_matching }}> Fuzzy answer matching</label>
+  </div>
+
+  <h3 style="font-size:1rem;margin:.6rem 0;">✨ XP values &amp; daily limits</h3>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.6rem;margin-bottom:1rem;">
+    <div>Max daily CXP {{ fld('max_daily_xp', cfg.max_daily_xp) }}</div>
+    <div>Chat XP / daily {{ fld('xp_chat', cfg.xp.chat.xp, '60px') }} {{ fld('limit_chat', cfg.xp.chat.daily_limit, '60px') }}</div>
+    <div>PvP XP / daily {{ fld('xp_pvp', cfg.xp.pvp_match.xp, '60px') }} {{ fld('limit_pvp', cfg.xp.pvp_match.daily_limit, '60px') }}</div>
+    <div>AI XP / daily {{ fld('xp_ai', cfg.xp.ai_match.xp, '60px') }} {{ fld('limit_ai', cfg.xp.ai_match.daily_limit, '60px') }}</div>
+    <div>Claim XP / daily {{ fld('xp_claim', cfg.xp.claim.xp, '60px') }} {{ fld('limit_claim', cfg.xp.claim.daily_limit, '60px') }}</div>
+    <div>Check-in XP {{ fld('xp_checkin', cfg.xp.checkin.xp, '60px') }}</div>
+  </div>
+
+  <h3 style="font-size:1rem;margin:.6rem 0;">💬 Chat anti-spam</h3>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.6rem;margin-bottom:1rem;">
+    <div>Min characters {{ fld('chat_min_chars', cfg.chat.min_chars, '70px') }}</div>
+    <div>Cooldown (s) {{ fld('chat_cooldown', cfg.chat.cooldown_seconds, '70px') }}</div>
+  </div>
+
+  <h3 style="font-size:1rem;margin:.6rem 0;">🎮 Games</h3>
+  <table style="width:100%;border-collapse:collapse;font-size:.85rem;margin-bottom:1rem;">
+    <tr style="text-align:left;color:var(--muted);"><th>Game</th><th>On</th><th>Duration (s)</th><th>Reward CXP</th><th>Daily win limit</th><th>Weight</th><th>Extra</th></tr>
+    {% for t in game_types %}
+    <tr style="border-top:1px solid var(--border);">
+      <td>{{ game_labels.get(t, t) }}</td>
+      <td><input type="checkbox" name="game_{{ t }}_enabled" {{ 'checked' if cfg.games[t].enabled }}></td>
+      <td>{{ fld('game_%s_duration'|format(t), cfg.games[t].duration, '70px') }}</td>
+      <td>{{ fld('game_%s_reward'|format(t), cfg.games[t].reward, '70px') }}</td>
+      <td>{{ fld('game_%s_winlimit'|format(t), cfg.games[t].get('daily_win_limit', 0), '70px') }}</td>
+      <td>{{ fld('weight_%s'|format(t), cfg.scheduler.weights[t], '60px') }}</td>
+      <td>
+        {% if t == 'wordle' %}Attempts {{ fld('game_wordle_attempts', cfg.games.wordle.get('max_attempts', 6), '55px') }}{% endif %}
+        {% if t == 'rating' %}Attempts {{ fld('game_rating_attempts', cfg.games.rating.get('max_attempts', 3), '55px') }}{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  <h3 style="font-size:1rem;margin:.6rem 0;">🤖 Automatic scheduler</h3>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.6rem;margin-bottom:1rem;">
+    <div>Active start hour (IST) {{ fld('sched_start', cfg.scheduler.active_start_hour, '60px') }}</div>
+    <div>Active end hour (IST) {{ fld('sched_end', cfg.scheduler.active_end_hour, '60px') }}</div>
+    <div>Max games / day {{ fld('sched_max', cfg.scheduler.max_games_per_day, '60px') }}</div>
+    <div>Min gap (min) {{ fld('sched_gap', cfg.scheduler.min_gap_minutes, '60px') }}</div>
+    <div>Inactivity trigger (min) {{ fld('sched_inactivity', cfg.scheduler.inactivity_minutes, '60px') }}</div>
+    <div>Recent-player exclusion {{ fld('sched_recent_players', cfg.scheduler.recent_player_exclusion, '60px') }}</div>
+    <div><label><input type="checkbox" name="sched_match_protection" {{ 'checked' if cfg.scheduler.match_protection }}> Protect tournament matches</label></div>
+  </div>
+
+  <h3 style="font-size:1rem;margin:.6rem 0;">🎯 Eligible players</h3>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.6rem;margin-bottom:1rem;">
+    <div>Min rating {{ fld('elig_rating_min', cfg.eligible.rating_min, '70px') }}</div>
+    <div>Max rating {{ fld('elig_rating_max', cfg.eligible.rating_max, '70px') }}</div>
+  </div>
+
+  <button type="submit" class="btn btn-primary">💾 Save settings</button>
+</form>
+
+<!-- ─ Levels reference ─ -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:.8rem;margin-top:1.3rem;">
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem;">
+    <h3 style="margin:0 0 .5rem;">🏆 Level ladder</h3>
+    {% for lvl, title, req in ladder %}
+      <div style="display:flex;justify-content:space-between;font-size:.84rem;padding:.12rem 0;">
+        <span>L{{ lvl }} · {{ title }}</span><b>{{ '{:,}'.format(req) }} CXP</b></div>
+    {% endfor %}
+  </div>
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem;">
+    <h3 style="margin:0 0 .5rem;">🎁 Milestone rewards</h3>
+    <p style="color:var(--muted);font-size:.74rem;margin:0 0 .5rem;">Monetary rewards are off by default; configure per level in a future release or via the DB.</p>
+    {% for r in rewards %}
+      <div style="display:flex;justify-content:space-between;font-size:.82rem;padding:.12rem 0;">
+        <span>L{{ r.level }} · {{ r.title }}</span><span style="color:var(--muted);">{{ r.reward }}</span></div>
+    {% endfor %}
+  </div>
+</div>
+
+{% endblock %}
