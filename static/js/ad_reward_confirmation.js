@@ -1,7 +1,7 @@
-// Remember the SDK completion so a network retry uses the same view reference.
-window.AdRewardConfirmation = function (initData, saveCompletion) {
+// Remember the SDK completion while waiting for Adsgram's server callback.
+window.AdRewardConfirmation = function (initData, checkCredit) {
   const pendingFor = 5 * 60 * 1000;
-  const delays = [0, 600, 1200];
+  const delays = [0, 1000, 2000, 3500, 5000, 5000];
   let key;
   let pendingView = null;
   try {
@@ -35,7 +35,7 @@ window.AdRewardConfirmation = function (initData, saveCompletion) {
     if (!view) return false;
     for (const delay of delays) {
       if (delay) await new Promise(resolve => setTimeout(resolve, delay));
-      const {ok, status, data} = await saveCompletion(view.id);
+      const {ok, status, data} = await checkCredit(view.id);
       if (ok && data?.confirmed) return true;
       if ([400, 401, 403, 409].includes(status)) return false;
     }
@@ -51,6 +51,6 @@ window.AdRewardConfirmation = function (initData, saveCompletion) {
     isPending: () => currentView() !== null,
     clear: () => writePending(null),
     waitForCredit,
-    pendingMessage: 'Your reward is still pending. Tap Check reward to retry without watching another ad.',
+    pendingMessage: 'Adsgram is still confirming your ad. Tap Check reward to check again without watching another ad.',
   };
 };

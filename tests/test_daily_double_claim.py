@@ -257,7 +257,7 @@ class MiniAppDailyButtonTests(unittest.TestCase):
 
     def test_the_server_quota_is_adopted_before_the_button_comes_back(self):
         adopt = self.click.index("lastInitData.daily.quota = data.quota")
-        response = self.click.index("await api('/api/webapp/daily'")
+        response = self.click.index("await submitReward('daily', '/api/webapp/daily'")
         self.assertLess(response, adopt)
         self.assertLess(adopt, self.click.index("updateDailyButton();", adopt),
                         "the cached quota must be replaced before a redraw")

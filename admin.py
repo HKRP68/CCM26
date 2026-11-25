@@ -12390,9 +12390,8 @@ def webapp_match_scorecard():
         db.close()
 
 
-# Adsgram sends the Telegram id as `userid`. The aliases cost nothing and make
-# a mistyped reward URL work rather than silently dropping every postback.
-_POSTBACK_ID_PARAMS = ("userid", "telegram_id", "tgid", "user_id")
+# Adsgram substitutes [userId] in the publisher's Reward URL.
+_POSTBACK_ID_PARAMS = ("userid", "userId", "telegram_id", "telegramId", "tgid", "user_id")
 
 
 @app.route("/api/ads/config", methods=["GET"])
@@ -12417,6 +12416,7 @@ def ads_postback():
     from services import ad_service
     if not ad_service.postback_authorized(request.args.get("secret", "")):
         return {"ok": False, "error": "unauthorized"}, 403
+    headers = {"Cache-Control": "no-store"}
     try:
         userid_raw = ""
         for param in _POSTBACK_ID_PARAMS:
@@ -12440,11 +12440,11 @@ def ads_postback():
             if not user:
                 # Still 200 OK so Adsgram doesn't retry, but don't insert a row
                 logger.warning(f"Adsgram postback for unknown user {telegram_id}")
-                return {"ok": True, "note": "user_not_found"}, 200
+                return {"ok": True, "note": "user_not_found"}, 200, headers
 
             from models import AdReward
-            from services.quest_service import safe_track
             user = _lock_user_row(db, user.id)
+            user_id = user.id
             event = request.args.get("event_id") or request.args.get("transaction_id") or ""
             now = datetime.utcnow()
             # Some Adsgram callbacks carry only the account ID. Coalesce
@@ -12457,14 +12457,23 @@ def ads_postback():
                 existing = existing.filter(
                     AdReward.received_at >= now - timedelta(seconds=ad_service.MIN_CLIENT_AD_INTERVAL_SECONDS))
             if existing.first():
-                return {"ok": True}
+                return {"ok": True}, 200, headers
             db.add(AdReward(telegram_id=telegram_id, provider="adsgram",
                             source_ip=request.remote_addr, query_string=reference, received_at=now))
-            db.flush()
-            safe_track(db, user.id, "ad_watched", 1)
+            # Quest tracking can roll back its session. Persist the ad first so
+            # an unrelated failure cannot erase a confirmed completion.
             db.commit()
+            try:
+                from services.quest_service import safe_track
+
+                _lock_user_row(db, user_id)
+                safe_track(db, user_id, "ad_watched", 1)
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.exception("Could not track quest progress for a confirmed ad")
             logger.info(f"Adsgram postback recorded for {telegram_id}")
-            return {"ok": True}
+            return {"ok": True}, 200, headers
         finally:
             db.close()
     except Exception as e:

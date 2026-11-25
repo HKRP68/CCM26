@@ -384,6 +384,36 @@ def test_unavailable_and_replayed_ad_callbacks_do_not_create_extra_rewards(minia
         assert db.query(MiniappRewardReceipt).count() == 2
 
 
+def test_adsgram_callback_survives_a_quest_tracking_rollback(miniapp_orders, monkeypatch):
+    from models import AdReward
+    from services import quest_service
+
+    post, sessions, admin = miniapp_orders
+    assert post("spin", {"request_id": "initial"})[1]["slot_type"] == "free"
+    assert post("ad-completed", {"view_id": "a" * 32})[1]["confirmed"] is False
+
+    def rollback_tracking(session, user_id, event, count):
+        if event == "ad_watched":
+            session.rollback()
+
+    monkeypatch.setattr(quest_service, "safe_track", rollback_tracking)
+    with admin.app.test_client() as client:
+        params = {"userid": 7, "secret": "t" * 32}
+        response = client.get("/api/ads/reward", query_string=params)
+        assert response.status_code == 200
+        assert response.headers["Cache-Control"] == "no-store"
+        assert client.get("/api/adsgram/reward", query_string={
+            "telegramId": 7, "secret": "t" * 32,
+        }).status_code == 200
+
+    assert post("ad-completed", {"view_id": "a" * 32})[1]["ads_saved"] == 1
+    result = post("spin", {"request_id": "watched-ad"})[1]
+    assert result["slot_type"] == "ad"
+    assert post("spin", {"request_id": "watched-ad"})[1] == dict(result, replayed=True)
+    with sessions() as db:
+        assert db.query(AdReward).one().consumed_at is not None
+
+
 def test_finalized_match_pays_once_and_applies_ai_daily_cap(miniapp_orders, monkeypatch):
     from models import Match, MatchRewardSettlement
     from services import config_service
