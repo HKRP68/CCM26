@@ -41,18 +41,26 @@ def ad_env(block_id=None):
 
 class ConfigTests(unittest.TestCase):
 
-    @patch.dict(os.environ, {"ADSGRAM_POSTBACK_SECRET": "x" * 32})
-    def test_a_block_id_and_callback_secret_turn_real_ads_on(self):
-        with ad_env("int-1234"):
+    @patch.dict(os.environ, {"ADSGRAM_POSTBACK_SECRET": "", "ADSGRAM_REQUIRE_POSTBACK": ""})
+    def test_reward_block_alone_enables_sdk_rewards(self):
+        with ad_env("1234"):
             cfg = ad_service.client_config()
         self.assertTrue(cfg["configured"])
-        self.assertEqual(cfg["block_id"], "int-1234")
+        self.assertEqual(cfg["block_id"], "1234")
         self.assertEqual(cfg["sdk_url"], ad_service.ADSGRAM_SDK_URL)
 
-    @patch.dict(os.environ, {"ADSGRAM_POSTBACK_SECRET": ""})
-    def test_block_without_callback_secret_keeps_rewarded_ads_unavailable(self):
-        with ad_env("int-1234"):
+    @patch.dict(os.environ, {"ADSGRAM_POSTBACK_SECRET": "", "ADSGRAM_REQUIRE_POSTBACK": "1"})
+    def test_callback_only_mode_requires_a_callback_secret(self):
+        with ad_env("1234"):
             self.assertFalse(ad_service.client_config()["configured"])
+            with patch.dict(os.environ, {"ADSGRAM_POSTBACK_SECRET": "x" * 32}):
+                self.assertTrue(ad_service.client_config()["configured"])
+
+    @patch.dict(os.environ, {"ADSGRAM_REQUIRE_POSTBACK": ""})
+    def test_non_reward_blocks_are_unavailable_for_rewards(self):
+        for value in ("int-1234", "task-1234"):
+            with self.subTest(block_id=value), ad_env(value):
+                self.assertIsNone(ad_service.client_config()["block_id"])
 
     def test_no_block_id_is_mock_mode(self):
         with ad_env(None):
@@ -75,7 +83,7 @@ class ConfigTests(unittest.TestCase):
         URL is a constant: configuration decides whether we can init(), never
         whether the SDK is there to init.
         """
-        for block_id in (None, "", "mock", "int-1234"):
+        for block_id in (None, "", "mock", "1234"):
             with self.subTest(block_id=block_id):
                 with ad_env(block_id):
                     self.assertEqual(ad_service.client_config()["sdk_url"],
@@ -83,8 +91,8 @@ class ConfigTests(unittest.TestCase):
 
     def test_whitespace_around_a_block_id_is_forgiven(self):
         """Env vars pasted into a dashboard field pick up spaces."""
-        with ad_env("  int-1234  "):
-            self.assertEqual(ad_service.get_block_id(), "int-1234")
+        with ad_env("  1234  "):
+            self.assertEqual(ad_service.get_block_id(), "1234")
 
 
 class TokenConcurrencyTests(unittest.TestCase):

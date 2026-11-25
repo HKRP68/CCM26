@@ -1,5 +1,6 @@
 """Adsgram SDK completions and optional postbacks share a single-use ledger."""
 
+import hashlib
 import logging
 import os
 import secrets
@@ -82,18 +83,14 @@ NOFILL_TOKEN_PREFIX = "NF-"    # no ad was available to watch
 
 ADSGRAM_SDK_URL = "https://sad.adsgram.ai/js/sad.min.js"
 
-# Values that mean "not configured" rather than a real block id.
-_PLACEHOLDERS = ("", "none", "mock", "disabled", "off", "false", "0")
-
-
 def _env(name: str) -> str:
     return (os.getenv(name) or "").strip()
 
 
 def get_block_id() -> str | None:
-    """Adsgram block ID for the client SDK, or None for mock mode."""
+    """Adsgram Reward blocks have numeric IDs."""
     value = _env("ADSGRAM_BLOCK_ID")
-    return value if value and value.lower() not in _PLACEHOLDERS else None
+    return value if value.isascii() and value.isdecimal() and value.strip("0") else None
 
 
 def reward_origin(webapp_url: str) -> str:
@@ -114,19 +111,66 @@ def postback_authorized(supplied: str) -> bool:
             and secrets.compare_digest(expected, supplied))
 
 
+def postback_required() -> bool:
+    return _env("ADSGRAM_REQUIRE_POSTBACK").lower() in {"1", "true", "yes", "on"}
+
+
+def has_postback_secret() -> bool:
+    secret = _env("ADSGRAM_POSTBACK_SECRET")
+    return len(secret) >= 32 and secret.isascii()
+
+
 def is_configured() -> bool:
-    return get_block_id() is not None
+    return bool(get_block_id() and (not postback_required() or has_postback_secret()))
 
 
 def client_config() -> dict:
-    block_id = get_block_id()
-    secret = _env("ADSGRAM_POSTBACK_SECRET")
-    configured = bool(block_id and len(secret) >= 32 and secret.isascii())
+    configured = is_configured()
     return {
         "configured": configured,
-        "block_id": block_id if configured else None,
+        "block_id": get_block_id() if configured else None,
         "sdk_url": ADSGRAM_SDK_URL,
     }
+
+
+def record_verified_postback(session, telegram_id: int, *, event: str, source_ip: str | None) -> bool:
+    """Record one authenticated callback under the caller's user lock."""
+    from sqlalchemy import or_
+    from models import AdReward
+
+    now = datetime.utcnow()
+    reference = "event:" + hashlib.sha256(event.encode()).hexdigest() if event else ""
+    receipts = session.query(AdReward).filter(AdReward.telegram_id == telegram_id)
+    callbacks = receipts.filter(AdReward.provider == "adsgram")
+    if reference:
+        duplicates = callbacks.filter(AdReward.query_string == reference)
+    else:
+        # Some Reward URLs identify only the account. Coalesce immediate retries.
+        duplicates = callbacks.filter(
+            or_(AdReward.query_string == "", AdReward.query_string.startswith("view:")),
+            AdReward.received_at >= now - timedelta(seconds=MIN_CLIENT_AD_INTERVAL_SECONDS),
+        )
+    if duplicates.first():
+        return False
+
+    sdk_receipt = (receipts.filter(
+        AdReward.provider == CLIENT_PROVIDER,
+        AdReward.received_at >= now - timedelta(seconds=POSTBACK_DEDUPE_SECONDS),
+        or_(AdReward.view_id.isnot(None), AdReward.query_string.startswith("view:")),
+    ).order_by(AdReward.received_at.asc(), AdReward.id.asc()).first())
+    ip = (source_ip or "")[:64]
+    if sdk_receipt:
+        # Keep the view ID and consumed state when Adsgram confirms this ad.
+        sdk_receipt.view_id = sdk_receipt.view_id or sdk_receipt.query_string.removeprefix("view:")
+        sdk_receipt.provider = "adsgram"
+        sdk_receipt.query_string = reference
+        sdk_receipt.source_ip = ip
+        sdk_receipt.received_at = now
+        return False
+
+    session.add(AdReward(telegram_id=telegram_id, provider="adsgram",
+                         query_string=reference, source_ip=ip, received_at=now))
+    return True
 
 
 def record_postback(session, telegram_id: int, source_ip: str | None = None,
@@ -258,7 +302,7 @@ def bank_credit(session, telegram_id: int, reason: str = "",
         return None
 
 
-def claim_credit(session, telegram_id: int, *, commit=True, provider_verified=False) -> bool:
+def claim_credit(session, telegram_id: int, *, commit=True, provider_verified=None) -> bool:
     """Consume one banked credit, oldest first. True if one was just spent.
 
     FIFO matters here in a way it doesn't for postbacks. Credits live for
@@ -277,14 +321,29 @@ def claim_credit(session, telegram_id: int, *, commit=True, provider_verified=Fa
     echoes a client receipt is stored already consumed by ``record_postback``,
     and consuming is a conditional UPDATE.
     """
-    query = _unclaimed(session, telegram_id, CREDIT_TTL_SECONDS, oldest_first=True)
+    row = _credit_query(session, telegram_id, provider_verified, oldest_first=True).first()
+    return _claim_row(session, row, commit=commit)
+
+
+def claim_reward_credit(session, telegram_id: int) -> str | None:
+    """Spend one credit inside the Mini App reward transaction."""
+    row = _credit_query(session, telegram_id, oldest_first=True).first()
+    if _claim_row(session, row, commit=False):
+        return "server_postback" if row.provider == "adsgram" else "ad_credit"
+    return None
+
+
+def _credit_query(session, telegram_id: int, provider_verified=None, *, oldest_first=False):
+    query = _unclaimed(session, telegram_id, CREDIT_TTL_SECONDS, oldest_first=oldest_first)
+    if provider_verified is None:
+        provider_verified = postback_required()
     if provider_verified:
         from models import AdReward
         query = query.filter(AdReward.provider == "adsgram")
-    return _claim_row(session, query.first(), commit=commit)
+    return query
 
 
-def count_credits(session, telegram_id: int, *, provider_verified=False) -> int:
+def count_credits(session, telegram_id: int, *, provider_verified=None) -> int:
     """How many watched-but-unspent ads this user can still redeem.
 
     Reported to the client so a saved ad is visible ("1 ad saved — spin it
@@ -292,11 +351,7 @@ def count_credits(session, telegram_id: int, *, provider_verified=False) -> int:
     exactly what ``claim_credit`` will spend, postbacks included.
     """
     try:
-        query = _unclaimed(session, telegram_id, CREDIT_TTL_SECONDS)
-        if provider_verified:
-            from models import AdReward
-            query = query.filter(AdReward.provider == "adsgram")
-        return query.count()
+        return _credit_query(session, telegram_id, provider_verified).count()
     except Exception:
         logger.exception("count_credits failed for %s", telegram_id)
         return 0
@@ -308,30 +363,33 @@ def record_client_view(session, telegram_id: int, view_id: str) -> bool:
     Returns whether a new credit was created. Persist the view reference so
     a retried request still matches after the credit has been spent.
     """
+    from sqlalchemy import or_
     from models import AdReward
 
     reference = f"view:{view_id}"
     receipts = session.query(AdReward).filter(AdReward.telegram_id == telegram_id)
-    if receipts.filter(AdReward.query_string == reference).first():
+    if receipts.filter(or_(AdReward.view_id == view_id, AdReward.query_string == reference)).first():
         return False
 
     recent = datetime.utcnow() - timedelta(seconds=MIN_CLIENT_AD_INTERVAL_SECONDS)
     postback = (receipts.filter(AdReward.provider == "adsgram",
                                 AdReward.received_at >= recent,
-                                AdReward.query_string == "")
-                .order_by(AdReward.received_at.desc()).first())
+                                AdReward.view_id.is_(None),
+                                or_(AdReward.query_string.is_(None),
+                                    ~AdReward.query_string.startswith("view:")))
+                .order_by(AdReward.received_at.desc(), AdReward.id.desc()).first())
     if postback:
-        postback.query_string = reference
+        postback.view_id = view_id
         return False
 
-    if receipts.filter(AdReward.provider == CLIENT_PROVIDER,
+    if receipts.filter(or_(AdReward.provider == CLIENT_PROVIDER, AdReward.view_id.isnot(None)),
                        AdReward.received_at >= recent).first():
         return False
     if _unclaimed(session, telegram_id, CREDIT_TTL_SECONDS).count() >= MAX_OUTSTANDING_CLIENT_ADS:
         return False
 
     session.add(AdReward(telegram_id=telegram_id, provider=CLIENT_PROVIDER,
-                         query_string=reference))
+                         view_id=view_id))
     return True
 
 

@@ -2223,7 +2223,9 @@ class AdReward(Base):
     consumed_at = Column(DateTime, nullable=True)
     provider = Column(String(20), nullable=True)
     source_ip = Column(String(64), nullable=True)
-    # Legacy rows store request metadata. SDK completions store a view reference.
+    # Keep the SDK view separate so callback and SDK retries each deduplicate.
+    view_id = Column(String(32), nullable=True)
+    # Callback event reference, or request metadata on older rows.
     query_string = Column(String(500), nullable=True)
 
 

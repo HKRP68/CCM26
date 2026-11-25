@@ -5201,7 +5201,7 @@ def webapp_init():
         # Ads banked when a reward couldn't be handed over (see ad_service).
         # Surfaced on both quotas so either screen can say "1 ad saved" and
         # skip the ad instead of asking for one the player already watched.
-        _ads_saved = ad_service.count_credits(db, tg_id, provider_verified=True)
+        _ads_saved = ad_service.count_credits(db, tg_id)
         gspin_quota["ads_saved"] = _ads_saved
         daily_quota["ads_saved"] = _ads_saved
         gspin_ready = not gspin_quota["all_used"]
@@ -6281,7 +6281,7 @@ def webapp_spin():
             banked = _bank_if_spendable(db, tg_id, ad_provided, verified_via,
                                         f"spin blocked: {reason}")
             status = quota_service.get_quota_status(stats, "spin", session=db, user=user)
-            saved = ad_service.count_credits(db, tg_id, provider_verified=True)
+            saved = ad_service.count_credits(db, tg_id)
             # Carried on the quota too, so a client that only reads `quota`
             # still sees the saved ad it is about to be told about.
             status["ads_saved"] = saved
@@ -6353,8 +6353,8 @@ def webapp_spin():
             # overwrite a cached saved-ad count with nothing.
             "quota": dict(quota_service.get_quota_status(stats, "spin",
                                                          session=db, user=user),
-                          ads_saved=ad_service.count_credits(db, tg_id, provider_verified=True)),
-            "ads_saved": ad_service.count_credits(db, tg_id, provider_verified=True),
+                          ads_saved=ad_service.count_credits(db, tg_id)),
+            "ads_saved": ad_service.count_credits(db, tg_id),
             "balance": {
                 "coins": user.total_coins or 0,
                 "gems": user.total_gems or 0,
@@ -6391,21 +6391,28 @@ def webapp_spin():
 @app.route("/api/webapp/ad-completed", methods=["POST"])
 @csrf_exempt
 def webapp_ad_completed():
-    """Check for an authenticated Adsgram callback. Completion reports are read-only."""
+    """Save an SDK completion or check the account's saved ad credits."""
     import re
     from services import ad_service
 
     auth, _, error = _webapp_auth()
     if error:
         return error
-    db, _, tg_id = auth
+    db, user, tg_id = auth
     try:
         data = request.get_json(silent=True)
         if isinstance(data, dict) and "view_id" in data:
             view_id = data["view_id"]
             if not isinstance(view_id, str) or not re.fullmatch(r"[0-9a-f]{32}", view_id):
                 return {"ok": False, "error": "invalid_view_id"}, 400
-        saved = ad_service.count_credits(db, tg_id, provider_verified=True)
+            if not ad_service.postback_required() and ad_service.is_configured():
+                user_id = user.id
+                _lock_user_row(db, user_id)
+                new_credit = ad_service.record_client_view(db, tg_id, view_id)
+                db.commit()
+                if new_credit:
+                    _track_ad_quest(db, user_id)
+        saved = ad_service.count_credits(db, tg_id)
         return ({"ok": True, "confirmed": saved > 0, "ads_saved": saved},
                 200, {"Cache-Control": "no-store"})
     finally:
@@ -6439,6 +6446,19 @@ def _locked_stats(db, user_id):
     return stats
 
 
+def _track_ad_quest(db, user_id):
+    # Track after the credit commits so a quest failure cannot roll it back.
+    try:
+        from services.quest_service import safe_track
+
+        _lock_user_row(db, user_id)
+        safe_track(db, user_id, "ad_watched", 1)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Could not track quest progress for a completed ad")
+
+
 def _bank_if_spendable(db, tg_id, ad_provided, verified_via, reason):
     """Keep a confirmed ad available if a payout was blocked or rolled back."""
     if verified_via in ("server_postback", "ad_credit"):
@@ -6459,11 +6479,12 @@ def _fmt_gap(seconds):
 
 
 def _verify_ad_for_action(db, tg_id, ad_token, dev_mode):
-    """Spend a provider-verified completion in the same transaction as its reward."""
+    """Spend an ad credit in the same transaction as its reward."""
     from services import ad_service
 
-    if ad_service.claim_credit(db, tg_id, commit=False, provider_verified=True):
-        return "server_postback"
+    verified_via = ad_service.claim_reward_credit(db, tg_id)
+    if verified_via:
+        return verified_via
     if dev_mode and ad_token.startswith("MOCK-"):
         return "mock"
     return None
@@ -6539,7 +6560,7 @@ def webapp_daily():
             banked = _bank_if_spendable(db, tg_id, ad_provided, verified_via,
                                         f"daily blocked: {reason}")
             status = quota_service.get_quota_status(stats, "daily", session=db, user=user)
-            saved = ad_service.count_credits(db, tg_id, provider_verified=True)
+            saved = ad_service.count_credits(db, tg_id)
             status["ads_saved"] = saved
             if reason == "ad_cooldown":
                 return {"ok": False, "error": "ad_cooldown",
@@ -6593,10 +6614,10 @@ def webapp_daily():
             "verified_via": verified_via,
             "quota": dict(quota_service.get_quota_status(stats, "daily",
                                                          session=db, user=user),
-                          ads_saved=ad_service.count_credits(db, tg_id, provider_verified=True)),
+                          ads_saved=ad_service.count_credits(db, tg_id)),
             # Same field the spin returns, so a client reading the claim
             # response rather than re-fetching init sees the saved-ad count.
-            "ads_saved": ad_service.count_credits(db, tg_id, provider_verified=True),
+            "ads_saved": ad_service.count_credits(db, tg_id),
             "reward": {
                 "coins": result["coins"],
                 "gems": result["gems"],
@@ -7248,7 +7269,7 @@ def webapp_freepack_status():
             "adsgram_block_id": ad_service.get_block_id(),
             # Ads this user has already watched but not yet spent. With one
             # banked the pack opens without showing another.
-            "ads_saved": ad_service.count_credits(db, tg_id, provider_verified=True),
+            "ads_saved": ad_service.count_credits(db, tg_id),
             "roster_count": user.roster_count or 0,
             "roster_full": (user.roster_count or 0) >= MAX_ROSTER,
         }
@@ -7303,7 +7324,7 @@ def webapp_freepack_open():
         ready, remaining = check_free_pack_cooldown(db, stats)
         if not ready:
             return {"ok": False, "error": "cooldown", "message": "Free Pack is still on cooldown.",
-                    "ads_saved": ad_service.count_credits(db, tg_id, provider_verified=True),
+                    "ads_saved": ad_service.count_credits(db, tg_id),
                     "remaining_seconds": remaining}, 400
 
         verified_via = _verify_ad_for_action(db, tg_id, ad_token, dev_mode)
@@ -7314,7 +7335,7 @@ def webapp_freepack_open():
                     # Same field the spin and daily send, so a client that
                     # arrived here on a stale saved-ad count corrects itself
                     # from the refusal instead of needing another round trip.
-                    "ads_saved": ad_service.count_credits(db, tg_id, provider_verified=True),
+                    "ads_saved": ad_service.count_credits(db, tg_id),
                     "ads_configured": ads_configured}, 400
 
 
@@ -12442,37 +12463,15 @@ def ads_postback():
                 logger.warning(f"Adsgram postback for unknown user {telegram_id}")
                 return {"ok": True, "note": "user_not_found"}, 200, headers
 
-            from models import AdReward
-            user = _lock_user_row(db, user.id)
             user_id = user.id
+            _lock_user_row(db, user_id)
             event = request.args.get("event_id") or request.args.get("transaction_id") or ""
-            now = datetime.utcnow()
-            # Some Adsgram callbacks carry only the account ID. Coalesce
-            # retry bursts for those placements. Keep supplied event IDs
-            # for exact deduplication over the full lifetime of the receipt.
-            reference = "event:" + _hashlib.sha256(event.encode()).hexdigest() if event else ""
-            existing = db.query(AdReward.id).filter_by(
-                telegram_id=telegram_id, provider="adsgram", query_string=reference)
-            if not reference:
-                existing = existing.filter(
-                    AdReward.received_at >= now - timedelta(seconds=ad_service.MIN_CLIENT_AD_INTERVAL_SECONDS))
-            if existing.first():
-                return {"ok": True}, 200, headers
-            db.add(AdReward(telegram_id=telegram_id, provider="adsgram",
-                            source_ip=request.remote_addr, query_string=reference, received_at=now))
-            # Quest tracking can roll back its session. Persist the ad first so
-            # an unrelated failure cannot erase a confirmed completion.
+            new_credit = ad_service.record_verified_postback(
+                db, telegram_id, event=event, source_ip=request.remote_addr)
             db.commit()
-            try:
-                from services.quest_service import safe_track
-
-                _lock_user_row(db, user_id)
-                safe_track(db, user_id, "ad_watched", 1)
-                db.commit()
-            except Exception:
-                db.rollback()
-                logger.exception("Could not track quest progress for a confirmed ad")
-            logger.info(f"Adsgram postback recorded for {telegram_id}")
+            if new_credit:
+                _track_ad_quest(db, user_id)
+                logger.info(f"Adsgram postback recorded for {telegram_id}")
             return {"ok": True}, 200, headers
         finally:
             db.close()
@@ -21452,9 +21451,10 @@ def admin_ads():
             spins=spins,
             users=users,
             total=total, consumed=consumed, today=today,
-            ad_config=ad_service.client_config(),
             configured=ad_service.client_config()["configured"],
             block_id=ad_service.get_block_id() or "",
+            postback_required=ad_service.postback_required(),
+            postback_configured=ad_service.has_postback_secret(),
             public_base_url=ad_service.reward_origin(os.getenv("WEBAPP_URL", "")),
         )
     finally:

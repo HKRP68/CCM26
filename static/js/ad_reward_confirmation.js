@@ -1,4 +1,4 @@
-// Remember the SDK completion while waiting for Adsgram's server callback.
+// Keep one SDK view reference across retries and page reloads.
 window.AdRewardConfirmation = function (initData, checkCredit) {
   const pendingFor = 5 * 60 * 1000;
   const delays = [0, 1000, 2000, 3500, 5000, 5000];
@@ -51,6 +51,6 @@ window.AdRewardConfirmation = function (initData, checkCredit) {
     isPending: () => currentView() !== null,
     clear: () => writePending(null),
     waitForCredit,
-    pendingMessage: 'Adsgram is still confirming your ad. Tap Check reward to check again without watching another ad.',
+    pendingMessage: 'Your ad credit is still processing. Tap Check reward to retry without watching another ad.',
   };
 };

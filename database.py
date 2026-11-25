@@ -816,6 +816,7 @@ def _migrate_add_columns():
     # Rewarded ads are no longer Adsgram-only — tag each postback with the
     # network that sent it. Legacy rows stay NULL and are read as Adsgram.
     _try_add("adsgram_rewards", "provider", "VARCHAR(20)")
+    _try_add("adsgram_rewards", "view_id", "VARCHAR(32)")
 
     # Giveaways: admin-marked guaranteed winners, set from the Participants tab.
     _try_add("giveaway_entries", "is_priority", "BOOLEAN DEFAULT FALSE")

@@ -125,6 +125,7 @@ def test_ad_rewards_require_an_authenticated_callback(tmp_path, monkeypatch, cal
     monkeypatch.setattr(config_service, "get_config", lambda *args, **kwargs: {})
     monkeypatch.setenv("BOT_TOKEN", "test")
     monkeypatch.setenv("ADSGRAM_BLOCK_ID", "1234")
+    monkeypatch.setenv("ADSGRAM_REQUIRE_POSTBACK", "1")
     monkeypatch.setenv("ADSGRAM_POSTBACK_SECRET", "s" * 32 if callback else "")
     auth = {"Authorization": "tma " + signed({"user": '{"id":7}', "auth_date": str(int(time.time()))})}
     url = "/api/webapp/ad-completed"
@@ -412,6 +413,65 @@ def test_adsgram_callback_survives_a_quest_tracking_rollback(miniapp_orders, mon
     assert post("spin", {"request_id": "watched-ad"})[1] == dict(result, replayed=True)
     with sessions() as db:
         assert db.query(AdReward).one().consumed_at is not None
+
+
+@pytest.mark.parametrize(("action", "callback"), [
+    ("spin", None), ("spin", "missing"), ("spin", "before"), ("spin", "after"),
+    ("daily", None), ("freepack/open", None),
+])
+def test_sdk_ad_rewards_work_with_the_existing_reward_block(miniapp_orders, monkeypatch,
+                                                           action, callback):
+    from models import AdReward
+    from services import config_service, free_pack_service, quest_service
+
+    post, sessions, admin = miniapp_orders
+    monkeypatch.setenv("ADSGRAM_BLOCK_ID", "1234")
+    monkeypatch.delenv("ADSGRAM_REQUIRE_POSTBACK", raising=False)
+    if not callback:
+        monkeypatch.delenv("ADSGRAM_POSTBACK_SECRET", raising=False)
+    receives_callback = callback in ("before", "after")
+    if action == "daily":
+        monkeypatch.setattr(config_service, "get_config", lambda *a, **kw: config_service.DEFAULTS)
+    if action == "freepack/open":
+        monkeypatch.setattr(free_pack_service, "get_bands",
+                            lambda session: [{"min": 78, "max": 78, "weight": 1}])
+    else:
+        assert post(action, {"request_id": "free"})[1]["slot_type"] == "free"
+    assert post(action, {"request_id": "sdk-ad"})[1]["error"] == "ad_required"
+    assert post("ad-completed", {})[1]["ads_saved"] == 0
+
+    tracked = []
+
+    def rollback_tracking(session, user_id, event, count):
+        if event == "ad_watched":
+            tracked.append(user_id)
+            session.rollback()
+
+    monkeypatch.setattr(quest_service, "safe_track", rollback_tracking)
+    with admin.app.test_client() as client:
+        assert client.get("/api/ads/config").json["ads"]["block_id"] == "1234"
+        callback_args = {"userid": 7, "secret": "t" * 32, "event_id": "partner-ref"}
+        if callback == "before":
+            assert client.get("/api/ads/reward", query_string=callback_args).status_code == 200
+        view = {"view_id": "c" * 32}
+        assert post("ad-completed", view)[1]["ads_saved"] == 1
+        assert post("ad-completed", view)[1]["ads_saved"] == 1
+        assert post("ad-completed", {"view_id": "d" * 32})[1]["ads_saved"] == 1
+        assert post("ad-completed", {}, telegram_id=8)[1]["ads_saved"] == 0
+        status, result = post(action, {"request_id": "sdk-ad"})
+        assert status == 200 and result["ok"]
+        assert post(action, {"request_id": "sdk-ad"})[1] == dict(result, replayed=True)
+        if receives_callback:
+            # A callback can arrive after the SDK credit has already been spent.
+            assert client.get("/api/ads/reward", query_string=callback_args).status_code == 200
+            assert client.get("/api/adsgram/reward", query_string=callback_args).status_code == 200
+        assert post("ad-completed", view)[1]["ads_saved"] == 0
+    assert len(tracked) == 1
+    with sessions() as db:
+        receipt = db.query(AdReward).one()
+        assert receipt.view_id == view["view_id"]
+        assert receipt.provider == ("adsgram" if receives_callback else "client")
+        assert receipt.consumed_at is not None
 
 
 def test_finalized_match_pays_once_and_applies_ai_daily_cap(miniapp_orders, monkeypatch):

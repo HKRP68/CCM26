@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>CMU Elite | CricMaster Ultra</title>
 <meta name="theme-color" content="#08090c">
-<script src="{{ url_for('static', filename='js/ad_reward_confirmation.js', v='3') }}"></script>
+<script src="{{ url_for('static', filename='js/ad_reward_confirmation.js', v='4') }}"></script>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="{{ url_for('static', filename='js/miniapp_theme.js', v='elite-main-1') }}"></script>
 <script>
@@ -5428,8 +5428,10 @@ function initAds(config) {
   // so a Mini App page still cached in a WebView picks up a block id that
   // changed since it was loaded.
   const cfg = config || window.__adConfig || {};
-  _adsConfigured = !!cfg.configured;
-  _adsBlockId = cfg.block_id || null;
+  const blockId = cfg.configured ? cfg.block_id || null : null;
+  if (_adsBlockId !== blockId) _adController = null;
+  _adsConfigured = Boolean(blockId);
+  _adsBlockId = blockId;
   if (!_adsConfigured || !_adsBlockId) return;
   // The SDK loads async, so it may not be present yet when init data arrives.
   // Try now, and if the SDK isn't ready, wait for its load event (or bail if
