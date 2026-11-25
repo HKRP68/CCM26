@@ -1308,6 +1308,10 @@ body {
 }
 
 /* ── Scorecard ──────────────────────────────────────────────────── */
+#panel-scorecard {
+  color: var(--text-primary);
+}
+
 .scorecard-wrapper {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
@@ -3272,38 +3276,18 @@ table.so-card-table th { color: #ff8a8a; font-weight: 600; opacity: 0.85; }
 #live-batting-dialog button:disabled, .live-batting-entry button:disabled { opacity: .45; cursor: default; }
 #live-batting-dialog :focus-visible { outline: 2px solid var(--text-primary); outline-offset: 2px; }
 
-/* Keep the innings total in view before the player-by-player figures. */
-#panel-scorecard .scorecard-wrapper {
-  background: #fbf7fc;
-  color: #211a2d;
-  border-color: #e0d5e8;
-  box-shadow: none;
-}
-
+/* Scorecard layout with the innings total above the figures. */
 #panel-scorecard .scorecard-team-tabs {
   gap: 6px;
-  padding: 0;
-  border: 0;
-  background: transparent;
 }
 
 #panel-scorecard .sc-tab-btn {
   min-height: 44px;
   padding: 7px 9px;
   border-radius: 999px;
-  border: 1px solid #d8cbe2;
-  color: #463550;
-  background: #fff;
   font-size: 12px;
   text-wrap: balance;
   overflow-wrap: anywhere;
-}
-
-#panel-scorecard .sc-tab-btn.active {
-  background: #251d33;
-  color: #fff;
-  border-color: #251d33;
-  box-shadow: none;
 }
 
 #panel-scorecard .total-row {
@@ -3313,22 +3297,10 @@ table.so-card-table th { color: #ff8a8a; font-weight: 600; opacity: 0.85; }
   border-radius: 14px;
   line-height: 1.2;
   font-size: 1.125rem;
-  color: white;
-  background: #302642;
   font-variant-numeric: tabular-nums;
 }
 
-#panel-scorecard .scorecard-section-title { color: #4b3863; }
-#panel-scorecard .scorecard-table { border-color: #ded3e7; border-bottom: 1px solid #ded3e7; border-radius: 10px; }
-#panel-scorecard .th-row { background: #eee5f6; color: #4d3d62; border-color: #ded3e7; }
-#panel-scorecard .tb-row { background: #fff; color: #2f233c; border-color: #ece4f0; }
-#panel-scorecard .tb-row:nth-child(even) { background: #fff; }
-#panel-scorecard .tb-row.batting-active { background: #f5eaf9; border-left: 1px solid #b397ca; }
+#panel-scorecard .scorecard-table { border-bottom: 1px solid var(--card-border); border-radius: 10px; }
 #panel-scorecard .tb-row-name, #panel-scorecard .th-player { min-width: 0; overflow-wrap: anywhere; }
-#panel-scorecard .tb-row-name-text, #panel-scorecard .tb-row.batting-active .tb-row-name-text { color: #271d31; }
-#panel-scorecard .tb-row-status, #panel-scorecard .extras-row,
-#panel-scorecard .ytb-label, #panel-scorecard .ytb-list, #panel-scorecard .sc-empty-msg { color: #5d4e6a; }
 #panel-scorecard .tb-num-val, #panel-scorecard .th-num { flex: 0 0 clamp(21px, 7vw, 36px); font-variant-numeric: tabular-nums; }
 #panel-scorecard .extras-row { border: 0; padding-inline: 0; background: transparent; }
-#panel-scorecard .impact-scorecard-box { color: #473450; background: #f0e6f6; border-color: #ded3e7; }
-#panel-scorecard .impact-scorecard-title, #panel-scorecard .impact-scorecard-list { color: #473450; }
