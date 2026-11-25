@@ -321,9 +321,12 @@ def rewards_card(rows):
     return blocks, html
 
 
-def help_card():
+def help_card(group_label=None, group_url=None):
+    where = esc(group_label) if group_label else "the Official Group"
+    link = f"\n👉 Join &amp; play here: {esc(group_label)}" if group_label else ""
     html = (
         "🏟️ <b>CMU COMMUNITY ARENA — GUIDE</b>\n\n"
+        f"All Community Arena activity happens in <b>{where}</b>.{link}\n\n"
         "Earn <b>Community XP (CXP)</b> by being active in the Official Group:\n"
         "• Chat (1 CXP), daily /checkin (20), complete matches, claim players\n"
         "• Win automatic mini-games (20–40 CXP each)\n\n"
@@ -337,6 +340,7 @@ def help_card():
         "/gcrewards — milestone rewards\n/gchelp — this guide")
     blocks = _safe(lambda: [
         R.heading("🏟️ CMU Community Arena — Guide", 2),
+        R.paragraph([f"All activity happens in ", R.bold(group_label or "the Official Group"), "."]),
         R.paragraph("Earn Community XP (CXP) by being active in the Official Group."),
         R.details(R.bold("How to earn"), [R.list_block([
             "Chat messages — 1 CXP", "Daily /checkin — 20 CXP",
