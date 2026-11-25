@@ -166,8 +166,6 @@ body:has(#screen-livematch.active) #bottom-nav { display: none; }
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
-.market-more summary { min-height: 44px; align-content: center; cursor: pointer; color: var(--primary); }
-.market-more .market-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 #quest-reset { color: var(--text-muted); font-size: 0.8rem; }
 #wallet-pending { font-size: 0.8rem; overflow-wrap: anywhere; }
 

@@ -45,6 +45,53 @@ def test_shell_uses_legacy_and_new_route_targets_once(local_app):
     assert client.post("/api/webapp/quickmatch/quota", json={}).status_code == 401
 
 
+def test_roster_player_detail_serializes_acquisition_for_its_owner(local_app):
+    from models import Player, UserRoster
+
+    client, sessions = local_app
+    with sessions() as db:
+        player = Player(name="Test All-rounder", rating=91, category="All-rounder",
+                        country="India", bat_hand="Right", bowl_hand="Right",
+                        bowl_style="Fast", bat_rating=91, bowl_rating=85)
+        db.add(player)
+        db.flush()
+        entry = UserRoster(user_id=71, player_id=player.id,
+                           acquired_date=datetime(2025, 8, 14, 9, 30))
+        db.add(entry)
+        db.flush()
+        roster_id = entry.id
+        db.commit()
+
+    response = post(client, "player-detail", {"roster_id": roster_id})
+    assert response.status_code == 200
+    player = response.json["player"]
+    assert player["acquired_at"] == "2025-08-14T09:30:00+00:00"
+    assert (player["rating"], player["bat_rating"], player["bowl_rating"]) == (91, 91, 85)
+    assert post(client, "player-detail", {"roster_id": roster_id}, account=71702).status_code == 404
+
+
+def test_market_listings_include_batting_and_bowling_ratings(local_app, monkeypatch):
+    from models import GlobalPlayerMarket, Player
+    from services import global_market
+
+    client, sessions = local_app
+    monkeypatch.setattr(global_market, "ensure_player_market_fresh", lambda db: None)
+    with sessions() as db:
+        player = Player(name="Test Bowler", rating=82, category="Bowler",
+                        country="India", bat_hand="Right", bowl_hand="Right",
+                        bowl_style="Fast", bat_rating=0, bowl_rating=82)
+        db.add(player)
+        db.flush()
+        db.add(GlobalPlayerMarket(slot_index=1, player_id=player.id,
+                                  base_price=100_000, final_price=100_000))
+        db.commit()
+
+    response = post(client, "market")
+    assert response.status_code == 200
+    listing, = response.json["slots"]
+    assert (listing["rating"], listing["bat_rating"], listing["bowl_rating"]) == (82, 0, 82)
+
+
 def test_quick_match_start_and_replayed_phase_use_current_snapshot(local_app, monkeypatch):
     from services import quick_match_service as quick
 

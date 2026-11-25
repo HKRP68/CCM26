@@ -7540,6 +7540,8 @@ def webapp_market():
                 "card_url": _player_card_url(p.id),
                 "name": p.name,
                 "rating": p.rating,
+                "bat_rating": p.bat_rating,
+                "bowl_rating": p.bowl_rating,
                 "category": p.category,
                 "country": p.country,
                 "version": p.version or "Base",
@@ -8638,6 +8640,7 @@ def webapp_roster_player_detail():
     try:
         from models import (UserRoster, Player, PlayerGameStats, PlayerMatchStats,
                              Match)
+        from services.miniapp_clubhouse import utc_string
         from services.trait_service import get_player_traits
         from services.version_service import get_base_id, get_all_versions
         from config import (TRAIT_MAX_PER_PLAYER, TRAIT_REPLACE_COST,
