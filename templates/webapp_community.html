@@ -52,6 +52,11 @@
 <h1>🏟️ CMU Community Arena</h1>
 <div id="err" class="err hide"></div>
 
+<a id="groupbanner" class="card hide" style="display:flex;justify-content:space-between;align-items:center;text-decoration:none;color:inherit;">
+  <span>🏏 Play &amp; earn in <b id="groupname"></b></span>
+  <span class="pill">Open ›</span>
+</a>
+
 <div id="app" class="hide">
   <!-- Profile -->
   <div class="card">
@@ -147,6 +152,12 @@ async function loadOverview(){
   const d = await api("/api/webapp/community/overview");
   if(!d.ok){ showErr("Could not load your profile."); return; }
   if(!d.enabled){ showErr("The Community Arena is currently disabled."); }
+  if(d.group && d.group.label){
+    const b = document.getElementById("groupbanner");
+    document.getElementById("groupname").textContent = d.group.label;
+    if(d.group.url){ b.href = d.group.url; b.target = "_blank"; }
+    b.classList.remove("hide");
+  }
   const p = d.profile, pr = p.progress;
   document.getElementById("name").textContent = p.name;
   document.getElementById("levelline").textContent = "Level "+p.level+" — "+p.title;

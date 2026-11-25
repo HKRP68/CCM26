@@ -258,6 +258,7 @@ def register_community_admin(app, *, login_required, get_session, webapp_auth,
             return jsonify({
                 "ok": True,
                 "enabled": bool(cfg.get("enabled")),
+                "group": _group_branding(),
                 "profile": summary,
                 "checkin": {
                     "done_today": (prof.last_checkin_date == today) if prof else False,
@@ -351,6 +352,17 @@ def _official_group_id():
         return official_group_id()
     except Exception:
         return None
+
+
+def _group_branding():
+    """{'label': '@cmugames', 'url': 't.me/...'} from admin Branding config."""
+    try:
+        from services import gc_gate
+        from services.config_service import get_config
+        cfg = get_config()
+        return {"label": gc_gate._group_label(cfg), "url": gc_gate.join_url(cfg)}
+    except Exception:
+        return {"label": None, "url": None}
 
 
 def _bridge_available():

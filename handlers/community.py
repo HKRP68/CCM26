@@ -37,6 +37,38 @@ def _is_official_chat(update):
     return gid is not None and chat is not None and chat.id == gid
 
 
+def _group_branding():
+    """The configured Official Group's display label + join URL.
+
+    Reads the admin-set Branding / Official Group config (never hardcoded) so
+    every Community Arena surface can name the real group, e.g. @cmugames, and
+    offer a one-tap Join link.
+    """
+    try:
+        from services import gc_gate
+        from services.config_service import get_config
+        cfg = get_config()
+        label = gc_gate._group_label(cfg)   # "@cmugames", or a sensible fallback
+        url = gc_gate.join_url(cfg)
+        return label, url
+    except Exception:
+        return None, None
+
+
+def _join_and_app_keyboard(update, *, label=None, url=None):
+    """A keyboard with a Join-group button (when a link is configured) plus the
+    Open-Community-Arena Mini App button."""
+    rows = []
+    if url:
+        rows.append([InlineKeyboardButton(
+            f"🔗 Join {label}" if label and label.startswith("@") else "🔗 Join Official Group",
+            url=url)])
+    app_kb = _community_webapp_kb(update)
+    if app_kb is not None:
+        rows.extend(app_kb.inline_keyboard)
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
 def _registered_user(session, tg_id):
     from models import User
     return session.query(User).filter(User.telegram_id == tg_id).first()
@@ -100,8 +132,11 @@ async def checkin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text("🏟️ The Community Arena is currently disabled.")
         return
     if not _is_official_chat(update):
+        label, url = _group_branding()
+        where = label if label else "the Official CMU Group"
         await update.effective_message.reply_text(
-            "📅 Daily check-in works only in the Official CMU Group.")
+            f"📅 Daily check-in works only in {where}. Join and send /checkin there!",
+            reply_markup=_join_and_app_keyboard(update, label=label, url=url))
         return
     from database import get_session
     from services import community_checkin_service as CK
@@ -243,8 +278,10 @@ async def gcrewards_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── /gchelp ──────────────────────────────────────────────────────────────
 
 async def gchelp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    blocks, html = CR.help_card()
-    await _reply(update, blocks, html)
+    label, url = _group_branding()
+    blocks, html = CR.help_card(group_label=label, group_url=url)
+    await _reply(update, blocks, html,
+                 kb=_join_and_app_keyboard(update, label=label, url=url))
 
 
 # ── /gctop (leaderboards with inline tabs) ──────────────────────────────
