@@ -481,6 +481,8 @@ async def traitbuy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # it entirely, so a captain with gems could buy the same slot all day.
         # ``buy_trait_from_shop`` has always enforced it; the two shop paths
         # now agree.
+        from services.economy_transactions import lock_user_for_update
+        user = lock_user_for_update(session, user)
         daily = _get_or_create_daily(session, user.id)
         if (daily.purchases or 0) >= TRAIT_SHOP_DAILY_PURCHASE_LIMIT:
             session.rollback()
@@ -491,9 +493,13 @@ async def traitbuy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         from services.global_market import buy_trait
+        gems_before = user.total_gems or 0
         ok, name_or_msg = buy_trait(session, user, slot)
         if ok:
             daily.purchases = (daily.purchases or 0) + 1
+            from services.activity_service import log_activity
+            log_activity(session, user.id, "buy_trait", f"Bought {name_or_msg}",
+                         gems_change=(user.total_gems or 0) - gems_before)
             # 'trait_buy' has been offered on the quest form all along but was
             # never fired anywhere, so a "buy a trait" quest sat at 0 forever.
             try:

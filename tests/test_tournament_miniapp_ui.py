@@ -78,7 +78,7 @@ const vm = require('node:vm');
 const template = fs.readFileSync(process.argv[1], 'utf8');
 const start = template.indexOf('const TN_SUBS =');
 const controller = template.slice(start, template.indexOf('function tnLogo(team)', start));
-const navigation = template.slice(template.indexOf('function navigate(screen)'),
+const navigation = template.slice(template.indexOf('const tabRoutes ='),
   template.indexOf('async function refreshDashboard()'));
 const tick = () => new Promise(setImmediate);
 
@@ -101,7 +101,7 @@ function boot() {
     return elements[id];
   }
   const context = vm.createContext({
-    currentScreen: 'home', navigator: {onLine: true}, console: {error() {}},
+    currentScreen: 'home', tg: null, navigator: {onLine: true}, console: {error() {}},
     document: {hidden: false, getElementById: element, querySelectorAll: () => [],
       querySelector: () => null, addEventListener(name, fn) { handlers[name] = fn; }},
     window: {scrollTo() {}, addEventListener(name, fn) { handlers[name] = fn; }},

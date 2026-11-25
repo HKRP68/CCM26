@@ -1,4 +1,4 @@
-/* global api, escapeHtml, navigate, openLiveMatch, openScorecard, refreshDashboard, switchPacksTab, hapticNotif, toast */
+/* global api, escapeHtml, navigate, openLiveMatch, openScorecard, refreshDashboard, askConfirm, switchPacksTab, hapticNotif, toast */
 (() => {
   const screens = {
     matchcentre: {path: 'matches', body: 'club-match-body', filter: 'matches', key: 'view'},
@@ -61,13 +61,14 @@
     document.getElementById('club-balances').innerHTML = Object.entries(data.balance).map(([key, value]) =>
       `<div><span>${labelsTitle[key]}</span><strong>${money(value)}</strong></div>`).join('');
     return data.transactions.map(row => {
-      const changes = ['coins', 'gems'].filter(key => row[key]).map(key =>
-        `<div class="${row[key] > 0 ? 'club-credit' : 'club-debit'}">${row[key] > 0 ? '+' : '−'}${money(Math.abs(row[key]))} ${key}</div>`).join('');
-      const after = ['coins', 'gems'].filter(key => row[key] && row[key + '_after'] != null)
-        .map(key => money(row[key + '_after']) + ' ' + key).join(' · ');
+      const changes = ['coins', 'gems', 'quest_points'].filter(key => row[key]).map(key =>
+        `<div class="${row[key] > 0 ? 'club-credit' : 'club-debit'}">${row[key] > 0 ? '+' : '−'}${money(Math.abs(row[key]))} ${labels[key]}</div>`).join('');
+      const after = ['coins', 'gems', 'quest_points'].filter(key => row[key] && row[key + '_after'] != null)
+        .map(key => money(row[key + '_after']) + ' ' + labels[key]).join(' · ');
       return `<article class="club-card club-row">
         <div class="club-inner"><h3>${escapeHtml(row.label)}</h3>
-        <p>${date(row.date)}${row.player ? ' · ' + escapeHtml(row.player) : ''}</p>
+        <p>${row.date ? new Date(row.date).toLocaleString() : ''}${row.player ? ' · ' + escapeHtml(row.player) : ''}</p>
+        <p>Reference ${escapeHtml(row.reference || String(row.id))} · Settled</p>
         ${after ? `<p>Balance after ${after}</p>` : ''}</div><div class="club-amount">${changes}</div>
         </article>`;
     }).join('') || empty('No recorded activity for this filter.');
@@ -82,7 +83,7 @@
             <h3>${escapeHtml(gift.title)}</h3>
             <p class="club-claim-label">${escapeHtml(giftValue(gift))}</p>
             <p>${gift.claimed_at ? 'Claimed ' + date(gift.claimed_at) : 'Received ' + date(gift.created_at)}</p>
-            ${!gift.claimed_at ? button('Claim gift', 'claim', gift.id, true)
+            ${!gift.claimed_at ? button('Review claim', 'claim', gift.id, true)
               : gift.currency === 'pack' ? button('Pack inventory', 'inventory')
               : gift.currency === 'player' ? button('My squad', 'squad') : ''}
           </div>
@@ -168,6 +169,10 @@
         const feedback = document.getElementById('club-reward-feedback');
         feedback.textContent = '';
         try {
+          if (action === 'claim') {
+            const prize = el.closest('article').querySelector('.club-claim-label').textContent;
+            if (!await askConfirm(`Claim ${prize}?`)) return;
+          }
           const path = action === 'claim' ? `gifts/${id}/claim` : `giveaways/${id}/join`;
           const {ok, data} = await api('/api/webapp/clubhouse/' + path, {});
           if (!ok) {
@@ -181,6 +186,7 @@
             refreshDashboard();
           } else {
             feedback.textContent = 'Entry confirmed.';
+            refreshDashboard();
           }
           if (activeScreen === name) await load(name);
           hapticNotif('success');
@@ -198,6 +204,12 @@
       activeScreen = name;
       generation++;
       if (screens[name]) load(name);
+    },
+    openGiveaways() {
+      const controls = document.querySelectorAll('#screen-rewards [data-club-filter]');
+      for (const control of controls) control.setAttribute('aria-pressed', String(control.dataset.clubFilter === 'giveaways'));
+      screens.rewards.filter = 'giveaways';
+      navigate('rewards');
     },
     giftCount,
   };

@@ -4,15 +4,15 @@ Flow:
   1. Inviter shares their link: t.me/<bot>?start=ref<inviter_telegram_id>
   2. Invitee clicks → /start ref<id> runs → record_referral() creates a
      pending Referral row (not counted yet).
-  3. Invitee runs /debut → debut_handler calls complete_referral() →
-     `completed_at` is set, leaderboard counts it, per-invite reward is paid.
+  3. Invitee completes an eligible ranked match → the referral counts and
+     the per-invite reward is paid.
   4. Admin can run "Declare winners" on a finished competition → top
      ranked inviters get top1/top2/top3 prizes.
 
 Anti-abuse:
   - Self-referral blocked (inviter == invitee).
   - One referrer per invitee (UNIQUE on invitee_user_id).
-  - Invitee must actually complete /debut to count (filters drive-by clicks).
+  - Invitee must complete an eligible ranked match against someone other than the inviter.
   - Admin can mark referrals invalid → excluded from leaderboard.
 """
 
@@ -86,20 +86,45 @@ def record_referral(session, inviter_user_id, invitee_user_id):
 
 
 def complete_referral(session, invitee_user_id):
-    """Called from /debut: mark referral as completed + pay reward.
+    """Pay a pending referral once the invitee has an eligible ranked result.
 
     Returns dict {ok, paid_coins, paid_gems, inviter_user_id} if a referral
     was completed, else None.
     """
-    from models import Referral, User, ReferralCompetition
+    from sqlalchemy import or_, update
+    from models import Match, MatchPostResult, Referral, User, ReferralCompetition
 
     ref = (session.query(Referral)
-           .filter(Referral.invitee_user_id == invitee_user_id,
+           .filter(Referral.invitee_user_id == invitee_user_id, Referral.is_valid.is_(True),
                    Referral.completed_at.is_(None)).first())
     if not ref:
         return None
 
-    ref.completed_at = datetime.utcnow()
+    result = (session.query(Match.id).join(MatchPostResult, MatchPostResult.match_id == Match.id)
+              .filter(Match.status == "completed", Match.completed_at >= ref.created_at,
+                      MatchPostResult.rated.is_(True),
+                      or_(Match.user1_id == invitee_user_id, Match.user2_id == invitee_user_id),
+                      Match.user1_id != ref.inviter_user_id, Match.user2_id != ref.inviter_user_id)
+              .first())
+    if not result:
+        return None
+
+    # Lock the inviter wallet before claiming the referral. A busy wallet can
+    # be retried from the next match or the invitee's next Mini App session.
+    if session.get_bind().dialect.name == "sqlite":
+        session.execute(update(User).where(User.id == ref.inviter_user_id).values(total_coins=User.total_coins)
+                        .execution_options(synchronize_session=False))
+    inviter = (session.query(User).filter_by(id=ref.inviter_user_id)
+               .populate_existing().with_for_update(skip_locked=True).first())
+    if not inviter or inviter.is_banned:
+        return None
+    now = datetime.utcnow()
+    claimed = (session.query(Referral).filter(Referral.id == ref.id, Referral.is_valid.is_(True),
+                                              Referral.completed_at.is_(None))
+               .update({Referral.completed_at: now}, synchronize_session=False))
+    if claimed != 1:
+        return None
+    session.refresh(ref)
 
     paid_coins = 0
     paid_gems = 0
@@ -111,20 +136,13 @@ def complete_referral(session, invitee_user_id):
             paid_coins = int(comp.prize_per_invite or 0)
             paid_gems = int(comp.prize_per_invite_gems or 0)
     if paid_coins > 0 or paid_gems > 0:
-        inviter = session.get(User, ref.inviter_user_id)
-        if inviter:
-            inviter.total_coins = (inviter.total_coins or 0) + paid_coins
-            inviter.total_gems = (inviter.total_gems or 0) + paid_gems
-            ref.reward_paid_at = datetime.utcnow()
-            try:
-                from services.activity_service import log_activity
-                log_activity(
-                    session, inviter.id, "referral_reward",
-                    f"Invite reward — invitee #{invitee_user_id}",
-                    coins_change=paid_coins, gems_change=paid_gems,
-                )
-            except Exception:
-                pass
+        inviter.total_coins = (inviter.total_coins or 0) + paid_coins
+        inviter.total_gems = (inviter.total_gems or 0) + paid_gems
+        ref.reward_paid_at = now
+        from services.activity_service import log_activity
+        log_activity(session, inviter.id, "referral_reward",
+                     f"Invitee #{invitee_user_id} qualified in match #{result.id}",
+                     coins_change=paid_coins, gems_change=paid_gems)
 
     return {
         "ok": True,
@@ -461,38 +479,20 @@ def redeem_code(session, code, invitee_user_id):
                             "(before playing your first match)."),
             }
 
-    if existing:
-        if existing.completed_at is not None:
-            return {"ok": False, "error": "already_redeemed",
-                    "message": "You've already used a referral code."}
-        # Pending: complete the existing one (don't overwrite inviter)
-        cr = complete_referral(session, invitee_user_id)
-        if cr:
-            return {
-                "ok": True, "error": None,
-                "message": "Code redeemed (using earlier link).",
-                "paid_coins": cr["paid_coins"],
-                "paid_gems": cr["paid_gems"],
-                "inviter_user_id": cr["inviter_user_id"],
-            }
-        return {"ok": False, "error": "complete_failed",
-                "message": "Could not complete referral. Try again later."}
-
-    # Fresh — create + complete in one go
-    ref = record_referral(session, inviter.id, invitee_user_id)
+    if existing and existing.completed_at is not None:
+        return {"ok": False, "error": "already_redeemed",
+                "message": "You've already used a referral code."}
+    ref = existing or record_referral(session, inviter.id, invitee_user_id)
     if not ref:
-        return {"ok": False, "error": "record_failed",
-                "message": "Couldn't record referral."}
-    cr = complete_referral(session, invitee_user_id)
-    if not cr:
-        return {"ok": False, "error": "complete_failed",
-                "message": "Couldn't complete referral."}
+        return {"ok": False, "error": "record_failed", "message": "Couldn't record referral."}
+    result = complete_referral(session, invitee_user_id)
     return {
         "ok": True, "error": None,
-        "message": "Code redeemed!",
-        "paid_coins": cr["paid_coins"],
-        "paid_gems": cr["paid_gems"],
-        "inviter_user_id": cr["inviter_user_id"],
+        "message": ("Code redeemed!" if result else
+                    "Code recorded. Complete an eligible ranked match against another player to qualify."),
+        "paid_coins": result["paid_coins"] if result else 0,
+        "paid_gems": result["paid_gems"] if result else 0,
+        "inviter_user_id": ref.inviter_user_id,
     }
 
 
@@ -507,7 +507,7 @@ def is_eligible_to_redeem(session, user):
     # Already redeemed → not eligible
     existing = (session.query(Referral)
                 .filter(Referral.invitee_user_id == user.id).first())
-    if existing and existing.completed_at is not None:
+    if existing:
         return False, "already_redeemed"
     # Pending referral from link → eligible (always — they should complete it)
     if existing and existing.completed_at is None:

@@ -268,6 +268,7 @@ def get_user_xi(session, user_id):
     from services import batting_order_service as bos
     user = session.get(User, user_id)
     captain_rid = user.captain_roster_id if user else None
+    vice_rid = user.vice_captain_roster_id if user else None
     from models import Player as _P
     rows = (session.query(UserRoster, _P)
             .join(_P, UserRoster.player_id == _P.id)
@@ -284,6 +285,7 @@ def get_user_xi(session, user_id):
         "version": p.version or "Base",
         "position": r.order_position,
         "is_captain": (captain_rid == r.id),
+        "is_vice_captain": (vice_rid == r.id),
     } for r, p in rows])
     for i, entry in enumerate(xi, start=1):
         entry["position"] = i
@@ -585,6 +587,7 @@ def _generate_batting_card(xi, runs_total, balls_faced, wickets_lost):
             "rating": p["rating"],
             "category": p["category"],
             "is_captain": p.get("is_captain", False),
+            "is_vice_captain": p.get("is_vice_captain", False),
             "runs": runs,
             "balls": balls,
             "fours": runs // 12,  # rough estimate
@@ -601,6 +604,7 @@ def _generate_batting_card(xi, runs_total, balls_faced, wickets_lost):
                 "position": p["position"], "name": p["name"],
                 "rating": p["rating"], "category": p["category"],
                 "is_captain": p.get("is_captain", False),
+                "is_vice_captain": p.get("is_vice_captain", False),
                 "runs": 0, "balls": 0, "fours": 0, "sixes": 0,
                 "strike_rate": 0, "out": False, "dismissal": "did not bat",
             })
@@ -709,6 +713,7 @@ def _generate_bowling_card(xi, runs_conceded, balls_bowled, wickets_taken):
             "position": p["position"], "name": p["name"],
             "rating": p["rating"], "category": p["category"],
             "is_captain": p.get("is_captain", False),
+            "is_vice_captain": p.get("is_vice_captain", False),
             "overs": overs_str, "balls": balls, "runs": runs,
             "wickets": wkts, "economy": economy,
         })

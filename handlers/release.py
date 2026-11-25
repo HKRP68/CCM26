@@ -185,6 +185,10 @@ def _do_release(session, user, entries, *, value_fn=get_sell_value,
     by_id = {entry.id: (entry, player) for entry, player in live_entries}
     entries = [by_id[roster_id] for roster_id in roster_ids]
 
+    if record_undo and any(entry.sale_locked for entry, _ in entries):
+        return {"success": False, "error": "card_locked",
+                "message": "Unlock the selected card in the Mini App before selling."}
+
     # Career Players are personal and permanent. This is the one choke point
     # every release path funnels through (chat, callbacks, multi-release and the
     # Mini App), so refusing here means no route can sell one by accident.
@@ -247,6 +251,9 @@ def _do_release(session, user, entries, *, value_fn=get_sell_value,
         user.captain_roster_id = None
         captain_released = True
         session.flush()
+
+    if user.vice_captain_roster_id in roster_ids:
+        user.vice_captain_roster_id = None
 
     # 4. Clear lingering captain pointers too. SQLAlchemy expands the IN list
     # correctly on both PostgreSQL and SQLite; swallowing a SQL syntax error

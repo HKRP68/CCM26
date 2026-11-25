@@ -137,6 +137,15 @@ def process_completed_match(session, match, *, count_result=True, state=None):
             row.ranked_done = True
             row.payload_json = json.dumps(summary, default=str)
             session.flush()
+            if row.rated:
+                from services.referral_service import complete_referral
+
+                for uid in (match.user1_id, match.user2_id):
+                    try:
+                        with session.begin_nested():
+                            complete_referral(session, uid)
+                    except Exception:
+                        logger.exception("Referral qualification deferred for user %s", uid)
             return summary
     except Exception:
         logger.exception("post-match processing failed for match %s", match.id)

@@ -546,9 +546,48 @@ def tournament_career(session, user_id, telegram_id):
             "match_losses": losses, "latest_title": latest_title}
 
 
+def registration_open(tour):
+    from datetime import datetime
+
+    return (tournament_service.tournament_kind(tour) == "letsplay"
+            and tour.status in ("draft", "scheduled") and not tour.schedule_generated
+            and tour.registration_closes_at is not None
+            and tour.registration_closes_at > datetime.utcnow())
+
+
+def register_team(session, tour, user):
+    from services.roster_service import get_roster_ordered
+    from services.xi_rules import validate_roster_xi
+
+    existing = session.query(TournamentTeam).filter_by(tournament_id=tour.id, user_tg_id=user.telegram_id).first()
+    if existing:
+        return {"ok": True, "team": existing.name, "entered": True}
+    if not registration_open(tour):
+        return {"ok": False, "message": "Registration has closed."}
+    if session.query(TournamentTeam).filter_by(tournament_id=tour.id).count() >= tour.max_teams:
+        return {"ok": False, "message": "This tournament is full."}
+    players = [(row, player) for row, player in get_roster_ordered(session, user.id)[:11] if player.is_active]
+    valid, errors = validate_roster_xi(players)
+    if not valid:
+        return {"ok": False, "message": " ".join(errors)}
+    name = (user.team_name or user.first_name or user.username or "Player")[:120]
+    session.add(TournamentTeam(tournament_id=tour.id, user_tg_id=user.telegram_id,
+                               owner_tg_id=user.telegram_id, name=name))
+    session.commit()
+    return {"ok": True, "team": name, "entered": True}
+
+
 def directory(session, user_id, telegram_id):
     """Featured competition, career totals and recent completed results."""
     active = featured_tournament(session)
+    from datetime import datetime
+    from services.miniapp_clubhouse import utc_string
+
+    upcoming = (session.query(Tournament)
+                .filter(Tournament.kind == "letsplay", Tournament.status.in_(("draft", "scheduled")),
+                        Tournament.registration_closes_at > datetime.utcnow(),
+                        Tournament.schedule_generated.is_(False))
+                .order_by(Tournament.registration_closes_at).limit(20).all())
     completed = (session.query(Tournament).filter_by(status="completed")
                  .order_by(Tournament.id.desc()).limit(20).all())
 
@@ -564,11 +603,17 @@ def directory(session, user_id, telegram_id):
             "kind_label": KIND_LABEL.get(kind, ""),
             "played": counts.get("completed", 0), "total": sum(counts.values()),
             "my_team": bool(mine),
+            "registration_closes_at": utc_string(tour.registration_closes_at),
+            "registration_open": registration_open(tour),
+            "description": tour.description,
+            "overs": tour.overs,
+            "max_teams": tour.max_teams,
             "champion": _team_brief(tournament_service.tournament_champion(session, tour.id))
                         if tour.status == "completed" else None,
         }
 
     return {"ok": True, "current": [card(active)] if active else [],
+            "upcoming": [card(t) for t in upcoming],
             "archive": [card(t) for t in completed],
             "career": tournament_career(session, user_id, telegram_id)}
 

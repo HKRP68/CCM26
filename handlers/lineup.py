@@ -437,6 +437,9 @@ async def setcaptain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text(f"❌ '{search}' not in roster")
             return
         entry, player = result
+        if user.vice_captain_roster_id == entry.id:
+            await update.message.reply_text("Choose a different captain or reassign the vice-captain in the Mini App.")
+            return
         user.captain_roster_id = entry.id
         log_activity(session, user.id, "captain", f"Captain: {player.name}", player_name=player.name)
         session.commit()

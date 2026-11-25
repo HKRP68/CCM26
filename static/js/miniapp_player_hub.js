@@ -65,7 +65,8 @@
       <div class="hub-panel"><h3>Achievements</h3><p>${p.achievements.unlocked} of ${p.achievements.total} unlocked</p>
         ${badges ? `<p>${badges}</p>` : ''}
         <div class="hub-actions"><button class="hub-button primary" onclick="navigate('achievements')">View achievements</button>
-        <button class="hub-button" onclick="navigate('matchcentre')">Match history</button></div>
+        <button class="hub-button" onclick="navigate('matchcentre')">Match history</button>
+        <button class="hub-button" onclick="navigate('appearance')">Appearance</button></div>
       </div>`;
     loadAvatar(request);
   }

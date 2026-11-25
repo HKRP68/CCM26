@@ -122,6 +122,11 @@ async def _undo_buy(update, session, user, payload, *, pending):
             parse_mode="HTML")
         return
 
+    if entry.sale_locked:
+        session.rollback()
+        await update.message.reply_text("Unlock this card in the Mini App to undo the purchase.")
+        return
+
     # An elite signing paid a gem rebate — undoing the buy has to hand those
     # gems back, so refuse while they're already spent rather than letting a
     # buy-and-undo loop mint them. Same rule the release undo uses for coins.

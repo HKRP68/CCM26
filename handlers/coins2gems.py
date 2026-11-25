@@ -12,13 +12,16 @@ confirm time (guards against double-taps and stale button data).
 """
 
 import logging
+import re
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from config import COINS_PER_GEM
 from database import get_session
-from models import User
+from models import MiniappEconomyIntent, User
+from services.economy_transactions import lock_user_for_update
+from services.miniapp_economy import EconomyRejected, create_quote, settle
 
 logger = logging.getLogger(__name__)
 
@@ -95,13 +98,23 @@ async def coins2gems_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             note = (f"\n<i>(rounded down to {_fmt(spend)} — coins convert in "
                     f"steps of {_fmt(COINS_PER_GEM)})</i>")
 
+        user = lock_user_for_update(session, user)
+        try:
+            quote = create_quote(session, user, "convert", spend)
+        except EconomyRejected as error:
+            session.rollback()
+            await update.message.reply_text(str(error))
+            return
+        quote_id = quote["quote_id"]
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Confirm", callback_data=f"c2g:{spend}"),
-            InlineKeyboardButton("✖️ Cancel", callback_data="c2g:cancel"),
+            InlineKeyboardButton("✅ Confirm", callback_data=f"c2g:{quote_id}"),
+            InlineKeyboardButton("✖️ Cancel", callback_data=f"c2g:cancel:{quote_id}"),
         ]])
         await update.message.reply_text(
-            f"💱 <b>Convert {_fmt(spend)} coins → {gems} 💎 gems?</b>{note}\n\n"
-            "⚠️ This <b>cannot be undone</b>.",
+            f"💱 <b>Convert {_fmt(spend)} coins → {_fmt(gems)} 💎 gems?</b>{note}\n\n"
+            f"Balance after: <b>{_fmt(quote['balance_after'])}</b> coins · "
+            f"<b>{_fmt(quote['gems_after'])}</b> gems.\n"
+            "This conversion cannot be undone. Quote expires in 5 minutes.",
             parse_mode="HTML", reply_markup=keyboard,
         )
     except Exception:
@@ -113,69 +126,50 @@ async def coins2gems_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def coins2gems_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    data = (query.data or "")
-    payload = data.split(":", 1)[1] if ":" in data else ""
-
-    if payload == "cancel":
-        await query.answer()
-        try:
-            await query.edit_message_text("✖️ Conversion cancelled — no coins spent.")
-        except Exception:
-            pass
-        return
-
-    try:
-        spend = int(payload)
-    except ValueError:
-        await query.answer("Invalid amount.", show_alert=True)
-        return
-
-    gems = spend // COINS_PER_GEM
-    if gems < 1:
-        await query.answer("Invalid amount.", show_alert=True)
+    payload = (query.data or "").removeprefix("c2g:")
+    cancel = payload.startswith("cancel:")
+    quote_id = payload.removeprefix("cancel:")
+    if not re.fullmatch(r"[0-9a-f]{32}", quote_id):
+        await query.answer("Request a new conversion quote.", show_alert=True)
         return
 
     session = get_session()
     try:
-        user = (session.query(User)
-                .filter(User.telegram_id == query.from_user.id).first())
+        user = session.query(User).filter_by(telegram_id=query.from_user.id).first()
         if not user:
             await query.answer("Account not found.", show_alert=True)
             return
-
-        # Re-validate against the live balance (double-tap / stale-button guard).
-        if (user.total_coins or 0) < spend:
-            await query.answer("You no longer have enough coins.", show_alert=True)
-            try:
-                await query.edit_message_text(
-                    "⚠️ Conversion cancelled — your coin balance changed.")
-            except Exception:
-                pass
+        user = lock_user_for_update(session, user)
+        intent = session.query(MiniappEconomyIntent).filter_by(
+            id=quote_id, user_id=user.id, action="convert").first()
+        if not intent:
+            session.rollback()
+            await query.answer("This conversion is unavailable for your account.", show_alert=True)
             return
-
-        user.total_coins = (user.total_coins or 0) - spend
-        user.total_gems = (user.total_gems or 0) + gems
-
+        if cancel and not intent.result:
+            session.delete(intent)
+            session.commit()
+            await query.answer("Cancelled")
+            await query.edit_message_text("Conversion cancelled.")
+            return
         try:
-            from services.activity_service import log_activity
-            log_activity(session, user.id, "coins2gems",
-                         f"Converted {spend} coins → {gems} gems",
-                         coins_change=-spend, gems_change=gems)
-        except Exception:
-            logger.exception("log_activity failed during coins2gems")
-
-        session.commit()
-
+            receipt = settle(session, user, intent)
+        except EconomyRejected as error:
+            session.rollback()
+            await query.answer(str(error), show_alert=True)
+            return
+        session.rollback()
         await query.answer("Converted!")
+        balance = receipt["balance"]
         await query.edit_message_text(
-            f"✅ <b>Converted {_fmt(spend)} coins → {gems} 💎 gems!</b>\n\n"
-            f"💰 Coins: <b>{_fmt(user.total_coins)}</b>\n"
-            f"💎 Gems: <b>{_fmt(user.total_gems)}</b>",
+            f"✅ <b>Received {_fmt(receipt['gems'])} gems.</b>\n\n"
+            f"Coins: <b>{_fmt(balance['coins'])}</b> · Gems: <b>{_fmt(balance['gems'])}</b>\n"
+            f"Receipt <code>{quote_id}</code>",
             parse_mode="HTML",
         )
     except Exception:
         session.rollback()
         logger.exception("coins2gems confirm failed")
-        await query.answer("Conversion failed. Please try again.", show_alert=True)
+        await query.answer("Check your Wallet for the result.", show_alert=True)
     finally:
         session.close()

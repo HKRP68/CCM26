@@ -58,6 +58,8 @@ def is_player_locked(entry: UserRoster, player: Player) -> bool:
     The production schema may add flags without requiring this module to be
     migrated in lockstep, so this deliberately checks common names dynamically.
     """
+    if getattr(entry, "sale_locked", False):
+        return True
     return _truthy_attr(entry, ("is_locked", "locked", "trade_locked")) or _truthy_attr(
         player, ("is_locked", "locked", "trade_locked")
     )

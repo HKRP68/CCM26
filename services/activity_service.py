@@ -14,7 +14,7 @@ _IST_OFFSET = timedelta(hours=5, minutes=30)
 
 def log_activity(session, user_id: int, action: str, detail: str = "",
                  coins_change: int = 0, gems_change: int = 0,
-                 player_name: str = None, player_rating: int = None):
+                 player_name: str = None, player_rating: int = None, *, quest_points_change: int = 0):
     """Write one activity row. Call before session.commit()."""
     user = session.get(User, user_id)
     entry = ActivityLog(
@@ -23,10 +23,13 @@ def log_activity(session, user_id: int, action: str, detail: str = "",
         detail=(detail or "")[:500],
         coins_change=coins_change,
         gems_change=gems_change,
+        quest_points_change=quest_points_change,
+        operation_id=getattr(session, "info", {}).get("economy_operation"),
         player_name=player_name,
         player_rating=player_rating,
         coins_balance_after=(user.total_coins or 0) if user is not None else None,
         gems_balance_after=(user.total_gems or 0) if user is not None else None,
+        quest_points_balance_after=(user.quest_points or 0) if user is not None else None,
     )
     session.add(entry)
     # Successful game actions share one capped activity budget across the bot

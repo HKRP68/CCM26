@@ -219,7 +219,8 @@ def _grant_prize(session, giveaway, user) -> str:
         from services.activity_service import log_activity
         log_activity(session, user.id, log_action,
                      detail=f"Giveaway #{giveaway.id} '{giveaway.title}' — {label}",
-                     coins_change=coins_change, gems_change=gems_change)
+                     coins_change=coins_change, gems_change=gems_change,
+                     quest_points_change=amt if ptype == "quest_points" else 0)
         return label
 
     if ptype == "player":

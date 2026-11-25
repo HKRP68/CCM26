@@ -120,9 +120,11 @@ def is_configured() -> bool:
 
 def client_config() -> dict:
     block_id = get_block_id()
+    secret = _env("ADSGRAM_POSTBACK_SECRET")
+    configured = bool(block_id and len(secret) >= 32 and secret.isascii())
     return {
-        "configured": block_id is not None,
-        "block_id": block_id,
+        "configured": configured,
+        "block_id": block_id if configured else None,
         "sdk_url": ADSGRAM_SDK_URL,
     }
 
@@ -256,7 +258,7 @@ def bank_credit(session, telegram_id: int, reason: str = "",
         return None
 
 
-def claim_credit(session, telegram_id: int, *, commit=True) -> bool:
+def claim_credit(session, telegram_id: int, *, commit=True, provider_verified=False) -> bool:
     """Consume one banked credit, oldest first. True if one was just spent.
 
     FIFO matters here in a way it doesn't for postbacks. Credits live for
@@ -275,13 +277,14 @@ def claim_credit(session, telegram_id: int, *, commit=True) -> bool:
     echoes a client receipt is stored already consumed by ``record_postback``,
     and consuming is a conditional UPDATE.
     """
-    return _claim_row(
-        session,
-        _unclaimed(session, telegram_id, CREDIT_TTL_SECONDS, oldest_first=True)
-        .first(), commit=commit)
+    query = _unclaimed(session, telegram_id, CREDIT_TTL_SECONDS, oldest_first=True)
+    if provider_verified:
+        from models import AdReward
+        query = query.filter(AdReward.provider == "adsgram")
+    return _claim_row(session, query.first(), commit=commit)
 
 
-def count_credits(session, telegram_id: int) -> int:
+def count_credits(session, telegram_id: int, *, provider_verified=False) -> int:
     """How many watched-but-unspent ads this user can still redeem.
 
     Reported to the client so a saved ad is visible ("1 ad saved — spin it
@@ -289,8 +292,11 @@ def count_credits(session, telegram_id: int) -> int:
     exactly what ``claim_credit`` will spend, postbacks included.
     """
     try:
-        return int(_unclaimed(session, telegram_id, CREDIT_TTL_SECONDS)
-                   .count() or 0)
+        query = _unclaimed(session, telegram_id, CREDIT_TTL_SECONDS)
+        if provider_verified:
+            from models import AdReward
+            query = query.filter(AdReward.provider == "adsgram")
+        return query.count()
     except Exception:
         logger.exception("count_credits failed for %s", telegram_id)
         return 0

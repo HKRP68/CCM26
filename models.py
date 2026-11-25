@@ -22,6 +22,7 @@ class User(Base):
     roster_count = Column(Integer, default=0)
     miniapp_economy_next = Column(DateTime, nullable=True)
     captain_roster_id = Column(Integer, nullable=True)
+    vice_captain_roster_id = Column(Integer, nullable=True)
     # Short unique code used by friends to redeem a referral via /debut prompt
     # or /redeem <code>. Auto-generated on first /invite or first request that
     # needs it. 6 chars uppercase alphanumeric, ~1 billion possibilities.
@@ -276,12 +277,13 @@ class UserRoster(Base):
     player_id = Column(Integer, ForeignKey("players.id"), nullable=False)
     order_position = Column(Integer, default=99)
     acquired_date = Column(DateTime, default=datetime.utcnow)
+    sale_locked = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="roster")
     player = relationship("Player")
 
-    __table_args__ = (Index("ix_user_roster_user", "user_id"),)
+    __table_args__ = (Index("ix_user_roster_user", "user_id"), {"sqlite_autoincrement": True})
 
 
 class UserStats(Base):
@@ -388,12 +390,15 @@ class ActivityLog(Base):
     detail = Column(String(500), nullable=True)
     coins_change = Column(Integer, default=0)
     gems_change = Column(Integer, default=0)
+    operation_id = Column(String(64), nullable=True)
+    quest_points_change = Column(Integer, nullable=False, default=0, server_default=text("0"))
     player_name = Column(String(150), nullable=True)
     player_rating = Column(Integer, nullable=True)
     # Captured when logged; NULL on historical rows, which can only be
     # estimated from deltas and must not be presented as recorded balances.
     coins_balance_after = Column(Integer, nullable=True)
     gems_balance_after = Column(Integer, nullable=True)
+    quest_points_balance_after = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User")
@@ -1251,6 +1256,7 @@ class GameConfig(Base):
     match_win_gems_per_over = Column(Float, default=1.0)       # Float to allow 0.5
     match_loss_coins_per_over = Column(Integer, default=150)
     match_loss_gems_per_over = Column(Float, default=0.5)
+    ai_match_reward_daily_cap = Column(Integer, default=10, nullable=False, server_default=text("10"))
     # GSpin gem range (for blue outcome)
     gspin_gem_min = Column(Integer, default=3)
     gspin_gem_max = Column(Integer, default=150)
@@ -1676,8 +1682,20 @@ class PackPurchase(Base):
     players_json = Column(Text, nullable=True)      # serialized list of player_ids/names received
     request_id = Column(String(64), nullable=True)
     inventory_id = Column(Integer, nullable=True)  # Kept on the receipt after opening.
+    opening_id = Column(Integer, nullable=True)
     __table_args__ = (Index("uq_pack_order_request", "user_id", "request_id", unique=True),)
     purchased_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class PackOpening(Base):
+    """Snapshot of a player's awarded cards, independent of current ownership."""
+    __tablename__ = "pack_openings"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    pack_name = Column(String(100), nullable=False)
+    cards_json = Column(Text, nullable=False)
+    opened_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 class UnopenedPack(Base):
@@ -1689,6 +1707,7 @@ class UnopenedPack(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     pack_id = Column(Integer, ForeignKey("packs.id"), nullable=False)
     acquired_at = Column(DateTime, default=datetime.utcnow, index=True)
+    __table_args__ = {"sqlite_autoincrement": True}
     source = Column(String(40), default="buypack")  # 'buypack' / 'admin' / 'reward' etc.
 
 
@@ -2271,9 +2290,8 @@ class ReferralCompetition(Base):
 
 class Referral(Base):
     """A single invite event. Created when an invitee starts the bot via a
-    referral deep-link. `completed_at` is set when the invitee finishes
-    /debut — that's when the invite "counts" for the leaderboard and any
-    per-invite reward is paid out.
+    referral deep-link. `completed_at` is set after an eligible ranked result
+    to count the invite and pay any per-invite reward.
     """
     __tablename__ = "referrals"
 
@@ -2289,7 +2307,7 @@ class Referral(Base):
                                        ondelete="SET NULL"),
                             nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
-    # Set when invitee completes /debut
+    # Set after the invitee qualifies.
     completed_at = Column(DateTime, nullable=True, index=True)
     # Admin can mark as invalid (suspected abuse) — invalid rows don't count
     # toward the leaderboard but stay for audit history.
@@ -2380,6 +2398,32 @@ class Giveaway(Base):
     reminder_sent_at = Column(DateTime, nullable=True)
 
     prize_player = relationship("Player")
+
+
+class MiniappEconomyIntent(Base):
+    """Account-bound quote with an immutable result once settled."""
+    __tablename__ = "miniapp_economy_intents"
+
+    id = Column(String(32), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    action = Column(String(20), nullable=False)
+    quote = Column(Text, nullable=False)
+    result = Column(Text, nullable=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+
+
+class MiniappRewardReceipt(Base):
+    """Durable retry result for a settled Mini App reward request."""
+    __tablename__ = "miniapp_reward_receipts"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    action = Column(String(20), nullable=False)
+    request_id = Column(String(64), nullable=False)
+    result = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (UniqueConstraint("user_id", "action", "request_id"),)
 
 
 class MiniappGift(Base):
@@ -2971,6 +3015,7 @@ class Tournament(Base):
     format = Column(String(40), default="League", nullable=False)
     overs = Column(Integer, default=20, nullable=False)
     max_teams = Column(Integer, default=8, nullable=False)
+    registration_closes_at = Column(DateTime, nullable=True)
     # Optional broadcast summary; resolved live for results and archived cards.
     special_graphics_enabled = Column(Boolean, default=False, server_default=text("false"),
                                       nullable=False)
@@ -5382,6 +5427,33 @@ class MatchPrediction(Base):
     __table_args__ = (
         UniqueConstraint("match_id", "user_id", name="uq_prediction_match_user"),
     )
+
+
+class MatchQuestCredit(Base):
+    """A finalized match advances each participating user's quests once."""
+    __tablename__ = "match_quest_credits"
+
+    match_id = Column(Integer, ForeignKey("matches.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+
+
+class MatchRewardSettlement(Base):
+    """One currency settlement for a finalized match."""
+    __tablename__ = "match_reward_settlements"
+
+    match_id = Column(Integer, ForeignKey("matches.id", ondelete="CASCADE"), primary_key=True)
+    winner_id = Column(Integer, nullable=True, index=True)
+    loser_id = Column(Integer, nullable=True, index=True)
+    winner_coins = Column(Integer, nullable=False, default=0)
+    winner_gems = Column(Integer, nullable=False, default=0)
+    loser_coins = Column(Integer, nullable=False, default=0)
+    loser_gems = Column(Integer, nullable=False, default=0)
+    ai_match = Column(Boolean, nullable=False, default=False)
+    eligibility = Column(String(40), nullable=False, default="eligible")
+    settled_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    def amounts(self):
+        return self.winner_coins, self.winner_gems, self.loser_coins, self.loser_gems
 
 
 class MatchPostResult(Base):

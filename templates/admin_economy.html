@@ -4,6 +4,7 @@
 
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:.5rem;">
   <h1>💰 Economy</h1>
+  <a class="btn btn-ghost" href="{{ url_for('admin_economy_review') }}">Economy review</a>
   <form method="POST" action="{{ url_for('admin_economy_reset') }}" style="display:inline;"
         onsubmit="return confirm('Reset all economy values to recommended defaults?');">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -150,6 +151,11 @@
              value="{{ cfg.match_loss_gems_per_over }}"
              style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
     </div>
+    <div>
+      <label for="ai-match-cap">VS Bot currency rewards per UTC day</label>
+      <input type="number" id="ai-match-cap" name="ai_match_reward_daily_cap" min="0" max="100"
+             value="{{ cfg.ai_match_reward_daily_cap }}" required>
+    </div>
   </div>
 
   <h2 style="margin-bottom:.7rem; font-size:1.1rem;">🎴 Lucky Card Gem Range</h2>
@@ -239,20 +245,6 @@
       <input type="number" name="daily_ad_quota" min="0" max="99" required
              value="{{ cfg.daily_ad_quota }}"
              style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
-    </div>
-    <div>
-      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
-        No-ad passes per cycle <span style="color:var(--muted);">(default: 2)</span>
-      </label>
-      <input type="number" name="spin_nofill_grace" min="0" max="99" required
-             value="{{ cfg.spin_nofill_grace }}"
-             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
-      <p style="color:var(--muted); font-size:.75rem; margin:.35rem 0 0;">
-        When the ad network has nothing to serve, this many of the ad slots
-        above can still be used without an ad — so a no-fill never dead-ends a
-        player. It spends an ad slot either way, so this is never extra quota.
-        Set to 0 to require a watched ad, always.
-      </p>
     </div>
     <div>
       <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">

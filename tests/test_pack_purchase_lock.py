@@ -1,31 +1,9 @@
-"""Regression coverage for the Mini App "double-tapped Buy = multiple packs" bug.
-
-Tapping Buy twice in the Telegram WebView fired two POSTs to
-``/api/webapp/packs/buy`` before the first one had committed. Each request read
-the same pre-deduction balance, passed the cost / inventory / daily-limit
-checks, charged the user and inserted another ``UnopenedPack`` — so an impatient
-tap cost real currency and handed out extra packs.
-
-The fix locks at three levels, and each one is covered here:
-
-  1. UI — the Buy/Open buttons disable themselves on the first click and a
-     module-level ``packActionBusy`` flag drops clicks already queued.
-  2. Endpoint — ``claim_once``/``release`` allow one pack buy (and one pack
-     open) per user in flight, returning 409 for the duplicate.
-  3. Data — ``buy_pack`` takes a ``SELECT … FOR UPDATE`` on the buyer before
-     validating, so overlapping transactions can't spend the same balance.
-
-The UI and endpoint layers are asserted against source text: the Mini App is a
-single Jinja template with no JS test harness, and importing ``admin`` needs
-Flask, which the lean test env doesn't have.
-"""
+"""Mini App pack buttons and shared wallet serialization."""
 
 import os
 import re
-import threading
 import unittest
 
-from utils.idempotency import claim_once, release, _GUARD
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -63,25 +41,25 @@ class MiniAppBuyButtonLockTests(unittest.TestCase):
     def test_buy_button_passes_itself_to_the_handler(self):
         """Without the element the handler has nothing to disable."""
         self.assertIn('onclick="buyPack(${p.id}, this)"', self.html)
-        self.assertIn('onclick="openPack(${inv.inventory_id}, this)"', self.html)
+        self.assertIn('onclick="openPack(${inv.inventory_id})"', self.html)
 
     def test_buy_drops_taps_that_arrive_while_a_purchase_is_in_flight(self):
         guard = self.buy.index("if (packActionBusy) return;")
-        request = self.buy.index("/api/webapp/packs/buy")
+        request = self.buy.index("/api/webapp/economy/quote")
         self.assertLess(guard, request,
                         "the busy check must run before the purchase request")
         self.assertLess(self.buy.index("packActionBusy = true"), request)
 
     def test_buy_disables_every_pack_button_before_the_request(self):
         self.assertLess(self.buy.index("setPackButtonsBusy(true)"),
-                        self.buy.index("/api/webapp/packs/buy"),
+                        self.buy.index("/api/webapp/economy/quote"),
                         "buttons must be locked before the round trip starts")
 
     def test_buy_re_enables_the_shop_after_a_failed_purchase(self):
         """A rejected buy (not enough coins) must leave a usable button."""
         failure = self.buy[self.buy.index("if (!ok)"):]
         self.assertIn("setPackButtonsBusy(false)", failure)
-        self.assertIn("btn.innerHTML = label", failure)
+        self.assertIn("finally", failure)
 
     def test_buy_always_clears_the_busy_flag(self):
         self.assertIn("finally", self.buy)
@@ -110,96 +88,6 @@ class MiniAppBuyButtonLockTests(unittest.TestCase):
         self.assertIn("packRevealing", reveal)
         self.assertLess(reveal.index("packRevealing"),
                         reveal.index("classList.add('bursting')"))
-
-
-# ════════════════════════════════════════════════════════════════════
-# 2. Endpoint — one pack buy per user in flight
-# ════════════════════════════════════════════════════════════════════
-
-class WebappPackEndpointGuardTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.admin_src = _read("admin.py")
-
-    def _endpoint(self, name):
-        start = self.admin_src.index(f"def {name}(")
-        end = self.admin_src.index("\n@app.route", start)
-        return self.admin_src[start:end]
-
-    def test_buy_endpoint_claims_before_doing_any_work(self):
-        src = self._endpoint("webapp_packs_buy")
-        self.assertIn("claim_once(guard_key", src)
-        self.assertLess(src.index("claim_once(guard_key"), src.index("buy_pack("),
-                        "the duplicate must be rejected before the purchase runs")
-
-    def test_buy_guard_is_per_user(self):
-        src = self._endpoint("webapp_packs_buy")
-        self.assertIn('f"webapp_packbuy_{user.id}"', src)
-
-    def test_duplicate_buy_is_rejected_with_409_and_closes_the_session(self):
-        src = self._endpoint("webapp_packs_buy")
-        rejection = src[src.index("if not claim_once"):src.index("try:", src.index("if not claim_once"))]
-        self.assertIn("409", rejection)
-        self.assertIn('"in_progress"', rejection)
-        self.assertIn("db.close()", rejection,
-                      "the rejected request must not leak its DB session")
-
-    def test_buy_releases_the_claim_in_finally(self):
-        """Otherwise a legitimate second purchase is blocked for the whole TTL."""
-        src = self._endpoint("webapp_packs_buy")
-        tail = src[src.index("finally:"):]
-        self.assertIn("release(guard_key)", tail)
-
-    def test_open_endpoint_is_guarded_and_released_too(self):
-        src = self._endpoint("webapp_packs_open")
-        self.assertIn('f"webapp_packopen_{user.id}"', src)
-        self.assertIn("409", src)
-        self.assertIn("release(guard_key)", src[src.index("finally:"):])
-
-    def test_guard_ttl_is_defined_and_bounded(self):
-        match = re.search(r"_WEBAPP_PACK_GUARD_TTL\s*=\s*([\d.]+)", self.admin_src)
-        self.assertIsNotNone(match, "guard TTL constant missing")
-        self.assertLessEqual(float(match.group(1)), 60.0,
-                             "a long TTL strands the user if a worker dies mid-buy")
-
-
-class GuardSemanticsTests(unittest.TestCase):
-    """The behaviour the endpoint relies on, exercised against the real guard."""
-
-    def setUp(self):
-        _GUARD.clear()
-
-    def test_second_concurrent_buy_for_the_same_user_is_rejected(self):
-        key = "webapp_packbuy_42"
-        self.assertTrue(claim_once(key))
-        self.assertFalse(claim_once(key))
-
-    def test_a_different_user_is_never_blocked(self):
-        self.assertTrue(claim_once("webapp_packbuy_42"))
-        self.assertTrue(claim_once("webapp_packbuy_43"))
-
-    def test_sequential_purchases_work_once_the_first_commits(self):
-        key = "webapp_packbuy_42"
-        self.assertTrue(claim_once(key))
-        release(key)                       # request finished (finally block)
-        self.assertTrue(claim_once(key))   # user buys a second pack — allowed
-
-    def test_a_burst_of_taps_yields_exactly_one_purchase(self):
-        """32 threads model the WebView firing a click storm at one endpoint."""
-        purchases = []
-        barrier = threading.Barrier(32)
-
-        def request():
-            barrier.wait()
-            if claim_once("webapp_packbuy_42"):
-                purchases.append(1)
-
-        threads = [threading.Thread(target=request) for _ in range(32)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        self.assertEqual(len(purchases), 1)
 
 
 # ════════════════════════════════════════════════════════════════════

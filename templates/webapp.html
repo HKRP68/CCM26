@@ -7,6 +7,7 @@
 <title>CricMaster Ultra</title>
 <script src="{{ url_for('static', filename='js/ad_reward_confirmation.js', v='2') }}"></script>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="{{ url_for('static', filename='js/miniapp_theme.js', v='1') }}"></script>
 <script>
   // Track third-party SDK load state so a DNS/network failure on these
   // hosts (e.g. net::ERR_NAME_NOT_RESOLVED where an ISP/region blocks the
@@ -38,27 +39,14 @@
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
   :root {
-    color-scheme: light;
-    --bg: #faf8fc;
-    --card: #fff;
-    --card-2: #f5f1f8;
-    --border: #ded6e5;
-    --text: #1e1925;
-    --muted: #5e566a;
-    --ink: #19151f;
-    --accent: #59418d;
-    --accent-2: #d7c7f7;
-    --lilac: #e6dcf9;
-    --cream: #fff1d8;
-    --coral: #fbe0dc;
-    --pink: #f9e4f0;
-    --navy: #28213c;
-    --success: #285843;
-    --success-bg: #dff3e8;
-    --red: #9c2f48;
-    --blue: #305a9d;
-    --purple: #654a97;
-    --input-bg: #fffdff;
+    --bg: var(--bg-main);
+    --card: var(--bg-card);
+    --card-2: var(--bg-secondary);
+    --text: var(--text-primary);
+    --muted: var(--text-muted);
+    --accent: var(--primary);
+    --accent-2: var(--primary-light);
+    --input-bg: var(--bg-secondary);
     --bg-color: var(--bg);
     --card-bg: var(--card);
     --card-border: var(--border);
@@ -81,15 +69,65 @@
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   ::selection { background: var(--accent-2); color: var(--ink); }
 
-  .top-links { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
-  .top-link { text-decoration: none; }
-  .cm-card {
-    margin-bottom: 8px;
-    padding: 0 14px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--card);
+  /* ════ Top app bar ════ */
+  .appbar {
+    position: sticky; top: 0; z-index: 50;
+    background: linear-gradient(180deg, var(--bg) 0%, var(--card) 100%);
+    border-bottom: 1px solid rgba(232,184,75,0.3);
+    padding: 0.85rem 1rem 0.7rem;
+    display: flex; align-items: center; gap: 0.6rem;
+    box-shadow: 0 2px 20px rgba(0,0,0,0.5), 0 1px 0 rgba(232,184,75,0.12);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
   }
+  .appbar .logo {
+    font-size: 1.4rem;
+  }
+
+  /* Top community links bar */
+  .top-links {
+    position: sticky; top: 0; z-index: 49;
+    display: flex; gap: 0.5rem; padding: 0.5rem 0.8rem;
+    background: var(--card-2, #12201a);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .top-link {
+    flex: 1; text-align: center; white-space: nowrap;
+    background: rgba(0,212,170,0.08); border: 1px solid rgba(0,212,170,0.35);
+    color: var(--accent); text-decoration: none;
+    padding: 0.4rem 0.7rem; border-radius: 8px;
+    font-size: 0.8rem; font-weight: 700;
+  }
+  .top-link:active { background: rgba(0,212,170,0.18); }
+
+  .suggestion-box {
+    margin: 0.65rem 0.8rem 0.75rem;
+    padding: 0.8rem;
+    border-radius: 15px;
+    background: var(--card);
+    border: 1px solid rgba(74,158,255,0.28);
+    box-shadow: 0 10px 28px rgba(0,0,0,0.22);
+  }
+  .suggestion-head { display:flex; align-items:center; justify-content:space-between; gap:0.6rem; margin-bottom:0.45rem; }
+  .suggestion-title { font-size: 0.84rem; font-weight: 900; }
+  .suggestion-sub { color: var(--muted); font-size: 0.68rem; }
+  .suggestion-input {
+    width: 100%; min-height: 76px; resize: vertical; border-radius: 11px;
+    border: 1px solid var(--border); background: var(--input-bg); color: var(--text);
+    padding: 0.7rem; font: inherit; font-size: 0.78rem; line-height: 1.4; outline: none;
+  }
+  .suggestion-input:focus { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(74,158,255,0.14); }
+  .suggestion-actions { display:flex; align-items:center; gap:0.55rem; margin-top:0.55rem; }
+  .suggestion-count { color: var(--muted); font-size: 0.67rem; flex:1; }
+  .suggestion-send {
+    border: 1px solid rgba(74,158,255,0.45); border-radius: 10px; padding: 0.5rem 0.78rem;
+    background: rgba(74,158,255,0.14); color: var(--blue); font: inherit; font-size: 0.74rem;
+    font-weight: 900; cursor: pointer;
+  }
+  .suggestion-send:disabled { opacity: 0.55; cursor: wait; }
+
+  /* Collapsible community cards: suggestion box, CMU News, poll */
   .cm-head {
     display: flex;
     align-items: center;
@@ -177,9 +215,77 @@
     padding: 1rem;
     min-height: calc(100vh - 140px);
   }
-  .screen.active { display: block; }
-  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-  @keyframes slideUpFade { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; } }
+  .balance-pill {
+    background: rgba(232, 184, 75, 0.1);
+    border: 1px solid rgba(232, 184, 75, 0.4);
+    padding: 0.3rem 0.7rem;
+    border-radius: 14px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    display: flex; align-items: center; gap: 0.25rem;
+    box-shadow: 0 0 8px rgba(232,184,75,0.12);
+  }
+
+  /* ════ Bottom tabs ════ */
+  .tabs {
+    position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
+    width: 100%; max-width: var(--app-max-width);
+    background: var(--card);
+    border-top: 1px solid rgba(232, 184, 75, 0.12);
+    display: flex;
+    z-index: 100;
+    padding: 0.35rem 0.5rem;
+    padding-bottom: calc(0.35rem + env(safe-area-inset-bottom));
+    box-shadow: 0 -4px 24px rgba(0,0,0,0.45), 0 -1px 0 rgba(232,184,75,0.08);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    gap: 0.25rem;
+  }
+  .tab {
+    flex: 1;
+    background: transparent;
+    border: none; color: var(--muted);
+    padding: 0.4rem 0.25rem 0.45rem;
+    font-size: 0.68rem;
+    cursor: pointer;
+    display: flex; flex-direction: column;
+    align-items: center; gap: 0.1rem;
+    transition: color 0.2s;
+    font-family: inherit;
+    border-radius: 12px;
+    position: relative;
+  }
+  .tab:active { transform: scale(0.91); }
+  .tab .icon {
+    font-size: 1.35rem;
+    line-height: 1;
+    transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .tab.active { color: var(--accent); }
+  .tab.active::before {
+    content: '';
+    position: absolute; top: 4px; left: 50%; transform: translateX(-50%);
+    width: 36px; height: 30px;
+    background: rgba(232, 184, 75, 0.12);
+    border-radius: 10px;
+    box-shadow: 0 0 12px rgba(232, 184, 75, 0.2);
+    pointer-events: none;
+  }
+  .tab.active .icon { transform: translateY(-3px) scale(1.12); }
+  .tab.active div:last-child { font-weight: 700; font-family: var(--font-display); }
+  @keyframes tabPop {
+    0%   { transform: scale(1); }
+    40%  { transform: scale(0.88); }
+    70%  { transform: scale(1.08); }
+    100% { transform: scale(1); }
+  }
+  .tab-popping .icon { animation: tabPop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+
+  /* ════ Screens ════ */
+  .screen { display: none; padding: 1rem; min-height: calc(100vh - 130px); }
+  .screen.active { display: block; animation: fadeIn 0.28s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes slideUpFade { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 
   /* ════ Cards ════ */
   .card {
@@ -216,6 +322,175 @@
     0% { background-position: 0% center; }
     100% { background-position: 200% center; }
   }
+  @keyframes cardShimmer {
+    0%   { transform: translateX(-100%) skewX(-15deg); }
+    100% { transform: translateX(250%) skewX(-15deg); }
+  }
+
+  /* ════ Stats grid (dashboard) ════ */
+  .greeting {
+    margin-bottom: 1rem;
+  }
+  .greeting .hi {
+    font-size: 0.85rem; color: var(--muted); margin: 0 0 0.2rem;
+  }
+  .greeting .name {
+    font-size: 1.5rem; font-weight: 800;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin: 0;
+  }
+  .stat-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.65rem;
+  }
+  .stat {
+    background: var(--card-2);
+    border: 1px solid rgba(232,184,75,0.07);
+    border-radius: 14px;
+    padding: 0.75rem;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.3), 0 0 0 1px rgba(232,184,75,0.04);
+    transition: box-shadow 0.2s, transform 0.2s;
+  }
+  .stat:active {
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    transform: scale(0.98);
+  }
+  .stat::before {
+    content: ""; position: absolute;
+    top: -10px; right: -10px;
+    width: 50px; height: 50px;
+    border-radius: 50%;
+    opacity: 0.12;
+    background: var(--accent);
+  }
+  .stat .label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+  }
+  .stat .val {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--text);
+    margin-top: 0.2rem;
+  }
+  .stat.coins .val { color: var(--accent); }
+  .stat.gems .val { color: var(--blue); }
+  .stat.qp .val { color: var(--purple); }
+  .stat.roster .val { color: var(--green); }
+
+  /* ════ Big action tiles ════ */
+  .tile-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; margin-top: 0.85rem;
+  }
+  .tile {
+    background: linear-gradient(135deg, var(--card-2), var(--card));
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 1rem;
+    text-align: center;
+    cursor: pointer;
+    transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+    font-family: inherit; color: var(--text);
+    position: relative; overflow: hidden;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+  }
+  .tile:active { transform: scale(0.96); box-shadow: 0 1px 6px rgba(0,0,0,0.2); }
+  .tile:active::after {
+    content: '';
+    position: absolute; top: 0; left: 0;
+    width: 40%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.04), transparent);
+    animation: cardShimmer 0.5s ease-out forwards;
+    pointer-events: none;
+  }
+  .tile.spin {
+    border-color: rgba(212, 168, 42, 0.5);
+    box-shadow: 0 0 16px rgba(212, 168, 42, 0.15) inset;
+  }
+  .tile.daily {
+    border-color: rgba(0, 212, 170, 0.4);
+    box-shadow: 0 0 16px rgba(0, 212, 170, 0.1) inset;
+  }
+  .tile.browse { border-color: rgba(74, 158, 255, 0.4); }
+  .tile.leaderboard { border-color: rgba(167, 139, 250, 0.4); }
+  .tile.invite {
+    border-color: rgba(0, 212, 170, 0.45);
+    box-shadow: 0 0 16px rgba(0, 212, 170, 0.08) inset;
+  }
+  .tile.quests {
+    border-color: rgba(212, 168, 42, 0.45);
+    box-shadow: 0 0 16px rgba(212, 168, 42, 0.08) inset;
+  }
+  .tile.freepack {
+    border-color: rgba(167, 139, 250, 0.45);
+    box-shadow: 0 0 16px rgba(167, 139, 250, 0.08) inset;
+  }
+  .tile.packs {
+    border-color: rgba(255, 107, 157, 0.45);
+    box-shadow: 0 0 16px rgba(255, 107, 157, 0.08) inset;
+  }
+  .tile.achievements {
+    border-color: rgba(255, 196, 0, 0.45);
+    box-shadow: 0 0 16px rgba(255, 196, 0, 0.08) inset;
+  }
+  .tile.season {
+    border-color: rgba(124, 196, 255, 0.45);
+    box-shadow: 0 0 16px rgba(124, 196, 255, 0.08) inset;
+  }
+  .tile.clubs {
+    border-color: rgba(96, 220, 160, 0.45);
+    box-shadow: 0 0 16px rgba(96, 220, 160, 0.08) inset;
+  }
+
+  /* ════ Home mission hub ════ */
+  .mission-hub {
+    margin: 0.95rem 0 0.85rem;
+    border: 1px solid rgba(232,184,75,0.28);
+    background:
+      radial-gradient(circle at top right, rgba(232,184,75,0.13), transparent 42%),
+      linear-gradient(145deg, var(--card-2), var(--input-bg));
+    border-radius: 20px; overflow: hidden;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.04);
+  }
+  .mission-hub-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.7rem; padding: 0.95rem 0.95rem 0.65rem; }
+  .mission-kicker { color: var(--accent); font-size: 0.64rem; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 0.25rem; }
+  .mission-hub-title { margin: 0; color: var(--text); font-size: 1.12rem; font-weight: 800; font-family: var(--font-display); letter-spacing: -0.02em; }
+  .mission-hub-sub { color: var(--muted); font-size: 0.73rem; margin-top: 0.2rem; }
+  .mission-toggle { display: flex; gap: 0.2rem; flex-shrink: 0; padding: 0.2rem; border-radius: 12px; border: 1px solid rgba(232,184,75,0.14); background: var(--bg); }
+  .mission-toggle-btn { border: 0; border-radius: 9px; padding: 0.42rem 0.52rem; background: transparent; color: var(--muted); font-family: inherit; font-size: 0.68rem; font-weight: 800; cursor: pointer; }
+  .mission-toggle-btn.active { background: var(--accent); color: #151005; box-shadow: 0 4px 12px rgba(232,184,75,0.22); }
+  .mission-list { padding: 0 0.75rem 0.5rem; }
+  .home-quest { width: 100%; display: grid; grid-template-columns: 2rem 1fr auto; align-items: center; gap: 0.55rem; padding: 0.62rem 0.18rem; border: 0; border-top: 1px solid rgba(107,122,150,0.14); background: transparent; color: var(--text); text-align: left; font-family: inherit; cursor: pointer; }
+  .home-quest-icon { width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: 10px; background: rgba(232,184,75,0.09); font-size: 1rem; }
+  .home-quest-title { font-size: 0.79rem; font-weight: 700; line-height: 1.2; }
+  .home-quest-progress { display: flex; align-items: center; gap: 0.35rem; margin-top: 0.35rem; }
+  .home-quest-progress-track { height: 4px; flex: 1; overflow: hidden; border-radius: 9px; background: rgba(107,122,150,0.2); }
+  .home-quest-progress-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg,var(--accent),var(--accent-2)); }
+  .home-quest-progress-fill.done { background: linear-gradient(90deg,var(--green),#00f5c4); }
+  .home-quest-count { color: var(--muted); font-size: 0.66rem; font-weight: 700; white-space: nowrap; }
+  .home-quest-reward { color: var(--accent); font-size: 0.69rem; font-weight: 800; white-space: nowrap; }
+  .mission-footer { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.7rem 0.85rem; border-top: 1px solid rgba(232,184,75,0.12); background: var(--bg); }
+  .mission-footer-copy { color: var(--muted); font-size: 0.7rem; }
+  .mission-link { border: 0; background: transparent; color: var(--accent); padding: 0.2rem; font-family: inherit; font-size: 0.74rem; font-weight: 800; cursor: pointer; }
+  .mission-loading { padding: 1.1rem; text-align: center; color: var(--muted); font-size: 0.78rem; }
+  .tile.freepack.ready { animation: freePackTilePulse 1.8s ease-in-out infinite; border-color: rgba(167,139,250,0.9); }
+  .tile-badge { position: absolute; top: 0.55rem; right: 0.55rem; padding: 0.2rem 0.38rem; border-radius: 99px; background: var(--purple); color: #130c27; font-size: 0.56rem; font-weight: 900; letter-spacing: 0.08em; }
+  @keyframes freePackTilePulse { 0%,100% { box-shadow: 0 0 14px rgba(167,139,250,0.16) inset, 0 0 0 rgba(167,139,250,0); } 50% { box-shadow: 0 0 18px rgba(167,139,250,0.28) inset, 0 0 22px rgba(167,139,250,0.22); } }
+  .freepack-pop-panel { width: min(92vw, 390px); padding: 1.15rem; text-align: center; border: 1px solid rgba(167,139,250,0.72); background: radial-gradient(circle at 50% 0%, rgba(167,139,250,0.3), transparent 42%), var(--card); box-shadow: 0 24px 80px rgba(0,0,0,0.6), 0 0 38px rgba(167,139,250,0.2); }
+  .freepack-pop-gift { font-size: 4rem; filter: drop-shadow(0 10px 20px rgba(167,139,250,0.48)); animation: giftFloat 2s ease-in-out infinite; }
+  .freepack-pop-kicker { color: var(--purple); text-transform: uppercase; font-size: 0.65rem; font-weight: 900; letter-spacing: 0.2em; }
+  .freepack-pop-title { margin: 0.35rem 0 0.25rem; font-family: var(--font-display); font-size: 1.45rem; }
+  .freepack-pop-copy { margin: 0 0 1rem; color: var(--muted); font-size: 0.8rem; line-height: 1.5; }
+  @keyframes giftFloat { 0%,100% { transform: translateY(0) rotate(-3deg); } 50% { transform: translateY(-8px) rotate(3deg); } }
+
   /* Clubs */
   .club-card {
     background: var(--card); border: 1px solid var(--border);
@@ -243,7 +518,7 @@
   .club-member-name { flex: 1; font-weight: 600; font-size: 0.9rem; }
   .club-member-pts { font-weight: 800; font-size: 0.85rem; }
   .founder-badge {
-    font-size: 0.6rem; background: var(--ink); color: #fff;
+    font-size: 0.6rem; background: var(--accent); color: var(--action-fg);
     padding: 0.1rem 0.4rem; border-radius: 4px; font-weight: 800; margin-left: 0.3rem;
   }
   .club-kick-btn {
@@ -263,7 +538,7 @@
     border-radius: 10px; padding: 0.7rem; margin-bottom: 0.5rem;
   }
   .club-join-btn {
-    margin-left: auto; background: var(--success-bg); color: var(--success); border: none;
+    margin-left: auto; background: var(--green); color: var(--action-fg); border: none;
     padding: 0.45rem 0.9rem; border-radius: 8px; font-weight: 800;
     font-family: inherit; font-size: 0.8rem; cursor: pointer; white-space: nowrap;
   }
@@ -273,7 +548,7 @@
     border: 1px solid var(--border); border-radius: 8px; font-family: inherit;
     font-size: 0.82rem; font-weight: 600; cursor: pointer;
   }
-  .club-tab.active { background: var(--ink); color: #fff; font-weight: 800; }
+  .club-tab.active { background: var(--accent); color: var(--action-fg); font-weight: 800; }
 
   /* Event banner */
   .event-banner {
@@ -327,11 +602,31 @@
   .upgrade-opt-version { font-weight: 800; font-size: 0.9rem; }
   .upgrade-opt-cost { font-size: 0.75rem; color: var(--muted); margin-top: 0.1rem; }
   .upgrade-do-btn {
-    background: #a78bfa; color: #0a0f1a; border: none;
+    background: #a78bfa; color: var(--action-fg); border: none;
     padding: 0.5rem 0.9rem; border-radius: 8px; font-weight: 800;
     font-family: inherit; font-size: 0.8rem; cursor: pointer; white-space: nowrap;
   }
   .upgrade-do-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Login streak banner */
+  .login-streak-banner {
+    display: flex; align-items: center; gap: 0.8rem;
+    background: linear-gradient(135deg, rgba(255,107,53,0.15), rgba(255,196,0,0.1));
+    border: 1px solid rgba(255,140,0,0.4);
+    border-radius: 12px; padding: 0.8rem 1rem; margin: 0.8rem 0;
+    cursor: pointer;
+  }
+  .login-streak-banner:active { opacity: 0.85; }
+  .lsb-flame { font-size: 2rem; animation: flameFlicker 1.5s ease-in-out infinite; }
+  @keyframes flameFlicker { 0%,100% { transform: scale(1) rotate(-2deg); } 50% { transform: scale(1.1) rotate(2deg); } }
+  .lsb-text { flex: 1; }
+  .lsb-title { font-weight: 800; font-size: 0.95rem; }
+  .lsb-sub { font-size: 0.75rem; color: var(--muted); margin-top: 0.1rem; }
+  .lsb-cta {
+    background: var(--accent); color: var(--action-fg); font-weight: 800;
+    padding: 0.45rem 0.9rem; border-radius: 8px; font-size: 0.82rem;
+  }
+  .lsb-cta.claimed { background: var(--card-2); color: var(--muted); }
 
   /* Login ladder */
   .login-ladder {
@@ -403,7 +698,7 @@
     font-family: inherit; font-size: 0.82rem; font-weight: 600; cursor: pointer;
     display: flex; align-items: center; justify-content: center; gap: 0.3rem;
   }
-  .packs-tab.active { background: var(--ink); color: #fff; font-weight: 800; }
+  .packs-tab.active { background: var(--accent); color: var(--action-fg); font-weight: 800; }
   .inv-badge {
     background: var(--red); color: #fff; font-size: 0.65rem; font-weight: 800;
     min-width: 16px; height: 16px; border-radius: 8px; padding: 0 4px;
@@ -447,7 +742,7 @@
   }
   .pack-open-btn {
     margin-left: auto; padding: 0.55rem 1.1rem; border: none; border-radius: 8px;
-    background: var(--success-bg); color: var(--success); font-weight: 800;
+    background: var(--green); color: var(--action-fg); font-weight: 800;
     font-family: inherit; font-size: 0.85rem; cursor: pointer;
   }
   /* The in-flight spinner sits on a gold/green button — the shared .spinner
@@ -476,6 +771,22 @@
 
   /* Free pack reveal card */
 
+  /* Quest screen */
+  .quest-tabs {
+    display: flex; gap: 0.3rem; margin-bottom: 0.75rem;
+    background: var(--card); padding: 0.25rem; border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .quest-tab {
+    flex: 1; padding: 0.5rem 0.7rem;
+    background: transparent; color: var(--muted);
+    border: none; border-radius: 6px;
+    font-family: inherit; font-size: 0.82rem; font-weight: 600;
+    cursor: pointer;
+  }
+  .quest-tab.active {
+    background: var(--accent); color: var(--action-fg); font-weight: 800;
+  }
   /* ── Career Player ── */
   .career-hero {
     display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap;
@@ -531,7 +842,55 @@
     font-size: 0.82rem; padding: 0.4rem 0; border-top: 1px solid var(--border);
   }
   .career-quest:first-of-type { border-top: none; }
-  .career-quest.done { color: var(--success); }
+  .career-quest.done { color: var(--green); }
+
+  .quest-row {
+    padding: 0.75rem;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; margin-bottom: 0.5rem;
+  }
+  .quest-row.completed { border-color: var(--green); }
+  .quest-row.claimed { opacity: 0.55; }
+  .quest-row-header {
+    display: flex; gap: 0.5rem; align-items: flex-start;
+    margin-bottom: 0.5rem;
+  }
+  .quest-row-emoji { font-size: 1.2rem; line-height: 1.2; }
+  .quest-row-title {
+    flex: 1; font-weight: 700; font-size: 0.92rem; line-height: 1.25;
+  }
+  .quest-row-desc {
+    color: var(--muted); font-size: 0.75rem; margin-top: 0.2rem;
+    line-height: 1.35;
+  }
+  .quest-progress-wrap {
+    background: var(--input-bg); border-radius: 4px; height: 7px;
+    overflow: hidden; margin: 0.4rem 0;
+  }
+  .quest-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    border-radius: 4px;
+    transition: width 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    box-shadow: 0 0 6px rgba(232,184,75,0.35);
+  }
+  .quest-progress-bar.completed {
+    background: linear-gradient(90deg, var(--green), #00f5c4);
+    box-shadow: 0 0 6px rgba(0,212,170,0.35);
+  }
+  .quest-meta-row {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 0.78rem;
+  }
+  .quest-rewards { color: var(--muted); }
+  .quest-claim-btn {
+    background: var(--green); color: var(--action-fg);
+    border: none; padding: 0.4rem 0.9rem;
+    border-radius: 6px; font-weight: 800; font-size: 0.78rem;
+    font-family: inherit; cursor: pointer;
+  }
+  .quest-claim-btn:active { opacity: 0.85; }
+  .quest-claim-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
   /* Quick Match scorecard */
   .scorecard-tabs {
@@ -546,7 +905,7 @@
     font-family: inherit; font-size: 0.78rem; font-weight: 600;
     cursor: pointer;
   }
-  .sc-tab.active { background: var(--ink); color: #fff; font-weight: 800; }
+  .sc-tab.active { background: var(--accent); color: var(--action-fg); font-weight: 800; }
   .scorecard-table {
     width: 100%; border-collapse: collapse;
     font-size: 0.78rem; margin-top: 0.4rem;
@@ -712,13 +1071,13 @@
     border-radius: 10px;
     display: flex; align-items: center; justify-content: center;
     font-weight: 900; font-size: 1.1rem;
-    background: linear-gradient(135deg, #fff1db, #e9c783);
-    color: #0a0f1a;
+    background: linear-gradient(135deg, var(--accent), #b8901f);
+    color: var(--action-fg);
     flex-shrink: 0;
   }
   .player-rating.bronze { background: linear-gradient(135deg, #b87333, #8b4513); color: #fff; }
   .player-rating.silver { background: linear-gradient(135deg, #c0c0c0, #888); color: #1a1a1a; }
-  .player-rating.gold { background: linear-gradient(135deg, #fff1db, #e9c783); color: var(--ink); }
+  .player-rating.gold { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--action-fg); }
   .player-rating.epic { background: linear-gradient(135deg, var(--purple), #6d28d9); color: #fff; }
   .player-rating.legendary { background: linear-gradient(135deg, #ff8c00, var(--red)); color: #fff; }
   .player-info { flex: 1; min-width: 0; }
@@ -881,7 +1240,7 @@
   .pick-card.won .pick-card-inner { transform: rotateY(180deg) scale(1.16); }
   .pick-card.won .pick-front {
     border-color: var(--accent);
-    background: linear-gradient(160deg, rgba(232,184,75,.3), rgba(20,27,49,.95));
+    background: linear-gradient(160deg, rgba(232,184,75,.3), var(--card));
     box-shadow: 0 0 26px rgba(232,184,75,.75);
   }
   .pick-card.won .pick-front .pick-label { color: #fff; }
@@ -1202,7 +1561,7 @@
   .roster-item .meta { color: var(--muted); font-size: 0.7rem; margin-top: 0.15rem; }
   .roster-item .captain-tag {
     position: absolute; top: 6px; right: 6px;
-    background: var(--ink); color: #fff;
+    background: var(--accent); color: var(--action-fg);
     font-size: 0.55rem;
     padding: 0.1rem 0.32rem;
     border-radius: 4px;
@@ -1326,8 +1685,8 @@
     border-radius: 9px; padding: 0.7rem 0.4rem; font-family: inherit;
     font-size: 0.8rem; font-weight: 700; cursor: pointer;
   }
-  .lm-shot-btn:active, .lm-opt-btn:active { background: var(--ink); color: #fff; }
-  .lm-opt-btn.selected { background: var(--ink); color: #fff; }
+  .lm-shot-btn:active, .lm-opt-btn:active { background: var(--accent); color: var(--action-fg); }
+  .lm-opt-btn.selected { background: var(--accent); color: var(--action-fg); }
   .lm-delivery-banner {
     text-align: center; padding: 1.1rem; border-radius: 12px;
     background: linear-gradient(135deg, rgba(255,77,109,0.15), rgba(212,168,42,0.1));
@@ -1355,8 +1714,8 @@
     display: inline-block; font-size: 0.66rem; font-weight: 800;
     padding: 0.15rem 0.5rem; border-radius: 5px; margin-left: 0.4rem;
   }
-  .lm-role-bat { background: var(--success-bg); color: var(--success); }
-  .lm-role-bowl { background: #4a9eff; color: #0a0f1a; }
+  .lm-role-bat { background: var(--green); color: var(--action-fg); }
+  .lm-role-bowl { background: #4a9eff; color: var(--action-fg); }
   .lm-role-spec { background: var(--card-2); color: var(--muted); border: 1px solid var(--border); }
 
   /* Scorecard drawer */
@@ -1381,7 +1740,7 @@
     border: 1px solid var(--border); border-radius: 8px; font-family: inherit;
     font-size: 0.8rem; font-weight: 700; cursor: pointer;
   }
-  .lm-drawer-tab.active { background: var(--ink); color: #fff; }
+  .lm-drawer-tab.active { background: var(--accent); color: var(--action-fg); }
   .lm-sc-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-bottom: 0.9rem; }
   .lm-sc-table th { text-align: left; color: var(--muted); font-size: 0.68rem; text-transform: uppercase; padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--border); }
   .lm-sc-table td { padding: 0.4rem; border-bottom: 1px solid var(--border); }
@@ -1389,7 +1748,7 @@
   .lm-sc-out { font-size: 0.66rem; color: var(--muted); }
   .lm-sc-fab {
     position: fixed; bottom: 1.2rem; right: 1.2rem; z-index: 100;
-    background: var(--ink); color: #fff; border: none;
+    background: var(--accent); color: var(--action-fg); border: none;
     border-radius: 50px; padding: 0.7rem 1.1rem; font-weight: 800;
     font-family: inherit; font-size: 0.85rem; cursor: pointer;
     box-shadow: 0 4px 16px rgba(0,0,0,0.4);
@@ -1415,7 +1774,7 @@
     border: 1px solid var(--border); border-radius: 8px; font-family: inherit;
     font-size: 0.8rem; font-weight: 600; cursor: pointer;
   }
-  .pd-tab.active { background: var(--ink); color: #fff; font-weight: 800; }
+  .pd-tab.active { background: var(--accent); color: var(--action-fg); font-weight: 800; }
   .pd-stat-grid {
     display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem;
   }
@@ -1447,7 +1806,7 @@
   }
   .pd-btn-up { background: rgba(167,139,250,0.2); color: var(--purple); }
   .pd-btn-rm { background: rgba(255,77,109,0.15); color: var(--red); }
-  .pd-btn-add { background: var(--success-bg); color: var(--success); }
+  .pd-btn-add { background: var(--green); color: var(--action-fg); }
   .link-btn {
     background: var(--card);
     color: var(--text);
@@ -1504,7 +1863,7 @@
     border-radius: 3px; text-transform: uppercase; vertical-align: middle;
   }
   .market-buy-btn {
-    background: var(--ink); color: #fff;
+    background: var(--accent); color: var(--action-fg);
     border: none; padding: 0.5rem 0.85rem;
     border-radius: 7px;
     font-weight: 800; font-size: 0.72rem;
@@ -1579,7 +1938,7 @@
     font-family: inherit; font-size: 0.7rem;
     cursor: pointer; line-height: 1;
   }
-  .xi-move-btn:active:not(:disabled) { background: var(--ink); color: #fff; }
+  .xi-move-btn:active:not(:disabled) { background: var(--accent); color: var(--action-fg); }
   .xi-move-btn:disabled { opacity: 0.3; cursor: not-allowed; }
   .cat-tag {
     display: inline-block;
@@ -1771,8 +2130,8 @@
   .tn-table tr.q td.pos { color: var(--success); }
   .tn-table tr.cut td { border-bottom: 1px dashed rgba(232,188,138,.5); }
   .tn-form { display: flex; gap: 3px; margin-top: 3px; }
-  .tn-form span { width: 13px; height: 13px; border-radius: 3px; font-size: 0.5rem; font-weight: 900; display: inline-flex; align-items: center; justify-content: center; color: #0a0f1a; }
-  .tn-form .W { background: var(--success); } .tn-form .L { background: var(--red); color: #fff; } .tn-form .T { background: #f2c94c; }
+  .tn-form span { width: 13px; height: 13px; border-radius: 3px; font-size: 0.5rem; font-weight: 900; display: inline-flex; align-items: center; justify-content: center; color: var(--action-fg); }
+  .tn-form .W { background: var(--green); } .tn-form .L { background: var(--red); color: #fff; } .tn-form .T { background: #f2c94c; }
   .tn-foot { font-size: 0.68rem; color: var(--muted); margin-top: 0.5rem; }
   .tn-fx {
     background: var(--card-2); border: 1px solid var(--border); border-radius: 12px;
@@ -1815,40 +2174,27 @@
   .lm-sc-result { font-size: 0.78rem; color: var(--success); margin-bottom: 0.6rem; font-weight: 700; }
   .lm-sc-note { font-size: 0.68rem; color: var(--muted); margin-top: 0.6rem; }
 </style>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_clubhouse.css', v='5') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_player_hub.css', v='5') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_clubhouse.css', v='6') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_player_hub.css', v='6') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_shell.css', v='6') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_pastel.css', v='2') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_blueprint.css', v='3') }}">
 </head>
 <body>
-<div class="miniapp-background" aria-hidden="true"></div>
-
 <header class="appbar">
-  <div class="appbar-inner">
-    <h1>{{ icon('cricket') }}<span>CricMaster</span></h1>
-    <nav class="tabs" id="bottom-nav" aria-label="Main navigation" style="display:none;">
-      {% for screen, label, image in [
-        ('home', 'Home', 'home'), ('matchcentre', 'Matches', 'matches'), ('roster', 'Squad', 'squad'),
-        ('market', 'Market', 'market'), ('rewards', 'Rewards', 'gift')
-      ] %}
-        <button type="button" class="tab{% if screen == 'home' %} active{% endif %}" data-screen="{{ screen }}"
-          {% if screen == 'home' %}aria-current="page"{% endif %} onclick="navigate('{{ screen }}')">
-          {{ icon(image) }}<span>{{ label }}</span>
-        </button>
-      {% endfor %}
-    </nav>
-    <div class="appbar-actions">
-      <button type="button" class="app-motion-button" id="app-motion" aria-label="Pause background animation" title="Pause background animation" aria-pressed="false">
-        {{ icon('pause', 'app-icon motion-pause') }}{{ icon('play', 'app-icon motion-play') }}
-      </button>
-      <button type="button" class="app-secondary app-wallet" id="app-wallet" style="display:none;" onclick="navigate('wallet')">
-        {{ icon('wallet') }}<span>Wallet</span>
-      </button>
-    </div>
+  <button class="cmu-icon-button" id="cmu-back" type="button" aria-label="Go back" onclick="goBack()" hidden>{{ icon('back') }}</button>
+  <a class="cmu-brand" href="#home" onclick="event.preventDefault(); navigate('home')" aria-label="CricMaster Ultra home">
+    <span class="cmu-brand-mark">{{ icon('cricket') }}</span><span>CricMaster <b>Ultra</b></span>
+  </a>
+  <div class="balance-pill" id="balance-pill" style="display:none;">
+    <span aria-hidden="true">◈</span><span id="bp-coins"></span>
   </div>
+  <button class="cmu-icon-button" type="button" aria-label="Search players" onclick="navigate('browse'); document.getElementById('search-input')?.focus()">{{ icon('search') }}</button>
+  <button class="cmu-icon-button" type="button" aria-label="Notifications" id="cmu-notification-button" onclick="navigate('notifications')">
+    {{ icon('bell') }}<span id="cmu-unread" hidden></span>
+  </button>
 </header>
 
-<div class="toast-container" id="toasts" role="status"></div>
+<div class="toast-container" id="toasts"></div>
 
 
 <!-- ════ New-user setup screen ════ -->
@@ -1876,7 +2222,69 @@
   </div>
 </div>
 
-{% include '_miniapp_home.html' %}
+<!-- ════ Home / Dashboard screen ════ -->
+<div class="screen active" id="screen-home">
+  <button id="home-giveaway" class="cmu-giveaway" type="button" onclick="openGiveaways()" hidden>
+    {{ icon('gift') }}<span><strong id="home-giveaway-title"></strong><small id="home-giveaway-prize"></small></span><b>View</b>{{ icon('chevron') }}
+  </button>
+  <button class="cmu-profile" type="button" onclick="navigate('profile')">
+    <span class="cmu-avatar" aria-hidden="true"><span id="home-avatar-initials"></span><img id="home-avatar-photo" alt="" hidden></span>
+    <span><strong id="user-name">Loading profile…</strong><small id="home-debut"></small></span>
+    {{ icon('chevron') }}
+  </button>
+  <div class="cmu-balances" aria-label="Wallet balances">
+    {% for key, label in [('coins','Coins'), ('gems','Gems'), ('qp','Quest points')] %}
+    <button type="button" onclick="navigate('wallet')">
+      <span>{{ label }}</span><strong id="stat-{{ key }}">—</strong>
+    </button>
+    {% endfor %}
+  </div>
+  <div class="cmu-play" id="home-match">
+    <div><h2 id="home-match-title">Play Cricket</h2><p id="home-match-detail">Choose a match mode</p></div>
+    <button type="button" id="home-match-action" onclick="navigate('matchcentre')"><span id="home-match-action-label">Play Match</span> {{ icon('chevron') }}</button>
+  </div>
+
+  <section class="cmu-section" aria-labelledby="home-rewards-title">
+    <div class="cmu-section-heading"><h2 id="home-rewards-title">Rewards</h2>
+      <button type="button" class="cmu-text-button" onclick="navigate('rewards')">My gifts <span class="club-gift-count" id="club-gift-count" hidden></span></button>
+    </div>
+    <button type="button" class="login-streak-banner" id="login-streak-banner" style="display:none;" onclick="showLoginStreakModal()">
+      {{ icon('calendar') }}<span class="lsb-text"><span class="lsb-title" id="lsb-streak"></span><span class="lsb-sub" id="lsb-sub"></span></span>
+      <span class="lsb-cta" id="lsb-cta">View</span>
+    </button>
+    <div class="cmu-reward-grid">
+      <button class="cmu-reward" type="button" onclick="navigate('daily')">{{ icon('calendar') }}<strong>Daily Rewards</strong><small id="daily-tile-sub">Checking eligibility…</small></button>
+      <button class="cmu-reward" type="button" id="home-freepack-tile" onclick="navigate('freepack')">{{ icon('box') }}<strong>Free Pack</strong><small id="freepack-tile-sub">Checking eligibility…</small></button>
+      <button class="cmu-reward" type="button" onclick="navigate('spin')">{{ icon('cards') }}<strong>Lucky Card Pick</strong><small id="spin-tile-sub">Checking eligibility…</small></button>
+    </div>
+  </section>
+
+  <section class="mission-hub cmu-section" aria-labelledby="mission-hub-title">
+    <div class="mission-hub-head">
+      <div><h2 class="mission-hub-title" id="mission-hub-title">Quests</h2><div class="mission-hub-sub" id="mission-hub-sub"></div></div>
+      <div class="mission-toggle" aria-label="Quest period">
+        {% for key, label in [('daily','Today'), ('weekly','Weekly'), ('monthly','Monthly')] %}
+        <button class="mission-toggle-btn{{ ' active' if loop.first else '' }}" type="button" data-home-qtab="{{ key }}" aria-pressed="{{ 'true' if loop.first else 'false' }}" onclick="switchHomeQuestTab('{{ key }}')">{{ label }}</button>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="mission-list" id="home-quest-list" aria-live="polite"><div class="mission-loading">Loading quests…</div></div>
+    <div class="mission-footer">
+      <span class="mission-footer-copy" id="home-quest-footer"></span>
+      <button type="button" class="quest-claim-btn hub-button" id="home-quest-claim" onclick="claimAllQuests(currentHomeQuestTab)" hidden>Claim rewards</button>
+      <button type="button" class="mission-link" onclick="openHomeQuestPeriod()">View all <span aria-hidden="true">→</span></button>
+    </div>
+  </section>
+
+  <section class="cmu-section" aria-labelledby="progress-title">
+    <div class="cmu-section-heading"><h2 id="progress-title">Team &amp; Progress</h2></div>
+    <div class="cmu-list">
+      {% for route, label, symbol in [('xi','Playing XI','squad'), ('browse','Browse Players','search'), ('career','Career Player','cricket'), ('achievements','Achievements','cup'), ('clubs','Clubs','squad'), ('invite','Invite & Win','gift')] %}
+      <button type="button" onclick="navigate('{{ route }}')">{{ icon(symbol) }}<span>{{ label }}</span>{{ icon('chevron') }}</button>
+      {% endfor %}
+    </div>
+  </section>
+  </div>
 
 <!-- ════ Lucky Card Pick screen ════
      Screen id, route key and endpoints stay "spin": the quota, the reward
@@ -2021,11 +2429,12 @@
 
 <!-- ════ Roster screen ════ -->
 <div class="screen hub-screen" id="screen-roster">
-  <header class="page-heading">
-    <h2>Squad</h2>
-    <div class="page-heading-actions">
-      <button type="button" class="app-secondary" onclick="navigate('xi')">Playing XI</button>
-      <button type="button" class="app-secondary" onclick="toggleSquadSelectMode()" id="squad-select-toggle">Sell multiple</button>
+  <header class="hub-hero">
+    <h2>Squad management</h2>
+    <div class="hub-actions">
+      <button type="button" class="hub-button primary" onclick="navigate('xi')">Playing XI</button>
+      <button type="button" class="hub-button" onclick="openCaptainMode()">Captain Mode</button>
+      <button type="button" class="hub-button" onclick="toggleSquadSelectMode()" id="squad-select-toggle">Sell multiple</button>
     </div>
   </header>
   <section class="squad-capacity" aria-label="Squad capacity">
@@ -2038,8 +2447,8 @@
   </div>
   <div id="squad-bulk-bar" class="squad-bulk-bar" style="display:none;">
     <span style="flex:1;font-size:0.85rem;"><b id="squad-bulk-count">0</b> selected · <b id="squad-bulk-coins">0</b> 🪙</span>
-    <button type="button" class="app-secondary" onclick="releaseSquadSelection()">Release</button>
-    <button type="button" class="app-secondary" onclick="clearSquadSelection()">Cancel</button>
+    <button class="link-btn" onclick="releaseSquadSelection()" style="background:var(--red);color:#fff;padding:0.3rem 0.7rem;border-radius:6px;">Review sale</button>
+    <button class="link-btn" onclick="clearSquadSelection()">Cancel</button>
   </div>
   <div id="roster-list">
     <div class="empty"><div class="icon">⏳</div>Loading roster…</div>
@@ -2078,6 +2487,16 @@
       <span id="market-count" role="status"></span>
     </div>
   </div>
+  <details class="market-more">
+    <summary>More filters</summary>
+    <div class="market-filters">
+      <select id="market-country" class="market-field" aria-label="Country"><option value="">All countries</option></select>
+      <select id="market-version" class="market-field" aria-label="Card version"><option value="">All versions</option></select>
+      <input type="number" class="market-field" id="market-min-ovr" min="0" aria-label="Minimum overall rating" placeholder="Min OVR">
+      <input type="number" class="market-field" id="market-max-ovr" min="0" aria-label="Maximum overall rating" placeholder="Max OVR">
+      <input type="number" class="market-field" id="market-max-price" min="0" aria-label="Maximum coin price" placeholder="Max coins">
+    </div>
+  </details>
   <div id="market-list">
     <div class="empty"><div class="spinner"></div></div>
   </div>
@@ -2086,16 +2505,17 @@
 <!-- ════ XI screen ════ -->
 <div class="screen" id="screen-xi">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
-    <h2 style="margin:0;font-size:1.25rem;">👥 Playing XI</h2>
+    <h2 style="margin:0;font-size:1.25rem;">Playing XI</h2>
     <div style="display:flex;gap:0.35rem;">
       <button class="link-btn" onclick="autoBuildXi()">✨ Auto-build</button>
-      <button class="link-btn" onclick="navigate('roster')">← Squad</button>
+      <button class="link-btn" onclick="goBack()">← Back</button>
     </div>
   </div>
   <p style="color:var(--muted);font-size:0.78rem;margin:0 0 0.7rem;">
     Drag the ⠿ handle or use ▲▼ to reorder. Tap a bench player to preview a swap with the same category.
     Chemistry suggestions can also adjust roles when the resulting XI is valid.
   </p>
+  <button class="hub-button primary" type="button" id="save-xi-order" onclick="saveXiOrder()" hidden>Save XI order</button>
   <div id="xi-chemistry" aria-live="polite"></div>
   <div id="xi-chemistry-suggestions"></div>
   <div id="xi-list" style="margin-bottom: 1rem;">
@@ -2197,6 +2617,7 @@
          style="display:none;font-size:0.8rem;font-weight:700;color:var(--accent);
                 background:rgba(255,255,255,0.05);border-radius:8px;
                 padding:0.45rem 0.6rem;margin-bottom:0.7rem;"></div>
+    <p id="login-reset" aria-live="polite"></p>
     <div id="login-ladder" class="login-ladder"></div>
     <button class="spin-button" id="login-claim-btn" onclick="claimLoginReward()" style="margin-top:1rem;width:100%;">
       🎁 Claim today's reward
@@ -2217,8 +2638,18 @@
     <button class="packs-tab" data-ptab="inventory" onclick="switchPacksTab('inventory')">
       🎒 My Packs <span id="packs-inv-badge" class="inv-badge" style="display:none;">0</span>
     </button>
+    <button type="button" class="packs-tab" data-ptab="history" onclick="switchPacksTab('history')">History</button>
   </div>
 
+  <div class="hub-actions hub-filters" id="pack-categories">
+    <label for="pack-currency">Category</label>
+    <select id="pack-currency" onchange="renderPacks()">
+      <option value="all">All packs</option><option value="free">Free</option>
+      <option value="coins">Coin packs</option><option value="gems">Gem packs</option>
+      <option value="quest_points">Quest Point packs</option>
+    </select>
+    <button class="hub-button" type="button" onclick="navigate('freepack')">Free Pack</button>
+  </div>
   <div id="packs-content">
     <div class="empty"><div class="spinner"></div></div>
   </div>
@@ -2276,6 +2707,7 @@
     <button type="button" class="page-tab" data-qtab="weekly" aria-pressed="false" onclick="switchQuestTab('weekly')">Weekly</button>
     <button type="button" class="page-tab" data-qtab="monthly" aria-pressed="false" onclick="switchQuestTab('monthly')">Monthly</button>
   </div>
+  <p id="quest-reset" aria-live="polite"></p>
   <div id="quest-content">
     <div class="empty"><div class="spinner"></div></div>
   </div>
@@ -2426,10 +2858,11 @@
   <header class="club-hero">
     <h2 id="club-matches-title">Match centre</h2>
     <p>Resume a game or revisit your results.</p>
-    <div class="page-heading-actions">
+    <p id="match-ai-cap"></p>
+    <div class="hub-actions">
       <button type="button" class="club-link primary" id="matchcentre-play" onclick="navigate('match')">Play Quick Match</button>
-      <button type="button" class="club-link" onclick="openTournamentDirectory()">Tournaments</button>
-      <button type="button" class="club-link" onclick="navigate('leaderboard')">Leaderboard</button>
+      <button type="button" class="club-link" onclick="openTournamentDirectory()">Tournament</button>
+      <button type="button" class="club-link" onclick="openBotMatchModes()">More match modes in Telegram</button>
     </div>
   </header>
   <div class="club-segment" role="group" aria-label="Match type">
@@ -2447,7 +2880,16 @@
     <button type="button" data-club-filter="all" aria-pressed="true">All activity</button>
     <button type="button" data-club-filter="coins" aria-pressed="false">Coins</button>
     <button type="button" data-club-filter="gems" aria-pressed="false">Gems</button>
+    <button type="button" data-club-filter="quest_points" aria-pressed="false">Quest points</button>
   </div>
+  <details class="club-card">
+    <summary>Convert Coins to Gems</summary>
+    <form class="hub-actions hub-filters" onsubmit="reviewConversion(event)">
+      <input type="number" name="coins" min="1" step="1" required placeholder="Coins to convert" aria-label="Coins to convert">
+      <button class="hub-button" type="submit">Review conversion</button>
+    </form>
+  </details>
+  <div id="wallet-pending" aria-live="polite"></div>
   <div id="club-wallet-body"></div>
 </section>
 
@@ -2467,6 +2909,109 @@
   <div id="club-reward-body"></div>
   <p id="club-reward-feedback" role="status"></p>
 </section>
+
+<section class="screen" id="screen-explore" aria-labelledby="explore-title">
+  <header class="cmu-page-heading"><h2 id="explore-title">Explore</h2></header>
+  <div class="cmu-list">
+    <button type="button" onclick="openTournamentDirectory()">{{ icon('cup') }}<span>Tournament Centre</span><span id="tn-live-dot" class="cmu-status-dot" hidden></span>{{ icon('chevron') }}</button>
+    <button type="button" onclick="navigate('season')">{{ icon('explore') }}<span>Season</span><small id="season-tile-sub"></small>{{ icon('chevron') }}</button>
+    {% for route, label, symbol in [('leaderboard','Leaderboards','cup'), ('traits','Traits Market','market'), ('wallet','Wallet','wallet')] %}
+    <button type="button" onclick="navigate('{{ route }}')">{{ icon(symbol) }}<span>{{ label }}</span>{{ icon('chevron') }}</button>
+    {% endfor %}
+    <button type="button" onclick="openGiveaways()">{{ icon('gift') }}<span>Giveaways</span>{{ icon('chevron') }}</button>
+  </div>
+  <div class="event-banner" id="event-banner" style="display:none;"></div>
+  <h3 class="cmu-community-title">Community</h3>
+<!-- Top community links (channel + official group) — populated from init -->
+<div class="top-links" id="top-links" style="display:none;"></div>
+
+<div class="suggestion-box cm-card" id="suggestion-box" style="display:none;">
+  <button class="cm-head" onclick="toggleCommunityCard('suggestion-box')">
+    <span class="cm-title">💡 Suggestion Box</span>
+    <span class="cm-chev">▾</span>
+  </button>
+  <div class="cm-body">
+    <div class="suggestion-sub" style="margin-bottom:0.45rem;">Send ideas, bugs, or balance feedback straight to the website report box.</div>
+    <textarea class="suggestion-input" id="suggestion-message" maxlength="1000" placeholder="Write your message here…"></textarea>
+    <div class="suggestion-actions">
+      <span class="suggestion-count" id="suggestion-count">0/1000</span>
+      <button class="suggestion-send" id="suggestion-send" onclick="sendSuggestion()">📨 Send</button>
+    </div>
+  </div>
+</div>
+
+<div class="news-box cm-card" id="news-box" style="display:none;">
+  <button class="cm-head" onclick="toggleCommunityCard('news-box')">
+    <span class="cm-title">📰 Today's CMU News</span>
+    <span class="news-unread" id="news-unread" style="display:none;"></span>
+    <span class="cm-chev">▾</span>
+  </button>
+  <div class="cm-body">
+    <div id="news-list"><div class="news-row-meta">Loading…</div></div>
+    <button class="news-submit-btn" onclick="openNewsSubmit()">✍️ Submit your own news</button>
+  </div>
+</div>
+
+
+
+  <div class="poll-box cm-card" id="poll-box" style="display:none;"></div>
+</section>
+
+<section class="screen" id="screen-notifications" aria-labelledby="notifications-title">
+  <header class="cmu-page-heading"><h2 id="notifications-title">Notifications</h2></header>
+  <div id="cmu-notification-list" class="cmu-list"></div>
+</section>
+
+<section class="screen" id="screen-appearance" aria-labelledby="appearance-title">
+  <header class="cmu-page-heading"><h2 id="appearance-title">Appearance</h2></header>
+  <form id="cmu-theme-form" class="cmu-appearance">
+    <fieldset>
+      <legend>App theme</legend>
+      <label><input type="radio" name="appearance" value="dark"> Dark</label>
+      <label><input type="radio" name="appearance" value="light"> Light</label>
+      <label><input type="radio" name="appearance" value="auto"> Follow Telegram</label>
+    </fieldset>
+    <button class="club-link primary" type="submit">Save appearance</button>
+    <p role="status" id="cmu-appearance-status"></p>
+  </form>
+</section>
+
+<section class="screen" id="screen-captains" aria-labelledby="captains-title">
+  <header class="cmu-page-heading"><h2 id="captains-title">Captain Mode</h2></header>
+  <form id="captain-form" class="cmu-appearance" onsubmit="saveCaptainMode(event)">
+    <fieldset><legend>Playing XI leadership</legend>
+      <label for="captain-choice">Captain</label><select id="captain-choice" name="captain" required></select>
+      <label for="vice-captain-choice">Vice-captain</label><select id="vice-captain-choice" name="vice" required></select>
+    </fieldset>
+    <button type="submit" class="hub-button primary">Save leadership</button>
+    <p id="captain-status" role="status"></p>
+  </form>
+</section>
+
+<section class="screen" id="screen-traits" aria-labelledby="traits-title">
+  <header class="cmu-page-heading"><h2 id="traits-title">Traits Market</h2></header>
+  <div id="cmu-traits-list"></div>
+</section>
+
+<nav class="tabs" id="bottom-nav" aria-label="Main navigation">
+  {% for route, label, symbol in [('home','Home','home'), ('roster','Squad','squad'), ('market','Market','market'), ('packs','Packs','box'), ('explore','Explore','explore')] %}
+  <button type="button" class="tab{{ ' active' if loop.first else '' }}" data-screen="{{ route }}"{{ ' aria-current=page' if loop.first else '' }} onclick="navigate('{{ route }}')">
+    {{ icon(symbol) }}<span>{{ label }}</span>
+  </button>
+  {% endfor %}
+</nav>
+
+<dialog id="cmu-review" aria-labelledby="cmu-review-title">
+  <form method="dialog">
+    <h2 id="cmu-review-title"></h2>
+    <dl id="cmu-review-amounts"></dl>
+    <p id="cmu-review-explanation"></p>
+    <div class="hub-actions">
+      <button class="hub-button" value="cancel" autofocus>Cancel</button>
+      <button class="hub-button primary" id="cmu-review-confirm" value="confirm">Confirm</button>
+    </div>
+  </form>
+</dialog>
 
 <!-- ════ Player detail modal ════ -->
 <div class="modal-backdrop" id="modal" onclick="if(event.target.id==='modal') closeModal()">
@@ -2509,7 +3054,7 @@
 
 <div class="screen" id="screen-playerdetail">
   <div style="margin-bottom:0.6rem;">
-    <button class="link-btn" onclick="navigate('roster')">← Squad</button>
+    <button class="link-btn" onclick="goBack()">← Back</button>
   </div>
   <div id="playerdetail-content"><div class="empty"><div class="spinner"></div></div></div>
 </div>
@@ -2558,39 +3103,19 @@
       </span>
       <span class="app-primary">Reveal players</span>
     </button>
+    <button type="button" class="hub-button" id="pack-open-skip" onclick="revealPackCards(true)">Skip animation</button>
     <div id="pack-open-cards" class="pack-anim-cards" hidden></div>
+    <p class="pack-receipt" id="pack-open-receipt" hidden></p>
     <div id="pack-open-overflow"></div>
     <button type="button" id="pack-open-done" class="app-primary" hidden onclick="closePackOpen()">Done</button>
   </div>
 </div>
 
 <script>
-const ambientMotion = document.getElementById('app-motion');
-
-function setAmbientMotionPaused(paused) {
-  document.body.classList.toggle('background-paused', paused);
-  ambientMotion.setAttribute('aria-pressed', String(paused));
-  const label = paused ? 'Resume background animation' : 'Pause background animation';
-  ambientMotion.setAttribute('aria-label', label);
-  ambientMotion.title = label;
-}
-
-try { setAmbientMotionPaused(localStorage.getItem('cm_background_paused') === '1'); } catch (_) {}
-ambientMotion.addEventListener('click', () => {
-  const paused = !document.body.classList.contains('background-paused');
-  setAmbientMotionPaused(paused);
-  try { localStorage.setItem('cm_background_paused', paused ? '1' : '0'); } catch (_) {}
-});
-
 const tg = window.Telegram?.WebApp;
 if (tg) {
   tg.ready();
   tg.expand();
-  // Match the Telegram chrome to the Mini App canvas.
-  try {
-    tg.setHeaderColor('#fffefe');
-    tg.setBackgroundColor('#faf8fc');
-  } catch (e) {}
 }
 
 // Auth — Telegram passes initData, we send it on every request as Authorization
@@ -2638,7 +3163,6 @@ const SPIN_REQUEST_WATCHDOG_MS = 30000;
 // retrying beats waiting for the default 25s abort.
 const SPIN_REQUEST_TIMEOUT_MS = 7000;
 let setupBotUsername = '';
-let lastOnboardingData = null;
 let suggestionSending = false;
 
 // ════════════════ API ════════════════
@@ -2724,7 +3248,7 @@ function showLockScreen(icon, bodyHtml, retryLabel) {
   document.body.appendChild(overlay);
   try {
     document.getElementById('bottom-nav').style.display = 'none';
-    document.getElementById('app-wallet').style.display = 'none';
+    document.getElementById('balance-pill').style.display = 'none';
   } catch (e) {}
 }
 
@@ -2824,43 +3348,40 @@ function showSetupScreen(setup = {}) {
   document.getElementById('screen-onboarding').classList.add('active');
   currentScreen = 'onboarding';
   document.getElementById('bottom-nav').style.display = 'none';
-  document.getElementById('app-wallet').style.display = 'none';
+  document.getElementById('balance-pill').style.display = 'none';
   setNativeSetupButton(true);
 }
 
-function markSquadOpened() {
-  localStorage.setItem('cm_starter_squad_opened', '1');
-  navigate('roster');
-  renderStarterGuide(lastOnboardingData || {});
-}
-
-function renderStarterGuide(onboarding = {}) {
-  lastOnboardingData = onboarding;
-  const guide = document.getElementById('starter-guide');
-  if (!guide) return;
-  const squadOpened = localStorage.getItem('cm_starter_squad_opened') === '1';
-  const steps = [
-    [squadOpened, 'Open your starter squad', 'Meet your 11 debut cards and your 83–85 OVR star.', "markSquadOpened()", 'Open'],
-    [onboarding.xi_set, 'Set your Playing XI', 'Put all 11 starters into your match lineup.', "navigate('xi')", 'Set XI'],
-    [onboarding.first_reward_claimed, 'Claim your first reward', 'Visit Daily and collect your first boost.', "navigate('daily')", 'Claim'],
-    [onboarding.casual_match_played, 'Play your first casual match', 'Try Quick Match once your XI is ready.', "navigate('match')", 'Play'],
-    [false, 'Join a club later', 'Clubs unlock a community to grow with when you are ready.', "navigate('clubs')", 'Explore', true],
-  ];
-  const completed = steps.slice(0, 4).filter(step => step[0]).length;
-  guide.style.display = completed === 4 ? 'none' : '';
-  guide.innerHTML = `<h3>🌱 Your first innings</h3><p class="onboarding-copy">${completed}/4 starter steps complete. Follow this path to get match-ready.</p>` +
-    steps.map(([done, title, sub, action, label, later], index) => `
-      <div class="guide-step ${done ? 'done' : ''} ${later ? 'later' : ''}">
-        <div class="guide-state">${done ? '✓' : (later ? '↗' : index + 1)}</div>
-        <div class="guide-body"><div class="guide-title">${title}</div><div class="guide-sub">${sub}</div></div>
-        ${done ? '' : `<button class="guide-btn" onclick="${action}">${label}</button>`}
-      </div>`).join('');
-}
-
 // ════════════════ Navigation ════════════════
-function navigate(screen) {
+const tabRoutes = new Set(['home', 'roster', 'market', 'packs', 'explore']);
+const routeHistory = [];
+const screenScroll = new Map();
+let activeTabScreen = 'home';
+
+function goBack() {
+  const sheet = document.getElementById('cmu-review');
+  if (sheet.open) { sheet.close('cancel'); return; }
+  if (document.getElementById('modal').classList.contains('open')) { closeModal(); return; }
+  if (document.getElementById('lm-drawer').classList.contains('open')) { closeScorecard(); return; }
+  const previous = routeHistory.pop();
+  navigate(previous?.screen || activeTabScreen, previous || {tab: activeTabScreen, scroll: 0});
+}
+
+function navigate(screen, back = null) {
   const target = document.getElementById('screen-' + screen);
   if (!target) return;
+  const changed = currentScreen !== screen;
+  if (changed) {
+    screenScroll.set(currentScreen, window.scrollY);
+    if (back) activeTabScreen = back.tab;
+    else if (tabRoutes.has(screen)) {
+      routeHistory.length = 0;
+      activeTabScreen = screen;
+    } else if (currentScreen !== 'onboarding') {
+      routeHistory.push({screen: currentScreen, tab: activeTabScreen, scroll: window.scrollY});
+    }
+  }
+  if (currentScreen === 'appearance' && changed) window.CmuTheme.restore();
   haptic('light');
   if (currentScreen === 'tournament' && screen !== 'tournament') stopTournamentPolling();
   // Stop live-match polling whenever we leave that screen
@@ -2871,34 +3392,39 @@ function navigate(screen) {
   }
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   target.classList.add('active');
-  const section = {
-    match: 'matchcentre', tournament: 'matchcentre', leaderboard: 'matchcentre', season: 'matchcentre',
-    xi: 'roster', playerdetail: 'roster', browse: 'market',
-    daily: 'rewards', freepack: 'rewards', spin: 'rewards', packs: 'rewards',
-    profile: 'home', quests: 'home', career: 'home', achievements: 'home', clubs: 'home', invite: 'home',
-  }[screen] || screen;
-  document.querySelectorAll('#bottom-nav .tab').forEach(tab => {
-    const selected = tab.dataset.screen === section;
-    tab.classList.toggle('active', selected);
-    if (selected) tab.setAttribute('aria-current', screen === section ? 'page' : 'location');
+  for (const tab of document.querySelectorAll('.tab')) {
+    const active = tab.dataset.screen === activeTabScreen;
+    tab.classList.toggle('active', active);
+    if (active) tab.setAttribute('aria-current', 'page');
     else tab.removeAttribute('aria-current');
-  });
+  }
   currentScreen = screen;
-  window.scrollTo(0, 0);
+  const canGoBack = !tabRoutes.has(screen) && screen !== 'onboarding';
+  document.getElementById('cmu-back').hidden = !canGoBack;
+  if (canGoBack) tg?.BackButton?.show();
+  else tg?.BackButton?.hide();
+  window.scrollTo(0, back?.scroll ?? (tabRoutes.has(screen) ? (screenScroll.get(screen) || 0) : 0));
   syncCommunityCards();
-  if (screen !== 'newsarticle' && screen !== 'newssubmit') showNewsBackButton(false);
-  if (screen === 'roster') loadRoster();
-  if (screen === 'home') refreshDashboard();
+  if (screen === 'roster' && (!back || !cachedRoster)) loadRoster();
+  if (screen === 'home' && !back) refreshDashboard();
+  if (screen === 'appearance') window.CmuTheme.open();
+  if (screen === 'notifications') window.CmuOverview.notifications();
+  if (screen === 'traits') window.CmuOverview.traits();
+  if (screen === 'captains') loadCaptainMode();
   if (screen === 'leaderboard') loadLeaderboard();
   if (screen === 'match') openQuickMatch();
   window.Clubhouse?.open(screen);
-  if (screen === 'market') loadMarket();
-  if (screen === 'xi') loadXi();
+  if (screen === 'wallet') recoverWalletTransactions();
+  if (screen === 'market' && (!back || !marketData)) loadMarket();
+  if (screen === 'xi') {
+    if (!back || !cachedXi) loadXi();
+    else renderXiList();
+  }
   if (screen === 'invite') loadInvite();
-  if (screen === 'quests') loadQuests();
+  if (screen === 'quests' && (!back || !cachedQuests)) loadQuests();
   if (screen === 'career') loadCareer();
   if (screen === 'freepack') loadFreePack();
-  if (screen === 'packs') loadPacks();
+  if (screen === 'packs' && !back) loadPacks();
   if (screen === 'achievements') PlayerHub.achievements();
   if (screen === 'profile') PlayerHub.profile();
   if (screen === 'season') loadSeason();
@@ -2944,56 +3470,29 @@ async function refreshDashboard() {
   setNativeSetupButton(false);
   document.getElementById('bottom-nav').style.display = currentScreen === 'livematch' ? 'none' : '';
   userData = data.user;
+  if (data.ai_match_daily_cap != null) document.getElementById('match-ai-cap').textContent = data.ai_match_daily_cap
+    ? `VS Bot currency rewards cap at ${data.ai_match_daily_cap} matches per UTC day.`
+    : 'VS Bot currency rewards are paused.';
   window.Clubhouse?.giftCount(data.unclaimed_gifts || 0);
   lastInitData = data;
-  renderStarterGuide(data.onboarding || {});
-  const profileName = document.getElementById('user-name');
-  profileName.textContent = userData.first_name || userData.username || 'Profile';
-  profileName.closest('button').setAttribute('aria-label', `Open profile · ${profileName.textContent}`);
-  const team = document.getElementById('home-team');
-  team.textContent = userData.team_name || '';
-  team.hidden = !userData.team_name;
+  window.CmuOverview?.update(data);
+  document.getElementById('user-name').textContent = userData.first_name || userData.username || 'Player';
   document.getElementById('stat-coins').textContent = formatNum(userData.coins);
   document.getElementById('stat-gems').textContent = formatNum(userData.gems);
   document.getElementById('stat-qp').textContent = formatNum(userData.quest_points);
-  document.getElementById('stat-roster').textContent = `${userData.roster_count}/${MAX_ROSTER}`;
-  document.getElementById('rec-played').textContent = userData.matches_played;
-  document.getElementById('rec-won').textContent = userData.matches_won;
-  document.getElementById('rec-lost').textContent = userData.matches_lost;
-  document.getElementById('rec-wr').textContent = userData.win_rate + '%';
-  document.getElementById('app-wallet').style.display = '';
+  const pill = document.getElementById('balance-pill');
+  pill.style.display = 'flex';
+  document.getElementById('bp-coins').textContent = formatNum(userData.coins);
 
-  // Lucky Pick tile
-  const spinSub = document.getElementById('spin-tile-sub');
   const sq = data.gspin?.quota;
-  if (sq) {
-    if (sq.free_available) {
-      spinSub.textContent = 'Free pick available';
-    } else if (sq.ad_used < sq.ad_total) {
-      spinSub.textContent = `${sq.ad_total - sq.ad_used} ad picks left`;
-    } else {
-      spinSub.textContent = `Resets in ${fmtRemaining(sq.cycle_reset_in)}`;
-    }
-  } else {
-    spinSub.textContent = 'Pick a card to reveal a reward';
-  }
+  const dq = data.daily?.quota;
+  document.getElementById('spin-tile-sub').textContent = sq?.free_available
+    ? '1 free pick available' : sq ? rewardAvailability(sq, 'pick') : 'Eligibility unavailable';
+  document.getElementById('daily-tile-sub').textContent = dq
+    ? rewardAvailability(dq, 'claim') : 'Eligibility unavailable';
   setAdBanner('spin-ad-banner', 'pick', sq?.ad_total, data.gspin?.cooldown_total);
   updateSpinButton(data.gspin);
 
-  // Daily tile
-  const dailySub = document.getElementById('daily-tile-sub');
-  const dq = data.daily?.quota;
-  if (dq) {
-    if (dq.free_available) {
-      dailySub.textContent = 'Free claim available';
-    } else if (dq.ad_used < dq.ad_total) {
-      dailySub.textContent = `${dq.ad_total - dq.ad_used} ad claims left`;
-    } else {
-      dailySub.textContent = `Resets in ${fmtRemaining(dq.cycle_reset_in)}`;
-    }
-  } else {
-    dailySub.textContent = 'Claim coins and gems';
-  }
   setAdBanner('daily-ad-banner', 'claim', dq?.ad_total, data.daily?.cooldown_total);
   updateDailyButton();
 
@@ -3018,7 +3517,7 @@ async function refreshDashboard() {
   updateNewsBadge(data.news_unread || 0);
   renderPoll(data.poll || null);
   if (!window._communityRestored) { window._communityRestored = true; restoreCommunityCards(); }
-  else if (document.getElementById('news-box')?.classList.contains('cm-open')) loadNewsFeed();
+  else if (currentScreen === 'explore' && document.getElementById('news-box')?.classList.contains('cm-open')) loadNewsFeed();
 
   // Resume live match banner
   renderResumeBanner(data.live_match || null);
@@ -3042,26 +3541,27 @@ async function refreshHomeHighlights() {
   ]);
   if (questsResult.ok) {
     cachedQuests = questsResult.data.groups || {};
+    questResetTimes = questsResult.data.resets_at || {};
     renderHomeQuests();
-  } else if (!cachedQuests) {
+  } else {
     document.getElementById('home-quest-list').innerHTML =
-      '<p class="mission-loading">Could not load quests. <button type="button" class="mission-link" onclick="refreshHomeHighlights()">Try again</button></p>';
+      '<div class="mission-loading">Could not load quests. <button class="mission-link" onclick="refreshHomeHighlights()">Retry</button></div>';
   }
   if (freePackResult.ok) updateHomeFreePack(freePackResult.data);
+  else document.getElementById('freepack-tile-sub').textContent = 'Open to check eligibility';
+}
+
+function rewardAvailability(quota, action) {
+  const left = Math.max(0, quota.ad_total - quota.ad_used);
+  if (left) return left + ' ad ' + action + (left === 1 ? '' : 's') + ' left';
+  return quota.free_available ? 'Free claim available' : 'Next in ' + fmtRemaining(quota.cycle_reset_in);
 }
 
 function updateHomeFreePack(data) {
-  const tile = document.getElementById('home-freepack-tile');
-  const sub = document.getElementById('freepack-tile-sub');
-  if (!tile || !sub || !data) return;
-  // A full roster no longer blocks the free pack — the pull is held pending and
-  // the user Replaces/Releases it after opening, so "ready" ignores roster_full.
-  const ready = Boolean(data.ready);
-  tile.classList.toggle('ready', ready);
-  sub.textContent = ready
-    ? (data.roster_full ? 'Ready to open · Squad full' : 'Ready to open')
-    : `Available in ${formatCountdown(data.remaining_seconds || 0)}`;
-  document.getElementById('home-freepack-notice').hidden = !ready;
+  const eligible = data.ready && (data.ads_configured || data.ads_saved > 0);
+  document.getElementById('freepack-tile-sub').textContent = eligible ? 'Ready to open'
+    : data.ready ? 'Ads unavailable' : 'Next in ' + formatCountdown(data.remaining_seconds || 0);
+  window.CmuOverview?.freePack({...data, ready: eligible});
 }
 
 function renderResumeBanner(lm) {
@@ -3069,13 +3569,14 @@ function renderResumeBanner(lm) {
   const live = Boolean(lm?.match_id);
   const inQuickMatch = ['playing', 'phases', 'innings-break'].includes(quickMatchStep);
   document.getElementById('home-match').classList.toggle('is-live', live);
-  document.getElementById('home-match-title').textContent = live ? 'Live match' : 'Quick Match';
+  document.getElementById('home-match-title').textContent = live ? 'Live match' : 'Play Cricket';
   document.getElementById('home-match-detail').textContent = live
     ? `${lm.bat_team} vs ${lm.bowl_team}`
-    : inQuickMatch ? 'Match in progress' : 'Casual match with your squad';
-  document.getElementById('home-match-action-label').textContent = live || inQuickMatch ? 'Resume match' : 'Play now';
+    : inQuickMatch ? 'Quick Match in progress' : 'Choose a match mode';
+  document.getElementById('home-match-action-label').textContent = live || inQuickMatch ? 'Resume match' : 'Play Match';
   document.getElementById('matchcentre-play').textContent = inQuickMatch ? 'Resume Quick Match' : 'Play Quick Match';
-  action.onclick = live ? () => openLiveMatch(lm.match_id) : () => navigate('match');
+  action.onclick = live ? () => openLiveMatch(lm.match_id)
+    : () => navigate(inQuickMatch ? 'match' : 'matchcentre');
 }
 
 function renderTopLinks(branding) {
@@ -3091,7 +3592,7 @@ function renderTopLinks(branding) {
   }
   if (!links.length) { el.style.display = 'none'; return; }
   el.innerHTML = links.join('');
-  el.style.display = 'flex';
+  el.style.display = currentScreen === 'explore' ? 'flex' : 'none';
 }
 
 let communityReady = false;
@@ -3103,14 +3604,15 @@ function renderCommunityPanel(show) {
 // The suggestion / news / poll cards belong to the home screen; on every other
 // screen (an open article especially) they would just push content down.
 function syncCommunityCards() {
-  const onHome = communityReady && currentScreen === 'home';
-  document.getElementById('home-community').hidden = !onHome;
+  const onExplore = communityReady && currentScreen === 'explore';
+  const links = document.getElementById('top-links');
+  if (links) links.style.display = onExplore && links.childElementCount ? 'flex' : 'none';
   const box = document.getElementById('suggestion-box');
   const news = document.getElementById('news-box');
   const poll = document.getElementById('poll-box');
-  if (box) box.style.display = onHome ? '' : 'none';
-  if (news) news.style.display = onHome ? '' : 'none';
-  if (poll) poll.style.display = onHome && currentPoll ? '' : 'none';
+  if (box) box.style.display = onExplore ? '' : 'none';
+  if (news) news.style.display = onExplore ? '' : 'none';
+  if (poll) poll.style.display = onExplore && currentPoll ? '' : 'none';
 }
 
 function _cardPref(id, value) {
@@ -3151,6 +3653,7 @@ function updateNewsBadge(n) {
   n = Math.max(0, Number(n) || 0);
   el.textContent = `${n} Unread`;
   el.style.display = n > 0 ? '' : 'none';
+  window.CmuOverview?.news(n);
 }
 
 function timeAgo(iso) {
@@ -3199,25 +3702,14 @@ function newsParagraphs(body) {
     .map(p => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join('');
 }
 
-function showNewsBackButton(show) {
-  try {
-    const bb = tg?.BackButton;
-    if (!bb) return;
-    if (show) { bb.onClick(closeNewsScreen); bb.show(); }
-    else { bb.offClick(closeNewsScreen); bb.hide(); }
-  } catch (e) {}
-}
-
 function closeNewsScreen() {
-  showNewsBackButton(false);
   currentNewsId = null;
-  navigate('home');
+  goBack();
 }
 
 async function openNewsArticle(id) {
   currentNewsId = id;
   navigate('newsarticle');
-  showNewsBackButton(true);
   const box = document.getElementById('newsarticle-content');
   box.innerHTML = '<div class="empty"><div class="spinner"></div></div>';
   const { ok, data } = await api('/api/webapp/news/article', { id });
@@ -3258,7 +3750,6 @@ async function reactNews(id, emoji) {
 
 function openNewsSubmit() {
   navigate('newssubmit');
-  showNewsBackButton(true);
 }
 
 function previewNewsImage(input) {
@@ -3401,7 +3892,7 @@ async function sendSuggestion() {
   }
   if (msg) msg.value = '';
   updateSuggestionCount();
-  toast(data.message || 'Suggestion added to the website report box — thank you!', 'success');
+  toast(data.report_id ? `Suggestion sent. Reference #${data.report_id}.` : 'Suggestion sent.', 'success');
   hapticNotif('success');
 }
 
@@ -3443,18 +3934,18 @@ function updateLoginStreakBanner() {
   if (!banner || !loginStreakStatus) return;
   const ls = loginStreakStatus;
   if ((ls.streak || 0) <= 0) { banner.style.display = 'none'; return; }
-  banner.style.display = '';
-  document.getElementById('lsb-streak').textContent = ls.streak;
+  banner.style.display = 'flex';
+  document.getElementById('lsb-streak').textContent = `Day ${ls.ladder_day} Login Reward`;
   const cta = document.getElementById('lsb-cta');
   const sub = document.getElementById('lsb-sub');
   if (ls.claimable_today) {
     cta.textContent = 'Claim';
     cta.classList.remove('claimed');
-    sub.textContent = `Day ${ls.ladder_day} reward ready`;
+    sub.textContent = `${ls.streak}-day streak · Ready to claim`;
   } else {
     cta.textContent = 'Claimed';
     cta.classList.add('claimed');
-    sub.textContent = 'Come back tomorrow to keep your streak';
+    sub.textContent = `${ls.streak}-day streak · Claimed today`;
   }
 }
 
@@ -3632,25 +4123,32 @@ async function onDailyClick() {
   // ledger, so this claim shows no second ad. See ad_service "Ad credits".
   const useSavedAd = !useFree && (quota?.ads_saved || 0) > 0;
 
-  if (!useFree && !adsAvailable) {
+  if (!useFree && !adsAvailable && !pendingRewardId('daily')) {
     toast('All claims used. Come back later.', 'info');
     return;
   }
   // Same gap as the spin, checked before an ad is fetched rather than after.
-  if (!useFree && (quota?.ad_ready_in || 0) > 0) {
+  if (!useFree && (quota?.ad_ready_in || 0) > 0 && !pendingRewardId('daily')) {
     toast(`Next ad claim unlocks in ${formatGap(quota.ad_ready_in)}.`, 'info');
     return;
   }
 
   isDailyClaiming = true;
   updateDailyButton();
+  if (!adConfirmation.isPending() && !pendingRewardId('daily') && !await reviewEconomy('Confirm daily reward',
+    [['Reward', 'Daily coins and streak rewards'], ['Eligibility', useFree ? 'Free claim' : 'Verified ad required']],
+    '', 'Claim')) {
+    isDailyClaiming = false;
+    updateDailyButton();
+    return;
+  }
 
   let adToken = '';
-  if (!useFree && !useSavedAd) {
+  if (!useFree && !useSavedAd && !pendingRewardId('daily')) {
     isClaimingDailyAd = true;
     updateDailyButton();
     try {
-      adToken = await showAd('daily');
+      adToken = await showAd();
     } finally {
       isClaimingDailyAd = false;
     }
@@ -3667,7 +4165,7 @@ async function onDailyClick() {
   }
 
   updateDailyButton();
-  const { ok, data } = await api('/api/webapp/daily', { ad_token: adToken });
+  const { ok, data } = await submitReward('daily', '/api/webapp/daily', adToken);
   isDailyClaiming = false;
   // Adopt the quota the server just returned before anything re-enables the
   // button. refreshDashboard() is a round trip, and until it lands the cached
@@ -4220,7 +4718,7 @@ function renderInningsScorecard(inn, userBatsFirst, innNum) {
     return `
       <tr class="${isDnb ? 'dnb' : ''}">
         <td style="text-align:left;">
-          <b>${escapeHtml(b.name)}</b>${b.is_captain ? ' <span style="font-size:0.6rem;color:var(--accent);">(C)</span>' : ''}
+          <b>${escapeHtml(b.name)}</b>${b.is_captain ? ' (C)' : b.is_vice_captain ? ' (VC)' : ''}
           <div style="font-size:0.7rem;color:var(--muted);">${b.out ? escapeHtml(b.dismissal) : (isDnb ? 'did not bat' : 'not out')}</div>
         </td>
         <td style="text-align:right; font-weight: ${isDnb ? '400' : '700'};">${b.runs}</td>
@@ -4235,7 +4733,7 @@ function renderInningsScorecard(inn, userBatsFirst, innNum) {
   const bowlingRows = (inn.bowling_card || []).map(b => `
     <tr>
       <td style="text-align:left;">
-        <b>${escapeHtml(b.name)}</b>${b.is_captain ? ' <span style="font-size:0.6rem;color:var(--accent);">(C)</span>' : ''}
+        <b>${escapeHtml(b.name)}</b>${b.is_captain ? ' (C)' : b.is_vice_captain ? ' (VC)' : ''}
       </td>
       <td style="text-align:right;">${b.overs}</td>
       <td style="text-align:right; color:var(--muted);">${b.runs}</td>
@@ -4548,11 +5046,10 @@ function pickCardLabel(r) {
 // granting a second, and if it didn't, the retry runs the spin normally.
 // Only transport failures are retried; a server that answered has decided.
 async function requestSpin(adToken) {
-  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const body = { ad_token: adToken, request_id: requestId };
+
   let last = null;
   for (let attempt = 0; attempt < 3; attempt++) {
-    last = await api('/api/webapp/spin', body, SPIN_REQUEST_TIMEOUT_MS);
+    last = await submitReward('spin', '/api/webapp/spin', adToken, SPIN_REQUEST_TIMEOUT_MS);
     if (last.status !== 0) return last;      // the server answered
     if (attempt < 2) await _sleep(600 * (attempt + 1));
   }
@@ -4582,7 +5079,7 @@ async function onSpinClick() {
   // is the point — shows no second ad.
   const useSavedAd = !useFree && (quota?.ads_saved || 0) > 0;
 
-  if (!useFree && !adsAvailable) {
+  if (!useFree && !adsAvailable && !pendingRewardId('spin')) {
     toast('All picks used. Come back later.', 'info');
     return;
   }
@@ -4590,20 +5087,29 @@ async function onSpinClick() {
   // as well as on the server so nobody watches an ad the pick is about to
   // refuse. A saved ad waits it out too — the gap is between rewards, not
   // between ad views. It ships at 0, so this normally never fires.
-  if (!useFree && (quota?.ad_ready_in || 0) > 0) {
+  if (!useFree && (quota?.ad_ready_in || 0) > 0 && !pendingRewardId('spin')) {
     toast(`Next ad pick unlocks in ${formatGap(quota.ad_ready_in)}.`, 'info');
     return;
   }
 
+  isPreparingSpinAd = true;
+  updateSpinButton();
+  const review = adConfirmation.isPending() || pendingRewardId('spin') ||
+    await reviewEconomy('Confirm Lucky Card Pick', [
+      ['Reward', 'One prize from the Lucky Pick pool'], ['Eligibility', useFree ? 'Free pick' : 'Verified ad required'],
+    ], '', 'Claim pick');
+  isPreparingSpinAd = false;
+  updateSpinButton();
+  if (!review) return;
   resetDeck('Shuffling…');
 
   // ── Phase 1: the ad, with the deck face-down ───────────────────
   let adToken = '';
-  if (!useFree && !useSavedAd) {
+  if (!useFree && !useSavedAd && !pendingRewardId('spin')) {
     isPreparingSpinAd = true;
     updateSpinButton();
     try {
-      adToken = await showAd('spin');
+      adToken = await showAd();
     } finally {
       isPreparingSpinAd = false;
       updateSpinButton();
@@ -5012,42 +5518,7 @@ function _reloadAdsSdk() {
 // defined (the retry state below it is `let`, not a hoisted declaration).
 initAds(window.__adConfig);
 
-// Ask the backend for a no-fill pass: a one-shot token that unlocks an
-// ad-gated slot when the network had no ad to give. `quotaKind` is 'spin' or
-// 'daily'; anything else (a free pack) has no quota of its own and so gets no
-// pass. Returns a token or null — the caller treats null as "no rescue left".
-async function _requestNoFillPass(quotaKind, budgetMs) {
-  if (quotaKind !== 'spin' && quotaKind !== 'daily') return null;
-  let r;
-  try {
-    // Bounded separately from api()'s 25s default: this call is the tail of an
-    // ad phase that has already spent most of its budget, and the whole point
-    // of the pass is to end the wait rather than extend it.
-    r = await api('/api/webapp/ad-unavailable', { kind: quotaKind },
-                  Math.max(4000, Math.min(NOFILL_REQUEST_TIMEOUT_MS,
-                                          budgetMs || NOFILL_REQUEST_TIMEOUT_MS)));
-  } catch (e) {
-    // This is the path that exists to rescue a broken ad network — it must not
-    // be the thing that throws. Fall through to the caller's "no rescue" toast.
-    console.error('No-fill pass request failed:', e);
-    return null;
-  }
-  if (r.ok && r.data?.ad_token) {
-    const left = r.data.quota?.nofill_left;
-    toast('📺 No ads available — using a no-ad pass'
-          + (typeof left === 'number' ? ` (${left} left this cycle)` : '')
-          + '.', 'info');
-    return r.data.ad_token;
-  }
-  return null;
-}
-
-// Returns an ad token for `quotaKind` ('spin'/'daily'/null), or null if the
-// user gets nothing this time. Every path through here is bounded and every
-// exit toasts a reason. AD_PHASE_BUDGET_MS covers the ad attempts themselves;
-// the no-fill pass request that may follow them carries its own smaller
-// timeout on top, so the worst case is the budget plus that.
-async function showAd(quotaKind = null) {
+async function showAd() {
   if (adConfirmation.isPending()) return _confirmWatchedAd();
   const deadline = Date.now() + AD_PHASE_BUDGET_MS;
   const timeLeft = () => deadline - Date.now();
@@ -5109,14 +5580,11 @@ async function showAd(quotaKind = null) {
     }
     // No fill, or the SDK erroring out: the user did everything right and the
     // network still gave them nothing. Rescue the attempt if they have a pass.
-    const pass = await _requestNoFillPass(quotaKind, timeLeft());
-    if (pass) return pass;
     if (failure === 'error') {
       const desc = lastErr?.description || lastErr?.message || 'unavailable';
       toast(`Ad error: ${desc}`, 'error');
     } else {
-      toast('No ad available right now, and your no-ad passes are used up. '
-            + 'Try again in a few minutes.', 'info');
+      toast('No ad available right now. Try again in a few minutes.', 'info');
     }
     return null;
   }
@@ -5132,8 +5600,6 @@ async function showAd(quotaKind = null) {
     console.warn('[ads] no controller: blockId=' + _adsBlockId
                  + ' sdkLoaded=' + _adSdkLoaded()
                  + ' markedFailed=' + !!window.__adsFailed);
-    const pass = await _requestNoFillPass(quotaKind, timeLeft());
-    if (pass) return pass;
     toast('Ads can\'t load right now — check your connection and reopen the app',
           'error');
     return null;
@@ -5441,7 +5907,7 @@ async function openPlayer(id) {
   } else if (p.blocked) {
     buyBtn = `<button class="big-buy-btn blocked" disabled>🚫 Not available to Buy</button>`;
   } else {
-    buyBtn = `<button class="big-buy-btn" onclick="buyPlayer(${p.id}, ${p.price})">💰 Buy for ${formatNum(p.price)} 🪙</button>`;
+    buyBtn = `<button class="big-buy-btn" onclick="buyPlayer(${p.id}, this)">💰 Buy for ${formatNum(p.price)} 🪙</button>`;
   }
   body.innerHTML = `
     <h2>${escapeHtml(p.name)}
@@ -5473,30 +5939,30 @@ function closeModal() {
   if (document.body.classList.contains('pack-overlay-open')) document.getElementById('pack-open-done').focus();
 }
 
-async function buyPlayer(id, price) {
-  haptic('medium');
-  const btn = event.target;
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Buying…';
-  const { ok, data } = await api('/api/webapp/buy/' + id, {});
-  if (!ok) {
-    btn.disabled = false;
-    btn.innerHTML = `💰 Buy for ${formatNum(price)} 🪙`;
-    toast(data.message || 'Buy failed', 'error');
-    hapticNotif('error');
-    return;
+async function buyPlayer(id, button) {
+  button.disabled = true;
+  try {
+    const {ok, data} = await api('/api/webapp/economy/quote', {action: 'browse', target: id});
+    if (!ok) { toast(data.message || 'Player unavailable.', 'error'); return; }
+    if (!await reviewPlayerPurchase(data)) return;
+    const result = await confirmEconomy(data.quote_id);
+    if (!result.ok) { toast(result.data.message || 'Could not confirm purchase.', 'error'); return; }
+    toast('Player purchased. Receipt ' + result.data.receipt, 'success');
+    closeModal();
+    refreshDashboard();
+    if (currentScreen === 'browse') onFilterChange();
+  } finally {
+    button.disabled = false;
   }
-  hapticNotif('success');
-  const bonus = data.purchased.gem_bonus || 0;
-  toast(`✅ Bought ${data.purchased.name}!` +
-        (bonus ? ` +${formatNum(bonus)} 💎` : ''), 'success');
-  closeModal();
-  // Refresh
-  refreshDashboard();
-  // If on browse screen, re-run to update ownership badges
-  if (currentScreen === 'browse') {
-    onFilterChange();
-  }
+}
+
+function reviewPlayerPurchase(offer) {
+  return reviewEconomy('Confirm player purchase', [
+    ['Card', `${offer.name} · ${offer.version} · ${offer.rating} OVR`],
+    ['Quantity', '1'],
+    ['You spend', `${offer.price.toLocaleString()} coins`],
+    ['Balance after', `${offer.balance_after.toLocaleString()} coins`],
+  ]);
 }
 
 // ════════════════ Roster ════════════════
@@ -5521,7 +5987,7 @@ function clearSquadSelection() {
 
 function toggleSquadSelection(rosterId) {
   const player = cachedRoster?.find(r => r.roster_id === rosterId);
-  if (!player || player.is_career || player.is_captain) return;
+  if (!player || saleProtection(player)) return;
   if (!squadSelected.has(rosterId) && squadSelected.size >= 25) {
     toast('Select up to 25 players per sale.', 'info');
     return;
@@ -5570,7 +6036,7 @@ async function loadRoster() {
   role.replaceChildren(new Option('All roles', ''), ...roles.map(name => new Option(name, name)));
   if (roles.includes(selectedRole)) role.value = selectedRole;
   squadSelected = new Set([...squadSelected].filter(id =>
-    cachedRoster.some(row => row.roster_id === id && !row.is_captain && !row.is_career)));
+    cachedRoster.some(row => row.roster_id === id && !saleProtection(row))));
   renderSquadList();
 }
 
@@ -5582,20 +6048,25 @@ function renderSquadList() {
   const visible = cachedRoster.filter(r => (!role || r.category === role) &&
     [r.name, r.country, r.version].some(value => String(value || '').toLowerCase().includes(query)));
   const card = r => {
-    const selectable = !r.is_captain && !r.is_career;
+    const protection = saleProtection(r);
     const selected = squadSelected.has(r.roster_id);
+    const leadership = r.is_captain ? ' · Captain' : r.is_vice_captain ? ' · Vice-captain' : '';
     return `<article class="hub-roster-row ${selected ? 'selected' : ''}">
       ${cardImg(r.card_url || playerCardUrl(r.player_id), '', 'hub-player-card')}
-      <div><h3>${escapeHtml(r.name)}</h3>
-        <p>${r.xi_slot ? '#' + r.xi_slot + ' · ' : ''}${r.rating} OVR · ${escapeHtml(r.category)} · ${escapeHtml(r.country)}</p>
-        <p>${r.is_captain ? 'Captain' : r.is_career ? 'Career player' : (r.version !== 'Base' ? escapeHtml(r.version) + ' · ' : '') + r.sell_value.toLocaleString() + ' coins to sell'}</p>
-        <div class="hub-actions">
-          ${squadSelectMode ? (selectable ? `<button type="button" class="hub-button" aria-pressed="${selected}" onclick="toggleSquadSelection(${r.roster_id})">${selected ? 'Selected' : 'Select'}</button>` : '') :
-            `<button type="button" class="hub-button" onclick="openPlayerDetail(${r.roster_id})">Details</button>
-             ${r.xi_slot && !r.is_captain ? `<button type="button" class="hub-button" onclick="setSquadCaptain(${r.roster_id}, this)">Set captain</button>` : ''}
-             ${selectable ? `<button type="button" class="release-btn hub-button" onclick="releaseOne(${r.roster_id})">Release</button>` : ''}`}
-        </div>
-      </div></article>`;
+      <div>
+        <button class="cmu-player-name" type="button" onclick="openPlayerDetail(${r.roster_id})">${escapeHtml(r.name)}</button>
+        <p>${r.xi_slot ? '#' + r.xi_slot + ' · ' : ''}${r.rating} OVR · ${escapeHtml(r.version)} · ${escapeHtml(r.category)}${leadership}</p>
+        <p>${protection || r.sell_value.toLocaleString() + ' coins to sell'}</p>
+      </div>
+      ${squadSelectMode
+        ? `<button type="button" class="hub-button" aria-pressed="${selected}" onclick="toggleSquadSelection(${r.roster_id})" ${protection ? 'disabled' : ''}>${selected ? 'Selected' : 'Select'}</button>`
+        : `<details class="cmu-player-menu"><summary aria-label="Actions for ${escapeHtmlAttr(r.name)}">⋯</summary>
+          <div><button type="button" class="hub-button" onclick="toggleCardLock(${r.roster_id}, this)">${r.sale_locked ? 'Unlock card' : 'Lock card'}</button>
+          ${r.xi_slot && !r.is_captain ? `<button type="button" class="hub-button" onclick="openCaptainMode(${r.roster_id}, 'captain')">Make captain</button>` : ''}
+          ${r.xi_slot && !r.is_vice_captain ? `<button type="button" class="hub-button" onclick="openCaptainMode(${r.roster_id}, 'vice')">Make vice-captain</button>` : ''}
+          ${!protection ? `<button type="button" class="hub-button" onclick="releaseOne(${r.roster_id})">Sell player</button>` : ''}
+          </div></details>`}
+    </article>`;
   };
   const shown = [[true, 'Playing XI'], [false, 'Reserves']].map(([starter, label]) => {
     const rows = visible.filter(r => Boolean(r.xi_slot) === starter);
@@ -5605,77 +6076,121 @@ function renderSquadList() {
   updateSquadBulkBar();
 }
 
-async function setSquadCaptain(rosterId, button) {
-  const row = cachedRoster?.find(r => r.roster_id === rosterId);
-  if (!row) return;
+function saleProtection(card) {
+  if (card.sale_locked) return 'Locked';
+  if (card.xi_slot) return 'Playing XI · replace before selling';
+  if (card.is_career) return 'Career player';
+  return '';
+}
+
+async function toggleCardLock(id, button) {
+  const card = cachedRoster?.find(row => row.roster_id === id);
+  if (!card) return;
   button.disabled = true;
   try {
-    if (!await askConfirm(`Make ${row.name} your captain?`)) return;
-    const {ok, data} = await api('/api/webapp/roster/captain', {roster_id: rosterId});
-    toast(ok ? `${data.name} is now your captain.` : (data.message || 'Could not set captain.'), ok ? 'success' : 'error');
+    const {ok, data} = await api(`/api/webapp/roster/${id}/lock`, {locked: !card.sale_locked});
+    toast(ok ? (data.locked ? 'Card locked.' : 'Card unlocked.') : data.message || 'Could not update card.',
+      ok ? 'success' : 'error');
     if (ok) await loadRoster();
   } finally {
     button.disabled = false;
   }
 }
 
-async function releaseOne(rosterId) {
-  const row = cachedRoster?.find(r => r.roster_id === rosterId);
-  if (!row || row.is_captain || row.is_career) return;
-  const {name, sell_value: sellValue} = row;
-  if (!await askConfirm(`Release ${name} for ${sellValue.toLocaleString()} 🪙?`)) return;
-  haptic('medium');
-  const { ok, data } = await api(`/api/webapp/release/${rosterId}`, {});
-  if (!ok) {
-    toast(data.message || 'Release failed', 'error');
-    hapticNotif('error');
+let captainChoice;
+function openCaptainMode(id, position) {
+  captainChoice = {id, position};
+  navigate('captains');
+}
+
+async function loadCaptainMode() {
+  const form = document.getElementById('captain-form');
+  const button = form.querySelector('button');
+  button.disabled = true;
+  const status = document.getElementById('captain-status');
+  status.textContent = 'Loading your Playing XI…';
+  const {ok, data} = await api('/api/webapp/xi');
+  if (currentScreen !== 'captains') return;
+  if (!ok) { status.textContent = data.message || 'Could not load your Playing XI.'; return; }
+  for (const role of ['captain', 'vice']) {
+    const select = form.elements[role];
+    const previous = data.xi.find(card => role === 'captain' ? card.is_captain : card.is_vice_captain);
+    select.replaceChildren(new Option('Choose a player', ''), ...data.xi.map(card =>
+      new Option(`${card.name} · ${card.version} · ${card.rating} OVR`, card.roster_id)));
+    select.value = captainChoice?.position === role ? String(captainChoice.id) : previous ? String(previous.roster_id) : '';
+  }
+  captainChoice = null;
+  status.textContent = data.xi.length < 2 ? 'Add two players to your XI to choose leadership.' : '';
+  button.disabled = data.xi.length < 2;
+}
+
+async function saveCaptainMode(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button');
+  const status = document.getElementById('captain-status');
+  const captain = form.elements.captain;
+  const vice = form.elements.vice;
+  if (captain.value === vice.value) {
+    status.textContent = 'Choose two different players.';
     return;
   }
-  toast(`Released ${data.player_name} (+${data.sell_value.toLocaleString()} 🪙)`, 'success');
-  hapticNotif('success');
-  loadRoster();
-  refreshDashboard();
+  button.disabled = true;
+  try {
+    const {ok, data} = await api('/api/webapp/roster/leadership',
+      {captain_id: Number(captain.value), vice_captain_id: Number(vice.value)});
+    status.textContent = ok ? 'Leadership saved.' : data.message || 'Could not save leadership.';
+    if (ok) {
+      cachedRoster = null;
+      if (cachedXi) for (const card of cachedXi) {
+        card.is_captain = card.roster_id === Number(captain.value);
+        card.is_vice_captain = card.roster_id === Number(vice.value);
+      }
+    }
+  } finally {
+    button.disabled = false;
+  }
+}
+
+let saleInProgress = false;
+
+async function reviewSale(ids) {
+  if (saleInProgress || !ids.length) return false;
+  saleInProgress = true;
+  try {
+    const {ok, data} = await api('/api/webapp/economy/quote', {action: 'sell', target: ids});
+    if (!ok) { toast(data.message || 'These cards are no longer available to sell.', 'error'); return false; }
+    const lines = data.cards.map(card => [
+      `${card.name} · ${card.version} · ${card.rating} OVR · #${card.id}`,
+      `${card.price.toLocaleString()} coins`,
+    ]);
+    lines.push(['Total credit', `${data.price.toLocaleString()} coins`],
+               ['Balance after', `${data.balance_after.toLocaleString()} coins`]);
+    if (!await reviewEconomy('Confirm player sale', lines, 'Sold cards leave your collection.', 'Sell')) return false;
+    const result = await confirmEconomy(data.quote_id);
+    toast(result.ok ? `Sale complete. Receipt ${result.data.receipt}.` :
+      result.data.message || 'Could not confirm sale. Check your Wallet.', result.ok ? 'success' : 'error');
+    if (result.ok) refreshDashboard();
+    return result.ok;
+  } finally {
+    saleInProgress = false;
+  }
+}
+
+async function releaseOne(rosterId) {
+  if (await reviewSale([rosterId])) loadRoster();
 }
 
 async function releaseSquadSelection() {
-  if (squadSelected.size === 0) return;
-  const ids = Array.from(squadSelected);
-  let total = 0;
-  if (cachedRoster) cachedRoster.forEach(r => { if (squadSelected.has(r.roster_id)) total += r.sell_value; });
-  if (!await askConfirm(`Release ${ids.length} players for ${total.toLocaleString()} 🪙?`)) return;
-  haptic('medium');
-  const { ok, data } = await api('/api/webapp/release_multi', { roster_ids: ids });
-  if (!ok) {
-    toast(data.message || 'Release failed', 'error');
-    hapticNotif('error');
-    return;
-  }
-  toast(`Released ${data.released_count} players (+${data.total_coins.toLocaleString()} 🪙)`, 'success');
-  hapticNotif('success');
+  if (!await reviewSale([...squadSelected])) return;
   clearSquadSelection();
   loadRoster();
-  refreshDashboard();
 }
 
-async function releaseDailyReward(rosterId, btn, name, sellValue) {
-  if (!await askConfirm(`Release ${name} for ${sellValue.toLocaleString()} 🪙?`)) return;
-  haptic('medium');
-  const { ok, data } = await api(`/api/webapp/release/${rosterId}`, {});
-  if (!ok) {
-    toast(data.message || 'Release failed', 'error');
-    hapticNotif('error');
-    return;
-  }
-  toast(`Released ${data.player_name} (+${data.sell_value.toLocaleString()} 🪙)`, 'success');
-  hapticNotif('success');
-  // Update the row in place — strike out + remove button
-  if (btn) {
-    const row = btn.parentElement;
-    row.style.opacity = '0.5';
-    row.querySelector('span').innerHTML = `<s>✅ ${escapeHtml(name)}</s> · sold`;
-    btn.remove();
-  }
-  refreshDashboard();
+async function releaseDailyReward(rosterId, button) {
+  if (!await reviewSale([rosterId])) return;
+  button.parentElement.querySelector('span').append(' · Sold');
+  button.remove();
 }
 
 function escapeHtmlAttr(s) {
@@ -5712,6 +6227,14 @@ async function loadMarket() {
     return;
   }
   marketData = data;
+  for (const [field, label] of [['country', 'All countries'], ['version', 'All versions']]) {
+    const select = marketEl(field);
+    const selected = select.value;
+    const choices = [...new Set(data.slots.map(slot => slot[field]).filter(Boolean))].sort();
+    if (selected && !choices.includes(selected)) choices.unshift(selected);
+    select.replaceChildren(new Option(label, ''), ...choices.map(value => new Option(value, value)));
+    select.value = selected;
+  }
   marketEl('balance').textContent = data.balance.coins.toLocaleString() + ' coins';
   marketEl('capacity').textContent = data.balance.roster_count + ' / ' + data.balance.roster_max;
   marketEl('cadence').textContent = data.refresh_interval_hours === 24
@@ -5738,9 +6261,17 @@ function renderMarket() {
   const query = marketEl('search').value.trim().toLowerCase();
   const role = marketEl('role').value;
   const available = marketEl('available').checked;
+  const country = marketEl('country').value;
+  const version = marketEl('version').value;
+  const minimum = marketEl('min-ovr').valueAsNumber;
+  const maximum = marketEl('max-ovr').valueAsNumber;
+  const price = marketEl('max-price').valueAsNumber;
   const visible = slots.filter(s =>
+    (!country || s.country === country) && (!version || s.version === version) &&
+    (Number.isNaN(minimum) || s.rating >= minimum) && (Number.isNaN(maximum) || s.rating <= maximum) &&
+    (Number.isNaN(price) || s.final_price <= price) &&
     (!role || s.category === role) && (!available || !signingBlock(s, balance)) &&
-    (s.name + ' ' + s.country).toLowerCase().includes(query));
+    [s.name, s.country, s.version, s.rating].join(' ').toLowerCase().includes(query));
   const sort = marketEl('sort').value;
   if (sort === 'price') visible.sort((a, b) => a.final_price - b.final_price);
   if (sort === 'rating') visible.sort((a, b) => b.rating - a.rating);
@@ -5756,39 +6287,45 @@ function marketRow(s, balance) {
   const discount = s.discount_pct > 0 ? ' · ' + s.discount_pct + '% off' : '';
   const bonus = s.gem_bonus > 0 ? ' · +' + s.gem_bonus.toLocaleString() + ' gems' : '';
   return `<article class="market-row">
-    <div class="market-art">
-      <span aria-hidden="true">${s.rating}<br>OVR</span>
-      ${cardImg(s.card_url, s.name + ' player card')}
-    </div>
-    <div class="market-player">
-      <h3 class="market-name">${escapeHtml(s.name)}</h3>
-      <p class="market-meta">${s.rating} OVR · ${escapeHtml(s.category)} · ${escapeHtml(s.country || '—')}</p>
-      <p class="market-stock">${escapeHtml(s.version || 'Base')} · ${stock}${discount}${bonus}</p>
-      <div class="market-price-line">
-        <strong>${s.final_price.toLocaleString()} coins</strong>
-        <button type="button" class="market-buy-btn" data-sign="${s.slot_id}"
-          ${blocked || marketSigning ? 'disabled' : ''}>${blocked || 'Sign player'}</button>
-      </div>
-    </div>
-  </article>`;
+    <div class="market-art"><span>${s.rating}<br>OVR</span>${cardImg(s.card_url, '')}</div>
+    <div><h3 class="market-name"><button type="button" class="cmu-player-name" data-market-details="${s.slot_id}">${escapeHtml(s.name)}</button></h3>
+    <p class="market-meta">${s.rating} OVR · ${escapeHtml(s.category)} · ${escapeHtml(s.country || '—')}</p>
+    <p class="market-stock">${escapeHtml(s.version || 'Base')} · ${stock}${discount}${bonus}</p>
+    ${blocked === 'Over budget' ? `<p>Need ${(s.final_price - balance.coins).toLocaleString()} more coins.</p>
+      <button class="cmu-text-button" type="button" onclick="navigate('rewards')">Earn coins</button>` : ''}
+    <div class="market-price-line"><strong>${s.final_price.toLocaleString()} coins</strong>
+    <button class="market-buy-btn ${blocked ? 'disabled' : ''}" data-sign="${s.slot_id}"
+      ${blocked || marketSigning ? 'disabled' : ''}>${blocked || 'Sign player'}</button></div></div></article>`;
+}
+
+function openMarketDetails(listing) {
+  const body = document.getElementById('modal-body');
+  body.innerHTML = `<h2>${escapeHtml(listing.name)}</h2>
+    ${cardImg(listing.card_url, listing.name, 'modal-player-card')}
+    <p>${escapeHtml(listing.version)} · ${escapeHtml(listing.category)} · ${escapeHtml(listing.country || '—')}</p>
+    <p>${listing.rating} OVR · ${listing.final_price.toLocaleString()} coins</p>
+    <button class="hub-button" type="button" onclick="closeModal()">Back to listings</button>`;
+  document.getElementById('modal').classList.add('open');
+  body.querySelector('button').focus();
 }
 
 async function buyFromMarket(slotId) {
   if (marketSigning || !marketData) return;
-  const slot = marketData.slots.find(s => s.slot_id === slotId);
-  if (!slot || signingBlock(slot, marketData.balance)) return;
-  const remaining = marketData.balance.coins - slot.final_price;
   marketSigning = true;
   renderMarket();
   try {
-    if (!await askConfirm(`Sign ${slot.name} for ${slot.final_price.toLocaleString()} coins? You’ll have ${remaining.toLocaleString()} coins left.`)) return;
-    const {ok, data} = await api('/api/webapp/market/buy/' + slotId, {
-      expected_player_id: slot.player_id, expected_price: slot.final_price,
-    });
+    const quote = await api('/api/webapp/economy/quote', {action: 'market', target: slotId});
+    if (!quote.ok) {
+      marketEl('receipt').textContent = quote.data.message || 'This listing is unavailable.';
+      await loadMarket();
+      return;
+    }
+    if (!await reviewPlayerPurchase(quote.data)) return;
+    const {ok, data} = await confirmEconomy(quote.data.quote_id);
     marketEl('receipt').textContent = ok
-      ? `Signed ${data.player_name} for ${data.spent.toLocaleString()} coins. Balance ${data.balance.coins.toLocaleString()} coins.` +
+      ? `Signed ${data.player_name} for ${data.spent.toLocaleString()} coins. Receipt ${data.receipt}.` +
         (data.gem_bonus ? ` Signing bonus +${data.gem_bonus.toLocaleString()} gems.` : '')
-      : (data.message || 'Purchase could not be confirmed. Check your squad before trying again.');
+      : (data.message || 'Could not confirm purchase. Check your Wallet.');
     hapticNotif(ok ? 'success' : 'error');
     await loadMarket();
     if (ok) refreshDashboard();
@@ -5799,15 +6336,20 @@ async function buyFromMarket(slotId) {
 }
 
 marketEl('search').addEventListener('input', renderMarket);
-for (const id of ['role', 'sort', 'available']) marketEl(id).addEventListener('change', renderMarket);
+for (const id of ['role', 'sort', 'available', 'country', 'version', 'min-ovr', 'max-ovr', 'max-price']) marketEl(id).addEventListener('change', renderMarket);
 marketEl('list').addEventListener('click', event => {
   const button = event.target.closest('button');
   if (!button || button.disabled) return;
+  if (button.dataset.marketDetails) {
+    const listing = marketData?.slots.find(slot => slot.slot_id === Number(button.dataset.marketDetails));
+    if (listing) openMarketDetails(listing);
+    return;
+  }
   if (button.hasAttribute('data-reload')) loadMarket();
   if (button.hasAttribute('data-sign')) buyFromMarket(Number(button.dataset.sign));
   if (button.hasAttribute('data-reset')) {
     marketEl('search').value = '';
-    marketEl('role').value = '';
+    for (const field of ['role', 'country', 'version', 'min-ovr', 'max-ovr', 'max-price']) marketEl(field).value = '';
     marketEl('available').checked = false;
     renderMarket();
   }
@@ -5864,6 +6406,7 @@ async function loadXi() {
     return;
   }
   cachedXi = data.xi;
+  document.getElementById('save-xi-order').hidden = true;
   cachedBench = data.bench;
   cachedXiChemistry = data.chemistry;
   cachedChemistrySuggestions = data.chemistry_suggestions || [];
@@ -5918,7 +6461,7 @@ function renderXiList() {
         <div class="xi-pos">${i + 1}</div>
         <span onclick="openPlayerDetail(${r.roster_id})">${cardImg(r.card_url || playerCardUrl(r.player_id), `${r.name} card`, 'player-card-thumb xi')}</span>
         <div class="xi-info" onclick="openPlayerDetail(${r.roster_id})" style="cursor:pointer;">
-          <div class="xi-name">${escapeHtml(r.name)} ${ratingBadge(r.rating)}${r.is_captain ? ' <span class="captain-tag" style="position:static;margin-left:0.3rem;">CAPT</span>' : ''}</div>
+          <div class="xi-name">${escapeHtml(r.name)} ${ratingBadge(r.rating)}${r.is_captain ? ' <span class="captain-tag" style="position:static;margin-left:0.3rem;">C</span>' : r.is_vice_captain ? ' <span>VC</span>' : ''}</div>
           <div class="xi-meta"><span class="cat-tag cat-${categoryKey(r.category)}">${escapeHtml(XI_CATEGORY_SHORT[r.category] || r.category)}</span> · ${escapeHtml(r.country)}</div>
         </div>
         <div class="xi-move">
@@ -5984,48 +6527,40 @@ function categoryKey(cat) {
   return (cat || '').toLowerCase().replace(/\s+/g, '-');
 }
 
-async function moveXiRow(rosterId, delta) {
-  if (!cachedXi) return;
-  const idx = cachedXi.findIndex(r => r.roster_id === rosterId);
-  if (idx === -1) return;
-  const newIdx = idx + delta;
-  if (newIdx < 0 || newIdx >= cachedXi.length) return;
-  // Swap positions in cachedXi
-  const tmp = cachedXi[idx];
-  cachedXi[idx] = cachedXi[newIdx];
-  cachedXi[newIdx] = tmp;
-  // Re-render immediately for snappy feel
+function moveXiRow(rosterId, delta) {
+  const index = cachedXi?.findIndex(card => card.roster_id === rosterId) ?? -1;
+  const next = index + delta;
+  if (xiOrderSaving || index < 0 || next < 0 || next >= cachedXi.length) return;
+  [cachedXi[index], cachedXi[next]] = [cachedXi[next], cachedXi[index]];
+  document.getElementById('save-xi-order').hidden = false;
   renderXiList();
-  haptic('light');
-  // Persist
-  const orderedIds = cachedXi.map(r => r.roster_id);
-  const { ok, data } = await api('/api/webapp/xi/reorder', { ordered_roster_ids: orderedIds });
-  if (!ok) {
-    toast(data.message || 'Reorder failed', 'error');
-    loadXi();
-  }
 }
 
-async function persistXiOrder() {
-  const orderedIds = Array.from(document.querySelectorAll('#xi-list .xi-row'))
-    .map(el => parseInt(el.dataset.rosterId, 10))
-    .filter(n => !isNaN(n));
-  if (orderedIds.length < 2) return;
-  // Sync cachedXi with new DOM order
-  if (cachedXi) {
-    const byId = {};
-    cachedXi.forEach(r => byId[r.roster_id] = r);
-    cachedXi = orderedIds.map(id => byId[id]).filter(Boolean);
-  }
-  // Optimistically update position labels
-  document.querySelectorAll('#xi-list .xi-row .xi-pos').forEach((el, i) => {
-    el.textContent = i + 1;
-  });
-  haptic('light');
-  const { ok, data } = await api('/api/webapp/xi/reorder', { ordered_roster_ids: orderedIds });
-  if (!ok) {
-    toast(data.message || 'Reorder failed', 'error');
-    loadXi();
+function persistXiOrder(event) {
+  if (event.oldIndex === event.newIndex || xiOrderSaving) return;
+  const [moved] = cachedXi.splice(event.oldIndex, 1);
+  cachedXi.splice(event.newIndex, 0, moved);
+  document.getElementById('save-xi-order').hidden = false;
+  renderXiList();
+}
+
+let xiOrderSaving = false;
+async function saveXiOrder() {
+  if (xiOrderSaving || !cachedXi?.length) return;
+  xiOrderSaving = true;
+  const button = document.getElementById('save-xi-order');
+  button.disabled = true;
+  try {
+    const {ok, data} = await api('/api/webapp/xi/reorder',
+      {ordered_roster_ids: cachedXi.map(card => card.roster_id)});
+    toast(ok ? 'Playing XI saved.' : data.message || 'Could not save your order.', ok ? 'success' : 'error');
+    if (ok) {
+      button.hidden = true;
+      cachedRoster = null;
+    }
+  } finally {
+    button.disabled = false;
+    xiOrderSaving = false;
   }
 }
 
@@ -6256,7 +6791,7 @@ async function loadInvite() {
         <button class="spin-button" style="padding:0.7rem 0.9rem;font-size:0.78rem;width:auto;" onclick="copyInviteCode()">📋</button>
       </div>
       <p style="color:var(--muted);font-size:0.72rem;margin-top:0.4rem;line-height:1.5;">
-        Friends can type <code>/redeem ${escapeHtml(code)}</code> after their /debut.
+        Friends can type <code>/redeem ${escapeHtml(code)}</code> after debut. The invite qualifies after an eligible ranked match against another player.
       </p>
     </div>
   ` : '';
@@ -6424,22 +6959,23 @@ function shareInviteLink(link) {
 // ════════════════ Quests ════════════════
 let currentQuestTab = 'daily';
 let currentHomeQuestTab = 'daily';
+let questResetTimes = {};
 let cachedQuests = null;  // {daily: [], weekly: [], monthly: []}
 
 function switchHomeQuestTab(qtype) {
   haptic('light');
   currentHomeQuestTab = qtype;
-  document.querySelectorAll('[data-home-qtab]').forEach(btn => {
-    btn.setAttribute('aria-pressed', String(btn.dataset.homeQtab === qtype));
+  document.querySelectorAll('[data-home-qtab]').forEach(el => {
+    const active = el.dataset.homeQtab === qtype;
+    el.classList.toggle('active', active);
+    el.setAttribute('aria-pressed', String(active));
   });
-  renderHomeQuests(true);
+  renderHomeQuests();
 }
 
 function questRewardLabel(q) {
-  if (q.reward_coins) return `+${q.reward_coins.toLocaleString()} coins`;
-  if (q.reward_gems) return `+${q.reward_gems} gems`;
-  if (q.reward_points) return `+${q.reward_points} points`;
-  return 'Reward';
+  return [[q.reward_coins, 'coins'], [q.reward_gems, 'gems'], [q.reward_points, 'QP']]
+    .filter(([amount]) => amount).map(([amount, name]) => `+${amount.toLocaleString()} ${name}`).join(' · ') || 'Completed';
 }
 
 function openHomeQuestPeriod() {
@@ -6451,14 +6987,14 @@ function renderHomeQuests(animate = false) {
   const el = document.getElementById('home-quest-list');
   if (!el || !cachedQuests) return;
   const list = cachedQuests[currentHomeQuestTab] || [];
-  const footer = document.getElementById('home-quest-footer');
   const claim = document.getElementById('home-quest-claim');
+  const footer = document.getElementById('home-quest-footer');
   const ready = list.filter(q => q.completed && !q.claimed).length;
   claim.hidden = !ready;
   claim.disabled = questClaimBusy;
   el.classList.toggle('animate-progress', animate);
   if (!list.length) {
-    const period = currentHomeQuestTab === 'daily' ? 'daily' : 'monthly';
+    const period = currentHomeQuestTab;
     el.innerHTML = `<p class="mission-loading">No ${period} quests right now.</p>`;
     footer.textContent = '';
     return;
@@ -6467,14 +7003,12 @@ function renderHomeQuests(animate = false) {
   footer.textContent = `${done} of ${list.length} complete` + (ready ? ` · ${ready} to claim` : '');
   const priority = q => q.claimed ? -1 : q.completed ? 101 : q.percent;
   const ranked = [...list].sort((a, b) => priority(b) - priority(a));
-  el.innerHTML = ranked.map(q => `
+  el.innerHTML = ranked.slice(0, 3).map(q => `
     <button type="button" class="home-quest" onclick="openHomeQuestPeriod()">
       <span class="home-quest-copy">
         <span class="home-quest-title">${escapeHtml(q.title)}</span>
         <span class="home-quest-progress">
-          <span class="home-quest-progress-track" aria-hidden="true">
-            <span class="home-quest-progress-fill ${q.completed ? 'done' : ''}" style="width:${q.percent}%"></span>
-          </span>
+          <span class="home-quest-progress-track" aria-hidden="true"><span class="home-quest-progress-fill ${q.completed ? 'done' : ''}" style="width:${q.percent}%"></span></span>
           <span class="home-quest-count">${q.progress}/${q.target}</span>
         </span>
       </span>
@@ -6502,6 +7036,7 @@ async function loadQuests() {
     return;
   }
   cachedQuests = data.groups || {};
+  questResetTimes = data.resets_at || {};
   // Show auto-claim toast if any
   if (data.auto_claimed_summary && data.auto_claimed_summary.length) {
     const coins = data.auto_claimed_summary.reduce((s,e) => s + (e.coins||0), 0);
@@ -6861,6 +7396,8 @@ function renderQuestList() {
   const el = document.getElementById('quest-content');
   if (!cachedQuests) return;
   const list = cachedQuests[currentQuestTab] || [];
+  const reset = questResetTimes[currentQuestTab];
+  document.getElementById('quest-reset').textContent = reset ? 'Resets ' + new Date(reset).toLocaleString() : '';
   if (!list.length) {
     el.innerHTML = `<div class="empty">No ${currentQuestTab} quests right now.</div>`;
     return;
@@ -6912,6 +7449,9 @@ async function claimQuest(questId) {
   haptic('medium');
   let ok, data;
   try {
+    const quest = (cachedQuests?.[currentQuestTab] || []).find(q => q.quest_id === questId);
+    if (!await reviewEconomy('Confirm quest reward', quest ? [[quest.title, questRewardLabel(quest)]] : [],
+      '', 'Claim')) { setQuestButtonsBusy(false); return; }
     ({ ok, data } = await api('/api/webapp/quests/claim', { quest_id: questId }));
   } finally {
     questClaimBusy = false;
@@ -6940,6 +7480,9 @@ async function claimAllQuests(qtype) {
   haptic('medium');
   let ok, data;
   try {
+    const quests = (cachedQuests?.[qtype] || []).filter(q => q.completed && !q.claimed);
+    if (!await reviewEconomy('Confirm quest rewards', quests.map(quest => [quest.title, questRewardLabel(quest)]),
+      '', 'Claim all')) { setQuestButtonsBusy(false); return; }
     ({ ok, data } = await api('/api/webapp/quests/claim_all', { type: qtype }));
   } finally {
     questClaimBusy = false;
@@ -7041,56 +7584,44 @@ function formatCountdown(sec) {
 async function openFreePack() {
   if (packActionBusy || pendingRevealPlayers) return;
   packActionBusy = true;
+  const button = document.getElementById('freepack-open-btn');
+  if (button) button.disabled = true;
   try {
-    const btn = document.getElementById('freepack-open-btn');
-    // An ad already watched but never spent opens the pack with no new ad — the
-    // server redeems it from the ledger, so this request carries no token.
-    const useSavedAd = (freePackState?.ads_saved || 0) > 0;
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = useSavedAd ? '📦 Opening…' : adConfirmation.isPending() ? 'Checking ad reward…' : '📺 Loading ad…';
-    }
-    haptic('medium');
+    const pending = pendingRewardId('free-pack');
+    if (!adConfirmation.isPending() && !pending && !await reviewEconomy('Open Free Pack',
+      [['Reward', '1 player card'], ['Cost', 'Free · verified ad required']], '', 'Open pack')) return;
 
     let adToken = '';
-    if (!useSavedAd) {
+    if (!(freePackState?.ads_saved > 0) && !pending) {
+      if (button) button.textContent = 'Checking ad reward…';
       adToken = await showAd();
-      // The server can redeem a confirmed credit without a client token.
+      if (!adToken) return;
       if (adToken === AD_TOKEN_LEDGER) adToken = '';
-      else if (!adToken) {
-        if (btn) { btn.disabled = false; btn.textContent = adConfirmation.isPending() ? 'Check reward' : '📺 Watch ad & open pack'; }
-        return;  // showAd already toasted
-      }
     }
-
-    if (btn) btn.textContent = '📦 Opening…';
-    const { ok, data } = await api('/api/webapp/freepack/open', { ad_token: adToken });
+    if (button) button.textContent = 'Opening…';
+    const {ok, data} = await submitReward('free-pack', '/api/webapp/freepack/open', adToken);
     if (!ok) {
-      // ad_banked / ads_saved: the ad was kept, so this isn't the loss it reads
-      // as. Say so rather than only "Pack failed".
       toast(rewardClaimMessage(data, 'Pack failed'), data.ad_banked ? 'info' : 'error');
-      hapticNotif('error');
       loadFreePack();
       return;
     }
-
     adConfirmation.clear();
-    hapticNotif('success');
-    showFreePackReveal(data.player, data.overflow_claim);
+    pendingRevealPlayers = {
+      source: 'freepack',
+      pack_name: 'Free Pack',
+      history_id: data.history_id,
+      players: [data.player],
+      overflow: data.overflow_claim ? [data.overflow_claim] : [],
+    };
+    startPackOpenAnimation();
     refreshDashboard();
   } finally {
     packActionBusy = false;
+    if (button && !pendingRevealPlayers) {
+      button.disabled = false;
+      button.textContent = adConfirmation.isPending() ? 'Check reward' : 'Review Free Pack';
+    }
   }
-}
-
-function showFreePackReveal(player, overflowClaim) {
-  pendingRevealPlayers = {
-    source: 'freepack',
-    pack_name: 'Free pack',
-    players: [player],
-    overflow: overflowClaim ? [overflowClaim] : [],
-  };
-  startPackOpenAnimation();
 }
 
 // ════════════════ Packs (buy + open) ════════════════
@@ -7115,6 +7646,7 @@ function switchPacksTab(tab) {
   currentPacksTab = tab;
   document.querySelectorAll('.packs-tab').forEach(el =>
     el.classList.toggle('active', el.dataset.ptab === tab));
+  document.getElementById('pack-categories').hidden = tab !== 'shop';
   renderPacks();
 }
 
@@ -7139,14 +7671,19 @@ async function loadPacks() {
 
 function renderPacks() {
   const el = document.getElementById('packs-content');
+  if (currentPacksTab === 'history') { loadPackHistory(); return; }
   if (!packsData) return;
 
   if (currentPacksTab === 'shop') {
-    if (!packsData.packs.length) {
+    const category = document.getElementById('pack-currency').value;
+    const matching = packsData.packs.filter(p => category === 'all' || (category === 'free'
+      ? !(p.cost_coins || p.cost_gems || p.cost_quest_points)
+      : p['cost_' + category] > 0));
+    if (!matching.length) {
       el.innerHTML = `<div class="empty">No packs available right now</div>`;
       return;
     }
-    el.innerHTML = packsData.packs.map(p => {
+    el.innerHTML = matching.map(p => {
       const prices = [['coins', p.cost_coins, 'coins'], ['quest_points', p.cost_quest_points, 'QP'],
                       ['gems', p.cost_gems, 'gems']].filter(([,cost]) => cost > 0);
       if (!prices.length) prices.push(['free', 0, '']);
@@ -7199,89 +7736,78 @@ function renderPacks() {
             ${inv.main_count}× main${inv.bonus_count ? ` + ${inv.bonus_count}× bonus` : ''}
           </div>
         </div>
-        <button class="pack-open-btn" onclick="openPack(${inv.inventory_id}, this)">Open</button>
+        <button class="pack-open-btn" onclick="openPack(${inv.inventory_id})">Open</button>
       </div>
     `).join('');
   }
 }
 
-const pendingPackOrders = new Map();
+let packHistoryRequest = 0;
+async function loadPackHistory(before = null) {
+  const request = ++packHistoryRequest;
+  const root = document.getElementById('packs-content');
+  if (!before) root.innerHTML = '<div class="empty">Loading pack history…</div>';
+  const {ok, data} = await api('/api/webapp/packs/history', {before});
+  if (request !== packHistoryRequest || currentPacksTab !== 'history' || currentScreen !== 'packs') return;
+  if (!ok) {
+    if (before) toast('Could not load more history.', 'error');
+    else root.innerHTML = '<div class="empty">Could not load history. <button class="hub-button" onclick="loadPackHistory()">Retry</button></div>';
+    return;
+  }
+  if (!before) root.replaceChildren();
+  root.querySelector('[data-pack-more]')?.remove();
+  root.insertAdjacentHTML('beforeend', data.history.map(row =>
+    `<article class="club-card"><h3>${escapeHtml(row.name)}</h3>
+      <p>${row.legacy ? 'Purchased ' : 'Opened '}${new Date(row.at).toLocaleString()} · Reference ${escapeHtml(row.id)}</p>
+      <ul>${row.cards.map(card => `<li>${escapeHtml(card.name)}${card.version ? ' · ' + escapeHtml(card.version) : ''} · ${card.rating} OVR</li>`).join('')}</ul>
+    </article>`).join('') || '<div class="empty">Your opened packs will appear here.</div>');
+  if (data.next_before) root.insertAdjacentHTML('beforeend',
+    `<button type="button" class="hub-button" data-pack-more onclick="loadPackHistory(${data.next_before})">Load more</button>`);
+}
 
-async function buyPack(packId, btn) {
-  // Drop every tap after the first until this purchase resolves. The flag
-  // catches clicks queued before the button was disabled; the disabled
-  // buttons stop everything after that.
+async function buyPack(packId, button) {
   if (packActionBusy) return;
   packActionBusy = true;
-  haptic('medium');
-
-  const label = btn ? btn.innerHTML : '';
   setPackButtonsBusy(true);
-  if (btn) btn.innerHTML = '<span class="spinner"></span> Buying…';
-
   try {
-    const payment = btn.dataset.payment;
-    const storageKey = ['pack-order', userData?.telegram_id, packId, payment].join('-');
-    let order = pendingPackOrders.get(storageKey);
-    try { order ||= sessionStorage.getItem(storageKey); } catch {}
-    if (!order) {
-      order = Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, '0')).join('');
-      pendingPackOrders.set(storageKey, order);
-      try { sessionStorage.setItem(storageKey, order); } catch {}
-    }
-    const { ok, data, status } = await api('/api/webapp/packs/buy', {
-      pack_id: packId, request_id: order, payment, expected_cost: Number(btn.dataset.cost),
-    });
-    if (ok || (status >= 400 && status < 500 && status !== 429 && data.error !== 'in_progress')) {
-      pendingPackOrders.delete(storageKey);
-      try { sessionStorage.removeItem(storageKey); } catch {}
-    }
-    if (!ok) {
-      // 409 = the server's own duplicate guard caught a request this client
-      // let slip. Not the user's fault, so don't shout about it.
-      if (data.error === 'in_progress') {
-        toast(data.message || 'Purchase already in progress', 'info');
-      } else {
-        toast(data.message || 'Purchase failed', 'error');
-        hapticNotif('error');
-      }
-      if (btn) btn.innerHTML = label;
-      setPackButtonsBusy(false);
-      if (data.error === 'price_changed') await loadPacks();
-      return;
-    }
-    toast('✅ Pack added to your inventory!', 'success');
-    hapticNotif('success');
+    const quote = await api('/api/webapp/economy/quote', {action: 'pack', target: [packId, button.dataset.payment]});
+    if (!quote.ok) { toast(quote.data.message || 'Pack unavailable.', 'error'); return; }
+    const pack = quote.data;
+    const currency = pack.currency.replaceAll('_', ' ');
+    const listing = packsData.packs.find(item => item.id === packId);
+    const rows = [['Pack', pack.name], ['Contents', `${listing.main_count} main · ${listing.bonus_count} bonus`]];
+    if (pack.currency === 'free') rows.push(['You spend', 'Free']);
+    else rows.push(['You spend', `${pack.price.toLocaleString()} ${currency}`],
+                   ['Balance after', `${pack.balance_after.toLocaleString()} ${currency}`]);
+    if (!await reviewEconomy('Confirm pack purchase', rows, 'The pack goes to your inventory. Open it when you’re ready.')) return;
+    const {ok, data} = await confirmEconomy(pack.quote_id);
+    if (!ok) { toast(data.message || 'Could not confirm purchase. Check My Packs.', 'error'); return; }
+    toast('Pack added to your inventory. Receipt ' + data.receipt, 'success');
     refreshDashboard();
-    await loadPacks();   // re-renders the shop → fresh, re-enabled buttons
-    // Nudge them to the inventory tab
     switchPacksTab('inventory');
+    await loadPacks();
   } finally {
     packActionBusy = false;
+    setPackButtonsBusy(false);
   }
 }
 
-async function openPack(inventoryId, btn) {
+async function openPack(inventoryId) {
   if (packActionBusy) return;
   if (pendingRevealPlayers) return;
   packActionBusy = true;
-  haptic('medium');
-
-  const label = btn ? btn.innerHTML : '';
   setPackButtonsBusy(true);
-  if (btn) btn.innerHTML = '<span class="spinner"></span>';
-
   try {
-    const { ok, data } = await api('/api/webapp/packs/open', { inventory_id: inventoryId });
+    const quote = await api('/api/webapp/economy/quote', {action: 'open_pack', target: inventoryId});
+    if (!quote.ok) { toast(quote.data.message || 'This pack is unavailable.', 'error'); return; }
+    const pack = quote.data;
+    const rows = [['Pack to consume', pack.name],
+                  ['Main cards', `${pack.main_count} · ${pack.main_min_rating}–${pack.main_max_rating} OVR`]];
+    if (pack.bonus_count) rows.push(['Bonus cards', `${pack.bonus_count} · ${pack.bonus_min_rating}–${pack.bonus_max_rating} OVR`]);
+    if (!await reviewEconomy('Confirm pack opening', rows, 'The pack is consumed once and the cards are saved to Pack History.', 'Open pack')) return;
+    const {ok, data} = await confirmEconomy(pack.quote_id);
     if (!ok) {
-      if (data.error === 'in_progress') {
-        toast(data.message || 'Already opening that pack', 'info');
-      } else {
-        toast(data.message || 'Could not open pack', 'error');
-        hapticNotif('error');
-      }
-      if (btn) btn.innerHTML = label;
-      setPackButtonsBusy(false);
+      toast(data.message || 'Could not confirm opening. Check Pack History.', 'error');
       return;
     }
     // Store revealed players and start the animation. The inventory stays
@@ -7291,6 +7817,7 @@ async function openPack(inventoryId, btn) {
     refreshDashboard();
   } finally {
     packActionBusy = false;
+    setPackButtonsBusy(Boolean(pendingRevealPlayers));
   }
 }
 
@@ -7305,6 +7832,8 @@ function startPackOpenAnimation() {
   document.getElementById('pack-open-status').textContent = 'Your pack is ready to reveal.';
   document.getElementById('pack-open-overflow').replaceChildren();
   document.getElementById('pack-open-done').hidden = true;
+  document.getElementById('pack-open-skip').hidden = false;
+  document.getElementById('pack-open-receipt').hidden = true;
   pack.hidden = false;
   pack.disabled = false;
   pack.classList.remove('bursting');
@@ -7316,9 +7845,10 @@ function startPackOpenAnimation() {
   pack.focus();
 }
 
-function revealPackCards() {
+function revealPackCards(skip = false) {
   if (!pendingRevealPlayers || packRevealing) return;
   packRevealing = true;
+  document.getElementById('pack-open-skip').hidden = true;
   haptic('heavy');
   const pack = document.getElementById('pack-open-pack');
   pack.disabled = true;
@@ -7339,6 +7869,9 @@ function revealPackCards() {
       ? `${count} player${count === 1 ? '' : 's'} revealed`
       : 'Pack opened';
     cards.innerHTML = players.map((player, index) => playerRevealCard(player, index)).join('');
+    const receipt = document.getElementById('pack-open-receipt');
+    receipt.hidden = !pendingRevealPlayers.history_id;
+    receipt.textContent = pendingRevealPlayers.history_id ? 'Pack History reference P' + pendingRevealPlayers.history_id : '';
     const sellValue = players[0]?.sell_value;
     document.getElementById('pack-open-overflow').innerHTML = freePack && !overflow.length && sellValue != null
       ? `<p class="pack-open-note">Added to your squad · ${formatNum(sellValue)} coins sell value</p>`
@@ -7348,9 +7881,9 @@ function revealPackCards() {
     done.hidden = false;
     done.focus();
     hapticNotif('success');
-    if (players.some(player => player.rating >= 84)) launchConfetti(32, 'epic', packOverlay);
+    if (!skip && players.some(player => player.rating >= 84)) launchConfetti(32, 'epic', packOverlay);
   };
-  if (reducedSpinMotion.matches) render();
+  if (skip || reducedSpinMotion.matches) render();
   else setTimeout(render, 310);
 }
 
@@ -7430,6 +7963,8 @@ function renderLoginLadder() {
   const ls = loginStreakStatus;
   if (!ls) return;
   const ladder = ls.ladder || [];
+  document.getElementById('login-reset').textContent = ls.reset_at
+    ? 'Resets ' + new Date(ls.reset_at).toLocaleString() + '. Missing a login day restarts the streak.' : '';
   // Subscription multiplier (💎 Diamond = 2×) applies to every ladder payout.
   const tierMult = Number(ls.tier_multiplier || 1);
   const multEl = document.getElementById('login-tier-multiplier');
@@ -7441,14 +7976,12 @@ function renderLoginLadder() {
   }
   const el = document.getElementById('login-ladder');
   el.innerHTML = ladder.map(d => {
-    const isToday = d.day === ls.ladder_day && ls.last_login_today !== false;
     const isClaimedToday = d.day === ls.ladder_day && ls.already_claimed_today;
-    const isPast = d.day < ls.ladder_day;
     const cls = [
       'ladder-day',
       d.day === 7 ? 'day7' : '',
       d.day === ls.ladder_day ? 'today' : '',
-      (isPast || isClaimedToday) ? 'claimed' : '',
+      isClaimedToday ? 'claimed' : '',
     ].filter(Boolean).join(' ');
     return `
       <div class="${cls}">
@@ -7487,7 +8020,7 @@ async function claimLoginReward() {
   haptic('medium');
   let ok, data;
   try {
-    ({ ok, data } = await api('/api/webapp/login-streak/claim', {}));
+    ({ ok, data } = await api('/api/webapp/login-streak/claim', {period: loginStreakStatus.today}));
   } finally {
     loginClaimBusy = false;
   }
@@ -7627,6 +8160,9 @@ function renderUpgradeOptions(data) {
 }
 
 async function doUpgrade(targetPlayerId, cost) {
+  if (!await reviewEconomy('Confirm card upgrade', [
+    ['You spend', `${cost.toLocaleString()} coins`],
+  ], 'The new version replaces the current card.', 'Upgrade')) return;
   haptic('medium');
   const { ok, data } = await api('/api/webapp/upgrade/apply', {
     roster_id: upgradeRosterId,
@@ -7885,7 +8421,8 @@ function renderPlayerDetail() {
       <div style="font-size:0.65rem;color:var(--muted);">OVR</div>
       <div class="pd-name">${escapeHtml(p.name)}</div>
       <div class="pd-meta">${escapeHtml(p.category)} · ${escapeHtml(p.country)} · 🏏${p.bat_rating} ⚾${p.bowl_rating}</div>
-      ${p.version && p.version !== 'Base' ? `<div class="pd-version-tag">${escapeHtml(p.version)}</div>` : ''}
+      <div class="pd-version-tag">${escapeHtml(p.version)}${p.sale_locked ? ' · Locked' : ''}</div>
+      ${p.acquired_at ? `<p class="pd-meta">Acquired ${new Date(p.acquired_at).toLocaleDateString()}</p>` : ''}
     </div>
     ${d.upgrade_available ? `
       <button class="spin-button" style="width:100%;margin-bottom:0.9rem;background:linear-gradient(135deg,#a78bfa,#7c5ce0);"
@@ -7991,7 +8528,7 @@ function renderPdTraits(d) {
   // Inventory (available to add)
   html += `<div class="pd-section"><p class="card-title">🎒 Your trait inventory</p>`;
   if (!d.inventory.length) {
-    html += `<div class="empty" style="padding:0.8rem;"><span style="font-size:0.82rem;">No spare traits. Buy from the Trait Shop (/tshop in the bot).</span></div>`;
+    html += `<div class="empty" style="padding:0.8rem;"><span style="font-size:0.82rem;">No spare traits. <button type="button" class="hub-button" onclick="navigate('traits')">Browse Traits Market</button></span></div>`;
   } else if (d.trait_slots.full) {
     html += `<p style="color:var(--muted);font-size:0.78rem;">Trait slots full. Remove one to add another.</p>`;
     html += d.inventory.map(t => pdInvRow(t, true)).join('');
@@ -8021,6 +8558,10 @@ function pdInvRow(t, disabled) {
 }
 
 async function pdApplyTrait(inventoryId) {
+  const trait = pdData?.inventory.find(item => item.inventory_id === inventoryId);
+  if (!trait || !await reviewEconomy('Equip trait', [
+    ['Trait', `${trait.name} · Level ${trait.level}`], ['Card', pdData.player.name],
+  ], 'This moves the trait from inventory to the player’s card.', 'Equip')) return;
   haptic('medium');
   const { ok, data } = await api('/api/webapp/trait/apply', { roster_id: pdRosterId, inventory_id: inventoryId });
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
@@ -8029,7 +8570,8 @@ async function pdApplyTrait(inventoryId) {
 }
 
 async function pdRemoveTrait(ptId) {
-  if (!confirm('Remove this trait? It returns to your inventory.')) return;
+  if (!await reviewEconomy('Remove trait', [['Card', pdData.player.name]],
+    'The trait returns to your inventory at its current level.', 'Remove')) return;
   haptic('medium');
   const { ok, data } = await api('/api/webapp/trait/remove', { player_trait_id: ptId });
   if (!ok) { toast(data.message || 'Failed', 'error'); return; }
@@ -8038,8 +8580,15 @@ async function pdRemoveTrait(ptId) {
 }
 
 async function pdUpgradeTrait(ptId, cost) {
+  const trait = pdData?.traits.find(item => item.player_trait_id === ptId);
+  if (!trait || !await reviewEconomy('Upgrade trait', [
+    ['Trait', `${trait.name} · Level ${trait.level} → ${trait.level + 1}`],
+    ['You spend', `${cost.toLocaleString()} gems`],
+    ['Balance after', `${(pdData.gems - cost).toLocaleString()} gems`],
+  ], '', 'Upgrade')) return;
   haptic('medium');
-  const { ok, data } = await api('/api/webapp/trait/upgrade', { player_trait_id: ptId });
+  const { ok, data } = await api('/api/webapp/trait/upgrade',
+    { player_trait_id: ptId, expected_level: trait.level, expected_cost: cost });
   if (!ok) { toast(data.message || 'Failed', 'error'); hapticNotif('error'); return; }
   toast(data.message, 'success'); hapticNotif('success');
   refreshDashboard();
@@ -8798,7 +9347,7 @@ window.addEventListener('online', () => {
 
 function updateTournamentStatus(info) {
   tnLive = (info && info.live && info.tournaments) ? info.tournaments : [];
-  const status = document.getElementById('home-tournament-live');
+  const status = document.getElementById('tn-live-dot');
   if (status) status.hidden = !tnLive.length;
   if (!tnArchive && tnId && !tnLive.some(t => t.id === tnId)) { tnId = null; tnData = null; tnInvalidateStats(); }
 }
@@ -8913,13 +9462,24 @@ function renderTnDirectory(filter = tnDirectoryFilter) {
   if (!tnDirectoryData) return;
   tnDirectoryFilter = filter;
   const archive = filter === 'archive';
-  const rows = tnDirectoryData[filter];
-  const cards = rows.map(t => `<button type="button" class="hub-panel hub-tournament-card" onclick="openDirectoryTournament(${t.id}, ${archive})">
-    <div class="hub-between"><h3>${escapeHtml(t.name)}</h3><span class="hub-label">${escapeHtml(t.status)}</span></div>
-    <p>${escapeHtml(t.kind_label)} · ${escapeHtml(t.format)} · ${t.played}/${t.total} matches</p>
-    ${t.champion ? `<p>Champion · ${escapeHtml(t.champion.name)}</p>` : ''}
-    ${t.my_team ? '<p>Your team is entered</p>' : ''}
-  </button>`).join('');
+  const rows = tnDirectoryData[filter] || [];
+  const cards = rows.map(t => {
+    if (filter === 'upcoming') {
+      return `<article class="hub-panel hub-tournament-card">
+        <div class="hub-between"><h3>${escapeHtml(t.name)}</h3><span>${t.my_team ? 'Entered' : 'Registration open'}</span></div>
+        <p>${escapeHtml(t.kind_label)} · ${escapeHtml(t.format)} · ${t.overs} overs · ${t.max_teams} places</p>
+        ${t.description ? `<p>${escapeHtml(t.description)}</p>` : ''}
+        <p>Deadline ${new Date(t.registration_closes_at).toLocaleString()}</p>
+        ${t.my_team ? '' : `<p>Requires a valid Playing XI.</p><button type="button" class="hub-button primary" onclick="joinTournament(${t.id}, this)">Review entry</button>`}
+        </article>`;
+    }
+    return `<button type="button" class="hub-panel hub-tournament-card" onclick="openDirectoryTournament(${t.id}, ${archive})">
+      <div class="hub-between"><h3>${escapeHtml(t.name)}</h3><span class="hub-label">${escapeHtml(t.status)}</span></div>
+      <p>${escapeHtml(t.kind_label)} · ${escapeHtml(t.format)} · ${t.played}/${t.total} matches</p>
+      ${t.champion ? `<p>Champion · ${escapeHtml(t.champion.name)}</p>` : ''}
+      ${t.my_team ? '<p>Your team is entered</p>' : ''}
+    </button>`;
+  }).join('');
   const career = tnDirectoryData.career;
   const metrics = [
     ['Tournaments', career.played], ['Titles', career.titles],
@@ -8934,9 +9494,27 @@ function renderTnDirectory(filter = tnDirectoryFilter) {
         onclick="openDirectoryTournament(${career.latest_title.id}, true)">Latest title · ${escapeHtml(career.latest_title.name)} ›</button>` : ''}
     </section>
     <div class="hub-actions tn-directory-controls" role="group" aria-label="Competitions">
-      <button class="hub-button" aria-pressed="${!archive}" onclick="renderTnDirectory('current')">Live</button>
+      <button class="hub-button" aria-pressed="${filter === 'current'}" onclick="renderTnDirectory('current')">Live</button>
       <button class="hub-button" aria-pressed="${archive}" onclick="renderTnDirectory('archive')">Completed</button>
-    </div>${cards || '<div class="empty">' + (archive ? 'No completed tournaments yet.' : 'No tournament is live right now.') + '</div>'}`;
+      <button class="hub-button" aria-pressed="${filter === 'upcoming'}" onclick="renderTnDirectory('upcoming')">Registration</button>
+    </div>${cards || '<div class="empty">' + (archive ? 'No completed tournaments yet.' : filter === 'upcoming' ? 'No tournaments are accepting entries.' : 'No tournament is live right now.') + '</div>'}`;
+}
+
+async function joinTournament(id, button) {
+  const event = tnDirectoryData?.upcoming?.find(item => item.id === id);
+  if (!event) return;
+  button.disabled = true;
+  try {
+    if (!await reviewEconomy('Join tournament', [
+      ['Competition', event.name], ['Team', userData.team_name || userData.first_name || 'Your team'],
+      ['Entry fee', 'Free'], ['Closes', new Date(event.registration_closes_at).toLocaleString()],
+    ], '', 'Join')) return;
+    const {ok, data} = await api('/api/webapp/tournament/join', {tournament_id: id});
+    toast(ok ? 'Your team is entered.' : data.message || 'Unable to enter this tournament.', ok ? 'success' : 'error');
+    if (ok && currentScreen === 'tournament') showTournamentDirectory();
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function openDirectoryTournament(id, archive) {
@@ -9318,7 +9896,7 @@ function maybeFantasyRedirect() {
 
 // (2) Telegram start_param (?startapp=spin) used by group t.me deep links.
 function handleHashDeepLink() {
-  const validScreens = ['home', 'matchcentre', 'wallet', 'rewards', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'profile', 'season', 'clubs', 'playerdetail', 'livematch', 'tournament'];
+  const validScreens = ['home', 'explore', 'notifications', 'appearance', 'traits', 'career', 'matchcentre', 'wallet', 'rewards', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'profile', 'season', 'clubs', 'playerdetail', 'livematch', 'tournament'];
   const alias = {
     // 'wheel' and 'gspin' stay mapped: deep links to the old prize wheel are
     // already out there in group chats and still belong on this screen.
@@ -9353,6 +9931,7 @@ function handleHashDeepLink() {
   const newsLink = target.match(/^news_(\d+)$/);
   if (newsLink) { openNewsArticle(Number(newsLink[1])); return; }
   if (target === 'news' || /^poll(_\d+)?$/.test(target)) {
+    navigate('explore');
     const card = document.getElementById(target === 'news' ? 'news-box' : 'poll-box');
     if (target === 'news') toggleCommunityCard('news-box', true);
     card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -9362,9 +9941,16 @@ function handleHashDeepLink() {
   else if (validScreens.includes(target) && target !== 'home') navigate(target);
 }
 
+
+</script>
+<script src="{{ url_for('static', filename='js/miniapp_clubhouse.js', v='3') }}"></script>
+<script src="{{ url_for('static', filename='js/miniapp_player_hub.js', v='2') }}"></script>
+<script src="{{ url_for('static', filename='js/miniapp_overview.js', v='1') }}"></script>
+<script>
 // Open directly into a match if launched via a match/scorecard link,
 // WITHOUT first showing the dashboard (no home-screen flash).
 (function bootstrap() {
+  tg?.BackButton?.onClick(goBack);
   // Fantasy deep link → jump straight to the picker (no dashboard flash).
   if (maybeFantasyRedirect()) return;
   const ml = resolveMatchLaunch();
@@ -9377,7 +9963,5 @@ function handleHashDeepLink() {
 })();
 
 </script>
-<script src="{{ url_for('static', filename='js/miniapp_clubhouse.js', v='3') }}"></script>
-<script src="{{ url_for('static', filename='js/miniapp_player_hub.js', v='1') }}"></script>
 </body>
 </html>

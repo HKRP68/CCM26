@@ -878,18 +878,25 @@ def add_trait_to_market(session, trait_id, custom_price=None,
     return True, next_slot
 
 
-def buy_trait(session, user, slot_index):
+def buy_trait(session, user, slot_index, *, expected_slot_id=None, expected_price=None,
+              expected_trait_id=None):
     """Atomic buy of a trait. Adds to user's TraitInventory at level 1."""
     lock_user_for_update(session, user)
-    slot = (session.query(GlobalTraitMarket)
-            .filter(GlobalTraitMarket.slot_index == slot_index,
-                    GlobalTraitMarket.is_active == True).first())
+    query = session.query(GlobalTraitMarket).filter_by(slot_index=slot_index, is_active=True)
+    if expected_slot_id is not None:
+        query = query.filter_by(id=expected_slot_id)
+    slot = query.populate_existing().with_for_update().first()
     if not slot:
         return False, "Slot not found or inactive."
+    if (expected_price is not None and slot.final_price != expected_price
+            or expected_trait_id is not None and slot.trait_id != expected_trait_id):
+        return False, "Listing changed. Review the new offer."
+    if slot.final_price < 0:
+        return False, "Invalid trait price."
     if is_sold_out(slot):
         return False, "Sold out."
     trait = session.get(Trait, slot.trait_id)
-    if not trait:
+    if not trait or not trait.is_active:
         return False, "Trait unavailable."
     if (user.total_gems or 0) < slot.final_price:
         return False, f"Not enough gems. Need {slot.final_price}, have {user.total_gems or 0}."

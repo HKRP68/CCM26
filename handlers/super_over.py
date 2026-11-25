@@ -2033,7 +2033,7 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
                 count_result = not bool((so.get("main_state") or {}).get("stats_disabled"))
                 w_coins, w_gems, l_coins, l_gems = award_match_rewards_core(
                     session, winner_uid, loser_uid, overs, is_vsbot=False,
-                    count_result=count_result)
+                    count_result=count_result, match_id=mid)
                 prize = {"wc": w_coins, "wg": w_gems, "lc": l_coins, "lg": l_gems}
             except Exception:
                 logger.exception("Super Over reward award failed (%s)", mid)
@@ -2136,8 +2136,7 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
             # match can credit quests. Both sides get the main match's events off
             # the same shared tracker, and the winner also gets 'super_over_won'.
             try:
-                from services.quest_service import (
-                    track_user_match_quests, safe_track, match_counts_for_quests)
+                from services.quest_service import track_user_match_quests
                 from models import User as _QUser
                 main_state = so.get("main_state") or {}
                 for uid in (main_state.get("inn1_bat_team_id"),
@@ -2146,9 +2145,8 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
                         continue
                     qu = session.get(_QUser, uid)
                     track_user_match_quests(session, main_state, qu,
-                                            uid == winner_uid, False, winner_uid)
-                if match_counts_for_quests(main_state):
-                    safe_track(session, winner_uid, "super_over_won", 1)
+                                            uid == winner_uid, False, winner_uid,
+                                            match_id=mid, super_over=True)
             except Exception:
                 logger.exception("Super Over quest tracking failed (%s)", mid)
 

@@ -1009,40 +1009,6 @@ async def _action_timeout(context):
 
 # ── Reward helper ────────────────────────────────────────────────────
 
-async def _award_match_rewards(ctx, s, winner_tg, loser_tg, overs):
-    session = get_session()
-    try:
-        from services.config_service import get_config
-        cfg = get_config(session)
-        w = session.query(User).filter(User.telegram_id == winner_tg).first()
-        l = session.query(User).filter(User.telegram_id == loser_tg).first()
-        w_coins = int(overs * cfg["match_win_coins_per_over"])
-        w_gems = max(0, int(overs * cfg["match_win_gems_per_over"]))
-        l_coins = int(overs * cfg["match_loss_coins_per_over"])
-        l_gems = max(0, int(overs * cfg["match_loss_gems_per_over"]))
-        # Active event coin multiplier (e.g. double-coins weekend) — PvP only
-        if not s.get("is_vsbot"):
-            try:
-                from services.event_service import apply_coin_multiplier
-                w_coins, _m = apply_coin_multiplier(session, w_coins)
-                l_coins, _m = apply_coin_multiplier(session, l_coins)
-            except Exception:
-                pass
-        if w:
-            w.total_coins += w_coins; w.total_gems += w_gems
-            log_activity(session, w.id, "match_reward", f"Win reward: +{w_coins} coins, +{w_gems} gems",
-                         coins_change=w_coins, gems_change=w_gems)
-        if l:
-            l.total_coins += l_coins; l.total_gems += l_gems
-            log_activity(session, l.id, "match_reward", f"Loss reward: +{l_coins} coins, +{l_gems} gems",
-                         coins_change=l_coins, gems_change=l_gems)
-
-        session.commit()
-        return w_coins, w_gems, l_coins, l_gems
-    except Exception: session.rollback(); return 0,0,0,0
-    finally: session.close()
-
-
 def _calc_potm(s, winner_name=None):
     """Calculate Player of the Match using Impact Points.
 
@@ -6720,12 +6686,8 @@ async def _end_innings(ctx, mid):
             margin_val = target - 1 - chasing
             margin = f"by {margin_val} runs"
 
-        # Skip all real-economy effects for spectator matches AND bot-vs-bot
-        if s.get("is_spectator") or s.get("is_bot_vs_bot"):
-            wc, wg, lc, lg = 0, 0, 0, 0
-        else:
-            wc, wg, lc, lg = await _award_match_rewards(ctx, s, winner_tg, loser_tg, overs)
-            await _save_match_stats(s)
+        count_result = not (s.get("is_spectator") or s.get("is_bot_vs_bot") or s.get("stats_disabled"))
+        wc, wg, lc, lg = 0, 0, 0, 0
         potm_name, potm_impact, potm_stats = _calc_potm(s, winner_name)
 
         # Get POTM player_id and the OWNER USER ID
@@ -6807,24 +6769,12 @@ async def _end_innings(ctx, mid):
                 except Exception:
                     logger.exception("Tour-result hook failed (non-fatal)")
 
-            # Update user counters — skip entirely for spectator matches AND bot-vs-bot
-            if s.get("is_spectator") or s.get("is_bot_vs_bot"):
-                pass  # No user stats update
-            else:
-                from services.match_rewards import (
-                    apply_win_streak, record_active_day, is_ai_user)
+            if m and count_result:
+                from services.match_rewards import award_match_rewards_core
+                wc, wg, lc, lg = award_match_rewards_core(
+                    session, winner_uid, loser_uid, overs, is_vsbot=bool(s.get("is_vsbot")), match_id=mid)
                 for uid, is_winner in [(winner_uid, True), (loser_uid, False)]:
                     u = session.get(User, uid)
-                    if u and not is_ai_user(u):
-                        u.matches_played = (u.matches_played or 0) + 1
-                        if is_winner:
-                            u.matches_won = (u.matches_won or 0) + 1
-                        else:
-                            u.matches_lost = (u.matches_lost or 0) + 1
-                        # Streak + "days with at least 1 match" — same shared
-                        # helpers the Mini App / Challenge League finalize uses.
-                        apply_win_streak(u, is_winner)
-                        record_active_day(u)
 
                     # Quest tracking — skip bot user (telegram_id = -1). Shared
                     # with the Mini App finalize so /wpm & /wpmbot fire the same
@@ -6833,7 +6783,7 @@ async def _end_innings(ctx, mid):
                         from services.quest_service import track_user_match_quests
                         track_user_match_quests(
                             session, s, u, is_winner,
-                            bool(s.get("is_vsbot")), winner_uid)
+                            bool(s.get("is_vsbot")), winner_uid, match_id=mid)
                     except Exception:
                         logger.exception("Match-end quest tracking failed")
             # Ranked ladder and rivalry (services.post_match).
@@ -6846,6 +6796,9 @@ async def _end_innings(ctx, mid):
             session.rollback()
             logger.exception("Match finalize err")
         finally: session.close()
+
+        if count_result:
+            await _save_match_stats(s)
 
         # Mark the result as recorded BEFORE the (fallible) scorecards, summary
         # card and result message below. If any of those fail, the state that

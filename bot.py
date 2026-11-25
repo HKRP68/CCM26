@@ -2962,6 +2962,11 @@ def main():
         except Exception:
             logger.exception("Failed to schedule season rollover")
 
+        if app.job_queue:
+            from services.economy_review import reconciliation_job
+            app.job_queue.run_repeating(reconciliation_job, interval=86400, first=300,
+                                        name="economy_reconciliation")
+
         # ── Hall of Fame background work ──
         # The scan harvests finished scorecards into the Hall of Fame,
         # back-filling history 200 matches at a time.

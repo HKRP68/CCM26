@@ -108,6 +108,9 @@ def get_login_status(session, stats, user=None):
                        and ladder_day >= 1)
 
     return {
+        "today": _today(),
+        "reset_at": (datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                     + timedelta(days=1)).isoformat() + "Z",
         "streak": streak,
         "best": stats.login_best_streak or 0,
         "ladder_day": ladder_day,
@@ -233,7 +236,7 @@ def claim_login_reward(session, user, stats):
                      f"+{coins} coins, +{gems} gems"
                      + (f" ({tier_mult}× tier)" if tier_mult > 1 else "")
                      + (" + free pack" if granted_pack else ""),
-                     coins_change=coins)
+                     coins_change=coins, gems_change=gems)
     except Exception:
         pass
 

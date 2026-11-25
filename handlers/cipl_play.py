@@ -5615,7 +5615,7 @@ async def _complete_match(context, mid, state):
                         w_coins, w_gems, l_coins, l_gems = award_match_rewards_core(
                             session, match.winner_id, match.loser_id, overs,
                             is_vsbot=False,
-                            count_result=not state.get("stats_disabled"))
+                            count_result=not state.get("stats_disabled"), match_id=match.id)
                         prize = {
                             "w_coins": w_coins, "w_gems": w_gems,
                             "l_coins": l_coins, "l_gems": l_gems,
@@ -5717,7 +5717,7 @@ async def _complete_match(context, mid, state):
                     track_user_match_quests(
                         session, state, qu,
                         bool(quest_winner) and uid == quest_winner,
-                        False, quest_winner)
+                        False, quest_winner, match_id=mid)
             except Exception:
                 logger.exception("cipl match-end quest tracking failed for %s", mid)
 

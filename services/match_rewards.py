@@ -7,7 +7,7 @@ streak / active-day counters shown by /myprofile.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, time
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ def record_match_result_stats(session, winner_user_id, loser_user_id,
 
 
 def award_match_rewards_core(session, winner_user_id, loser_user_id, overs,
-                             is_vsbot=False, count_result=True):
+                             is_vsbot=False, count_result=True, match_id=None):
     """Apply match-end rewards. Returns (w_coins, w_gems, l_coins, l_gems).
 
     - Coins/gems scale with overs via GameConfig.
@@ -123,12 +123,42 @@ def award_match_rewards_core(session, winner_user_id, loser_user_id, overs,
       rewards/stats against a deliberately weak opponent.
     Caller commits.
     """
-    from models import User
+    from sqlalchemy import or_, update
+    from config import AI_MATCH_REWARD_DAILY_CAP
+    from models import Match, MatchRewardSettlement, User
     from services.config_service import get_config
     from services.activity_service import log_activity
+    from services.economy_transactions import lock_user_for_update
+    from services.match_outcome import END_COMPLETED, derive_end_reason
 
     if not count_result:
         return 0, 0, 0, 0
+
+    settlement = None
+    if match_id is not None:
+        session.flush()
+        if session.get_bind().dialect.name == "sqlite":
+            session.execute(update(Match).where(Match.id == match_id).values(id=Match.id)
+                            .execution_options(synchronize_session=False))
+        match = (session.query(Match).filter_by(id=match_id)
+                 .populate_existing().with_for_update().first())
+        if (not match or match.status != "completed" or derive_end_reason(match)[0] != END_COMPLETED
+                or match.winner_id != winner_user_id or match.loser_id != loser_user_id
+                or {match.user1_id, match.user2_id} != {winner_user_id, loser_user_id}
+                or winner_user_id == loser_user_id):
+            return 0, 0, 0, 0
+        previous = session.get(MatchRewardSettlement, match_id)
+        if previous:
+            return previous.amounts()
+        overs = match.overs or overs
+        settlement = MatchRewardSettlement(match_id=match_id, winner_id=winner_user_id,
+                                           loser_id=loser_user_id, ai_match=is_vsbot)
+        session.add(settlement)
+
+    for uid in sorted({uid for uid in (winner_user_id, loser_user_id) if uid is not None}):
+        user = session.get(User, uid)
+        if not is_ai_user(user):
+            lock_user_for_update(session, user)
 
     cfg = get_config(session)
     w = session.get(User, winner_user_id) if winner_user_id else None
@@ -144,6 +174,25 @@ def award_match_rewards_core(session, winner_user_id, loser_user_id, overs,
     w_gems = max(0, int(overs * cfg["match_win_gems_per_over"]))
     l_coins = int(overs * cfg["match_loss_coins_per_over"])
     l_gems = max(0, int(overs * cfg["match_loss_gems_per_over"]))
+
+    if settlement and is_vsbot:
+        human = w or l
+        if human:
+            today = datetime.combine(datetime.utcnow().date(), time.min)
+            paid = session.query(MatchRewardSettlement.match_id).filter(
+                MatchRewardSettlement.match_id != match_id,
+                MatchRewardSettlement.ai_match.is_(True),
+                MatchRewardSettlement.eligibility == "eligible",
+                MatchRewardSettlement.settled_at >= today,
+                or_(MatchRewardSettlement.winner_id == human.id, MatchRewardSettlement.loser_id == human.id),
+            ).count()
+            if paid >= cfg.get("ai_match_reward_daily_cap", AI_MATCH_REWARD_DAILY_CAP):
+                settlement.eligibility = "ai_daily_cap"
+                w_coins = w_gems = l_coins = l_gems = 0
+        if w is None:
+            w_coins = w_gems = 0
+        if l is None:
+            l_coins = l_gems = 0
 
     if not is_vsbot:
         try:
@@ -180,4 +229,7 @@ def award_match_rewards_core(session, winner_user_id, loser_user_id, overs,
         except Exception:
             pass
 
+    if settlement:
+        settlement.winner_coins, settlement.winner_gems = w_coins, w_gems
+        settlement.loser_coins, settlement.loser_gems = l_coins, l_gems
     return w_coins, w_gems, l_coins, l_gems

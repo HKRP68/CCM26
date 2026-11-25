@@ -472,7 +472,20 @@ def list_user_inventory(session, user_id):
             .all())
 
 
-def open_unopened_pack(session, user, inventory_id):
+def record_pack_opening(session, user_id, pack_name, players):
+    from models import PackOpening
+
+    snapshot = [{"id": player.id, "name": player.name, "rating": player.rating,
+                 "category": player.category, "country": player.country,
+                 "version": player.version or "Base", "slot": kind}
+                for player, kind in players]
+    history = PackOpening(user_id=user_id, pack_name=pack_name, cards_json=json.dumps(snapshot))
+    session.add(history)
+    session.flush()
+    return history
+
+
+def open_unopened_pack(session, user, inventory_id, *, expected_pack=None):
     """Roll players, add to roster, delete inventory row."""
     from services.economy_transactions import lock_user_for_update
     lock_user_for_update(session, user)
@@ -490,7 +503,12 @@ def open_unopened_pack(session, user, inventory_id):
                             f"{user.roster_count or 0}/{MAX_ROSTER}). Release "
                             f"some players first — your pack stays in your "
                             f"inventory.")}
-    pack = session.get(Pack, inv.pack_id)
+    pack = session.get(Pack, inv.pack_id, populate_existing=True, with_for_update=True)
+    if pack and expected_pack is not None:
+        fields = ("main_count", "bonus_count", "main_min_rating", "main_max_rating",
+                  "bonus_min_rating", "bonus_max_rating", "name")
+        if pack.id != expected_pack["item_id"] or any(getattr(pack, field) != expected_pack[field] for field in fields):
+            return {"success": False, "message": "Pack contents changed. Review the updated pack."}
     if not pack:
         session.delete(inv); session.flush()
         return {"success": False, "message": "❌ Pack definition no longer exists."}
@@ -580,13 +598,16 @@ def open_unopened_pack(session, user, inventory_id):
     if last_audit is None and inv.source == "buypack":
         # Purchases made before inventory ids were recorded used FIFO matching.
         last_audit = audits.filter_by(inventory_id=None).order_by(PackPurchase.purchased_at).first()
+    history = record_pack_opening(session, user.id, pack.name, rolled)
     if last_audit:
+        last_audit.opening_id = history.id
         last_audit.players_json = json.dumps(received)
     else:
         audit = PackPurchase(
             user_id=user.id, pack_id=pack.id,
             cost_paid=0, currency="opened",
             players_json=json.dumps(received),
+            opening_id=history.id,
             purchased_at=datetime.utcnow(),
         )
         session.add(audit)
@@ -598,7 +619,7 @@ def open_unopened_pack(session, user, inventory_id):
     names = ", ".join(p.name for p, _slot in rolled)
     log_activity(session, user.id, "open_pack", f"Opened {pack.name}: {names}")
 
-    return {"success": True, "pack": pack, "players": rolled,
+    return {"success": True, "pack": pack, "players": rolled, "history_id": history.id,
             "added": added, "players_to_claim": to_claim,
             "pity_triggered": pity_was_triggered,
             "pity_counter": user.pack_pity_counter or 0}

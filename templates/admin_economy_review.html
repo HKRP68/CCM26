@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Economy review{% endblock %}
+{% block content %}
+<h1>Economy review</h1>
+<p><a href="{{ url_for('admin_economy') }}">Back to Economy</a></p>
+<h2>Wallet and squad discrepancies</h2>
+{% if discrepancies %}
+<table>
+  <thead><tr><th>Account</th><th>Coins</th><th>Gems</th><th>Quest points</th><th>Recorded squad size</th><th>Owned cards</th></tr></thead>
+  <tbody>
+  {% for row in discrepancies %}
+  <tr><td><a href="/users/{{ row.id }}">{{ row.first_name or row.id }}</a></td><td>{{ row.total_coins }}</td>
+    <td>{{ row.total_gems }}</td><td>{{ row.quest_points }}</td><td>{{ row.roster_count }}</td><td>{{ row.actual_roster }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p>No account discrepancies found.</p>{% endif %}
+<h2>Repeat opponents in the past 24 hours</h2>
+{% if pairs %}
+<table>
+  <thead><tr><th>Player</th><th>Opponent</th><th>Settled matches</th><th>Coins credited</th></tr></thead>
+  <tbody>
+  {% for row in pairs %}
+  <tr><td><a href="/users/{{ row.first_id }}">{{ row.first_id }}</a></td>
+    <td><a href="/users/{{ row.second_id }}">{{ row.second_id }}</a></td><td>{{ row.matches }}</td><td>{{ row.coins }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p>No pairs played five or more eligible matches.</p>{% endif %}
+{% endblock %}

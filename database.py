@@ -705,6 +705,7 @@ def _migrate_add_columns():
     existing = _load_existing_columns()
     new_user_cols = {
         "miniapp_economy_next": "TIMESTAMP",
+        "vice_captain_roster_id": "INTEGER",
         "matches_played": "INTEGER DEFAULT 0",
         "matches_won": "INTEGER DEFAULT 0",
         "matches_lost": "INTEGER DEFAULT 0",
@@ -769,8 +770,15 @@ def _migrate_add_columns():
             except Exception:
                 continue  # try next form, or just give up
 
+    _try_add("game_config", "ai_match_reward_daily_cap", "INTEGER DEFAULT 10 NOT NULL")
+    _try_add("activity_log", "operation_id", "VARCHAR(64)")
+    _try_add("activity_log", "quest_points_change", "INTEGER DEFAULT 0 NOT NULL")
+    _try_add("activity_log", "quest_points_balance_after", "INTEGER")
+    _try_add("tournaments", "registration_closes_at", "TIMESTAMP")
+    _try_add("user_roster", "sale_locked", "BOOLEAN DEFAULT FALSE NOT NULL")
     _try_add("pack_purchases", "request_id", "VARCHAR(64)")
     _try_add("pack_purchases", "inventory_id", "INTEGER")
+    _try_add("pack_purchases", "opening_id", "INTEGER")
     if existing is None or "pack_purchases" in existing:
         with engine.begin() as conn:
             conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_pack_order_request "

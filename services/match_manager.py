@@ -421,13 +421,6 @@ class MatchManager:
         session = SessionLocal()
         w_coins = w_gems = l_coins = l_gems = 0
         try:
-            w_coins, w_gems, l_coins, l_gems = award_match_rewards_core(
-                session,
-                winner_user_id=winner_uid,
-                loser_user_id=loser_uid,
-                overs=self.total_overs,
-                is_vsbot=(self.match_type == "vsbot"),
-            )
             # Update Match row with result details
             match_row = session.get(MatchModel, self.match_id)
             if match_row:
@@ -442,6 +435,9 @@ class MatchManager:
                 match_row.inn2_runs = s.get("total_runs", 0)
                 match_row.inn2_wickets = s.get("total_wickets", 0)
                 match_row.completed_at = datetime.utcnow()
+                w_coins, w_gems, l_coins, l_gems = award_match_rewards_core(
+                    session, winner_uid, loser_uid, self.total_overs,
+                    is_vsbot=(self.match_type == "vsbot"), match_id=match_row.id)
                 # Ranked ladder and rivalry (services.post_match).
                 from services.post_match import process_completed_match
                 process_completed_match(session, match_row, state=s)

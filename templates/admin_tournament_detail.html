@@ -88,6 +88,23 @@
     <p style="color:var(--muted); font-size:.84rem; margin:.7rem 0 0;">{% if is_lp %}<code>/lptour</code>{% else %}The tournament command{% endif %} only starts matches when this tournament is <strong>active</strong> (status = active and live). Activating it deactivates any other active {% if is_lp %}Lets Play{% else %}Challenge League{% endif %} tournament — the two kinds run independently, so one of each can be live at the same time.</p>
   </section>
 
+  {% if t.kind == 'letsplay' and t.status in ('draft', 'scheduled') and not t.schedule_generated %}
+  <section class="tour-card">
+    <h3>Mini App registration</h3>
+    <form method="POST" class="tour-form-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="save_registration">
+      <div>
+        <label for="registration-closes-at">Registration deadline (UTC)</label>
+        <input type="datetime-local" id="registration-closes-at" name="registration_closes_at"
+               value="{{ t.registration_closes_at.strftime('%Y-%m-%dT%H:%M') if t.registration_closes_at else '' }}">
+        <p>Leave blank to close registration.</p>
+      </div>
+      <div><button class="btn btn-primary" type="submit">Save registration</button></div>
+    </form>
+  </section>
+  {% endif %}
+
   <section class="tour-card" id="match-summary-graphics">
     <h3 style="margin-top:0;">Match-summary graphics</h3>
     <p style="color:var(--muted);font-size:.88rem;">Special tournament graphics use your original CMU HTML design: angled team panels, stadium artwork, a gold result banner and the slim POTM strip. Team colours and readable text are applied automatically.</p>

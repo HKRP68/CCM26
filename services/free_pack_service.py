@@ -221,6 +221,9 @@ def open_free_pack(session, user, hold_overflow=False):
         user.roster_count = (user.roster_count or 0) + 1
         entry_id = entry.id
 
+    from services.pack_service import record_pack_opening
+    history = record_pack_opening(session, user.id, "Free Pack", [(player, "main")])
+
     # Set cooldown + reset the "ready" notification flag
     stats.last_free_pack = datetime.utcnow()
     stats.notified_free_pack_ready = False
@@ -245,6 +248,7 @@ def open_free_pack(session, user, hold_overflow=False):
     return {
         "ok": True,
         "pending": overflow_claim is not None,
+        "history_id": history.id,
         "overflow_claim": overflow_claim,
         "player": {
             "id": player.id,

@@ -8,6 +8,7 @@ import logging
 from datetime import datetime
 from time import monotonic
 
+from config import AI_MATCH_REWARD_DAILY_CAP
 from models import GameConfig
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ DEFAULTS = {
     "match_win_gems_per_over": 1.0,
     "match_loss_coins_per_over": 150,
     "match_loss_gems_per_over": 0.5,
+    "ai_match_reward_daily_cap": AI_MATCH_REWARD_DAILY_CAP,
     "gspin_gem_min": 3,
     "gspin_gem_max": 150,
     "daily_coins": 1500,

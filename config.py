@@ -969,3 +969,6 @@ def get_max_overs_per_bowler(total_overs: int) -> int:
     """Max overs a single bowler may bowl. Standard rule: total_overs // 5."""
     return max(1, total_overs // 5) if total_overs >= 5 else 1
 
+
+# Daily allowance of currency rewards from finalized AI matches, reset in UTC.
+AI_MATCH_REWARD_DAILY_CAP = 10

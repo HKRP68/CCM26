@@ -227,6 +227,10 @@ def complete_trade(session: Session, trade_id: int) -> dict:
     traits_returned = return_traits_to_inventory(
         session, [init_entry.id, recv_entry.id])
 
+    if initiator.vice_captain_roster_id == init_entry.id:
+        initiator.vice_captain_roster_id = None
+    if receiver.vice_captain_roster_id == recv_entry.id:
+        receiver.vice_captain_roster_id = None
     init_entry.user_id = receiver.id
     recv_entry.user_id = initiator.id
     trade.status = "completed"

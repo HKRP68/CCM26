@@ -425,6 +425,10 @@ def _claim_silently(session, user, uqp, q):
     user.total_gems = (user.total_gems or 0) + (q.reward_gems or 0)
     uqp.claimed = True
     uqp.claimed_at = datetime.utcnow()
+    from services.activity_service import log_activity
+    log_activity(session, user.id, "quest_auto_claim", f"Automatically claimed quest #{q.id}: {q.name}",
+                 coins_change=q.reward_coins or 0, gems_change=q.reward_gems or 0,
+                 quest_points_change=q.reward_points or 0)
     return {
         "name": q.name,
         "points": q.reward_points or 0,
@@ -1063,6 +1067,16 @@ def monthly_period_key(now=None):
     return (now or datetime.utcnow()).strftime("%Y-%m")
 
 
+def next_period_start(quest_type, now=None):
+    """The next UTC reset shared by eligibility and the Mini App clock."""
+    midnight = (now or datetime.utcnow()).replace(hour=0, minute=0, second=0, microsecond=0)
+    if quest_type == "daily":
+        return midnight + timedelta(days=1)
+    if quest_type == "weekly":
+        return midnight + timedelta(days=7 - midnight.weekday())
+    return (midnight.replace(day=28) + timedelta(days=4)).replace(day=1)
+
+
 def period_key_for(quest_type, now=None):
     if quest_type == "daily":
         return daily_period_key(now)
@@ -1335,7 +1349,8 @@ def claim_quest_reward(session, user_id, quest_id):
 
     from services.activity_service import log_activity
     log_activity(session, user.id, "quest_claim", f"Claimed quest #{quest.id}: {quest.name}",
-                 coins_change=coins, gems_change=quest.reward_gems or 0)
+                 coins_change=coins, gems_change=quest.reward_gems or 0,
+                 quest_points_change=quest.reward_points or 0)
 
     reward = {
         "points": quest.reward_points or 0,
@@ -1375,7 +1390,8 @@ def safe_track(session, user_id, event_key, count=1, mode="add"):
         return []
 
 
-def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_uid):
+def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_uid,
+                            *, match_id=None, super_over=False):
     """Fire every per-user match-end quest event for ``user`` from a completed
     match ``state``.
 
@@ -1405,6 +1421,19 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
     if not match_counts_for_quests(state, is_vsbot=is_vsbot):
         return
 
+    if match_id is not None:
+        from models import Match, MatchQuestCredit
+        from services.economy_transactions import lock_user_for_update
+
+        match = session.get(Match, match_id)
+        if not match or match.status != "completed" or user.id not in (match.user1_id, match.user2_id):
+            return
+        user = lock_user_for_update(session, user)
+        if session.get(MatchQuestCredit, (match_id, user.id)):
+            return
+        session.add(MatchQuestCredit(match_id=match_id, user_id=user.id))
+        session.flush()
+
     bot_match = is_bot_match(state, is_vsbot=is_vsbot)
     if bot_match and not consume_bot_quest_allowance(session, user):
         # Daily AI-match allowance spent — the match still paid out, it just
@@ -1415,6 +1444,8 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
     safe_track(session, uid, "match_played", 1)
     if is_winner:
         safe_track(session, uid, "match_won", 1)
+    if super_over and is_winner:
+        safe_track(session, uid, "super_over_won", 1)
     if bot_match:
         # Bot-specific quests ("beat the AI twice today") — these only ever
         # fire from an AI match, so they are never reachable in a PvP game.

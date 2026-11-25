@@ -86,14 +86,19 @@ def wallet(session, user, before, currency):
     query = session.query(ActivityLog, ActivityLog.id).filter(ActivityLog.user_id == user.id)
     coins = ActivityLog.coins_change != 0
     gems = ActivityLog.gems_change != 0
-    query = query.filter(coins if currency == "coins" else gems if currency == "gems" else or_(coins, gems))
+    quest_points = ActivityLog.quest_points_change != 0
+    filters = {"coins": coins, "gems": gems, "quest_points": quest_points, "all": or_(coins, gems, quest_points)}
+    query = query.filter(filters[currency])
     rows, next_before = _page(query, ActivityLog, before)
     transactions = [{
+        "id": log.id,
+        "reference": log.operation_id or str(log.id),
         "label": _WALLET_LABELS.get(log.action, log.action.replace("_", " ").capitalize()),
         "player": log.player_name,
         "date": utc_string(log.created_at),
         "coins": log.coins_change or 0, "gems": log.gems_change or 0,
         "coins_after": log.coins_balance_after, "gems_after": log.gems_balance_after,
+        "quest_points": log.quest_points_change or 0, "quest_points_after": log.quest_points_balance_after,
     } for log, _ in rows]
     return {"ok": True, "transactions": transactions, "next_before": next_before,
             "balance": {"coins": user.total_coins or 0, "gems": user.total_gems or 0,

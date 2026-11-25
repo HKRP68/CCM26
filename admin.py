@@ -4500,7 +4500,8 @@ _PACED_MINIAPP_ACTIONS = {
     "webapp_quest_claim", "webapp_quest_claim_all", "webapp_login_streak_claim",
     "webapp_roster_overflow_release", "webapp_roster_overflow_replace",
     "webapp_upgrade_apply", "webapp_trait_upgrade", "webapp_career_upgrade",
-    "webapp_gift_claim", "webapp_giveaway_join", "webapp_set_captain",
+    "webapp_gift_claim", "webapp_giveaway_join", "webapp_set_captain", "webapp_economy_quote", "webapp_roster_lock", "webapp_roster_leadership",
+    "webapp_tournament_join",
 }
 
 
@@ -4837,6 +4838,120 @@ def _render_player_card(player_id):
         db.close()
 
 
+def _economy_target(action, target):
+    valid_id = lambda value: type(value) is int and 0 < value < 2**31
+    if action == "sell":
+        if (not isinstance(target, list) or not 1 <= len(target) <= MAX_ROSTER
+                or not all(valid_id(value) for value in target)):
+            return None
+        return list(dict.fromkeys(target))
+    if action == "pack":
+        if (isinstance(target, list) and len(target) == 2 and valid_id(target[0])
+                and target[1] in ("free", "coins", "gems", "quest_points")):
+            return target
+        return None
+    if action in ("market", "browse", "trait", "convert", "open_pack") and valid_id(target):
+        return target
+    return None
+
+
+@app.route("/api/webapp/economy/quote", methods=["POST"])
+@csrf_exempt
+def webapp_economy_quote():
+    from services.miniapp_economy import EconomyRejected, create_quote
+
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, user, _ = auth
+    try:
+        data = request.get_json(silent=True)
+        action = data.get("action") if isinstance(data, dict) else None
+        target = _economy_target(action, data.get("target")) if isinstance(action, str) else None
+        if target is None:
+            return {"ok": False, "message": "Choose a valid offer."}, 400
+        user = _lock_user_row(db, user.id)
+        return create_quote(db, user, action, target)
+    except EconomyRejected as error:
+        return {"ok": False, "message": str(error)}, 409
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/economy/confirm", methods=["POST"])
+@app.route("/api/webapp/economy/status", methods=["POST"])
+@csrf_exempt
+def webapp_economy_confirm():
+    import json
+    import re
+
+    from models import MiniappEconomyIntent
+    from services.miniapp_economy import EconomyRejected, settle
+
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, user, telegram_id = auth
+    try:
+        data = request.get_json(silent=True)
+        quote_id = data.get("quote_id") if isinstance(data, dict) else None
+        if (not isinstance(quote_id, str) or not re.fullmatch(r"[a-f0-9]{32}", quote_id)
+                or set(data) != {"quote_id"}):
+            return {"ok": False, "message": "Choose a valid quote."}, 400
+        confirm = request.path.endswith("/confirm")
+        if confirm:
+            user = _lock_user_row(db, user.id)
+        intent = db.query(MiniappEconomyIntent).filter_by(id=quote_id, user_id=user.id).first()
+        if not intent:
+            return {"ok": False, "message": "This quote does not exist."}, 404
+        if intent.result:
+            return json.loads(intent.result)
+        if not confirm:
+            return {"ok": True, "state": "created" if intent.expires_at > datetime.utcnow() else "expired"}
+        if intent.action in ("market", "browse", "sell"):
+            verb = "sell players" if intent.action == "sell" else "buy players"
+            locked = _team_locked_response(db, user, verb, market=True)
+            if locked:
+                return locked
+        if intent.action == "sell":
+            busy = _release_prompt_open(telegram_id)
+            if busy:
+                return busy
+        return settle(db, user, intent)
+    except EconomyRejected as error:
+        return {"ok": False, "message": str(error)}, 409
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/traits", methods=["POST"])
+@csrf_exempt
+def webapp_traits():
+    from models import Trait, TraitDaily
+    from services.global_market import ensure_trait_market_fresh, is_sold_out, list_trait_market
+    from services.trait_service import _today_key
+
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, user, _ = auth
+    try:
+        ensure_trait_market_fresh(db)
+        daily = db.query(TraitDaily).filter_by(user_id=user.id, day_key=_today_key()).first()
+        from config import TRAIT_SHOP_DAILY_PURCHASE_LIMIT
+        remaining = max(0, TRAIT_SHOP_DAILY_PURCHASE_LIMIT - (daily.purchases or 0 if daily else 0))
+        slots = []
+        for listing in list_trait_market(db):
+            trait = db.get(Trait, listing.trait_id)
+            if trait and trait.is_active:
+                slots.append({"id": listing.id, "name": trait.name, "price": listing.final_price,
+                              "effect": trait.description, "compatibility": trait.category + " trait",
+                              "sold_out": is_sold_out(listing)})
+        return {"ok": True, "gems": user.total_gems or 0, "remaining": remaining, "slots": slots}
+    finally:
+        db.close()
+
+
 @app.route("/api/webapp/profile", methods=["POST"])
 @csrf_exempt
 def webapp_profile():
@@ -4907,7 +5022,7 @@ def webapp_wallet():
     db, user, _ = auth
     try:
         body, before = _clubhouse_page()
-        if body is None or body.get("currency", "all") not in ("all", "coins", "gems"):
+        if body is None or body.get("currency", "all") not in ("all", "coins", "gems", "quest_points"):
             return {"ok": False, "error": "invalid_page"}, 400
         return miniapp_clubhouse.wallet(db, user, before, body.get("currency", "all"))
     finally:
@@ -4976,7 +5091,8 @@ def webapp_gift_claim(gift_id):
         gift.claimed_at = datetime.utcnow()
         log_activity(db, user.id, "miniapp_gift", detail=f"Claimed {gift.title}",
                      coins_change=gift.amount if gift.currency == "coins" else 0,
-                     gems_change=gift.amount if gift.currency == "gems" else 0)
+                     gems_change=gift.amount if gift.currency == "gems" else 0,
+                     quest_points_change=gift.amount if gift.currency == "quest_points" else 0)
         db.commit()
         return {"ok": True, "gift": gift_payload(gift)}
     finally:
@@ -5060,20 +5176,31 @@ def webapp_init():
                     },
                 },
             }
+        try:
+            from services.referral_service import complete_referral
+            with db.begin_nested():
+                referral = complete_referral(db, user.id)
+            if referral:
+                db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("Referral qualification deferred during Mini App init")
+
         from models import UserStats
         from services import ad_service, quota_service as _quota_service
         stats = db.query(UserStats).filter(UserStats.user_id == user.id).first()
         if stats is None:
             stats = _locked_stats(db, user.id)
             db.commit()
-        from config import GSPIN_COOLDOWN, DAILY_COOLDOWN
+        from config import AI_MATCH_REWARD_DAILY_CAP, GSPIN_COOLDOWN, DAILY_COOLDOWN
+        from services.config_service import get_config
         from services.command_config_service import get_user_cooldown
         gspin_quota = _quota_service.get_quota_status(stats, "spin", session=db, user=user)
         daily_quota = _quota_service.get_quota_status(stats, "daily", session=db, user=user)
         # Ads banked when a reward couldn't be handed over (see ad_service).
         # Surfaced on both quotas so either screen can say "1 ad saved" and
         # skip the ad instead of asking for one the player already watched.
-        _ads_saved = ad_service.count_credits(db, tg_id)
+        _ads_saved = ad_service.count_credits(db, tg_id, provider_verified=True)
         gspin_quota["ads_saved"] = _ads_saved
         daily_quota["ads_saved"] = _ads_saved
         gspin_ready = not gspin_quota["all_used"]
@@ -5102,16 +5229,40 @@ def webapp_init():
                                   "bowl_team": st.get("bowl_team_name", "")}
         except Exception:
             logger.exception("live_match lookup failed (non-fatal)")
-        from models import MiniappGift
+        from models import MiniappGift, Giveaway, GiveawayEntry, GameConfig
+        from services.giveaway_service import prize_label
+        from services.miniapp_clubhouse import utc_string
+        config = db.query(GameConfig).first()
+        giveaway = None
+        if config and config.official_group_id:
+            now = datetime.utcnow()
+            entered = db.query(GiveawayEntry.id).filter(
+                GiveawayEntry.user_id == user.id, GiveawayEntry.giveaway_id == Giveaway.id).exists()
+            giveaway = db.query(Giveaway).filter(
+                Giveaway.status == "running", Giveaway.start_time <= now, Giveaway.end_time > now,
+                ~entered, or_(Giveaway.require_min_activity.is_(False), (user.matches_played or 0) > 0),
+            ).order_by(Giveaway.end_time).first()
+            if giveaway and not _user_in_chat(config.official_group_id, tg_id):
+                giveaway = None
+        latest = (db.query(Match).filter(or_(Match.user1_id == user.id, Match.user2_id == user.id),
+                                        Match.status == "completed", Match.winner_id.isnot(None))
+                  .order_by(Match.id.desc()).first())
         unclaimed_gifts = db.query(MiniappGift).filter_by(user_id=user.id, claimed_at=None).count()
         return {
             "ok": True,
             "live_match": live_match,
             "unclaimed_gifts": unclaimed_gifts,
+            "bot_username": os.getenv("BOT_USERNAME", "").strip().lstrip("@"),
+            "ai_match_daily_cap": get_config(db).get("ai_match_reward_daily_cap", AI_MATCH_REWARD_DAILY_CAP),
+            "home_giveaway": ({"id": giveaway.id, "title": giveaway.title,
+                               "prize": prize_label(giveaway)} if giveaway else None),
+            "latest_match": ({"id": latest.id, "result": "Match won" if latest.winner_id == user.id else "Match lost"}
+                             if latest else None),
             "user": {
                 "user_id": user.id,
                 "telegram_id": user.telegram_id,
                 "first_name": user.first_name or "",
+                "joined_at": utc_string(user.created_at),
                 "username": user.username or "",
                 "team_name": user.team_name or "",
                 "coins": user.total_coins or 0,
@@ -5148,7 +5299,7 @@ def webapp_init():
             # a Mini App page cached in a Telegram WebView keeps working.
             "ads": ad_service.client_config(),
             "adsgram": {
-                "configured": ad_service.is_configured(),
+                "configured": ad_service.client_config()["configured"],
                 "block_id": ad_service.get_block_id(),
             },
             "branding": _get_branding_safe(db),
@@ -5313,6 +5464,31 @@ def webapp_tournament_directory():
     db, user, telegram_id = auth
     try:
         return directory(db, user.id, telegram_id)
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/tournament/join", methods=["POST"])
+@csrf_exempt
+def webapp_tournament_join():
+    from services.tournament_webapp import register_team
+
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, user, _ = auth
+    try:
+        body = request.get_json(silent=True)
+        tournament_id = body.get("tournament_id") if isinstance(body, dict) else None
+        if type(tournament_id) is not int or not 0 < tournament_id < 2**31:
+            return {"ok": False, "message": "Choose a tournament."}, 400
+        user = _lock_user_row(db, user.id)
+        tour = (db.query(Tournament).filter_by(id=tournament_id)
+                .populate_existing().with_for_update().first())
+        if not tour:
+            return {"ok": False, "message": "Tournament unavailable."}, 404
+        result = register_team(db, tour, user)
+        return result, 200 if result["ok"] else 409
     finally:
         db.close()
 
@@ -5707,87 +5883,19 @@ def _team_locked_response(db, user, action="change your Playing XI", market=Fals
                        f"Finish the game first."}, 409
 
 
+def _miniapp_quote_required():
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    auth[0].close()
+    return {"ok": False, "error": "quote_required",
+            "message": "Reopen the Mini App to review and confirm this offer."}, 409
+
+
 @app.route("/api/webapp/buy/<int:player_id>", methods=["POST"])
 @csrf_exempt
 def webapp_buy(player_id):
-    auth, tg_id, err = _webapp_auth()
-    if err:
-        return err
-    db, user, tg_id = auth
-    try:
-        from services.economy_transactions import debit_coins, lock_user_for_update
-        lock_user_for_update(db, user)
-        locked = _team_locked_response(db, user, "buy players", market=True)
-        if locked:
-            return locked
-        from datetime import datetime as _dt
-        from models import UserRoster
-        from services.version_service import user_owns_any_version
-        from config import get_buy_value
-
-        p = db.get(Player, player_id)
-        if not p or not p.is_active or getattr(p, "is_career", False):
-            return {"ok": False, "error": "not_found"}, 404
-        if getattr(p, "restricted_from_buypl", False):
-            return {"ok": False, "error": "blocked",
-                    "message": f"{p.name} is Not available to Buy via the Mini App."}, 403
-        if user_owns_any_version(db, user.id, p.id):
-            return {"ok": False, "error": "already_owned",
-                    "message": f"You already own {p.name}."}, 400
-        if (user.roster_count or 0) >= MAX_ROSTER:
-            return {"ok": False, "error": "roster_full",
-                    "message": f"Roster full ({MAX_ROSTER}/{MAX_ROSTER}). Release someone first."}, 400
-        price = get_buy_value(p.rating)
-        if (user.total_coins or 0) < price:
-            return {"ok": False, "error": "insufficient_coins",
-                    "message": f"Need {price:,} 🪙, you have {user.total_coins:,}."}, 400
-
-        if not debit_coins(db, user, price):
-            return {"ok": False, "error": "insufficient_coins",
-                    "message": "Your balance changed. Please try again."}, 400
-        entry = UserRoster(
-            user_id=user.id, player_id=p.id,
-            order_position=(user.roster_count or 0) + 1,
-            acquired_date=_dt.utcnow(),
-        )
-        db.add(entry)
-        db.flush()
-        user.roster_count = (user.roster_count or 0) + 1
-
-        from services.activity_service import log_activity
-        purchase_log = log_activity(
-            db, user.id, "buy",
-            f"[MiniApp] Bought {p.name} ({p.rating} OVR) for {price:,}",
-            coins_change=-price,
-            player_name=p.name, player_rating=p.rating)
-        # Elite signing rebate — gems back on anything rated above 95.
-        from services.buy_bonus import award_buy_gem_bonus
-        gem_bonus = award_buy_gem_bonus(db, user, p, price, source="miniapp")
-
-        from services.undo_service import record_buy
-        db.flush()
-        record_buy(db, user.id,
-                   roster_id=entry.id, player_id=p.id,
-                   player_name=p.name, rating=p.rating, price=price,
-                   gem_bonus=gem_bonus, activity_id=purchase_log.id)
-
-        db.commit()
-        post_miniapp_activity(user, "buy_player",
-                              player_name=p.name, rating=p.rating, price=price)
-        return {
-            "ok": True,
-            "purchased": {"name": p.name, "rating": p.rating, "price": price,
-                          "gem_bonus": gem_bonus},
-            "balance": user.total_coins,
-            "gems": user.total_gems or 0,
-            "roster_count": user.roster_count,
-        }
-    except Exception as e:
-        db.rollback()
-        logger.exception("webapp_buy failed")
-        return {"ok": False, "error": "internal", "message": str(e)}, 500
-    finally:
-        db.close()
+    return _miniapp_quote_required()
 
 
 def _release_prompt_open(tg_id):
@@ -5814,161 +5922,13 @@ def _release_prompt_open(tg_id):
 @app.route("/api/webapp/release/<int:roster_id>", methods=["POST"])
 @csrf_exempt
 def webapp_release(roster_id):
-    """Release a single player from the user's roster.
-
-    Returns coins received from sell value.
-    """
-    auth, tg_id, err = _webapp_auth()
-    if err:
-        return err
-    db, user, tg_id = auth
-    try:
-        from services.economy_transactions import lock_user_for_update
-        lock_user_for_update(db, user)
-        locked = _team_locked_response(db, user, "sell players", market=True)
-        if locked:
-            return locked
-        busy = _release_prompt_open(tg_id)
-        if busy:
-            return busy
-        from models import UserRoster
-        from config import get_sell_value
-
-        row = (db.query(UserRoster)
-               .filter(UserRoster.id == roster_id,
-                       UserRoster.user_id == user.id).first())
-        if not row:
-            return {"ok": False, "error": "not_found",
-                    "message": "That player isn't in your roster."}, 404
-
-        player = db.get(Player, row.player_id)
-        if not player:
-            return {"ok": False, "error": "player_missing"}, 404
-
-        # Career Players are personal and permanent — never sellable.
-        if getattr(player, "is_career", False):
-            from services.career_service import CAREER_LOCKED_MESSAGE
-            return {"ok": False, "error": "career_player",
-                    "message": CAREER_LOCKED_MESSAGE}, 400
-
-        # Prevent releasing the captain
-        if user.captain_roster_id == row.id:
-            return {"ok": False, "error": "is_captain",
-                    "message": "Can't release captain. Set a new captain first."}, 400
-
-        sell_value = get_sell_value(player.rating)
-        player_name = player.name
-        player_rating = player.rating
-
-        from handlers.release import _do_release
-        result = _do_release(db, user, [(row, player)])
-        if not result["success"]:
-            return {"ok": False, "error": result["error"], "message": result["message"]}, 409
-        traits_returned = result["traits_returned"]
-
-        db.commit()
-        post_miniapp_activity(user, "sell_player",
-                              player_name=player_name, rating=player_rating,
-                              sell=sell_value)
-        return {
-            "ok": True,
-            "sell_value": sell_value,
-            "player_name": player_name,
-            "player_rating": player_rating,
-            "traits_returned": traits_returned,
-            "balance": {
-                "coins": user.total_coins or 0,
-                "roster_count": user.roster_count or 0,
-            },
-        }
-    except Exception as e:
-        db.rollback()
-        logger.exception("webapp_release failed")
-        return {"ok": False, "error": "internal", "message": str(e)}, 500
-    finally:
-        db.close()
+    return _miniapp_quote_required()
 
 
 @app.route("/api/webapp/release_multi", methods=["POST"])
 @csrf_exempt
 def webapp_release_multi():
-    """Release multiple players at once. Returns total coins gained.
-
-    Request body: {roster_ids: [123, 456, ...]}
-    """
-    auth, tg_id, err = _webapp_auth()
-    if err:
-        return err
-    db, user, tg_id = auth
-    try:
-        from services.economy_transactions import lock_user_for_update
-        lock_user_for_update(db, user)
-        locked = _team_locked_response(db, user, "sell players", market=True)
-        if locked:
-            return locked
-        busy = _release_prompt_open(tg_id)
-        if busy:
-            return busy
-        from models import UserRoster
-        from config import get_sell_value
-
-        data = request.get_json(silent=True) or {}
-        ids = data.get("roster_ids") if isinstance(data, dict) else None
-        if not isinstance(ids, list) or not 1 <= len(ids) <= 25:
-            return {"ok": False, "error": "bad_ids",
-                    "message": "Select between 1 and 25 players."}, 400
-        if any(type(value) is not int or not 0 < value < 2**63 for value in ids):
-            return {"ok": False, "error": "bad_ids", "message": "Invalid roster selection."}, 400
-        ids = set(ids)
-        rows = (db.query(UserRoster)
-                .filter(UserRoster.user_id == user.id,
-                        UserRoster.id.in_(ids)).all())
-        if len(rows) != len(ids):
-            return {"ok": False, "error": "not_found",
-                    "message": "Your selection changed. Refresh your squad and select again."}, 409
-
-        # Bail if captain is in the selection
-        if user.captain_roster_id and any(r.id == user.captain_roster_id for r in rows):
-            return {"ok": False, "error": "captain_selected",
-                    "message": "Captain is in selection. Set a new captain first."}, 400
-
-        # Look up players for sell values
-        player_ids = [r.player_id for r in rows]
-        players = {p.id: p for p in
-                   db.query(Player).filter(Player.id.in_(player_ids)).all()}
-
-        if len(players) != len(set(player_ids)):
-            return {"ok": False, "error": "player_missing", "message": "Refresh your squad and try again."}, 409
-
-        from handlers.release import _do_release
-        result = _do_release(db, user, [(r, players[r.player_id]) for r in rows])
-        if not result["success"]:
-            return {"ok": False, "error": result["error"], "message": result["message"]}, 400
-        total_coins = result["total_coins"]
-        traits_returned = result["traits_returned"]
-        released = [{"roster_id": row.id, "name": item["name"], "rating": item["rating"],
-                     "sell_value": item["value"]} for row, item in zip(rows, result["released"])]
-
-        db.commit()
-        post_miniapp_activity(user, "sell_multi",
-                              count=len(released), total=total_coins)
-        return {
-            "ok": True,
-            "released_count": len(released),
-            "total_coins": total_coins,
-            "released": released,
-            "traits_returned": traits_returned,
-            "balance": {
-                "coins": user.total_coins or 0,
-                "roster_count": user.roster_count or 0,
-            },
-        }
-    except Exception as e:
-        db.rollback()
-        logger.exception("webapp_release_multi failed")
-        return {"ok": False, "error": "internal", "message": str(e)}, 500
-    finally:
-        db.close()
+    return _miniapp_quote_required()
 
 
 @app.route("/api/webapp/roster", methods=["POST"])
@@ -5995,13 +5955,16 @@ def webapp_roster():
                 "category": p.category,
                 "country": p.country,
                 "version": p.version or "Base",
-                "is_captain": bool(user.captain_roster_id == r.id),
+                "is_captain": position <= 11 and user.captain_roster_id == r.id,
+                "is_vice_captain": position <= 11 and user.vice_captain_roster_id == r.id,
+                "sale_locked": r.sale_locked,
                 # Career Players stay visible in the squad but can never be
                 # sold — the UI uses this to badge the card and hide Sell.
                 "is_career": bool(getattr(p, "is_career", False)),
                 "sell_value": get_sell_value(p.rating),
             } for position, (r, p) in enumerate(rows, 1)],
             "captain_roster_id": user.captain_roster_id,
+            "vice_captain_roster_id": user.vice_captain_roster_id,
             "count": len(rows),
             "max": MAX_ROSTER,
         }
@@ -6034,12 +5997,69 @@ def webapp_set_captain():
                     if entry.id == roster_id and player.is_active), None)
         if row is None:
             return {"ok": False, "message": "Choose a player from your Playing XI."}, 404
+        if user.vice_captain_roster_id == roster_id:
+            return {"ok": False, "message": "Choose another vice-captain first."}, 409
         _, player = row
         if user.captain_roster_id != roster_id:
             user.captain_roster_id = roster_id
             log_activity(db, user.id, "captain", f"Captain: {player.name}", player_name=player.name)
             db.commit()
         return {"ok": True, "captain_roster_id": roster_id, "name": player.name}
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/roster/leadership", methods=["POST"])
+@csrf_exempt
+def webapp_roster_leadership():
+    from services.activity_service import log_activity
+    from services.roster_service import get_roster_ordered
+
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, user, _ = auth
+    try:
+        body = request.get_json(silent=True)
+        if (not isinstance(body, dict) or set(body) != {"captain_id", "vice_captain_id"}
+                or any(type(value) is not int or not 0 < value < 2**31 for value in body.values())
+                or body["captain_id"] == body["vice_captain_id"]):
+            return {"ok": False, "message": "Choose two different players from your Playing XI."}, 400
+        user = _lock_user_row(db, user.id)
+        blocked = _team_locked_response(db, user, "change your captains")
+        if blocked:
+            return blocked
+        eleven = {row.id: player for row, player in get_roster_ordered(db, user.id)[:11] if player.is_active}
+        captain, vice = body["captain_id"], body["vice_captain_id"]
+        if captain not in eleven or vice not in eleven:
+            return {"ok": False, "message": "Choose two active players from your Playing XI."}, 409
+        if (user.captain_roster_id, user.vice_captain_roster_id) != (captain, vice):
+            user.captain_roster_id, user.vice_captain_roster_id = captain, vice
+            log_activity(db, user.id, "leadership", f"Captain {eleven[captain].name}; vice-captain {eleven[vice].name}")
+            db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/roster/<int:roster_id>/lock", methods=["POST"])
+@csrf_exempt
+def webapp_roster_lock(roster_id):
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, user, _ = auth
+    try:
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or type(body.get("locked")) is not bool:
+            return {"ok": False, "message": "Choose whether to lock this card."}, 400
+        user = _lock_user_row(db, user.id)
+        row = db.query(UserRoster).filter_by(id=roster_id, user_id=user.id).first()
+        if not row:
+            return {"ok": False, "message": "This card is no longer in your squad."}, 404
+        row.sale_locked = body["locked"]
+        db.commit()
+        return {"ok": True, "locked": row.sale_locked}
     finally:
         db.close()
 
@@ -6154,6 +6174,17 @@ def webapp_roster_overflow_release():
         db.close()
 
 
+def _reward_request(body):
+    if not isinstance(body, dict):
+        return None
+    token, request_id = body.get("ad_token"), body.get("request_id")
+    if token is not None and (not isinstance(token, str) or len(token) > 256):
+        return None
+    if request_id is not None and (not isinstance(request_id, str) or not 1 <= len(request_id) <= 64):
+        return None
+    return (token or "").strip(), request_id
+
+
 @app.route("/api/webapp/spin", methods=["POST"])
 @csrf_exempt
 def webapp_spin():
@@ -6202,24 +6233,21 @@ def webapp_spin():
         from datetime import datetime as _dt
         from models import UserStats
         from services import ad_service, quota_service
-        from utils.idempotency import recall, remember
 
-        data = request.get_json(silent=True) or {}
-        ad_token = (data.get("ad_token") or "").strip()
-        request_id = (str(data.get("request_id") or "")).strip()[:64]
-        dev_mode = (webapp_test_mode())
-        ads_configured = ad_service.is_configured()
+        from services.miniapp_economy import reward_result, record_reward_result
 
-        # A client that retries after a dropped response gets the reward it was
-        # already granted, not a second one and not "watch another ad".
-        replay_key = f"spin_{tg_id}_{request_id}" if request_id else None
-        if replay_key:
-            cached = recall(replay_key)
-            if cached is not None:
-                return dict(cached, replayed=True)
-
-        # ── Load stats first to check quota ──
+        data = _reward_request(request.get_json(silent=True) or {})
+        if data is None:
+            return {"ok": False, "error": "invalid_request"}, 400
+        ad_token, request_id = data
+        dev_mode = webapp_test_mode()
+        ads_configured = ad_service.client_config()["configured"]
         stats = _locked_stats(db, user.id)
+        replay = reward_result(db, user.id, "spin", request_id)
+        if replay is not None:
+            return dict(replay, replayed=True)
+        if request_id:
+            db.info["economy_operation"] = request_id
 
         # ── Which slot is this spin spending? ──
         # The free one is decided without touching any ad evidence: claiming a
@@ -6228,16 +6256,7 @@ def webapp_spin():
         pre = quota_service.get_quota_status(stats, "spin", session=db, user=user)
         verified_via = None
         if not pre["free_available"]:
-            verified_via = _verify_ad_for_action(
-                db, tg_id, ad_token, dev_mode, ads_configured,
-                nofill_kind="spin")
-        elif ad_token.startswith("CT-"):
-            # The free slot came back (a cycle turned over between the tap and
-            # this request, or a second tab spun first) but the client had
-            # already watched its ad. Keep it: the spin is free and the ad
-            # still pays for the next one.
-            ad_service.preserve_client_ad(db, ad_token, tg_id,
-                                          "ad watched, free spin used")
+            verified_via = _verify_ad_for_action(db, tg_id, ad_token, dev_mode)
 
         ad_provided = bool(verified_via)
 
@@ -6248,10 +6267,6 @@ def webapp_spin():
             except Exception:
                 pass
 
-        # Legacy client tokens may commit independently. Provider receipts
-        # keep the original user lock until the reward and quota commit.
-        if ad_token.startswith("CT-"):
-            stats = _locked_stats(db, user.id)
         allowed, slot_type, reason = quota_service.can_use(stats, "spin", ad_provided, session=db, user=user)
         if not allowed:
             # The ad was real but can't be spent right now — keep it. Without
@@ -6259,7 +6274,7 @@ def webapp_spin():
             banked = _bank_if_spendable(db, tg_id, ad_provided, verified_via,
                                         f"spin blocked: {reason}")
             status = quota_service.get_quota_status(stats, "spin", session=db, user=user)
-            saved = ad_service.count_credits(db, tg_id)
+            saved = ad_service.count_credits(db, tg_id, provider_verified=True)
             # Carried on the quota too, so a client that only reads `quota`
             # still sees the saved ad it is about to be told about.
             status["ads_saved"] = saved
@@ -6309,7 +6324,10 @@ def webapp_spin():
             from services.activity_service import log_activity
             log_activity(db, user.id, "gspin",
                          f"[MiniApp/{slot_type}/{verified_via or 'free'}] "
-                         f"Spin: {reward.label} → {result['type']}")
+                         f"Lucky Card Pick: {reward.label}",
+                         coins_change=result["amount"] if result["type"] == "coins" else 0,
+                         gems_change=result["amount"] if result["type"] == "gems" else 0,
+                         quest_points_change=result["amount"] if result["type"] == "quest_points" else 0)
         except Exception:
             pass
         try:
@@ -6318,9 +6336,6 @@ def webapp_spin():
         except Exception:
             pass
 
-        db.commit()
-        reward_committed = True
-        post_miniapp_activity(user, "gspin", reward=result)
         payload = {
             "ok": True,
             "reward": result,
@@ -6331,8 +6346,8 @@ def webapp_spin():
             # overwrite a cached saved-ad count with nothing.
             "quota": dict(quota_service.get_quota_status(stats, "spin",
                                                          session=db, user=user),
-                          ads_saved=ad_service.count_credits(db, tg_id)),
-            "ads_saved": ad_service.count_credits(db, tg_id),
+                          ads_saved=ad_service.count_credits(db, tg_id, provider_verified=True)),
+            "ads_saved": ad_service.count_credits(db, tg_id, provider_verified=True),
             "balance": {
                 "coins": user.total_coins or 0,
                 "gems": user.total_gems or 0,
@@ -6340,10 +6355,10 @@ def webapp_spin():
                 "roster_count": user.roster_count or 0,
             },
         }
-        # Remembered only after the commit: a reward that was rolled back must
-        # not be replayed to a retry as though it had been granted.
-        if replay_key:
-            remember(replay_key, payload)
+        record_reward_result(db, user.id, "spin", request_id, payload)
+        db.commit()
+        reward_committed = True
+        post_miniapp_activity(user, "gspin", reward=result)
         return payload
     except Exception as e:
         db.rollback()
@@ -6369,30 +6384,21 @@ def webapp_spin():
 @app.route("/api/webapp/ad-completed", methods=["POST"])
 @csrf_exempt
 def webapp_ad_completed():
-    """Save a reported Adsgram SDK completion or check for an available credit."""
-    auth, tg_id, err = _webapp_auth()
-    if err:
-        return err
-    db, user, tg_id = auth
+    """Check for an authenticated Adsgram callback. Completion reports are read-only."""
+    import re
+    from services import ad_service
+
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, _, tg_id = auth
     try:
-        from services import ad_service
         data = request.get_json(silent=True)
         if isinstance(data, dict) and "view_id" in data:
-            import re
-
             view_id = data["view_id"]
             if not isinstance(view_id, str) or not re.fullmatch(r"[0-9a-f]{32}", view_id):
                 return {"ok": False, "error": "invalid_view_id"}, 400
-            if not ad_service.is_configured():
-                return {"ok": False, "error": "ads_unavailable"}, 409
-
-            _lock_user_row(db, user.id)
-            if ad_service.record_client_view(db, tg_id, view_id):
-                from services.quest_service import safe_track
-                safe_track(db, user.id, "ad_watched", 1)
-            db.commit()
-
-        saved = ad_service.count_credits(db, tg_id)
+        saved = ad_service.count_credits(db, tg_id, provider_verified=True)
         return ({"ok": True, "confirmed": saved > 0, "ads_saved": saved},
                 200, {"Cache-Control": "no-store"})
     finally:
@@ -6402,66 +6408,12 @@ def webapp_ad_completed():
 @app.route("/api/webapp/ad-unavailable", methods=["POST"])
 @csrf_exempt
 def webapp_ad_unavailable():
-    """Called by the client when the ad network could not serve an ad.
-
-    Request body: ``{kind: "spin"|"daily"}``.
-
-    Returns a single-use ``NF-`` token the client passes to the spin/daily
-    endpoint in place of an ad token. This is the *no-fill pass* — see
-    ``services.ad_service`` for why it exists: an ad network answering "no
-    banner", or its SDK never loading inside a Telegram WebView on a phone
-    network, is common and is not something the player can fix, so it must not
-    dead-end them on a feature they were told they could reach by watching an
-    ad.
-
-    The pass is debited here, before the token is handed out, and is capped per
-    cycle by ``GameConfig.spin_nofill_grace``. So a client that lies about
-    no-fill spends its own small grace and gains nothing beyond it — the rest of
-    the ad quota still needs real ads.
-    """
-    auth, tg_id, err = _webapp_auth()
-    if err:
-        return err
-    db, user, tg_id = auth
-    try:
-        from models import UserStats
-        from services import ad_service, quota_service
-
-        data = request.get_json(silent=True) or {}
-        kind = "daily" if (data.get("kind") or "spin") == "daily" else "spin"
-
-        stats = _locked_stats(db, user.id)
-
-        granted, status = quota_service.claim_nofill_pass(
-            stats, kind, session=db, user=user)
-        if not granted:
-            db.rollback()
-            return {"ok": False, "error": "no_pass_available",
-                    "message": ("No ads available right now — and you've used "
-                                "your no-ad passes for this cycle. Try again "
-                                "in a few minutes."),
-                    "quota": status}, 429
-
-        db.commit()
-        try:
-            from services.activity_service import log_activity
-            log_activity(db, user.id, "ad_nofill",
-                         f"No ad available — {kind} no-fill pass granted "
-                         f"({status['nofill_total'] - status['nofill_left']}"
-                         f"/{status['nofill_total']} used)")
-            db.commit()
-        except Exception:
-            db.rollback()
-
-        return {"ok": True,
-                "ad_token": ad_service.issue_nofill_token(tg_id, kind),
-                "quota": status}
-    except Exception as e:
-        db.rollback()
-        logger.exception("webapp_ad_unavailable failed")
-        return {"ok": False, "error": "internal", "message": str(e)}, 500
-    finally:
-        db.close()
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    auth[0].close()
+    return {"ok": False, "error": "no_ad_available",
+            "message": "Ads are unavailable. Your claim allowance has not changed."}, 409
 
 
 def _locked_stats(db, user_id):
@@ -6487,9 +6439,6 @@ def _bank_if_spendable(db, tg_id, ad_provided, verified_via, reason):
         # receipt back into the ledger without creating a second one.
         db.rollback()
         return True
-    if ad_provided and verified_via == "client_token":
-        from services import ad_service
-        return ad_service.bank_credit(db, tg_id, reason) is not None
     return False
 
 
@@ -6502,43 +6451,14 @@ def _fmt_gap(seconds):
     return f"{minutes // 60}h {minutes % 60}m" if minutes % 60 else f"{minutes // 60}h"
 
 
-def _verify_ad_for_action(db, tg_id, ad_token, dev_mode, ads_configured,
-                          nofill_kind=None, allow_credit=True):
-    """Shared ad-verification helper for spin/daily. Returns verified_via str or None.
-
-    ``nofill_kind`` names the quota ("spin"/"daily") a no-fill pass may be
-    redeemed against here; leave it None for actions that have no quota of
-    their own and therefore issue no passes.
-
-    ``allow_credit`` lets a previously banked ad (see ad_service "Ad credits")
-    stand in for a fresh one. It is checked LAST, on purpose: a client that just
-    watched an ad has a live ``CT-`` token which expires in two minutes, so
-    spending the credit ahead of it would throw that ad away — exactly the bug
-    credits exist to prevent. Fresh evidence first, savings only when there is
-    none.
-    """
+def _verify_ad_for_action(db, tg_id, ad_token, dev_mode):
+    """Spend a provider-verified completion in the same transaction as its reward."""
     from services import ad_service
-    if ad_service.claim_postback(db, tg_id, commit=False):
+
+    if ad_service.claim_credit(db, tg_id, commit=False, provider_verified=True):
         return "server_postback"
-    if ad_token and ad_token.startswith("CT-"):
-        # The session matters: a token minted with one addresses a ledger row,
-        # and spending the token means spending that row — so an ad whose row
-        # was already redeemed (as a saved ad, or claimed as a postback) is
-        # correctly refused here instead of paying twice.
-        if ad_service.consume_client_token(ad_token, tg_id, session=db):
-            return "client_token"
-    if ad_token and ad_token.startswith("NF-") and nofill_kind:
-        # The network had no ad to serve; the pass was already debited when the
-        # token was issued (see /api/webapp/ad-unavailable). Only the quota the
-        # pass came out of accepts it — callers with no quota of their own
-        # (free packs) pass nofill_kind=None and so never take one.
-        if ad_service.consume_nofill_token(ad_token, tg_id, nofill_kind):
-            return "nofill_pass"
-    if ad_token and ad_token.startswith("MOCK-"):
-        if dev_mode:
-            return "mock"
-    if allow_credit and ad_service.claim_credit(db, tg_id, commit=False):
-        return "ad_credit"
+    if dev_mode and ad_token.startswith("MOCK-"):
+        return "mock"
     return None
 
 
@@ -6574,12 +6494,20 @@ def webapp_daily():
         from services import ad_service, quota_service
         from services.daily_service import claim_daily
 
-        data = request.get_json(silent=True) or {}
-        ad_token = (data.get("ad_token") or "").strip()
-        dev_mode = (webapp_test_mode())
-        ads_configured = ad_service.is_configured()
+        from services.miniapp_economy import reward_result, record_reward_result
 
+        data = _reward_request(request.get_json(silent=True) or {})
+        if data is None:
+            return {"ok": False, "error": "invalid_request"}, 400
+        ad_token, request_id = data
+        dev_mode = webapp_test_mode()
+        ads_configured = ad_service.client_config()["configured"]
         stats = _locked_stats(db, user.id)
+        replay = reward_result(db, user.id, "daily", request_id)
+        if replay is not None:
+            return dict(replay, replayed=True)
+        if request_id:
+            db.info["economy_operation"] = request_id
 
         # ── Verify ad (so we know which slot is available) ──
         # Only when the free claim is gone: verifying first would consume a
@@ -6588,9 +6516,7 @@ def webapp_daily():
         pre = quota_service.get_quota_status(stats, "daily", session=db, user=user)
         verified_via = None
         if not pre["free_available"]:
-            verified_via = _verify_ad_for_action(
-                db, tg_id, ad_token, dev_mode, ads_configured,
-                nofill_kind="daily")
+            verified_via = _verify_ad_for_action(db, tg_id, ad_token, dev_mode)
         ad_provided = bool(verified_via)
 
         if verified_via == "mock":
@@ -6600,15 +6526,13 @@ def webapp_daily():
             except Exception:
                 pass
 
-        if ad_token.startswith("CT-"):
-            stats = _locked_stats(db, user.id)
         allowed, slot_type, reason = quota_service.can_use(stats, "daily", ad_provided, session=db, user=user)
         if not allowed:
             # A verified ad that can't be spent right now is banked, not burned.
             banked = _bank_if_spendable(db, tg_id, ad_provided, verified_via,
                                         f"daily blocked: {reason}")
             status = quota_service.get_quota_status(stats, "daily", session=db, user=user)
-            saved = ad_service.count_credits(db, tg_id)
+            saved = ad_service.count_credits(db, tg_id, provider_verified=True)
             status["ads_saved"] = saved
             if reason == "ad_cooldown":
                 return {"ok": False, "error": "ad_cooldown",
@@ -6656,24 +6580,16 @@ def webapp_daily():
                                    if banked else ""))}, 500
 
         quota_service.consume_slot(stats, "daily", slot_type, session=db, user=user)
-        db.commit()
-        reward_committed = True
-        post_miniapp_activity(user, "daily",
-                              coins=result.get("coins"), gems=result.get("gems"),
-                              streak=result.get("streak"),
-                              milestone=result.get("milestone"),
-                              milestone_player=result.get("milestone_player"))
-
-        return {
+        payload = {
             "ok": True,
             "slot_type": slot_type,
             "verified_via": verified_via,
             "quota": dict(quota_service.get_quota_status(stats, "daily",
                                                          session=db, user=user),
-                          ads_saved=ad_service.count_credits(db, tg_id)),
+                          ads_saved=ad_service.count_credits(db, tg_id, provider_verified=True)),
             # Same field the spin returns, so a client reading the claim
             # response rather than re-fetching init sees the saved-ad count.
-            "ads_saved": ad_service.count_credits(db, tg_id),
+            "ads_saved": ad_service.count_credits(db, tg_id, provider_verified=True),
             "reward": {
                 "coins": result["coins"],
                 "gems": result["gems"],
@@ -6691,6 +6607,16 @@ def webapp_daily():
                 "roster_count": user.roster_count or 0,
             },
         }
+        record_reward_result(db, user.id, "daily", request_id, payload)
+        db.commit()
+        reward_committed = True
+        post_miniapp_activity(user, "daily",
+                              coins=result.get("coins"), gems=result.get("gems"),
+                              streak=result.get("streak"),
+                              milestone=result.get("milestone"),
+                              milestone_player=result.get("milestone_player"))
+
+        return payload
     except Exception as e:
         db.rollback()
         logger.exception("webapp_daily failed")
@@ -7249,6 +7175,7 @@ def webapp_freepack_status():
     db, user, tg_id = auth
     try:
         from services import ad_service
+        from services.miniapp_clubhouse import utc_string
         from services.free_pack_service import (
             check_free_pack_cooldown, get_cooldown_minutes,
         )
@@ -7261,13 +7188,14 @@ def webapp_freepack_status():
             "ok": True,
             "ready": ready,
             "remaining_seconds": remaining,
+            "last_opened_at": utc_string(stats.last_free_pack),
             "cooldown_minutes": get_cooldown_minutes(db),
             "ads": ad_service.client_config(),
-            "ads_configured": ad_service.is_configured(),
+            "ads_configured": ad_service.client_config()["configured"],
             "adsgram_block_id": ad_service.get_block_id(),
             # Ads this user has already watched but not yet spent. With one
             # banked the pack opens without showing another.
-            "ads_saved": ad_service.count_credits(db, tg_id),
+            "ads_saved": ad_service.count_credits(db, tg_id, provider_verified=True),
             "roster_count": user.roster_count or 0,
             "roster_full": (user.roster_count or 0) >= MAX_ROSTER,
         }
@@ -7300,15 +7228,20 @@ def webapp_freepack_open():
     try:
         from services import ad_service
         from services.free_pack_service import open_free_pack, check_free_pack_cooldown
-        data = request.get_json(silent=True) or {}
-        ad_token = (data.get("ad_token") or "").strip()
+        from services.miniapp_economy import reward_result, record_reward_result
 
+        data = _reward_request(request.get_json(silent=True) or {})
+        if data is None:
+            return {"ok": False, "error": "invalid_request"}, 400
+        ad_token, request_id = data
         dev_mode = webapp_test_mode()
-        ads_configured = ad_service.is_configured()
-
-        # Locked + refreshed so the cooldown is judged on the committed
-        # last_free_pack, not on a read taken before a concurrent open.
+        ads_configured = ad_service.client_config()["configured"]
         stats = _locked_stats(db, user.id)
+        replay = reward_result(db, user.id, "free_pack", request_id)
+        if replay is not None:
+            return dict(replay, replayed=True)
+        if request_id:
+            db.info["economy_operation"] = request_id
 
         # Cooldown check first (don't waste their ad). The client can still
         # arrive here having already watched one — its countdown was stale, or
@@ -7316,22 +7249,11 @@ def webapp_freepack_open():
         # open rather than left to expire with the token.
         ready, remaining = check_free_pack_cooldown(db, stats)
         if not ready:
-            kept = (ad_token.startswith("CT-")
-                    and ad_service.preserve_client_ad(
-                        db, ad_token, tg_id, "free pack on cooldown"))
-            return {"ok": False, "error": "cooldown",
-                    "message": ("Free Pack is still on cooldown."
-                                + (" Your ad is saved — the next pack opens "
-                                   "without one." if kept else "")),
-                    "ad_banked": bool(kept),
-                    "ads_saved": ad_service.count_credits(db, tg_id),
+            return {"ok": False, "error": "cooldown", "message": "Free Pack is still on cooldown.",
+                    "ads_saved": ad_service.count_credits(db, tg_id, provider_verified=True),
                     "remaining_seconds": remaining}, 400
 
-        # Verify ad. nofill_kind=None — a free pack has no quota of its own, so
-        # it never issues (or takes) a no-fill pass; a banked credit still
-        # counts, since it is an ad this user really watched.
-        verified_via = _verify_ad_for_action(
-            db, tg_id, ad_token, dev_mode, ads_configured, nofill_kind=None)
+        verified_via = _verify_ad_for_action(db, tg_id, ad_token, dev_mode)
 
         if not verified_via:
             return {"ok": False, "error": "ad_required",
@@ -7339,11 +7261,9 @@ def webapp_freepack_open():
                     # Same field the spin and daily send, so a client that
                     # arrived here on a stale saved-ad count corrects itself
                     # from the refusal instead of needing another round trip.
-                    "ads_saved": ad_service.count_credits(db, tg_id),
+                    "ads_saved": ad_service.count_credits(db, tg_id, provider_verified=True),
                     "ads_configured": ads_configured}, 400
 
-        if ad_token.startswith("CT-"):
-            stats = _locked_stats(db, user.id)
 
         if verified_via == "mock":
             try:
@@ -7362,15 +7282,16 @@ def webapp_freepack_open():
                 db, tg_id, True, verified_via, "free pack failed")
             return result, 400
 
-        db.commit()
-        reward_committed = True
-        post_miniapp_activity(user, "open_pack", pack_name="Free Pack",
-                              players=[result.get("player")] if result.get("player") else [])
         result["balance"] = {
             "coins": user.total_coins or 0,
             "gems": user.total_gems or 0,
             "roster_count": user.roster_count or 0,
         }
+        record_reward_result(db, user.id, "free_pack", request_id, result)
+        db.commit()
+        reward_committed = True
+        post_miniapp_activity(user, "open_pack", pack_name="Free Pack",
+                              players=[result.get("player")] if result.get("player") else [])
         return result
     except Exception as e:
         db.rollback()
@@ -7463,162 +7384,53 @@ def webapp_packs():
 @app.route("/api/webapp/packs/buy", methods=["POST"])
 @csrf_exempt
 def webapp_packs_buy():
-    """Buy a pack → goes to inventory (does not auto-open).
-    Body: {pack_id}"""
-    auth, tg_id, err = _webapp_auth()
-    if err:
-        return err
-    db, user, tg_id = auth
-
-    # Server-side double-tap guard. The Mini App disables the Buy button on
-    # the first click, but a laggy WebView can still emit two clicks (or a
-    # replayed request) before that runs — and each one used to charge the
-    # user and drop another pack in their inventory. Only one purchase per
-    # user may be in flight; the claim is released once this request has
-    # committed, so a deliberate second purchase right after works fine.
-    guard_key = f"webapp_packbuy_{user.id}"
-    if not claim_once(guard_key, ttl=_WEBAPP_PACK_GUARD_TTL):
-        db.close()
-        return {"ok": False, "error": "in_progress",
-                "message": "A pack purchase is already going through — hang tight."}, 409
-    try:
-        from models import Pack
-        from services.pack_service import buy_pack
-        import re
-        data = request.get_json(silent=True)
-        if (not isinstance(data, dict) or type(data.get("pack_id")) is not int
-                or not 0 < data["pack_id"] < 2**31):
-            return {"ok": False, "error": "bad_id"}, 400
-        request_id = data.get("request_id")
-        if "request_id" in data and (not isinstance(request_id, str)
-                or not re.fullmatch(r"[a-zA-Z0-9_-]{12,64}", request_id)):
-            return {"ok": False, "error": "bad_request_id"}, 400
-        pack = db.get(Pack, data["pack_id"])
-        if not pack:
-            return {"ok": False, "error": "not_found", "message": "Pack not found."}, 404
-        payment = data.get("payment")
-        if "payment" in data and payment not in ("coins", "quest_points", "gems", "free"):
-            return {"ok": False, "error": "bad_payment"}, 400
-        expected_cost = data.get("expected_cost")
-        if "expected_cost" in data and type(expected_cost) is not int:
-            return {"ok": False, "error": "bad_quote"}, 400
-        result = buy_pack(db, user, pack, request_id=request_id, payment=payment, expected_cost=expected_cost)
-        if not result.get("success"):
-            db.rollback()
-            return {"ok": False, "error": result.get("error", "buy_failed"),
-                    "message": result.get("message", "Could not buy pack.")}, 400
-        if not result.get("replayed"):
-            from services.activity_service import log_activity
-            amount, paid_in = result["cost_paid"], result["currency"]
-            log_activity(db, user.id, "buy_pack", f"Bought {pack.name}",
-                         coins_change=-amount if paid_in == "coins" else 0,
-                         gems_change=-amount if paid_in == "gems" else 0)
-        db.commit()
-        if not result.get("replayed"):
-            post_miniapp_activity(user, "buy_pack", pack_name=pack.name)
-        return {
-            "ok": True,
-            "inventory_id": result.get("inventory_id"),
-            "cost_paid": result.get("cost_paid", 0),
-            "currency": result.get("currency", "coins"),
-            "balance": {
-                "coins": user.total_coins or 0,
-                "gems": user.total_gems or 0,
-                "quest_points": user.quest_points or 0,
-            },
-        }
-    except Exception as e:
-        db.rollback()
-        logger.exception("webapp_packs_buy failed")
-        return {"ok": False, "error": "internal", "message": str(e)}, 500
-    finally:
-        release(guard_key)
-        db.close()
+    return _miniapp_quote_required()
 
 
 @app.route("/api/webapp/packs/open", methods=["POST"])
 @csrf_exempt
 def webapp_packs_open():
-    """Open an unopened pack from inventory → reveal players.
-    Body: {inventory_id}"""
-    auth, tg_id, err = _webapp_auth()
-    if err:
-        return err
-    db, user, tg_id = auth
+    return _miniapp_quote_required()
 
-    # Same double-tap guard as buying: two concurrent opens of the same
-    # inventory row would both roll players off it.
-    guard_key = f"webapp_packopen_{user.id}"
-    if not claim_once(guard_key, ttl=_WEBAPP_PACK_GUARD_TTL):
-        db.close()
-        return {"ok": False, "error": "in_progress",
-                "message": "That pack is already being opened — hang tight."}, 409
+
+@app.route("/api/webapp/packs/history", methods=["POST"])
+@csrf_exempt
+def webapp_pack_history():
+    import json
+    from models import PackOpening, PackPurchase, Pack
+    from services.miniapp_clubhouse import utc_string
+
+    auth, _, error = _webapp_auth()
+    if error:
+        return error
+    db, user, _ = auth
     try:
-        from services.pack_service import open_unopened_pack
-        data = request.get_json(silent=True) or {}
-        try:
-            inventory_id = int(data.get("inventory_id") or 0)
-        except (ValueError, TypeError):
-            return {"ok": False, "error": "bad_id"}, 400
-
-        result = open_unopened_pack(db, user, inventory_id)
-        if not result.get("success"):
-            db.rollback()
-            return {"ok": False, "error": "open_failed",
-                    "message": result.get("message", "Could not open pack.")}, 400
-
-        # Build player reveal list (main first, then bonus)
-        try:
-            from config import get_sell_value
-        except Exception:
-            get_sell_value = lambda r: 0
-
-        players_out = []
-        for player, slot_type in result.get("players", []):
-            players_out.append({
-                "id": player.id,
-                "card_url": _player_card_url(player.id),
-                "name": player.name,
-                "rating": player.rating,
-                "category": player.category,
-                "country": player.country,
-                "version": player.version or "Base",
-                "slot": slot_type,  # 'main' or 'bonus'
-                "sell_value": get_sell_value(player.rating),
-            })
-
-        # Players that couldn't fit (roster full) → park each as a pending claim
-        # so the Mini App can offer a Replace flow instead of discarding them.
-        from services.overflow_service import record_overflow
-        overflow = []
-        for p in result.get("players_to_claim", []):
-            # If the pending claim can't be persisted, propagate so the whole
-            # transaction rolls back — otherwise the pack would be consumed while
-            # the overflow player has no replace/release path.
-            overflow.append(record_overflow(db, user, p, source="pack"))
-
-        db.commit()
-        _opened_pack_name = result["pack"].name if result.get("pack") else "Pack"
-        post_miniapp_activity(user, "open_pack",
-                              pack_name=_opened_pack_name, players=players_out)
-        return {
-            "ok": True,
-            "pack_name": _opened_pack_name,
-            "players": players_out,
-            "overflow": overflow,
-            "pity_triggered": result.get("pity_triggered", False),
-            "balance": {
-                "coins": user.total_coins or 0,
-                "gems": user.total_gems or 0,
-                "roster_count": user.roster_count or 0,
-            },
-        }
-    except Exception as e:
-        db.rollback()
-        logger.exception("webapp_packs_open failed")
-        return {"ok": False, "error": "internal", "message": str(e)}, 500
+        body, before = _clubhouse_page()
+        if body is None:
+            return {"ok": False, "message": "Invalid page."}, 400
+        query = db.query(PackOpening).filter_by(user_id=user.id)
+        if before:
+            query = query.filter(PackOpening.id < before)
+        rows = query.order_by(PackOpening.id.desc()).limit(21).all()
+        history = [{"id": f"P{row.id}", "name": row.pack_name, "at": utc_string(row.opened_at),
+                    "cards": json.loads(row.cards_json)} for row in rows[:20]]
+        if not before:
+            # Existing installations have legacy PackPurchase audit rows.
+            # Their time records the purchase and historical snapshots lack
+            # card versions, so display only the fields actually recorded.
+            legacy = (db.query(PackPurchase, Pack.name).join(Pack, Pack.id == PackPurchase.pack_id)
+                      .filter(PackPurchase.user_id == user.id, PackPurchase.players_json.isnot(None),
+                              PackPurchase.opening_id.is_(None)))
+            for row, name in legacy.order_by(PackPurchase.id.desc()).limit(20).all():
+                try:
+                    cards = json.loads(row.players_json)
+                except (TypeError, ValueError):
+                    cards = []
+                cards = [card for card in cards if isinstance(card, dict)] if isinstance(cards, list) else []
+                history.append({"id": f"L{row.id}", "name": name, "at": utc_string(row.purchased_at),
+                                "legacy": True, "cards": cards})
+        return {"ok": True, "history": history, "next_before": rows[19].id if len(rows) > 20 else None}
     finally:
-        release(guard_key)
         db.close()
 
 
@@ -7719,99 +7531,7 @@ def webapp_market():
 @app.route("/api/webapp/market/buy/<int:slot_id>", methods=["POST"])
 @csrf_exempt
 def webapp_market_buy(slot_id):
-    """Buy from a market slot."""
-    auth, tg_id, err = _webapp_auth()
-    if err:
-        return err
-    db, user, tg_id = auth
-    try:
-        from services.economy_transactions import lock_user_for_update
-        lock_user_for_update(db, user)
-        locked = _team_locked_response(db, user, "buy players", market=True)
-        if locked:
-            return locked
-        from models import GlobalPlayerMarket
-        from services.global_market import buy_player, is_sold_out
-
-        slot = db.query(GlobalPlayerMarket).filter(
-            GlobalPlayerMarket.id == slot_id,
-            GlobalPlayerMarket.is_active == True).first()
-        if not slot:
-            return {"ok": False, "error": "not_found",
-                    "message": "Market slot not found."}, 404
-        if is_sold_out(slot):
-            return {"ok": False, "error": "sold_out",
-                    "message": "This item is sold out."}, 400
-
-        player = db.get(Player, slot.player_id)
-        if not player:
-            return {"ok": False, "error": "player_missing"}, 404
-
-        # Note: restricted_from_buypl only blocks /buypl direct-name purchase,
-        # NOT the Player Market — market buys are always allowed.
-
-        # Use the same locked wallet, ownership checks, atomic stock claim and
-        # MarketPurchase receipt as the chat market.
-        data = request.get_json(silent=True) or {}
-        if not isinstance(data, dict):
-            return {"ok": False, "error": "bad_quote"}, 400
-        for field in ("expected_price", "expected_player_id"):
-            if field in data and type(data[field]) is not int:
-                return {"ok": False, "error": "bad_quote"}, 400
-        balance_before = user.total_coins or 0
-        ok, message, gem_bonus = buy_player(
-            db, user, slot.slot_index, expected_slot_id=slot_id,
-            expected_price=data.get("expected_price"), expected_player_id=data.get("expected_player_id"))
-        if not ok:
-            db.rollback()
-            if message == "Listing changed. Review the new offer.":
-                return {"ok": False, "error": "listing_changed", "message": message}, 409
-            error = "purchase_failed"
-            if "already own" in message:
-                error = "already_owned"
-            elif "Roster full" in message:
-                error = "roster_full"
-            elif "coins" in message or "balance" in message:
-                error = "insufficient_coins"
-            elif "Sold out" in message:
-                error = "sold_out"
-            return {"ok": False, "error": error, "message": message}, 400
-        price = balance_before - (user.total_coins or 0)
-
-        try:
-            from services.activity_service import log_activity
-            log_activity(db, user.id, "market_buy",
-                         f"[MiniApp] Market: {player.name} ({player.rating})",
-                         coins_change=-price,
-                         player_name=player.name, player_rating=player.rating)
-        except Exception:
-            pass
-        # Market purchases are final: the generic undo cannot restore stock
-        # or reverse MarketPurchase receipts. The shared service awards the
-        # signing rebate once and deliberately creates no direct-buy undo.
-
-        db.commit()
-        post_miniapp_activity(user, "buy_player",
-                              player_name=player.name, rating=player.rating,
-                              price=price)
-        return {
-            "ok": True,
-            "player_name": player.name,
-            "rating": player.rating,
-            "spent": price,
-            "gem_bonus": gem_bonus,
-            "balance": {
-                "coins": user.total_coins or 0,
-                "gems": user.total_gems or 0,
-                "roster_count": user.roster_count or 0,
-            },
-        }
-    except Exception as e:
-        db.rollback()
-        logger.exception("webapp_market_buy failed")
-        return {"ok": False, "error": "internal", "message": str(e)}, 500
-    finally:
-        db.close()
+    return _miniapp_quote_required()
 
 
 @app.route("/api/webapp/xi", methods=["POST"])
@@ -7843,7 +7563,8 @@ def webapp_xi():
                 "category": p.category,
                 "country": p.country,
                 "version": p.version or "Base",
-                "is_captain": bool(user.captain_roster_id == r.id),
+                "is_captain": position <= 11 and user.captain_roster_id == r.id,
+                "is_vice_captain": position <= 11 and user.vice_captain_roster_id == r.id,
             }
             if position <= 11:
                 xi.append(entry)
@@ -7920,28 +7641,19 @@ def webapp_xi_reorder():
         return err
     db, user, tg_id = auth
     try:
+        user = _lock_user_row(db, user.id)
         locked = _team_locked_response(db, user, "change your batting order")
         if locked:
             return locked
-        from models import UserRoster
-        data = request.get_json(silent=True) or {}
-        ids = data.get("ordered_roster_ids") or []
-        if not isinstance(ids, list) or not ids:
-            return {"ok": False, "error": "no_ids"}, 400
-        try:
-            ids = [int(x) for x in ids][:11]
-        except (ValueError, TypeError):
-            return {"ok": False, "error": "bad_ids"}, 400
-
-        # Verify all belong to this user
-        rows = (db.query(UserRoster)
-                .filter(UserRoster.user_id == user.id,
-                        UserRoster.id.in_(ids)).all())
-        if len(rows) != len(ids):
-            return {"ok": False, "error": "mismatch",
-                    "message": "Some roster_ids not in your roster."}, 400
-
-        by_id = {r.id: r for r in rows}
+        from services.roster_service import get_roster_ordered
+        body = request.get_json(silent=True)
+        ids = body.get("ordered_roster_ids") if isinstance(body, dict) else None
+        if (not isinstance(ids, list) or not 1 <= len(ids) <= 11
+                or any(type(value) is not int for value in ids)):
+            return {"ok": False, "message": "Choose a valid Playing XI order."}, 400
+        by_id = {row.id: row for row, _ in get_roster_ordered(db, user.id)[:11]}
+        if len(ids) != len(by_id) or set(ids) != set(by_id):
+            return {"ok": False, "message": "Your XI has changed. Reload before saving."}, 409
         for new_pos, rid in enumerate(ids, start=1):
             by_id[rid].order_position = new_pos
 
@@ -8183,6 +7895,8 @@ def webapp_quests():
         return err
     db, user, tg_id = auth
     try:
+        from services.miniapp_clubhouse import utc_string
+        from services.quest_service import next_period_start
         from services.quest_service import get_user_quests, consume_pending_auto_claims
         data = request.get_json(silent=True) or {}
         which = (data.get("type") or "all").lower()
@@ -8227,6 +7941,7 @@ def webapp_quests():
                 })
             result["groups"][qtype] = quests_out
 
+        result["resets_at"] = {period: utc_string(next_period_start(period)) for period in result["groups"]}
         db.commit()
         return result
     except Exception as e:
@@ -8394,16 +8109,30 @@ def webapp_login_streak_claim():
                 "message": "Your reward is already on its way — hang tight."}, 409
     try:
         from services.login_streak_service import claim_login_reward, get_login_status
+        from services.miniapp_economy import reward_result, record_reward_result
         # Locked + refreshed, so the "already claimed today" check is made
         # against what is committed rather than a snapshot from before a
         # concurrent claim. _locked_stats creates the row if it's missing.
         stats = _locked_stats(db, user.id)
+        current = get_login_status(db, stats, user=user)
+        body = request.get_json(silent=True) or {}
+        period = body.get("period") if isinstance(body, dict) else None
+        if period is not None and (not isinstance(period, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", period)):
+            return {"ok": False, "message": "Choose a valid login reward."}, 400
+        key = period or current["today"]
+        replay = reward_result(db, user.id, "login", key)
+        if replay is not None:
+            return dict(replay, replayed=True)
+        if key != current["today"]:
+            return {"ok": False, "message": "The login reward reset. Refresh and review today’s reward."}, 409
+        db.info["economy_operation"] = f"login:{user.id}:{key}"
         result = claim_login_reward(db, user, stats)
         if not result.get("ok"):
             db.rollback()
             return result, 400
-        db.commit()
         result["status"] = get_login_status(db, stats, user=user)
+        record_reward_result(db, user.id, "login", key, result)
+        db.commit()
         return result
     except Exception as e:
         db.rollback()
@@ -9001,7 +8730,10 @@ def webapp_roster_player_detail():
                 "bowl_hand": player.bowl_hand,
                 "bowl_style": player.bowl_style,
                 "sell_value": sell_value,
-                "is_captain": False,
+                "is_captain": user.captain_roster_id == entry.id,
+                "is_vice_captain": user.vice_captain_roster_id == entry.id,
+                "sale_locked": entry.sale_locked,
+                "acquired_at": utc_string(entry.acquired_date),
                 "is_career": is_career_card,
             },
             "stats": stats,
@@ -9033,6 +8765,7 @@ def webapp_trait_apply():
         return err
     db, user, tg_id = auth
     try:
+        user = _lock_user_row(db, user.id)
         locked = _team_locked_response(db, user, "apply a trait to a player")
         if locked:
             return locked
@@ -9087,6 +8820,7 @@ def webapp_trait_remove():
         return err
     db, user, tg_id = auth
     try:
+        user = _lock_user_row(db, user.id)
         locked = _team_locked_response(db, user, "remove a player's trait")
         if locked:
             return locked
@@ -9118,16 +8852,28 @@ def webapp_trait_upgrade():
         return err
     db, user, tg_id = auth
     try:
+        user = _lock_user_row(db, user.id)
         locked = _team_locked_response(db, user, "upgrade an equipped trait")
         if locked:
             return locked
+        from config import TRAIT_UPGRADE_COSTS
+        from models import PlayerTrait
+        from services.activity_service import log_activity
         from services.trait_service import upgrade_player_trait
         data = request.get_json(silent=True) or {}
         ptid = int(data.get("player_trait_id") or 0)
+        trait = db.query(PlayerTrait).filter_by(id=ptid, user_id=user.id).first()
+        level = data.get("expected_level")
+        cost = data.get("expected_cost")
+        if (not trait or type(level) is not int or level != trait.level
+                or type(cost) is not int or cost != TRAIT_UPGRADE_COSTS.get(level)):
+            return {"ok": False, "message": "This upgrade changed. Reopen the card to review the cost."}, 409
         ok, msg = upgrade_player_trait(db, user, ptid)
         if not ok:
             db.rollback()
             return {"ok": False, "message": msg}, 400
+        log_activity(db, user.id, "trait_upgrade", f"Trait #{ptid} upgraded to level {level + 1}",
+                     gems_change=-cost)
         db.commit()
         return {"ok": True, "message": msg, "gems": user.total_gems or 0}
     except Exception as e:
@@ -12641,17 +12387,26 @@ def ads_postback():
                 return {"ok": True, "note": "user_not_found"}, 200
 
             from models import AdReward
-            from datetime import datetime, timedelta
-            _lock_user_row(db, user.id)
-            recent = datetime.utcnow() - timedelta(seconds=ad_service.MIN_CLIENT_AD_INTERVAL_SECONDS)
-            if db.query(AdReward.id).filter(AdReward.telegram_id == telegram_id,
-                    AdReward.provider == "adsgram", AdReward.received_at >= recent).first():
+            from services.quest_service import safe_track
+            user = _lock_user_row(db, user.id)
+            event = request.args.get("event_id") or request.args.get("transaction_id") or ""
+            now = datetime.utcnow()
+            # Some Adsgram callbacks carry only the account ID. Coalesce
+            # retry bursts for those placements. Keep supplied event IDs
+            # for exact deduplication over the full lifetime of the receipt.
+            reference = "event:" + _hashlib.sha256(event.encode()).hexdigest() if event else ""
+            existing = db.query(AdReward.id).filter_by(
+                telegram_id=telegram_id, provider="adsgram", query_string=reference)
+            if not reference:
+                existing = existing.filter(
+                    AdReward.received_at >= now - timedelta(seconds=ad_service.MIN_CLIENT_AD_INTERVAL_SECONDS))
+            if existing.first():
                 return {"ok": True}
-            receipt = ad_service.record_postback(db, telegram_id, source_ip=request.remote_addr)
-            if receipt.consumed_at is None:
-                from services.quest_service import safe_track
-                safe_track(db, user.id, "ad_watched", 1)
-                db.commit()
+            db.add(AdReward(telegram_id=telegram_id, provider="adsgram",
+                            source_ip=request.remote_addr, query_string=reference, received_at=now))
+            db.flush()
+            safe_track(db, user.id, "ad_watched", 1)
+            db.commit()
             logger.info(f"Adsgram postback recorded for {telegram_id}")
             return {"ok": True}
         finally:
@@ -14720,6 +14475,7 @@ def admin_economy():
                     "match_win_gems_per_over": float(request.form.get("match_win_gems_per_over", 1.0)),
                     "match_loss_coins_per_over": int(request.form.get("match_loss_coins_per_over", 150)),
                     "match_loss_gems_per_over": float(request.form.get("match_loss_gems_per_over", 0.5)),
+                    "ai_match_reward_daily_cap": max(0, min(100, int(request.form.get("ai_match_reward_daily_cap", 10)))) if "ai_match_reward_daily_cap" in request.form else get_config(db).get("ai_match_reward_daily_cap", 10),
                     "gspin_gem_min": int(request.form.get("gspin_gem_min", 5)),
                     "gspin_gem_max": int(request.form.get("gspin_gem_max", 50)),
                     "daily_coins": int(request.form.get("daily_coins", 1000)),
@@ -14728,7 +14484,7 @@ def admin_economy():
                     "daily_streak_bonus_gems": int(request.form.get("daily_streak_bonus_gems", 0)),
                     "spin_ad_quota": max(0, min(99, int(request.form.get("spin_ad_quota", 5)))),
                     "daily_ad_quota": max(0, min(99, int(request.form.get("daily_ad_quota", 5)))),
-                    "spin_nofill_grace": max(0, min(99, int(request.form.get("spin_nofill_grace", 2)))),
+                    "spin_nofill_grace": 0,
                     # Capped at 24h: a gap longer than the quota cycle would
                     # silently make the ad slots unreachable.
                     "ad_reward_gap_minutes": max(0, min(1440, int(request.form.get("ad_reward_gap_minutes", 60)))),
@@ -14753,6 +14509,16 @@ def admin_economy():
                                offer_example=_signing_bonus_example(offer))
     finally:
         db.close()
+
+
+@app.route("/economy/review")
+@login_required
+def admin_economy_review():
+    from services.economy_review import diagnostics
+
+    with get_session() as db:
+        discrepancies, pairs = diagnostics(db)
+        return render_template("admin_economy_review.html", discrepancies=discrepancies, pairs=pairs)
 
 
 def _signing_bonus_example(offer):
@@ -18201,6 +17967,19 @@ def admin_tournament_detail(tournament_id):
                 return True
 
             try:
+                if action == "save_registration":
+                    raw = (request.form.get("registration_closes_at") or "").strip()
+                    if (tournament_service.tournament_kind(t) != "letsplay" or t.schedule_generated
+                            or t.status not in ("draft", "scheduled")):
+                        raise ValueError("Registration is available before scheduling a Lets Play tournament.")
+                    from datetime import timezone
+                    closes = datetime.fromisoformat(raw) if raw else None
+                    if closes and closes.tzinfo:
+                        closes = closes.astimezone(timezone.utc).replace(tzinfo=None)
+                    t.registration_closes_at = closes
+                    db.commit()
+                    flash("Tournament registration saved.", "success")
+                    return redirect(url_for("admin_tournament_detail", tournament_id=t.id))
                 if action == "save_settings":
                     t.name = (request.form.get("name") or t.name).strip()[:120]
                     t.description = (request.form.get("description") or "").strip() or None
@@ -21609,7 +21388,7 @@ def admin_ads():
             users=users,
             total=total, consumed=consumed, today=today,
             ad_config=ad_service.client_config(),
-            configured=ad_service.is_configured(),
+            configured=ad_service.client_config()["configured"],
             block_id=ad_service.get_block_id() or "",
             public_base_url=ad_service.reward_origin(os.getenv("WEBAPP_URL", "")),
         )

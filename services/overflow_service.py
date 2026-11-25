@@ -152,6 +152,8 @@ def resolve_replace(session, user, claim_id, old_roster_id):
                 "message": "That squad player isn't in your roster."}
 
     # Don't let the captain be dropped without re-assigning first.
+    if old_entry.sale_locked:
+        return {"ok": False, "error": "card_locked", "message": "Unlock this card before replacing it."}
     if user.captain_roster_id == old_entry.id:
         return {"ok": False, "error": "is_captain",
                 "message": "Can't replace your captain. Set a new captain first."}
