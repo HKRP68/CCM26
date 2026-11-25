@@ -5,46 +5,31 @@
   <!-- Relative assets (style.css / app.js) resolve under /cricket/ regardless
        of the ?match_id=... query string the page is opened with. -->
   <base href="/cricket/">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>CMU Match Arena</title>
-  <!-- Apply saved theme before CSS loads to prevent a flash of the wrong theme -->
-  <script>
-    (function () {
-      try {
-        var saved = localStorage.getItem('crickidex_theme');
-        if (saved !== 'light' && saved !== 'dark') {
-          saved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
-        }
-        document.documentElement.setAttribute('data-theme', saved);
-      } catch (e) {
-        document.documentElement.setAttribute('data-theme', 'dark');
-      }
-    })();
-  </script>
-  <!-- Google Fonts: Outfit -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <meta name="theme-color" content="#08090c">
+  <script src="/static/js/miniapp_theme.js?v=elite-main-1"></script>
+  <link rel="stylesheet" href="/static/css/miniapp_tokens.css?v=elite-main-1">
   <!-- Telegram Web App SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Custom Styling -->
-  <link rel="stylesheet" href="style.css?v=20261125-scorecard">
+  <link rel="stylesheet" href="style.css?v=elite-main-1">
 </head>
 <body>
   <div id="app-container">
     
     <!-- HEADER BAR -->
     <header class="app-header">
-      <button class="header-icon-btn" id="exit-btn-back">
+      <button class="header-icon-btn" id="exit-btn-back" type="button" aria-label="Leave match centre">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
       </button>
       <div class="match-meta-header">
         <div class="header-teams">
-          <span id="header-host-name">MY TEAM</span>
+          <span id="header-host-name">—</span>
           <span class="vs-badge">VS</span>
-          <span id="header-guest-name">INDIA</span>
+          <span id="header-guest-name">—</span>
         </div>
-        <div class="header-match-id" id="header-match-uuid">MATCH ID: E2265B</div>
+        <div class="header-match-id" id="header-match-uuid">Match centre</div>
       </div>
       <div class="header-btn-group">
       <button class="header-icon-btn" id="sfx-toggle-btn" aria-label="Toggle in-game sounds" aria-pressed="true">
@@ -88,7 +73,8 @@
       <div class="spinner-container">
         <div class="cricket-ball-spinner"></div>
         <p class="loading-text">Loading match...</p>
-        <p class="loading-sub">Setting up the arena</p>
+        <p class="loading-sub">Connecting to the match</p>
+        <button type="button" id="arena-retry" class="btn btn-secondary hidden">Retry</button>
       </div>
     </section>
 
@@ -172,6 +158,7 @@
     <section id="gameplay-screen" class="screen">
       <!-- LIVE SCOREBOARD CARD -->
       <div class="scoreboard-section">
+        <div class="arena-score-meta"><div class="arena-match-state" id="arena-match-state"></div><span id="arena-first-innings" class="hidden"></span></div>
         <!-- BATTING / BOWLING TEAMS -->
         <div class="team-batting-row">
           <span id="bat-team-label" class="bat-team-label"></span>
@@ -184,7 +171,7 @@
             <div class="crr-over-row">
               <span class="crr-badge">CRR: <span id="live-crr">0.0</span></span>
               <span class="overs-display"><span id="live-overs">0.0</span>/<span id="total-overs">1</span> <span class="ov-unit">OV</span></span>
-              <span class="proj-badge hidden" id="proj-badge">PROJ: <span id="live-projected">0</span></span>
+              <span class="proj-badge hidden" id="proj-badge">EST: <span id="live-projected">0</span></span>
             </div>
           </div>
           <div class="toss-col">
@@ -197,17 +184,19 @@
 
         <!-- TARGET DISPLAY FOR INNINGS 2 -->
         <div id="target-display" class="target-bar hidden">
-          🎯 Need <span id="target-runs-needed" class="glow-text">0</span> runs from <span id="target-balls-left">0</span> balls
+          <span>Need <strong id="target-runs-needed">—</strong> from <strong id="target-balls-left">—</strong> balls</span>
+          <span>Target <strong id="target-total">—</strong> · RRR <strong id="target-required-rate">—</strong></span>
         </div>
 
-        <!-- WIN PROBABILITY BAR (broadcast feel, 2nd-innings chase) -->
+        <!-- Server-backed chase estimate -->
         <div id="win-prob" class="winprob hidden">
+          <div class="arena-estimate-label">Win probability estimate</div>
           <div class="winprob-labels">
-            <span class="winprob-bat" id="winprob-bat-label">BAT 50%</span>
-            <span class="winprob-bowl" id="winprob-bowl-label">50% BOWL</span>
+            <span class="winprob-bat" id="winprob-bat-label">—</span>
+            <span class="winprob-bowl" id="winprob-bowl-label">—</span>
           </div>
           <div class="winprob-track">
-            <div class="winprob-fill" id="winprob-fill" style="width:50%"></div>
+            <div class="winprob-fill" id="winprob-fill" style="width:0"></div>
           </div>
         </div>
 
@@ -217,10 +206,11 @@
 
       <!-- TAB SELECTION -->
       <div class="tabs-container">
-        <button class="tab-btn active" id="tab-match">MATCH</button>
-        <button class="tab-btn" id="tab-scorecard">SCORECARD</button>
-        <button class="tab-btn" id="tab-squads">SQUADS</button>
-        <button class="tab-btn hidden" id="tab-result">RESULT</button>
+        <button class="tab-btn active" id="tab-match" aria-pressed="true">Live</button>
+        <button class="tab-btn" id="tab-scorecard" aria-pressed="false">Scorecard</button>
+        <button class="tab-btn" id="tab-analysis" aria-pressed="false">Analysis</button>
+        <button class="tab-btn" id="tab-squads" aria-pressed="false">Info</button>
+        <button class="tab-btn hidden" id="tab-result" aria-pressed="false">Result</button>
       </div>
 
       <!-- MATCH PANEL (Default view) -->
@@ -230,7 +220,7 @@
           <div class="crease-player-left" id="card-striker">
             <div class="player-circle-icon"><span class="inner-c">c</span></div>
             <div class="crease-player-info">
-              <span class="p-name" id="striker-name">E Lewis*</span>
+              <span class="p-name" id="striker-name">—</span>
               <span class="p-score" id="striker-stats">0(0)</span>
               <span class="p-rhythm hidden" id="striker-rhythm"></span>
             </div>
@@ -243,13 +233,13 @@
             </div>
             <div class="crease-meta-row">
               <span class="meta-label">BOWLER</span>
-              <span class="meta-value" id="bowler-name-stats">K Roach 0-0</span>
+              <span class="meta-value" id="bowler-name-stats">—</span>
             </div>
           </div>
           
           <div class="crease-player-right" id="card-non-striker">
             <div class="crease-player-info">
-              <span class="p-name" id="non-striker-name">T Wyllie</span>
+              <span class="p-name" id="non-striker-name">—</span>
               <span class="p-score" id="non-striker-stats">0(0)</span>
               <span class="p-rhythm hidden" id="non-striker-rhythm"></span>
             </div>
@@ -290,8 +280,9 @@
         </div>
 
         <!-- COMMENTARY FEED -->
-        <div class="commentary-feed-container">
-          <div class="timeline" id="commentary-list">
+        <div class="arena-commentary-heading"><h2>Commentary</h2><button type="button" id="arena-new-events" class="btn btn-secondary hidden">New events</button></div>
+        <div class="commentary-feed-container" id="arena-commentary-feed">
+          <div class="timeline" id="commentary-list" tabindex="0" aria-label="Match commentary">
             <!-- Commentary items will go here -->
           </div>
         </div>
@@ -302,11 +293,10 @@
         <div class="scorecard-wrapper">
           <!-- TEAM TOGGLE TABS -->
           <div class="scorecard-team-tabs" role="group" aria-label="Innings">
-            <button type="button" class="sc-tab-btn active" id="scorecard-tab-host" aria-pressed="true">HOST XI 0/0</button>
-            <button type="button" class="sc-tab-btn" id="scorecard-tab-guest" aria-pressed="false">GUEST XI</button>
+            <button type="button" class="sc-tab-btn active" id="scorecard-tab-host" aria-pressed="true">Innings 1</button>
+            <button type="button" class="sc-tab-btn" id="scorecard-tab-guest" aria-pressed="false">Innings 2</button>
           </div>
-
-          <div class="total-row" id="scorecard-total">TOTAL 0/0 (0.0 Ov)</div>
+          <div class="total-row" id="scorecard-total">TOTAL —</div>
 
           <!-- Batting Team Section -->
           <div class="scorecard-section-title" id="scorecard-batting-title">BATTING</div>
@@ -324,8 +314,9 @@
             </div>
           </div>
 
-          <div class="extras-row" id="scorecard-extras">Extras 0 (w 0, lb 0, b 0, nb 0, p 0)</div>
+          <div class="extras-row" id="scorecard-extras">Extras —</div>
 
+          <div class="extras-row hidden" id="arena-fall-of-wickets"></div>
           <div class="yet-to-bat-section">
             <span class="ytb-label">YET TO BAT:</span>
             <span class="ytb-list" id="scorecard-yet-to-bat"></span>
@@ -361,9 +352,18 @@
           </div>
         </div>
 
+        <div class="scorecard-wrapper hidden" id="arena-super-over-card"></div>
+      </div>
+
+      <div id="panel-analysis" class="tab-panel">
+        <div class="scorecard-wrapper">
+          <h2 class="scorecard-section-title">Run progression</h2>
+          <div id="arena-run-progression"></div>
+        </div>
+
         <!-- MANHATTAN CHART -->
         <div class="scorecard-wrapper" style="margin-top: 10px;">
-          <div class="scorecard-section-title">MANHATTAN CHART</div>
+          <div class="scorecard-section-title">Runs per over</div>
           <div id="manhattan-chart-container">
             <div class="sc-empty-msg">Loading...</div>
           </div>
@@ -371,7 +371,7 @@
 
         <!-- OVER BY OVER -->
         <div class="scorecard-wrapper" style="margin-top: 10px; margin-bottom: 16px;">
-          <div class="scorecard-section-title">OVER BY OVER</div>
+          <div class="scorecard-section-title">Over by over</div>
           <div id="over-by-over-container">
             <div class="sc-empty-msg">Loading...</div>
           </div>
@@ -380,6 +380,10 @@
 
       <!-- SQUADS PANEL -->
       <div id="panel-squads" class="tab-panel">
+        <div class="scorecard-wrapper arena-info">
+          <h2 class="scorecard-section-title">Match information</h2>
+          <dl><div><dt>Format</dt><dd id="arena-format">—</dd></div><div><dt>Pitch</dt><dd id="arena-pitch">—</dd></div><div id="arena-venue-row" class="hidden"><dt>Venue</dt><dd id="arena-venue"></dd></div><div id="arena-wickets-row" class="hidden"><dt>Wicket limit</dt><dd id="arena-wicket-limit"></dd></div><div><dt>Toss</dt><dd id="arena-toss">—</dd></div></dl>
+        </div>
         <div class="squads-wrapper">
           <div class="squad-column">
             <div class="squad-title" id="squad-host-title">Host XI</div>
@@ -636,10 +640,10 @@
           <p class="result-outcome-detail" id="result-outcome-detail"></p>
         </div>
         <div class="result-body">
-          <div class="reward-section">
+          <div class="reward-section hidden">
             <div class="coin-badge">
               <span class="coin-icon">🪙</span>
-              <span id="result-reward-amount">+1,500</span>
+              <span id="result-reward-amount">—</span>
             </div>
             <p class="reward-sub" id="result-reward-label">coins earned</p>
           </div>
@@ -702,7 +706,7 @@
     <ol id="live-batting-order"></ol>
     <button type="button" id="save-live-order-btn" class="btn btn-primary btn-block btn-green" disabled>Save batting order</button>
   </dialog>
-  <script src="app.js?v=20261120-scorecard"></script>
+  <script src="app.js?v=elite-main-1"></script>
   <script src="live-batting.js?v=20261111-1"></script>
   <script src="approach.js?v=20261111-live-batting"></script>
 </body>

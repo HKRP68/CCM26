@@ -17,6 +17,12 @@ let pollFailureCount = 0;
 const POLL_REQUEST_TIMEOUT_MS = 8000;
 const MAX_POLL_FAILURES = 10;
 const MATCH_POLL_INTERVAL_MS = 150;
+const gameplayTabs = ['match', 'scorecard', 'analysis', 'squads'];
+let activeGameplayTab = 'match';
+let arenaLoadBlocked = false;
+let commentarySignature;
+let pendingCommentaryEvents = false;
+let matchStatePresentedResult = false;
 const AUTOPLAY_ACTION_DELAY_MS = 0;
 // Fast ball-by-ball pacing vs the Bot. The bot's reply (shot/delivery/outcome)
 // is already resolved server-side by the time these timers run, so they're
@@ -67,6 +73,12 @@ let selectionSubmitInFlight = false;
 // `mountId` tracks which selection sheet currently hosts the picker so the
 // 150ms poll can re-render it in place without losing an in-progress pick.
 let impactSelection = { incoming: null, outgoing: null, open: false, mountId: null };
+
+function escapeArenaText(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[char]);
+}
 
 function isActiveXIPlayer(player) {
   return player?.active !== false;
@@ -326,15 +338,33 @@ async function init() {
   // Bind exit handlers
   const handleExit = () => {
     stopAllGameAudio();
-    if (tg) {
+    if (window.opener || document.referrer.startsWith(location.origin + '/webapp')) {
+      if (history.length > 1) history.back();
+      else location.assign('/webapp' + location.hash);
+    } else if (tg?.initData) {
       tg.close();
     } else {
-      window.location.reload();
+      location.assign('/webapp');
     }
   };
   
   const btnBack = document.getElementById('exit-btn-back');
   if (btnBack) btnBack.addEventListener('click', handleExit);
+  try {
+    tg?.BackButton?.onClick(handleExit);
+    tg?.BackButton?.show();
+  } catch (_) { /* The on-screen exit is available. */ }
+  window.MiniappTheme.start(tg);
+  const retry = document.getElementById('arena-retry');
+  retry.addEventListener('click', () => {
+    arenaLoadBlocked = false;
+    pollFailureCount = 0;
+    retry.classList.add('hidden');
+    document.querySelector('.loading-text').textContent = 'Loading match…';
+    document.querySelector('.loading-sub').textContent = 'Connecting to the match';
+    document.querySelector('.cricket-ball-spinner').style.animationPlayState = '';
+    startPolling();
+  });
 
   // Theme toggle (Light / Dark)
   const themeToggleBtn = document.getElementById('theme-toggle-btn');
@@ -342,9 +372,8 @@ async function init() {
     themeToggleBtn.addEventListener('click', () => {
       const root = document.documentElement;
       const next = root.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
-      root.setAttribute('data-theme', next);
-      try { localStorage.setItem('crickidex_theme', next); } catch (e) {}
-      if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+      window.MiniappTheme.setMode(next);
+      if (window.MiniappTheme.haptics && tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
     });
   }
 
@@ -374,7 +403,7 @@ async function init() {
         });
       }
       syncSoundToggleUI();
-      if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+      if (window.MiniappTheme.haptics && tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
     });
   }
   if (ambienceToggleBtn) {
@@ -383,7 +412,7 @@ async function init() {
       try { localStorage.setItem(AMBIENCE_PREF_KEY, soundPrefs.ambience ? '1' : '0'); } catch (e) {}
       updateAmbience();
       syncSoundToggleUI();
-      if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+      if (window.MiniappTheme.haptics && tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
     });
   }
 
@@ -391,8 +420,13 @@ async function init() {
   // autoplay policy) — see unlockAudio(); unlocked entries make this a no-op.
   document.addEventListener('pointerdown', unlockAudio);
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) stopAmbience();
-    else updateAmbience();
+    if (document.hidden) {
+      stopAmbience();
+      stopPolling();
+    } else {
+      updateAmbience();
+      startPolling();
+    }
   });
 
   startPolling();
@@ -525,8 +559,7 @@ function setupEventListeners() {
   }
 
   // Tab switching
-  const tabs = ['match', 'scorecard', 'squads'];
-  tabs.forEach(tab => {
+  gameplayTabs.forEach(tab => {
     document.getElementById(`tab-${tab}`).addEventListener('click', () => switchGameplayTab(tab));
   });
 
@@ -540,8 +573,6 @@ function setupEventListeners() {
     tabGuest.classList.remove('active');
     renderScorecardPanel();
     renderPartnershipHistory();
-    renderManhattanChart();
-    renderOverByOver();
   });
 
   tabGuest.addEventListener('click', () => {
@@ -550,17 +581,28 @@ function setupEventListeners() {
     tabHost.classList.remove('active');
     renderScorecardPanel();
     renderPartnershipHistory();
-    renderManhattanChart();
-    renderOverByOver();
   });
 }
 
 function switchGameplayTab(tab) {
-  document.getElementById('tab-result').classList.remove('active');
-  ['match', 'scorecard', 'squads'].forEach(t => {
-    document.getElementById(`tab-${t}`).classList.toggle('active', t === tab);
-    document.getElementById(`panel-${t}`).classList.toggle('active', t === tab);
+  activeGameplayTab = tab;
+  const resultTab = document.getElementById('tab-result');
+  resultTab.classList.remove('active');
+  resultTab.setAttribute('aria-pressed', 'false');
+  gameplayTabs.forEach(t => {
+    const active = t === tab;
+    const button = document.getElementById(`tab-${t}`);
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+    document.getElementById(`panel-${t}`).classList.toggle('active', active);
   });
+  if (tab === 'analysis') renderArenaAnalysis();
+  if (tab === 'scorecard' && matchState) {
+    renderScorecardPanel();
+    renderPartnershipHistory();
+    renderArenaSuperOvers();
+  }
+  if (tab === 'squads' && matchState) renderSquadsPanel();
 }
 
 // Screen Switcher
@@ -645,6 +687,7 @@ function selectIdentity(selectedId) {
 
 // Polling Loop
 function startPolling() {
+  if (document.hidden || arenaLoadBlocked || matchState?.status === 'completed') return;
   fetchState();
   if (!pollingInterval) {
     pollingInterval = setInterval(fetchState, MATCH_POLL_INTERVAL_MS);
@@ -715,7 +758,7 @@ async function fetchWithTimeout(url, options = {}) {
 }
 
 async function fetchState() {
-  if (fetchInFlight || flowActionInFlight) return;
+  if (fetchInFlight || flowActionInFlight || document.hidden || arenaLoadBlocked) return;
   fetchInFlight = true;
   try {
     // Build query safely without sending stringified "null" or "undefined"
@@ -725,10 +768,10 @@ async function fetchState() {
 
     const response = await fetchWithTimeout(`/api/match?${params.toString()}`);
     if (!response.ok) {
-      if (response.status === 404) {
-        const urlDebug = window.location.search || 'None';
-        showError(`No active match room found.<br><span style="font-size:0.85em;opacity:0.85;font-family:monospace;white-space:pre-wrap;display:block;margin-top:10px">Debug: userId=${userId}, matchId=${matchId}, URL params: ${urlDebug}</span>`);
-        stopPolling();
+      if (response.status === 404 || response.status === 401 || response.status === 403) {
+        showError(response.status === 404
+          ? 'This match link is no longer available.'
+          : 'Open this match again from an authorized Telegram chat.', false);
         return;
       }
       throw new Error(`HTTP error: ${response.status}`);
@@ -737,14 +780,11 @@ async function fetchState() {
     const data = await response.json();
     applyMatchState(data);
   } catch (err) {
-    console.error("Polling error:", err);
+    console.error('Match update failed:', err.name);
     pollFailureCount += 1;
     if (pollFailureCount >= MAX_POLL_FAILURES) {
       const timedOut = err.name === 'AbortError';
-      showError(timedOut
-        ? 'The match is taking too long to load. Please close this window and tap Play Match again.'
-        : 'Unable to load the match. Please close this window and tap Play Match again.');
-      stopPolling();
+      showError(timedOut ? 'The match update timed out.' : 'Unable to connect to the match.');
     }
   } finally {
     fetchInFlight = false;
@@ -753,6 +793,7 @@ async function fetchState() {
 
 function applyMatchState(nextState, { force = false } = {}) {
   if (!nextState) return;
+  if (matchState?.status === 'completed' && nextState.status !== 'completed') return;
   if ((flowActionInFlight || autoplayInFlight) && !force) return;
   const currentRevision = Number(matchState?.ballSeq ?? -1);
   const nextRevision = Number(nextState.ballSeq ?? currentRevision);
@@ -797,7 +838,7 @@ function applyMatchState(nextState, { force = false } = {}) {
   // Over-by-over matches (vs the bot) land a whole over at once; approach.js
   // plays it back ball by ball instead of flashing only the last delivery.
   const approachMode = !!matchState.approachMode;
-  document.getElementById('autoplay-strip')?.classList.toggle('hidden', approachMode);
+  document.getElementById('autoplay-strip')?.classList.toggle('hidden', approachMode || matchState.myRole === 'spectator' || matchState.status === 'completed');
   if (approachMode && typeof handleApproachPlayback === 'function') {
     handleApproachPlayback();
   }
@@ -831,9 +872,11 @@ function applyMatchState(nextState, { force = false } = {}) {
   else if (matchState.status === 'innings_break') renderInningsBreakScreen();
   else if (matchState.status === 'innings1' || matchState.status === 'innings2') renderGameplayScreen();
   else if (matchState.status === 'completed') {
+    const firstResult = !matchStatePresentedResult;
+    matchStatePresentedResult = true;
     renderGameplayScreen();
     lockCompletedMatchControls();
-    renderResultScreen();
+    if (firstResult) renderResultScreen();
     stopPolling();
   }
 
@@ -1145,7 +1188,7 @@ function renderGameplayScreen() {
   // Projected score — 1st innings only (target bar covers the chase)
   const projBadge = document.getElementById('proj-badge');
   if (projBadge) {
-    if (matchState.status !== 'innings2' && matchState.score.projected != null) {
+    if (matchState.status === 'innings1' && matchState.score.projected != null) {
       projBadge.classList.remove('hidden');
       document.getElementById('live-projected').innerText = matchState.score.projected;
     } else {
@@ -1156,17 +1199,35 @@ function renderGameplayScreen() {
   // Recent-ball doodle timeline
   renderBallTimeline();
 
-  // Toss/Election Badge
+  const completed = matchState.status === 'completed';
+  const stateLabel = document.getElementById('arena-match-state');
+  stateLabel.textContent = completed ? 'Final score' : 'Live · Innings ' + (matchState.currentInningsIdx + 1);
+  stateLabel.dataset.live = String(!completed);
+  const firstInnings = document.getElementById('arena-first-innings');
+  const first = matchState.currentInningsIdx === 1 ? matchState.innings[0] : null;
+  firstInnings.classList.toggle('hidden', !first);
+  if (first) firstInnings.textContent = inningsTeamNames()[0] + ' ' + first.runs + '/' + first.wickets +
+    ' (' + formatInningsProgress(first.overs, first.balls) + ')';
+  const decision = matchState.tossDecision;
+  const tossWinner = [matchState.host, matchState.guest].find(team =>
+    team && String(team.telegramId) === String(matchState.tossWinnerId));
+  const winnerName = tossWinner?.teamName || tossWinner?.username || (matchState.tossWinnerId ? 'AI XI' : '');
+  const tossText = winnerName && ['bat', 'bowl'].includes(decision) ? winnerName + ' chose to ' + decision : 'Unavailable';
   const tossBadge = document.getElementById('toss-badge-display');
-  const dec = matchState.tossDecision === 'bat' ? 'ELECTED TO BAT' : 'ELECTED TO BOWL';
-  const winnerName = matchState.tossWinnerId === matchState.host.telegramId 
-    ? (matchState.host.teamName || matchState.host.username || 'Host').toUpperCase() 
-    : (matchState.guest ? (matchState.guest.teamName || matchState.guest.username || 'Guest').toUpperCase() : 'AI XI');
-  tossBadge.innerText = `⚫ ${winnerName} WON & ${dec}`;
+  tossBadge.textContent = tossText;
+  tossBadge.classList.toggle('hidden', tossText === 'Unavailable');
+  document.getElementById('arena-toss').textContent = tossText;
+  document.getElementById('arena-format').textContent = isHundredFormat() ? 'The Hundred'
+    : matchState.totalOvers ? matchState.totalOvers + ' overs per innings' : 'Unavailable';
+  document.getElementById('arena-pitch').textContent = matchState.pitch || 'Unavailable';
+  document.getElementById('arena-venue-row').classList.toggle('hidden', !matchState.venue);
+  document.getElementById('arena-venue').textContent = matchState.venue || '';
+  document.getElementById('arena-wickets-row').classList.toggle('hidden', matchState.wicketLimit == null);
+  document.getElementById('arena-wicket-limit').textContent = matchState.wicketLimit ?? '';
 
   // Innings 2 Target logic
   const targetDisplay = document.getElementById('target-display');
-  if (matchState.status === 'innings2' && matchState.score.target !== null) {
+  if (matchState.status === 'innings2' && matchState.score.target != null) {
     targetDisplay.classList.remove('hidden');
     const runsNeeded = Math.max(0, matchState.score.target - matchState.score.runs);
     const totalBalls = matchState.totalBalls || (matchState.totalOvers * ballsPerUnit());
@@ -1174,6 +1235,9 @@ function renderGameplayScreen() {
     
     document.getElementById('target-runs-needed').innerText = runsNeeded;
     document.getElementById('target-balls-left').innerText = ballsRemaining;
+    document.getElementById('target-total').textContent = matchState.score.target;
+    document.getElementById('target-required-rate').textContent = ballsRemaining
+      ? (runsNeeded * 6 / ballsRemaining).toFixed(1) : '—';
   } else {
     targetDisplay.classList.add('hidden');
   }
@@ -1256,12 +1320,13 @@ function renderGameplayScreen() {
   // Render commentary list
   renderCommentaryFeed();
 
-  // Render Scorecard & Squads panels (so they are fresh if user switches tabs)
-  renderScorecardPanel();
-  renderManhattanChart();
-  renderPartnershipHistory();
-  renderOverByOver();
-  renderSquadsPanel();
+  if (activeGameplayTab === 'scorecard') {
+    renderScorecardPanel();
+    renderPartnershipHistory();
+  }
+  if (activeGameplayTab === 'analysis') renderArenaAnalysis();
+  if (activeGameplayTab === 'squads') renderSquadsPanel();
+  if (completed) renderArenaSuperOvers();
 }
 
 // 3. Render Interactive Controls
@@ -1269,7 +1334,7 @@ function renderControlsSection() {
   const activeBlock = document.getElementById('controls-sheet');
   const waitingBlock = document.getElementById('controls-waiting');
   
-  if (matchState.status === 'completed') {
+  if (matchState.status === 'completed' || matchState.myRole === 'spectator') {
     activeBlock.classList.add('hidden');
     return;
   }
@@ -2165,89 +2230,14 @@ async function selectNextBowler(index) {
 }
 
 // Vivid commentary fallback templates used when DB commentary is not available
-const COMM_TEMPLATES = {
-  six: [
-    "{bat} launches it into orbit! MAXIMUM — {bowler} is stunned!",
-    "That's HUGE! {bat} clears the ropes with absolute authority! SIX!",
-    "BOOM! {bat} hits it out of the ground! {bowler} can only watch!",
-    "Muscle power! {bat} deposits it into the stands for SIX!",
-    "What a shot! {bat} smashes {bowler} over the boundary for a MAXIMUM!",
-    "Incredible! {bat} sends it sailing into the crowd! SIX runs!",
-    "{bowler} tries hard but {bat} is in the zone — that's a SIX!",
-  ],
-  four: [
-    "CRACKING shot! {bat} finds the gap and races away for FOUR!",
-    "Beautiful timing from {bat} — it races to the boundary!",
-    "{bat} punishes the loose delivery from {bowler} — FOUR!",
-    "Exquisite placement! {bat} threads through the covers for FOUR!",
-    "Sweetly timed by {bat} — the fielder had no chance!",
-    "The ball races away! {bat} finds the boundary with a perfect drive!",
-    "Well played {bat}! That's four runs to the fence!",
-  ],
-  wicket: [
-    "BOWLED 'EM! {bowler} has {bat} completely deceived!",
-    "OUT! {bat} walks back — brilliant delivery from {bowler}!",
-    "WICKET! {bowler} strikes — {bat} is on his way back to the pavilion!",
-    "CAUGHT! {bat} mistimes the shot and walks off — {bowler} is pumped!",
-    "Huge breakthrough! {bowler} removes {bat} — this changes everything!",
-    "What a delivery! {bowler} foxes {bat} completely — OUT!",
-    "Clean bowled! {bowler} finds the gap and {bat} has to walk!",
-  ],
-  dot: [
-    "Tight line from {bowler} — {bat} can't score off that one. Dot ball.",
-    "Good length delivery — {bat} plays it back cautiously.",
-    "Defended solidly by {bat}. {bowler} keeps it tight.",
-    "{bat} has a look but leaves it — well bowled by {bowler}.",
-    "No run. {bowler} generates good movement — {bat} watches it go.",
-    "Excellent discipline from {bowler}! Dot ball.",
-    "{bat} gets a good look but cannot score — tight bowling.",
-  ],
-  one: [
-    "Quick single — {bat} rotates the strike smartly.",
-    "Pushed into the gap, {bat} calls for one.",
-    "Good running by {bat} — worked away for a single.",
-    "Clever cricket from {bat} — finds a gap for one.",
-    "{bat} nudges it into the leg side and takes the single.",
-    "Strike rotation! {bat} tucks it away for a quick one.",
-  ],
-  two: [
-    "Good running between the wickets — two for {bat}!",
-    "{bat} places it well and they come back for two.",
-    "Two runs — quick feet from {bat}!",
-    "Driven into the outfield — they scamper back for two.",
-    "Excellent running! {bat} and his partner grab a quick two.",
-  ],
-  three: [
-    "Three runs! Excellent running between the wickets from {bat}!",
-    "{bat} finds the gap and they run hard for three!",
-    "Superb running — {bat} picks up three with sharp footwork!",
-  ],
-};
-
-function _randomComm(pool, bat, bowler) {
-  const t = pool[Math.floor(Math.random() * pool.length)];
-  return t.replace(/{bat}/g, bat || 'Batsman').replace(/{bowler}/g, bowler || 'Bowler');
-}
-
-function _enrichCommentaryText(comm) {
-  const bat = comm.batsmanName || '';
-  const bowler = comm.bowlerName || '';
-  // If DB commentary exists (>15 chars), use it — but still inject names if placeholders exist
-  if (comm.text && comm.text.length > 15) {
-    let t = comm.text;
-    // Replace any {bat}/{bowler} style placeholders if they exist in DB commentary
-    if (bat) t = t.replace(/\{bat\}/g, bat).replace(/\{batsman\}/gi, bat);
-    if (bowler) t = t.replace(/\{bowler\}/g, bowler);
-    return t;
+function recordedCommentary(comm) {
+  if (comm.text) {
+    return comm.text.replace(/\{bat(?:sman)?\}/gi, () => comm.batsmanName || 'Batter')
+      .replace(/\{bowler\}/gi, () => comm.bowlerName || 'Bowler');
   }
-  if (comm.isWicket) return _randomComm(COMM_TEMPLATES.wicket, bat, bowler);
-  if (comm.runs === 6) return _randomComm(COMM_TEMPLATES.six, bat, bowler);
-  if (comm.runs === 4) return _randomComm(COMM_TEMPLATES.four, bat, bowler);
-  if (comm.runs === 3) return _randomComm(COMM_TEMPLATES.three, bat, bowler);
-  if (comm.runs === 0) return _randomComm(COMM_TEMPLATES.dot, bat, bowler);
-  if (comm.runs === 1) return _randomComm(COMM_TEMPLATES.one, bat, bowler);
-  if (comm.runs === 2) return _randomComm(COMM_TEMPLATES.two, bat, bowler);
-  return comm.text || `${comm.runs} run${comm.runs !== 1 ? 's' : ''}`;
+  if (comm.isWicket) return 'Wicket';
+  if (comm.runs == null) return '';
+  return comm.runs === 0 ? 'Dot ball' : comm.runs + (comm.runs === 1 ? ' run' : ' runs');
 }
 
 // Render the recent-ball timeline as coloured doodle chips.
@@ -2260,21 +2250,31 @@ function renderBallTimeline() {
     return;
   }
   el.innerHTML = tl
-    .map(c => `<span class="ball-chip chip-${c.kind || 'run'}">${c.label}</span>`)
+    .map(c => `<span class="ball-chip chip-${String(c.kind || 'run').replace(/[^a-z_-]/gi, '')}">${escapeArenaText(c.label)}</span>`)
     .join('');
 }
 
 // Render Commentary feed in Cricbuzz style
 function renderCommentaryFeed() {
   const list = document.getElementById('commentary-list');
-  if (!matchState.commentary || matchState.commentary.length === 0) {
-    list.innerHTML = '<div class="no-commentary">First ball is about to be delivered...</div>';
+  const commentary = matchState.commentary || [];
+  const signature = JSON.stringify(commentary);
+  if (signature === commentarySignature) return;
+  const feed = list;
+  const oldTop = feed.scrollTop;
+  const oldHeight = feed.scrollHeight;
+  const newEvents = document.getElementById('arena-new-events');
+  const readingOlder = oldTop > 40;
+  const hadEvents = Boolean(commentarySignature);
+  commentarySignature = signature;
+  if (!commentary.length) {
+    list.innerHTML = '<div class="no-commentary">No commentary available.</div>';
     return;
   }
 
   list.innerHTML = '';
 
-  matchState.commentary.forEach(comm => {
+  commentary.forEach(comm => {
     const item = document.createElement('div');
 
     if (comm.type === 'end_of_over') {
@@ -2288,11 +2288,11 @@ function renderCommentaryFeed() {
         <div class="over-end-stats">
           <div class="stats-row">
             <div class="stat-batsmen">
-              ${comm.striker ? `<span>${comm.striker.name}: <b>${comm.striker.runs}</b>(${comm.striker.balls}b)</span>` : ''}
-              ${comm.nonStriker ? `<span>${comm.nonStriker.name}: <b>${comm.nonStriker.runs}</b>(${comm.nonStriker.balls}b)</span>` : ''}
+              ${comm.striker ? `<span>${escapeArenaText(comm.striker.name)}: <b>${comm.striker.runs}</b>(${comm.striker.balls}b)</span>` : ''}
+              ${comm.nonStriker ? `<span>${escapeArenaText(comm.nonStriker.name)}: <b>${comm.nonStriker.runs}</b>(${comm.nonStriker.balls}b)</span>` : ''}
             </div>
             <div class="stat-bowler">
-              ${comm.bowler ? `<span>${comm.bowler.name}: <b>${comm.bowler.wickets}-${comm.bowler.runsConceded}</b> (${formatBowlingUnit(comm.bowler.overs, comm.bowler.balls)})</span>` : ''}
+              ${comm.bowler ? `<span>${escapeArenaText(comm.bowler.name)}: <b>${comm.bowler.wickets}-${comm.bowler.runsConceded}</b> (${formatBowlingUnit(comm.bowler.overs, comm.bowler.balls)})</span>` : ''}
             </div>
           </div>
         </div>
@@ -2306,8 +2306,8 @@ function renderCommentaryFeed() {
         <div class="innings-end-body">
           <div class="total-score">Total: <b>${comm.runs}/${comm.wickets}</b> in ${formatInningsProgress(comm.overs, comm.balls)}</div>
           ${comm.target ? `<div class="target-needed">🏹 Target: <b>${comm.target} runs</b></div>` : ''}
-          ${comm.winner ? `<div class="match-winner">🏆 <b>${comm.winner} WIN!</b></div>` : ''}
-          ${comm.motm ? `<div class="match-motm">⭐ MOTM: <b>${comm.motm.name}</b> — ${comm.motm.runs}R ${comm.motm.wickets}W</div>` : ''}
+          ${comm.winner ? `<div class="match-winner">🏆 <b>${escapeArenaText(comm.winner)} WIN!</b></div>` : ''}
+          ${comm.motm ? `<div class="match-motm">⭐ MOTM: <b>${escapeArenaText(comm.motm.name)}</b> — ${comm.motm.runs}R ${comm.motm.wickets}W</div>` : ''}
         </div>
       `;
     } else if (comm.type === 'impact_player') {
@@ -2317,7 +2317,7 @@ function renderCommentaryFeed() {
       item.className = "cricbuzz-impact-row comm-event comm-impact";
       const impactText = comm.text
         || `Impact Player used! ${comm.inPlayer || ''} replaces ${comm.outPlayer || ''}`;
-      item.innerHTML = `<span class="comm-dot">🟢</span><span class="comm-text">${impactText}</span>`;
+      item.innerHTML = `<span class="comm-dot">🟢</span><span class="comm-text">${escapeArenaText(impactText)}</span>`;
     } else if (comm.type === 'retirement' || comm.type === 'batting_order') {
       item.className = 'comm-event comm-new-batsman';
       const icon = document.createElement('span');
@@ -2329,25 +2329,25 @@ function renderCommentaryFeed() {
       item.append(icon, text);
     } else if (comm.type === 'wicket') {
       item.className = "comm-event comm-wicket";
-      item.innerHTML = `<span class="comm-dot">🔴</span><span class="comm-text">${comm.text || ''}</span>`;
+      item.innerHTML = `<span class="comm-dot">🔴</span><span class="comm-text">${escapeArenaText(comm.text || '')}</span>`;
     } else if (comm.type === 'new_batsman') {
       item.className = "comm-event comm-new-batsman";
-      item.innerHTML = `<span class="comm-dot">🟢</span><span class="comm-text">${comm.text || ((comm.name || '') + ' comes in.')}</span>`;
+      item.innerHTML = `<span class="comm-dot">🟢</span><span class="comm-text">${escapeArenaText(comm.text || ((comm.name || '') + ' comes in.'))}</span>`;
     } else if (comm.type === 'new_bowler' || comm.type === 'returning_bowler') {
       item.className = "comm-event comm-new-bowler";
-      item.innerHTML = `<span class="comm-dot">🔵</span><span class="comm-text">${comm.text || ((comm.name || '') + ' to bowl.')}</span>`;
+      item.innerHTML = `<span class="comm-dot">🔵</span><span class="comm-text">${escapeArenaText(comm.text || ((comm.name || '') + ' to bowl.'))}</span>`;
     } else if (comm.type === 'sledge') {
       // On-field chirp (services/sledging.py) — words, not a delivery.
       item.className = "comm-event comm-sledge";
-      item.innerHTML = `<span class="comm-dot">🗣️</span><span class="comm-text">${(comm.text || '').replace(/^🗣️\s*/, '')}</span>`;
+      item.innerHTML = `<span class="comm-dot">🗣️</span><span class="comm-text">${escapeArenaText((comm.text || '').replace(/^🗣️\s*/, ''))}</span>`;
     } else if (comm.type === 'over_complete') {
       item.className = "comm-event comm-over-complete";
-      item.innerHTML = `<span class="comm-dot">⚪</span><span class="comm-text">${comm.text || ''}</span>`;
+      item.innerHTML = `<span class="comm-dot">⚪</span><span class="comm-text">${escapeArenaText(comm.text || '')}</span>`;
     } else {
       item.className = "cricbuzz-ball-row";
 
-      const richText = _enrichCommentaryText(comm);
-      let highlightedText = richText
+      const richText = recordedCommentary(comm);
+      let highlightedText = escapeArenaText(richText)
         .replace(/\b([A-Z][a-z]+ [A-Z][a-z]+)\b/g, "<span class='hl-player'>$1</span>")
         .replace(/\b(WICKET!?|OUT!?|FOUR!?|SIX!?|MAXIMUM|BOUNDARY|BOWLED|CAUGHT|LBW|STUMPED)/gi,
                  "<b class='hl-event'>$1</b>");
@@ -2375,7 +2375,7 @@ function renderCommentaryFeed() {
       }
 
       item.innerHTML = `
-        <div class="ball-over-num">${comm.over}</div>
+        <div class="ball-over-num">${escapeArenaText(comm.over)}</div>
         <div class="ball-outcome-badge ${outcomeClass}">${outcomeText}</div>
         <div class="ball-comm-text">${highlightedText}</div>
       `;
@@ -2383,6 +2383,17 @@ function renderCommentaryFeed() {
 
     list.appendChild(item);
   });
+  if (readingOlder && hadEvents) {
+    feed.scrollTop = oldTop + Math.max(0, feed.scrollHeight - oldHeight);
+    pendingCommentaryEvents = true;
+  }
+  newEvents.classList.toggle('hidden', !pendingCommentaryEvents);
+  newEvents.onclick = () => {
+    pendingCommentaryEvents = false;
+    newEvents.classList.add('hidden');
+    feed.scrollTop = 0;
+    feed.focus({preventScroll: true});
+  };
 }
 
 function getFirstInningsBattingId() {
@@ -2509,7 +2520,7 @@ function renderScorecardPanel() {
     row.className = `tb-row ${isActive ? 'batting-active' : ''}`;
     row.innerHTML = `
       <span class="tb-row-name">
-        <span class="tb-row-name-text">${player.name}</span>${impactTag(player)}
+        <span class="tb-row-name-text">${escapeArenaText(player.name)}</span>${impactTag(player)}
         <span class="tb-row-status ${statusClass}">${statusText}</span>
       </span>
       <span class="tb-num-val">${runs}</span>
@@ -2526,9 +2537,18 @@ function renderScorecardPanel() {
   }
 
   // Extras & total
-  document.getElementById('scorecard-extras').innerText = `Extras ${activeInnings.extras || 0} (w 0, nb 0, lb 0, b 0)`;
+  document.getElementById('scorecard-extras').textContent =
+    'Extras ' + (activeInnings.extrasKnown === false || activeInnings.extras == null ? 'unavailable' : activeInnings.extras);
   document.getElementById('scorecard-total').innerText =
     `TOTAL ${activeInnings.runs}/${activeInnings.wickets} (${formatInningsProgress(activeInnings.overs, activeInnings.balls)})`;
+
+  const falls = activeInnings.fallOfWickets || [];
+  const fallsRow = document.getElementById('arena-fall-of-wickets');
+  fallsRow.classList.toggle('hidden', !falls.length);
+  if (falls.length) {
+    fallsRow.textContent = 'Fall of wickets · ' + falls.map(fall =>
+      fall.runs + '/' + fall.wicket + ' (' + [fall.batter, fall.progress].filter(value => value != null).join(', ') + ')').join(' · ');
+  }
 
   // Yet to bat
   const activeIds = [
@@ -2577,7 +2597,7 @@ function renderScorecardPanel() {
     row.className = 'tb-row';
     row.innerHTML = isHundredFormat() ? `
       <span class="tb-row-name">
-        <span class="tb-row-name-text">${player.name}</span>
+        <span class="tb-row-name-text">${escapeArenaText(player.name)}</span>
         ${isCurrent ? '<span class="tb-row-status active">bowling*</span>' : ''}
       </span>
       <span class="tb-num-val">${oversDisplay || '0b'}</span>
@@ -2587,7 +2607,7 @@ function renderScorecardPanel() {
       <span class="tb-num-val">${er}</span>
     ` : `
       <span class="tb-row-name">
-        <span class="tb-row-name-text">${player.name}</span>
+        <span class="tb-row-name-text">${escapeArenaText(player.name)}</span>
         ${isCurrent ? '<span class="tb-row-status active">bowling*</span>' : ''}
       </span>
       <span class="tb-num-val">${oversDisplay || '0'}</span>
@@ -2882,29 +2902,24 @@ function soTurnIcon(kind) {
 function renderResultScreen() {
   const overlay = document.getElementById('result-overlay');
   overlay.classList.remove('hidden');
-  ['match', 'scorecard', 'squads'].forEach(tab => {
-    document.getElementById(`tab-${tab}`)?.classList.remove('active');
+  gameplayTabs.forEach(tab => {
+    document.getElementById(`tab-${tab}`).classList.remove('active');
+    document.getElementById(`tab-${tab}`).setAttribute('aria-pressed', 'false');
   });
-  document.getElementById('tab-result')?.classList.add('active');
+  document.getElementById('tab-result').classList.add('active');
+  document.getElementById('tab-result').setAttribute('aria-pressed', 'true');
 
   const result = matchState.result;
   renderPostMatchCoaching(result?.coaching);
 
-  if (result && result.winner) {
-    const winnerDisplayName = result.winner.teamName || result.winner.username || 'WINNER';
-    document.getElementById('result-winner-title').innerText = 
-      `${winnerDisplayName.toUpperCase()} WINS!`;
-  } else {
-    document.getElementById('result-winner-title').innerText = "TIE MATCH!";
-  }
+  const winner = result?.winner?.teamName || result?.winner?.username || result?.winnerName;
+  document.getElementById('result-winner-title').textContent = winner ? winner + ' wins'
+    : result?.outcome === 'tie' ? 'Match tied' : result?.outcome === 'cancelled' ? 'Match cancelled' : 'Match completed';
+  const myCoins = result?.viewerReward;
+  document.getElementById('result-reward-amount').closest('.reward-section').classList.toggle('hidden', myCoins == null || myCoins <= 0);
+  if (myCoins > 0) document.getElementById('result-reward-amount').textContent = '+' + myCoins.toLocaleString();
+  document.getElementById('result-outcome-detail').textContent = result?.resultText || '';
 
-  // Calculate my exact awarded coins based on Telegram identity and outcome.
-  const iAmWinner = Boolean(result && result.winner && result.winner.telegramId &&
-    result.winner.telegramId.toString() === userId.toString());
-  const myCoins = result ? (iAmWinner ? result.winnerReward : result.loserReward) : 0;
-  document.getElementById('result-reward-amount').innerText = `+${myCoins.toLocaleString()}`;
-  document.getElementById('result-reward-label').innerText = iAmWinner ? 'coins won' : 'coins earned after loss';
-  document.getElementById('result-outcome-detail').innerText = result?.resultText || (iAmWinner ? 'You won the match.' : 'Match completed.');
 
   const inn1 = matchState.innings[0] || { runs: 0, wickets: 0, overs: 0, balls: 0 };
   const inn2 = matchState.innings[1] || { runs: 0, wickets: 0, overs: 0, balls: 0 };
@@ -2914,39 +2929,7 @@ function renderResultScreen() {
   document.getElementById('result-inn2-score').innerText =
     `${inn2.runs}/${inn2.wickets} (${formatInningsProgress(inn2.overs, inn2.balls)})`;
 
-  // Super Over (if the match was decided in one): show each Super Over innings'
-  // total and the winner, after the two main innings. Guarded so normal matches
-  // are unaffected.
-  const soEl = document.getElementById('result-super-over');
-  if (soEl) {
-    const so = matchState.superOver || result?.superOver;
-    const soInns = so && Array.isArray(so.innings) ? so.innings : [];
-    if (soInns.length) {
-      try {
-        // Full Super Over: per-round collapsible innings with batting/bowling
-        // stats, ball-by-ball commentary and turning points (all escaped).
-        soEl.innerHTML = buildSuperOverHtml(so);
-      } catch (e) {
-        // Defensive fallback to the compact totals view if anything in the
-        // richer render throws — the result screen must still show the result.
-        let html = '<div class="result-super-over-title">🔥 SUPER OVER</div>';
-        soInns.forEach((s, i) => {
-          const label = escapeHtml(s.label || `Super Over Innings ${i + 1}`);
-          const team = s.team ? `${escapeHtml(s.team)} ` : '';
-          html += `<div class="result-super-over-row"><span>${label}</span>` +
-                  `<span>${team}${s.runs | 0}/${s.wickets | 0}</span></div>`;
-        });
-        if (so.winner) {
-          html += `<div class="result-super-over-win">🏆 ${escapeHtml(so.winner)} won the match` +
-                  `${so.marginText ? ' ' + escapeHtml(so.marginText) : ''}</div>`;
-        }
-        soEl.innerHTML = html;
-      }
-      soEl.classList.remove('hidden');
-    } else {
-      soEl.classList.add('hidden');
-    }
-  }
+  renderArenaSuperOvers();
 
   // Render MOTM
   const motmSection = document.getElementById('result-motm-section');
@@ -3173,7 +3156,7 @@ function applyAutoplayLock() {
 let autoplayInFlight = false;
 let autoplayOffPending = false;
 async function runAutoplayAction() {
-  if (!autoplayActive || !matchState) return;
+  if (!autoplayActive || !matchState || document.hidden) return;
   if (autoplayInFlight || matchState.isProcessing) return;
   if (matchState.status === 'completed') return;
 
@@ -3248,13 +3231,13 @@ function buildCumulativeChart(inn1OverRuns, inn2OverRuns, name1, name2, unitLabe
   const line1 = c1.length ? `<polyline class="cum-line cum-inn1" points="${poly(c1)}" />` : '';
   const line2 = c2.length ? `<polyline class="cum-line cum-inn2" points="${poly(c2)}" />` : '';
   const unit = escapeHtml(unitLabel || 'overs');
-  const n1 = escapeHtml(String(name1 || 'Inn 1')).substring(0, 10);
-  const n2 = escapeHtml(String(name2 || 'Inn 2')).substring(0, 10);
+  const n1 = escapeHtml(String(name1 || 'Inn 1'));
+  const n2 = escapeHtml(String(name2 || 'Inn 2'));
   const end1 = c1.length ? ` ${c1[c1.length - 1]}` : '';
   const end2 = c2.length ? ` ${c2[c2.length - 1]}` : '';
   return `<div class="cum-chart-wrap">
       <div class="cum-title">Cumulative runs · by ${unit}</div>
-      <svg class="cum-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+      <svg class="cum-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Cumulative runs by ${unit}. ${n1}${end1}, ${n2}${end2}">
         ${line1}${line2}${dot(c1, 'cum-dot cum-inn1')}${dot(c2, 'cum-dot cum-inn2')}
       </svg>
       <div class="mh-legend">
@@ -3265,6 +3248,53 @@ function buildCumulativeChart(inn1OverRuns, inn2OverRuns, name1, name2, unitLabe
 }
 // ==CUMULATIVE_CHART_END==
 
+function inningsTeamNames() {
+  return [getFirstInningsBattingId(), getSecondInningsBattingId()].map(id => {
+    const side = [matchState.host, matchState.guest].find(team => team && String(team.telegramId) === String(id));
+    return side?.teamName || side?.username || 'AI XI';
+  });
+}
+
+let arenaAnalysisSignature;
+function renderArenaAnalysis() {
+  if (!matchState) return;
+  const series = [matchState.inn1OverRuns || [], matchState.inn2OverRuns || []];
+  const teams = inningsTeamNames();
+  const signature = JSON.stringify([series, teams, matchState.isHundred]);
+  if (signature === arenaAnalysisSignature) return;
+  arenaAnalysisSignature = signature;
+  renderManhattanChart();
+  renderOverByOver();
+  const chart = document.getElementById('arena-run-progression');
+  const latest = Math.max(...series.map(innings => innings.length));
+  if (!latest) {
+    chart.innerHTML = '<p class="sc-empty-msg">Run progression appears after the first completed over.</p>';
+    return;
+  }
+  chart.innerHTML = buildCumulativeChart(series[0], series[1], teams[0], teams[1],
+    isHundredFormat() ? 'sets' : 'overs');
+}
+
+let arenaSuperOverSignature;
+function renderArenaSuperOvers() {
+  const summary = matchState.superOver || matchState.result?.superOver;
+  const innings = summary?.innings || [];
+  const details = matchState.superOverInnings || [];
+  const signature = JSON.stringify([summary, details]);
+  if (signature === arenaSuperOverSignature) return;
+  arenaSuperOverSignature = signature;
+  const scorecard = document.getElementById('arena-super-over-card');
+  const result = document.getElementById('result-super-over');
+  const cardMarkup = innings.length ? buildSuperOverHtml(summary) : '';
+  result.classList.toggle('hidden', !cardMarkup);
+  if (cardMarkup) result.innerHTML = cardMarkup;
+  scorecard.classList.toggle('hidden', !cardMarkup && !details.length);
+  if (cardMarkup) scorecard.innerHTML = cardMarkup;
+  else if (details.length) scorecard.innerHTML = '<h2 class="scorecard-section-title">Super Over</h2>' +
+    details.map(inning => '<p>' + escapeArenaText(inning.bat_team) + ' ' +
+      escapeArenaText(inning.runs) + '/' + escapeArenaText(inning.wickets) + '</p>').join('');
+}
+
 // Manhattan Bar Chart (over-by-over runs)
 function renderManhattanChart() {
   const container = document.getElementById('manhattan-chart-container');
@@ -3272,8 +3302,6 @@ function renderManhattanChart() {
 
   const inn1 = matchState.inn1OverRuns || [];
   const inn2 = matchState.inn2OverRuns || [];
-  const totalOvers = matchState.totalOvers || 20;
-
   if (inn1.length === 0 && inn2.length === 0) {
     container.innerHTML = '<div class="sc-empty-msg">No completed overs yet</div>';
     return;
@@ -3300,18 +3328,14 @@ function renderManhattanChart() {
     </div>`;
   }
 
-  // Legend
-  const hostName = matchState.host ? (matchState.host.teamName || 'Host') : 'Inn 1';
-  const guestName = matchState.guest ? (matchState.guest.teamName || 'Guest') : 'Inn 2';
+  const [first, second] = inningsTeamNames().map(escapeArenaText);
 
-  const unitLabel = isHundredFormat() ? 'sets' : 'overs';
   container.innerHTML = `
     <div class="mh-legend">
-      <span class="mh-leg-dot inn1-dot"></span><span>${hostName.substring(0,8)}</span>
-      <span class="mh-leg-dot inn2-dot" style="margin-left:12px"></span><span>${guestName.substring(0,8)}</span>
+      <span class="mh-leg-dot inn1-dot"></span><span>${first}</span>
+      <span class="mh-leg-dot inn2-dot" style="margin-left:12px"></span><span>${second}</span>
     </div>
     <div class="mh-chart">${bars}</div>
-    ${buildCumulativeChart(inn1, inn2, hostName, guestName, unitLabel)}
   `;
 }
 
@@ -3328,14 +3352,13 @@ function renderOverByOver() {
     return;
   }
 
-  const hostName = matchState.host ? (matchState.host.teamName || 'Host').substring(0, 6) : 'Inn 1';
-  const guestName = matchState.guest ? (matchState.guest.teamName || 'Guest').substring(0, 6) : 'Inn 2';
+  const [first, second] = inningsTeamNames().map(escapeArenaText);
 
   const numOvers = Math.max(inn1.length, inn2.length);
   let rows = `<div class="ovo-header-row">
     <span class="ovo-ov">OV</span>
-    <span class="ovo-val">${hostName}</span>
-    <span class="ovo-val">${guestName}</span>
+    <span class="ovo-val">${first}</span>
+    <span class="ovo-val">${second}</span>
   </div>`;
 
   for (let i = 0; i < numOvers; i++) {
@@ -3394,11 +3417,14 @@ function renderPartnershipHistory() {
   container.innerHTML = rows || '<div class="sc-empty-msg">No partnership data yet</div>';
 }
 
-function showError(msg) {
+function showError(message, retryable = true) {
+  arenaLoadBlocked = true;
+  stopPolling();
   showScreen('loading-screen');
-  document.querySelector('.loading-text').innerHTML = `<span style="color:#ef4444;font-weight:600">${msg}</span>`;
+  document.querySelector('.loading-text').textContent = message;
+  document.querySelector('.loading-sub').textContent = retryable ? 'Check your connection and try again.' : '';
   document.querySelector('.cricket-ball-spinner').style.animationPlayState = 'paused';
-  document.querySelector('.cricket-ball-spinner').style.borderColor = '#ef4444';
+  document.getElementById('arena-retry').classList.toggle('hidden', !retryable);
 }
 
 // Inline event GIFs. Falls back to the existing full-screen animation when
@@ -3518,7 +3544,7 @@ function showEventBoxIdle() {
 
 // Native haptic feedback for the moment (Telegram WebApp only).
 function fireEventHaptic(comm) {
-  if (!(tg && tg.HapticFeedback)) return;
+  if (!window.MiniappTheme.haptics || !tg?.HapticFeedback) return;
   try {
     if (comm.isWicket) tg.HapticFeedback.notificationOccurred('error');
     else if (comm.runs === 4 || comm.runs === 6) tg.HapticFeedback.notificationOccurred('success');

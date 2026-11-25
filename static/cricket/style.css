@@ -13,9 +13,7 @@
   --card-border: rgba(242, 184, 100, 0.14);
   --card-border-bright: rgba(242, 184, 100, 0.32);
 
-  --text-primary: #eef1f8;
   --text-secondary: #99a5c2;
-  --text-muted: #5b6680;
 
   --contrast-rgb: 255, 255, 255;
   --inset-bg: rgba(5, 8, 16, 0.4);
@@ -34,9 +32,7 @@
   --card-border: rgba(40, 44, 58, 0.09);
   --card-border-bright: rgba(232, 158, 53, 0.4);
 
-  --text-primary: #272c3b;
   --text-secondary: #6d7488;
-  --text-muted: #9aa1b2;
 
   --contrast-rgb: 40, 44, 58;
   --inset-bg: rgba(40, 44, 58, 0.045);
@@ -3304,3 +3300,110 @@ table.so-card-table th { color: #ff8a8a; font-weight: 600; opacity: 0.85; }
 #panel-scorecard .tb-row-name, #panel-scorecard .th-player { min-width: 0; overflow-wrap: anywhere; }
 #panel-scorecard .tb-num-val, #panel-scorecard .th-num { flex: 0 0 clamp(21px, 7vw, 36px); font-variant-numeric: tabular-nums; }
 #panel-scorecard .extras-row { border: 0; padding-inline: 0; background: transparent; }
+
+/* CMU Elite broadcast surface */
+:root[data-theme] {
+  --bg-color: var(--bg-main);
+  --header-bg: var(--surface-nav);
+  --card-bg: var(--bg-card);
+  --card-bg-alt: var(--bg-secondary);
+  --card-border: var(--border);
+  --card-border-bright: var(--essential-border);
+  --text-secondary: var(--text-muted);
+  --score-color: var(--text-primary);
+  --primary-accent: var(--primary);
+  --primary-gradient: var(--primary);
+  --blue-accent: var(--blue);
+  --warning-accent: var(--primary-light);
+  --danger-accent: var(--red);
+  --success-accent: var(--green);
+  --sheet-bg: var(--bg-card);
+  --font-family: var(--font-ui);
+  --shadow-soft: none;
+  --border-radius-lg: var(--radius-card);
+}
+body { background-image: none; }
+#app-container {
+  max-width: 760px;
+  min-height: 100dvh;
+  padding: max(10px, var(--safe-top)) max(12px, var(--safe-right)) var(--safe-bottom) max(12px, var(--safe-left));
+}
+.app-header { gap: 5px; margin-bottom: 10px; }
+.header-icon-btn, .header-btn-group .header-icon-btn { padding: 0; justify-content: center; min-width: var(--touch-target); min-height: var(--touch-target); }
+.match-meta-header { min-width: 0; }
+.header-teams, .header-teams span { min-width: 0; overflow-wrap: anywhere; }
+.header-match-id { color: var(--text-muted); }
+.scoreboard-section {
+  position: sticky;
+  top: var(--safe-top);
+  z-index: 8;
+  padding: 14px 16px;
+  border-color: var(--border);
+  margin-bottom: 12px;
+  overflow: visible;
+  box-shadow: 0 8px 14px color-mix(in srgb, var(--bg-main), transparent 55%);
+}
+.scoreboard-section::before, .scoreboard-section::after { content: none; }
+.arena-match-state { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; color: var(--text-muted); font-size: 12px; font-weight: 650; }
+.arena-match-state[data-live="true"]::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+.live-runs { font-variant-numeric: tabular-nums; color: var(--text-primary); text-shadow: none; }
+.bat-team-label { color: var(--text-primary); }
+.bowl-team-label, .toss-badge { color: var(--text-muted); }
+.toss-badge { white-space: normal; }
+.crr-badge, .proj-badge, .overs-display { border-color: var(--border); }
+.target-bar:not(.hidden) { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 5px 12px; color: var(--primary-light); }
+.target-bar strong { font-variant-numeric: tabular-nums; }
+.arena-estimate-label { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; }
+.winprob-track { background: var(--bg-secondary); }
+.tabs-container { border-radius: var(--radius-control); background: var(--card-bg); }
+.tab-btn { min-height: var(--touch-target); border-radius: 8px; padding-inline: 3px; letter-spacing: 0; }
+.tab-btn.active { color: var(--on-primary); }
+.tab-btn.active::after { content: none; }
+.sc-tab-btn, .sheet-toggle-btn, #arena-retry { min-height: var(--touch-target); }
+.scorecard-wrapper { border-radius: var(--radius-card); }
+.scorecard-table, .arena-super-over-innings { font-variant-numeric: tabular-nums; }
+.arena-commentary-heading { display: flex; align-items: center; justify-content: space-between; min-height: 44px; margin-top: 8px; }
+.arena-commentary-heading h2 { margin: 0; font-size: 1rem; }
+.arena-commentary-heading button { min-height: 44px; }
+#commentary-list { overflow-anchor: none; }
+#arena-run-progression svg { display: block; width: 100%; height: auto; overflow: visible; }
+#arena-run-progression text { fill: var(--text-muted); font-family: var(--font-family); font-size: 11px; }
+.arena-chart-grid { fill: none; stroke: var(--border); stroke-width: 1; }
+.arena-chart-series { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.arena-chart-series-1 { stroke: var(--chart-1); }
+.arena-chart-series-2 { stroke: var(--chart-2); stroke-dasharray: 5 3; }
+.mh-bar.inn1, .inn1-dot { background: var(--chart-1); box-shadow: none; }
+.mh-bar.inn2, .inn2-dot { background: var(--chart-2); box-shadow: none; }
+.mh-chart { overflow-x: auto; }
+.mh-legend { flex-wrap: wrap; }
+.ovo-val { overflow-wrap: anywhere; }
+.arena-info { margin-bottom: 12px; }
+.arena-info dl, .arena-super-over-innings dl { margin: 0; }
+.arena-info dl div, .arena-super-over-innings dl div { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.arena-info dt, .arena-super-over-note { color: var(--text-muted); }
+.arena-info dd { text-align: right; }
+.arena-super-over-innings summary { min-height: 44px; align-content: center; cursor: pointer; }
+.arena-super-over-note { padding-block: 6px; }
+#arena-super-over-card { margin-top: 10px; }
+.sheet-content { padding-bottom: calc(12px + var(--safe-bottom)); }
+@media (max-width: 380px) {
+  .header-icon-btn, .header-btn-group .header-icon-btn { min-width: 44px; }
+  .header-match-id { font-size: 9px; }
+  .toss-col { max-width: 38%; }
+  .scoreboard-section { padding: 10px 12px; }
+}
+@media (max-height: 540px) {
+  .scoreboard-section { position: relative; top: auto; }
+}
+.arena-score-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; align-items: baseline; margin-bottom: 8px; }
+.arena-score-meta .arena-match-state { margin-bottom: 0; }
+#arena-first-innings { color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+#arena-fall-of-wickets { white-space: normal; overflow-wrap: anywhere; line-height: 1.5; }
+
+.winprob-bat, .crr-badge { color: var(--green); }
+.winprob-bowl, .proj-badge { color: var(--primary); }
+.overs-display, .tab-btn, .event-gif-idle { color: var(--text-muted); }
+@media (max-width: 520px) {
+  .header-teams { display: none; }
+  .header-match-id { font-size: 12px; }
+}

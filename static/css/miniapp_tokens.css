@@ -1,0 +1,105 @@
+@font-face {
+  font-family: Geist;
+  src: url("../fonts/geist-latin.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-main: #08090C;
+  --bg-card: #181821;
+  --bg-secondary: #2A2C33;
+  --primary: #E7A443;
+  --primary-light: #F8E3B4;
+  --accent-red: #A41E26;
+  --accent-blue: #2D5F97;
+  --accent-orange: #C3652E;
+  --text-primary: #F9F9F8;
+  --text-secondary: #D9DCDE;
+  --text-muted: #999A9B;
+  --border: #414348;
+  --action-fg: #08090C;
+  --green: #6CD9AE;
+  --red: #FF818D;
+  --blue: #91BEF1;
+  --purple: #C6B1FF;
+  --gold-glow: rgb(231 164 67 / 19%);
+  --card-shadow: 0 5px 16px rgb(0 0 0 / 18%);
+  --card-shadow-hover: 0 7px 22px rgb(0 0 0 / 24%);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg-main: #FAF8F4;
+  --bg-card: #FFFFFF;
+  --bg-secondary: #F0ECE5;
+  --primary: #9A5A12;
+  --primary-light: #F5DCAF;
+  --accent-red: #9B2226;
+  --accent-blue: #23507E;
+  --accent-orange: #A64D20;
+  --text-primary: #17171C;
+  --text-secondary: #3C4148;
+  --text-muted: #636A73;
+  --border: #DED7CC;
+  --action-fg: #FFFFFF;
+  --green: #146546;
+  --red: #9B2226;
+  --blue: #23507E;
+  --purple: #5D3C9D;
+  --gold-glow: rgb(154 90 18 / 15%);
+  --card-shadow: 0 5px 16px rgb(83 57 29 / 9%);
+  --card-shadow-hover: 0 7px 22px rgb(83 57 29 / 13%);
+}
+
+
+:root,
+[data-theme="dark"] {
+  --on-primary: #241508;
+  --surface-nav: #101217;
+  --essential-border: #68707e;
+}
+
+[data-theme="light"] {
+  --on-primary: #fff;
+  --surface-nav: #fffdf8;
+  --essential-border: #8d8271;
+}
+
+:root {
+  --surface-input: var(--bg-card);
+  --font-ui: Geist, system-ui, sans-serif;
+  --radius-card: 14px;
+  --radius-control: 10px;
+  --chart-1: var(--primary);
+  --chart-2: var(--blue);
+  --touch-target: 44px;
+  --safe-top: max(env(safe-area-inset-top, 0px), var(--telegram-safe-top, 0px));
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--telegram-safe-bottom, 0px));
+  --safe-left: max(env(safe-area-inset-left, 0px), var(--telegram-safe-left, 0px));
+  --safe-right: max(env(safe-area-inset-right, 0px), var(--telegram-safe-right, 0px));
+}
+
+:root {
+  accent-color: var(--primary);
+  scrollbar-color: var(--essential-border) var(--bg-main);
+}
+
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+
+::selection { background: var(--primary); color: var(--on-primary); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -334,6 +334,23 @@ def _viewer_has_autoplay(viewer_user):
         return False
 
 
+def _fall_of_wickets(entries):
+    """Normalize the two recorded wicket-fall formats, including older saves."""
+    falls = []
+    for entry in entries or []:
+        if not isinstance(entry, (list, tuple)):
+            continue
+        if len(entry) == 4:
+            runs, wicket, batter, progress = entry
+        elif len(entry) == 2:
+            runs, progress = entry
+            batter, wicket = None, len(falls) + 1
+        else:
+            continue
+        falls.append({"runs": runs, "wicket": wicket, "batter": batter, "progress": progress})
+    return falls
+
+
 # ── viewer / match resolution ────────────────────────────────────────
 
 def resolve_viewer(session, user_id_param):
@@ -416,18 +433,22 @@ def _serialize_match_state_impl(session, match, viewer_user):
     match_id = match.id
     state = mwa.get_state(match_id)
     completed_snapshot = False
-    if not state and match.status == "completed":
+    final_scorecard = None
+    if match.status == "completed":
         # Live state is intentionally cleaned up at the end of a match. Restore
         # the persisted read-only Arena snapshot so Play Match can reopen the
         # result summary and scorecard later.
         try:
             from services.match_webapp_service import load_final_scorecard
-            state = (load_final_scorecard(session, match_id) or {}).get("arena_state")
-            completed_snapshot = bool(state)
+            final_scorecard = load_final_scorecard(session, match_id)
+            if not state:
+                state = (final_scorecard or {}).get("arena_state")
+                completed_snapshot = bool(state)
         except Exception:
             logger.exception("completed arena snapshot load failed")
     if not state:
         return None
+    final_scorecard = final_scorecard or {}
 
     next_action = "COMPLETED" if completed_snapshot else mwa.get_next_action(match_id)
     # Prefer the state-machine terminal pointer over the Match row while an
@@ -637,32 +658,41 @@ def _serialize_match_state_impl(session, match, viewer_user):
     bowl_tg = tg_of.get(bowl_team_id)
 
     innings_arr = [None, None]
-    if innings_no == 1 and status != "completed":
+    current_extras = state.get("extras_total")
+    if innings_no == 1:
         innings_arr[0] = {
             "battingId": bat_tg, "bowlingId": bowl_tg,
             "runs": cur_runs, "wickets": cur_wkts,
             "balls": cur_balls, "overs": cur_overs,
-            "extras": state.get("extras_total", 0), "target": None,
+            "extras": current_extras or 0, "extrasKnown": current_extras is not None,
+            "fallOfWickets": _fall_of_wickets(state.get("fow")), "target": None,
         }
         innings_arr[1] = {
             "battingId": bowl_tg, "bowlingId": bat_tg,
             "runs": 0, "wickets": 0, "balls": 0, "overs": 0,
-            "extras": 0, "target": None,
+            "extras": 0, "extrasKnown": False, "target": None,
         }
     else:
         # First innings has finished — read the saved summary.
-        i1_ov, i1_b = _parse_overs_str(state.get("inn1_overs"))
+        if is_hundred_match and state.get("inn1_balls") is not None:
+            i1_ov, i1_b = divmod(state["inn1_balls"], bpu)
+        else:
+            i1_ov, i1_b = _parse_overs_str(state.get("inn1_overs"))
+        extras_fields = ("inn1_wides", "inn1_noballs", "inn1_legbyes")
+        first_extras = sum(int(state[k] or 0) for k in extras_fields) if all(k in state for k in extras_fields) else None
         innings_arr[0] = {
             "battingId": inn1_bat_tg, "bowlingId": inn1_bowl_tg,
             "runs": state.get("inn1_runs", 0), "wickets": state.get("inn1_wickets", 0),
             "balls": i1_b, "overs": i1_ov,
-            "extras": 0, "target": None,
+            "extras": first_extras or 0, "extrasKnown": first_extras is not None,
+            "fallOfWickets": _fall_of_wickets(state.get("inn1_fow")), "target": None,
         }
         innings_arr[1] = {
             "battingId": bat_tg, "bowlingId": bowl_tg,
             "runs": cur_runs, "wickets": cur_wkts,
             "balls": cur_balls, "overs": cur_overs,
-            "extras": state.get("extras_total", 0), "target": target,
+            "extras": current_extras or 0, "extrasKnown": current_extras is not None,
+            "fallOfWickets": _fall_of_wickets(state.get("fow")), "target": target,
         }
 
     # ── players on the field ──
@@ -800,20 +830,9 @@ def _serialize_match_state_impl(session, match, viewer_user):
 
     # ── result (completed) ──
     result = None
-    super_over_summary = None
     if status == "completed":
-        result = _build_result(session, state, match, tg_of, host, guest)
-        # Surface the archived Super Over summary (winner + each round's
-        # scorecard and ball-by-ball commentary) so a match decided in a Super
-        # Over shows it on the Mini App result screen — including when reopened
-        # long after the live state was cleaned up. None for ordinary matches.
-        try:
-            from services.match_webapp_service import load_final_scorecard
-            final_sc = load_final_scorecard(session, match_id)
-            if final_sc:
-                super_over_summary = final_sc.get("super_over")
-        except Exception:
-            logger.exception("super over summary load failed (non-fatal)")
+        result = _build_result(session, state, match, host, guest, viewer_uid)
+        result["resultText"] = final_scorecard.get("result_text") or result.get("resultText")
         # Enrich the final end_of_innings card with winner/MOTM so the
         # commentary feed's innings-end overlay reads the same as the result.
         if isinstance(commentary, list) and result:
@@ -850,6 +869,8 @@ def _serialize_match_state_impl(session, match, viewer_user):
         "type": "pve" if state.get("is_vsbot") else "pvp",
         "chatId": state.get("chat_id"),
         "pitch": (match.pitch_type or state.get("pitch_type") or "normal"),
+        "venue": match.stadium or state.get("stadium"),
+        "wicketLimit": state.get("wicket_limit"),
         "totalOvers": state.get("overs"),
         # "T20" (6-ball overs) or "The100" (5-ball sets, 100 balls/innings) so
         # the client can label progress correctly; absent/"T20" keeps the
@@ -871,7 +892,8 @@ def _serialize_match_state_impl(session, match, viewer_user):
         "myRole": my_role,
         "isMyTurn": bool(is_my_turn),
         "result": result,
-        "superOver": super_over_summary,
+        "superOver": final_scorecard.get("super_over"),
+        "superOverInnings": [inning for inning in final_scorecard.get("innings", []) if inning.get("super_over")],
         "impactPlayer": impact_player,
         "liveBatting": live_batting,
         "deliveryOptions": delivery_options,
@@ -1155,24 +1177,12 @@ def _impact_summary_for_result(state):
         })
     return rows
 
-def _build_result(session, state, match, tg_of, host, guest):
+def _build_result(session, state, match, host, guest, viewer_uid=None):
     """Result overlay payload for a completed match."""
-    inn1_runs = state.get("inn1_runs", 0)
-    inn2_runs = state.get("total_runs", 0)
-    target = state.get("target")
-
-    # Which side batted second this match? bat_team_id is the 2nd-innings
-    # batting side once we're past innings 1.
-    second_bat_uid = state.get("bat_team_id")
-    first_bat_uid = state.get("inn1_bat_team_id")
-
-    winner_uid = None
-    if target and inn2_runs >= target:
-        winner_uid = second_bat_uid
-    elif inn2_runs < inn1_runs:
-        winner_uid = first_bat_uid
-    elif inn2_runs > inn1_runs:           # safety (shouldn't trip if target set)
-        winner_uid = second_bat_uid
+    recorded = state.get("match_result") or {}
+    persisted = match.status == "completed" and (match.winner_id is not None or match.margin_type is not None)
+    winner_uid = match.winner_id if persisted else recorded.get("winner_team_id")
+    outcome = match.margin_type if persisted else recorded.get("margin_type")
 
     def _block_for_uid(uid):
         if uid == match.user1_id:
@@ -1187,6 +1197,9 @@ def _build_result(session, state, match, tg_of, host, guest):
     # finalization (including event multipliers), with a config fallback for
     # older persisted matches.
     awarded = state.get("_completed_rewards") or {}
+    viewer_reward = None
+    if viewer_uid is not None and viewer_uid in {match.user1_id, match.user2_id} and winner_uid is not None:
+        viewer_reward = awarded.get("winner_coins" if viewer_uid == winner_uid else "loser_coins")
     winner_reward = awarded.get("winner_coins", 0)
     loser_reward = awarded.get("loser_coins", 0)
     if not awarded:
@@ -1231,6 +1244,10 @@ def _build_result(session, state, match, tg_of, host, guest):
         "winner": ({"telegramId": win_block.get("telegramId"),
                     "username": win_block.get("username"),
                     "teamName": win_block.get("teamName")} if win_block else None),
+        "winnerName": (state.get("bat_team_name") if winner_uid == state.get("bat_team_id")
+                       else state.get("bowl_team_name")) if winner_uid is not None and not win_block else None,
+        "outcome": outcome,
+        "viewerReward": viewer_reward,
         "winnerReward": winner_reward,
         "loserReward": loser_reward,
         "resultText": (state.get("match_result") or {}).get("text"),

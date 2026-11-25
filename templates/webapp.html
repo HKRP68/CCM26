@@ -4,10 +4,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>CricMaster Ultra</title>
+<title>CMU Elite | CricMaster Ultra</title>
+<meta name="theme-color" content="#08090c">
 <script src="{{ url_for('static', filename='js/ad_reward_confirmation.js', v='2') }}"></script>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="{{ url_for('static', filename='js/miniapp_theme.js', v='1') }}"></script>
+<script src="{{ url_for('static', filename='js/miniapp_theme.js', v='elite-main-1') }}"></script>
 <script>
   // Track third-party SDK load state so a DNS/network failure on these
   // hosts (e.g. net::ERR_NAME_NOT_RESOLVED where an ISP/region blocks the
@@ -2177,21 +2178,23 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_clubhouse.css', v='6') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_player_hub.css', v='6') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_shell.css', v='6') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_blueprint.css', v='3') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_tokens.css', v='elite-main-1') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_blueprint.css', v='elite-main-1') }}">
 </head>
 <body>
 <header class="appbar">
   <button class="cmu-icon-button" id="cmu-back" type="button" aria-label="Go back" onclick="goBack()" hidden>{{ icon('back') }}</button>
   <a class="cmu-brand" href="#home" onclick="event.preventDefault(); navigate('home')" aria-label="CricMaster Ultra home">
-    <span class="cmu-brand-mark">{{ icon('cricket') }}</span><span>CricMaster <b>Ultra</b></span>
+    <span class="cmu-brand-mark">{{ icon('cricket') }}</span><span>CMU <b>Elite</b></span>
   </a>
-  <div class="balance-pill" id="balance-pill" style="display:none;">
-    <span aria-hidden="true">◈</span><span id="bp-coins"></span>
-  </div>
+  <button type="button" class="balance-pill" id="balance-pill" style="display:none;" onclick="navigate('wallet')" aria-label="Wallet">
+    <span aria-hidden="true">{{ icon('wallet') }}</span><span id="bp-coins"></span><span id="bp-gems"></span>
+  </button>
   <button class="cmu-icon-button" type="button" aria-label="Search players" onclick="navigate('browse'); document.getElementById('search-input')?.focus()">{{ icon('search') }}</button>
   <button class="cmu-icon-button" type="button" aria-label="Notifications" id="cmu-notification-button" onclick="navigate('notifications')">
     {{ icon('bell') }}<span id="cmu-unread" hidden></span>
   </button>
+  <button class="cmu-icon-button" type="button" aria-label="Explore and settings" onclick="navigate('explore')">{{ icon('explore') }}</button>
 </header>
 
 <div class="toast-container" id="toasts"></div>
@@ -2223,7 +2226,12 @@
 </div>
 
 <!-- ════ Home / Dashboard screen ════ -->
-<div class="screen active" id="screen-home">
+<main class="screen active" id="screen-home" aria-labelledby="elite-home-heading">
+  <header class="elite-home-heading"><h1 id="elite-home-heading">Clubhouse</h1><p id="elite-home-team"></p></header>
+  <section class="hub-panel" id="elite-home-error" role="status" hidden>
+    <h2 id="elite-home-error-title"></h2><p id="elite-home-error-copy"></p>
+    <button class="hub-button" id="elite-home-retry" type="button" onclick="refreshDashboard()">Retry</button>
+  </section>
   <button id="home-giveaway" class="cmu-giveaway" type="button" onclick="openGiveaways()" hidden>
     {{ icon('gift') }}<span><strong id="home-giveaway-title"></strong><small id="home-giveaway-prize"></small></span><b>View</b>{{ icon('chevron') }}
   </button>
@@ -2239,12 +2247,29 @@
     </button>
     {% endfor %}
   </div>
-  <div class="cmu-play" id="home-match">
-    <div><h2 id="home-match-title">Play Cricket</h2><p id="home-match-detail">Choose a match mode</p></div>
-    <button type="button" id="home-match-action" onclick="navigate('matchcentre')"><span id="home-match-action-label">Play Match</span> {{ icon('chevron') }}</button>
-  </div>
+  <section class="cmu-play elite-home-play" id="home-match" aria-labelledby="home-match-title">
+    <div>
+      <h2 id="home-match-title">Quick Match</h2>
+      <p id="home-match-detail">Set your tactics phase by phase against the AI.</p>
+      <button type="button" id="home-match-action" onclick="navigate('matchcentre')" disabled><span id="home-match-action-label">Play Cricket</span> {{ icon('chevron') }}</button>
+    </div>
+  </section>
 
-  <section class="cmu-section" aria-labelledby="home-rewards-title">
+  <section class="cmu-section elite-record" aria-labelledby="elite-record-title">
+    <div class="cmu-section-heading"><h2 id="elite-record-title">Club record</h2><button class="cmu-text-button" type="button" onclick="navigate('matchcentre')">Match history</button></div>
+    <dl class="elite-record-grid">
+      <div><dt>Matches</dt><dd id="elite-record-played">—</dd></div><div><dt>Won</dt><dd id="elite-record-wins">—</dd></div>
+      <div><dt>Win rate</dt><dd id="elite-record-rate">—</dd></div><div><dt>Squad</dt><dd id="elite-record-squad">—</dd></div>
+    </dl>
+    <p>Account matches excluding Quick Match</p>
+  </section>
+
+  <section class="cmu-section elite-home-results" aria-labelledby="elite-home-results-title">
+    <div class="cmu-section-heading"><h2 id="elite-home-results-title">Recent match</h2></div>
+    <div class="cmu-list"><button id="elite-last-result" type="button" onclick="navigate('matchcentre')">{{ icon('cricket') }}<span>View match history</span>{{ icon('chevron') }}</button></div>
+  </section>
+
+  <section class="cmu-section elite-home-rewards" aria-labelledby="home-rewards-title">
     <div class="cmu-section-heading"><h2 id="home-rewards-title">Rewards</h2>
       <button type="button" class="cmu-text-button" onclick="navigate('rewards')">My gifts <span class="club-gift-count" id="club-gift-count" hidden></span></button>
     </div>
@@ -2259,7 +2284,7 @@
     </div>
   </section>
 
-  <section class="mission-hub cmu-section" aria-labelledby="mission-hub-title">
+  <section class="mission-hub cmu-section elite-home-quests" aria-labelledby="mission-hub-title">
     <div class="mission-hub-head">
       <div><h2 class="mission-hub-title" id="mission-hub-title">Quests</h2><div class="mission-hub-sub" id="mission-hub-sub"></div></div>
       <div class="mission-toggle" aria-label="Quest period">
@@ -2276,7 +2301,7 @@
     </div>
   </section>
 
-  <section class="cmu-section" aria-labelledby="progress-title">
+  <section class="cmu-section elite-home-team" aria-labelledby="progress-title">
     <div class="cmu-section-heading"><h2 id="progress-title">Team &amp; Progress</h2></div>
     <div class="cmu-list">
       {% for route, label, symbol in [('xi','Playing XI','squad'), ('browse','Browse Players','search'), ('career','Career Player','cricket'), ('achievements','Achievements','cup'), ('clubs','Clubs','squad'), ('invite','Invite & Win','gift')] %}
@@ -2284,7 +2309,7 @@
       {% endfor %}
     </div>
   </section>
-  </div>
+</main>
 
 <!-- ════ Lucky Card Pick screen ════
      Screen id, route key and endpoints stay "spin": the quota, the reward
@@ -2349,15 +2374,16 @@
 
 <!-- ════ Browse screen ════ -->
 <div class="screen" id="screen-browse">
+  <header class="elite-page-heading"><h2>Player catalog</h2><p>Search cards, compare ratings and find your next signing.</p></header>
   <div class="search-box">
-    <span>🔍</span>
-    <input type="text" id="search-input" placeholder="Search player or country…" autocomplete="off">
+    {{ icon('search') }}
+    <input type="search" id="search-input" placeholder="Name, country or version" aria-label="Search players" autocomplete="off">
   </div>
 
   <div class="filter-bar">
     <div class="filter-grid">
       <div>
-        <label class="filter-label">Role</label>
+        <label class="filter-label" for="role-select">Role</label>
         <select id="role-select" onchange="onFilterChange()">
           <option value="">All</option>
           <option value="Batsman">BAT</option>
@@ -2367,13 +2393,13 @@
         </select>
       </div>
       <div>
-        <label class="filter-label">Country</label>
+        <label class="filter-label" for="country-select">Country</label>
         <select id="country-select" onchange="onFilterChange()">
           <option value="">All countries</option>
         </select>
       </div>
       <div>
-        <label class="filter-label">OVR</label>
+        <label class="filter-label" for="ovr-select">OVR</label>
         <select id="ovr-select" onchange="onFilterChange()">
           <option value="0-100">All</option>
           <option value="95-100">95+ Legendary</option>
@@ -2382,6 +2408,20 @@
           <option value="75-84">75-84 Silver</option>
           <option value="50-74">50-74 Bronze</option>
         </select>
+      </div>
+      <div>
+        <label class="filter-label" for="version-select">Version</label>
+        <select id="version-select" onchange="onFilterChange()"><option value="">All versions</option></select>
+      </div>
+      <div>
+        <label class="filter-label" for="browse-sort">Sort by</label>
+        <select id="browse-sort" onchange="onFilterChange()">
+          <option value="overall">Overall</option><option value="batting">Batting</option><option value="bowling">Bowling</option>
+        </select>
+      </div>
+      <div>
+        <label class="filter-label" for="browse-layout">View</label>
+        <select id="browse-layout"><option value="list">List</option><option value="cards">Cards</option></select>
       </div>
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:0.5rem;">
@@ -2422,8 +2462,15 @@
     </div>
   </div>
 
-  <div id="browse-summary" style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;"></div>
-  <div id="browse-results"></div>
+  <div class="elite-catalog-tools">
+    <p id="browse-summary" role="status"></p>
+    <button type="button" class="elite-text" id="browse-compare" disabled>Compare cards (0/2)</button>
+  </div>
+  <div id="browse-results" data-layout="list"></div>
+  <dialog id="browse-comparison" aria-labelledby="browse-comparison-title">
+    <div class="elite-section-heading"><h2 id="browse-comparison-title">Compare cards</h2><form method="dialog"><button type="submit" class="elite-text">Close</button></form></div>
+    <div id="browse-comparison-body"></div>
+  </dialog>
   <button id="load-more" class="load-more-btn" style="display:none;" onclick="loadMore()">Load more</button>
 </div>
 
@@ -2434,6 +2481,8 @@
     <div class="hub-actions">
       <button type="button" class="hub-button primary" onclick="navigate('xi')">Playing XI</button>
       <button type="button" class="hub-button" onclick="openCaptainMode()">Captain Mode</button>
+      <button type="button" class="hub-button" onclick="navigate('market')">Player market</button>
+      <button type="button" class="hub-button" onclick="navigate('browse')">Player catalog</button>
       <button type="button" class="hub-button" onclick="toggleSquadSelectMode()" id="squad-select-toggle">Sell multiple</button>
     </div>
   </header>
@@ -2761,7 +2810,8 @@
       <p id="diff-hint" class="page-note">Opponent rating matches your XI average.</p>
     </fieldset>
 
-    <button type="button" class="app-primary match-play" id="qm-play-button" onclick="startMatch()">Go to toss</button>
+    <button type="button" class="app-primary match-play" id="qm-play-button" disabled onclick="startMatch()">Go to toss</button>
+    <button type="button" class="hub-button" id="elite-quick-retry" onclick="checkQuickMatchStatus()" hidden>Check match status</button>
 
     <details class="match-help">
       <summary>Rules and rewards</summary>
@@ -2910,18 +2960,31 @@
   <p id="club-reward-feedback" role="status"></p>
 </section>
 
+<section class="screen" id="screen-compete" aria-labelledby="elite-compete-title">
+  <header class="cmu-page-heading"><h2 id="elite-compete-title">Compete</h2><p id="elite-competition-summary">Check fixtures, standings and tournament registration.</p></header>
+  <div class="cmu-list">
+    <button type="button" onclick="openTournamentDirectory()">{{ icon('cup') }}<span>Tournament Centre</span>{{ icon('chevron') }}</button>
+    <button type="button" onclick="navigate('leaderboard')">{{ icon('ranks') }}<span>Leaderboards</span>{{ icon('chevron') }}</button>
+    <button type="button" onclick="navigate('season')">{{ icon('calendar') }}<span>Season</span>{{ icon('chevron') }}</button>
+    <button type="button" onclick="openFranchiseModes()">{{ icon('market') }}<span>Franchise Auction &amp; Draft</span>{{ icon('chevron') }}</button>
+  </div>
+</section>
+
 <section class="screen" id="screen-explore" aria-labelledby="explore-title">
   <header class="cmu-page-heading"><h2 id="explore-title">Explore</h2></header>
   <div class="cmu-list">
     <button type="button" onclick="openTournamentDirectory()">{{ icon('cup') }}<span>Tournament Centre</span><span id="tn-live-dot" class="cmu-status-dot" hidden></span>{{ icon('chevron') }}</button>
     <button type="button" onclick="navigate('season')">{{ icon('explore') }}<span>Season</span><small id="season-tile-sub"></small>{{ icon('chevron') }}</button>
-    {% for route, label, symbol in [('leaderboard','Leaderboards','cup'), ('traits','Traits Market','market'), ('wallet','Wallet','wallet')] %}
+    {% for route, label, symbol in [('leaderboard','Leaderboards','cup'), ('traits','Traits Market','market'), ('wallet','Wallet','wallet'), ('appearance','Appearance and haptics','explore')] %}
     <button type="button" onclick="navigate('{{ route }}')">{{ icon(symbol) }}<span>{{ label }}</span>{{ icon('chevron') }}</button>
     {% endfor %}
     <button type="button" onclick="openGiveaways()">{{ icon('gift') }}<span>Giveaways</span>{{ icon('chevron') }}</button>
   </div>
   <div class="event-banner" id="event-banner" style="display:none;"></div>
   <h3 class="cmu-community-title">Community</h3>
+  <div class="cmu-list">
+    <button type="button" onclick="openCommunityArena()">{{ icon('cup') }}<span>Community Arena and XP</span>{{ icon('chevron') }}</button>
+  </div>
 <!-- Top community links (channel + official group) — populated from init -->
 <div class="top-links" id="top-links" style="display:none;"></div>
 
@@ -2971,6 +3034,7 @@
       <label><input type="radio" name="appearance" value="light"> Light</label>
       <label><input type="radio" name="appearance" value="auto"> Follow Telegram</label>
     </fieldset>
+    <label><input type="checkbox" name="haptics" checked> Haptic feedback</label>
     <button class="club-link primary" type="submit">Save appearance</button>
     <p role="status" id="cmu-appearance-status"></p>
   </form>
@@ -2994,9 +3058,9 @@
 </section>
 
 <nav class="tabs" id="bottom-nav" aria-label="Main navigation">
-  {% for route, label, symbol in [('home','Home','home'), ('roster','Squad','squad'), ('market','Market','market'), ('packs','Packs','box'), ('explore','Explore','explore')] %}
+  {% for route, label, symbol in [('home','Home','home'), ('roster','Squad','squad'), ('matchcentre','Play','cricket'), ('compete','Compete','cup'), ('rewards','Rewards','gift')] %}
   <button type="button" class="tab{{ ' active' if loop.first else '' }}" data-screen="{{ route }}"{{ ' aria-current=page' if loop.first else '' }} onclick="navigate('{{ route }}')">
-    {{ icon(symbol) }}<span>{{ label }}</span>
+    <span class="elite-nav-icon">{{ icon(symbol) }}</span><span>{{ label }}</span>
   </button>
   {% endfor %}
 </nav>
@@ -3293,9 +3357,11 @@ function toast(msg, type = 'info') {
 
 // ════════════════ Haptic ════════════════
 function haptic(style = 'light') {
+  if (!window.MiniappTheme.haptics) return;
   try { tg?.HapticFeedback?.impactOccurred(style); } catch (e) {}
 }
 function hapticNotif(type = 'success') {
+  if (!window.MiniappTheme.haptics) return;
   try { tg?.HapticFeedback?.notificationOccurred(type); } catch (e) {}
 }
 
@@ -3353,7 +3419,7 @@ function showSetupScreen(setup = {}) {
 }
 
 // ════════════════ Navigation ════════════════
-const tabRoutes = new Set(['home', 'roster', 'market', 'packs', 'explore']);
+const tabRoutes = new Set(['home', 'roster', 'matchcentre', 'compete', 'rewards']);
 const routeHistory = [];
 const screenScroll = new Map();
 let activeTabScreen = 'home';
@@ -3363,6 +3429,10 @@ function goBack() {
   if (sheet.open) { sheet.close('cancel'); return; }
   if (document.getElementById('modal').classList.contains('open')) { closeModal(); return; }
   if (document.getElementById('lm-drawer').classList.contains('open')) { closeScorecard(); return; }
+  if (routeHistory.length && window.history.state?.cmuRoute?.inside) {
+    window.history.back();
+    return;
+  }
   const previous = routeHistory.pop();
   navigate(previous?.screen || activeTabScreen, previous || {tab: activeTabScreen, scroll: 0});
 }
@@ -3371,7 +3441,12 @@ function navigate(screen, back = null) {
   const target = document.getElementById('screen-' + screen);
   if (!target) return;
   const changed = currentScreen !== screen;
+  const browserHistory = window.history;
+  const oldState = browserHistory?.state?.cmuRoute;
   if (changed) {
+    if (!back && oldState) {
+      browserHistory.replaceState({cmuRoute: {...oldState, scroll: window.scrollY}}, '');
+    }
     screenScroll.set(currentScreen, window.scrollY);
     if (back) activeTabScreen = back.tab;
     else if (tabRoutes.has(screen)) {
@@ -3399,6 +3474,11 @@ function navigate(screen, back = null) {
     else tab.removeAttribute('aria-current');
   }
   currentScreen = screen;
+  if (changed && !back && oldState) {
+    browserHistory.pushState({cmuRoute: {
+      screen, tab: activeTabScreen, trail: routeHistory.slice(), scroll: 0, inside: true,
+    }}, '');
+  }
   const canGoBack = !tabRoutes.has(screen) && screen !== 'onboarding';
   document.getElementById('cmu-back').hidden = !canGoBack;
   if (canGoBack) tg?.BackButton?.show();
@@ -3452,17 +3532,26 @@ function navigate(screen, back = null) {
 }
 
 // ════════════════ Dashboard ════════════════
-async function refreshDashboard() {
+let dashboardRequest;
+function refreshDashboard() {
+  if (!dashboardRequest) dashboardRequest = loadDashboard().finally(() => { dashboardRequest = null; });
+  return dashboardRequest;
+}
+
+async function loadDashboard() {
   const { ok, status, data } = await api('/api/webapp/init');
+  const failure = document.getElementById('elite-home-error');
   if (!ok) {
-    if (status === 403 && data.error === 'not_debuted') {
-      toast(data.message || 'Run /debut in the bot first', 'error');
-      document.getElementById('user-name').textContent = '⚠️ Not debuted';
-      return;
-    }
-    toast(data.message || 'Couldn\'t load dashboard', 'error');
-    return;
+    if (maintenanceShown) return false;
+    failure.hidden = false;
+    document.getElementById('elite-home-error-title').textContent =
+      status === 401 ? 'Open CMU in Telegram' : 'Clubhouse unavailable';
+    document.getElementById('elite-home-error-copy').textContent =
+      status === 401 ? 'Reopen the Mini App from your bot or group.' : data.message || 'Check your connection and try again.';
+    document.getElementById('elite-home-retry').hidden = status === 401;
+    return false;
   }
+  failure.hidden = true;
   if (data.needs_setup) {
     showSetupScreen(data.setup || {});
     return;
@@ -3483,6 +3572,18 @@ async function refreshDashboard() {
   const pill = document.getElementById('balance-pill');
   pill.style.display = 'flex';
   document.getElementById('bp-coins').textContent = formatNum(userData.coins);
+  document.getElementById('bp-gems').textContent = '· ' + formatNum(userData.gems);
+  pill.setAttribute('aria-label', 'Wallet, ' + userData.coins.toLocaleString() + ' coins, ' + userData.gems.toLocaleString() + ' gems');
+  document.getElementById('elite-home-team').textContent = userData.team_name || '';
+  document.getElementById('elite-record-played').textContent = userData.matches_played;
+  document.getElementById('elite-record-wins').textContent = userData.matches_won;
+  document.getElementById('elite-record-rate').textContent = userData.matches_played ? userData.win_rate + '%' : '—';
+  document.getElementById('elite-record-squad').textContent = userData.roster_count + '/' + MAX_ROSTER;
+  document.querySelector('#elite-last-result span').textContent = data.latest_match?.result || 'View match history';
+  const featured = data.tournament?.tournaments?.[0]?.name;
+  document.getElementById('elite-competition-summary').textContent = featured
+    ? featured + ' is active. Open the directory for fixtures and standings.' : 'Check fixtures, standings and tournament registration.';
+
 
   const sq = data.gspin?.quota;
   const dq = data.daily?.quota;
@@ -3532,6 +3633,7 @@ async function refreshDashboard() {
 
   // Keep the first screen useful: surface missions and the free reward state.
   refreshHomeHighlights();
+  return true;
 }
 
 async function refreshHomeHighlights() {
@@ -3564,19 +3666,65 @@ function updateHomeFreePack(data) {
   window.CmuOverview?.freePack({...data, ready: eligible});
 }
 
-function renderResumeBanner(lm) {
+function renderResumeBanner(live) {
   const action = document.getElementById('home-match-action');
-  const live = Boolean(lm?.match_id);
-  const inQuickMatch = ['playing', 'phases', 'innings-break'].includes(quickMatchStep);
-  document.getElementById('home-match').classList.toggle('is-live', live);
-  document.getElementById('home-match-title').textContent = live ? 'Live match' : 'Play Cricket';
-  document.getElementById('home-match-detail').textContent = live
-    ? `${lm.bat_team} vs ${lm.bowl_team}`
-    : inQuickMatch ? 'Quick Match in progress' : 'Choose a match mode';
-  document.getElementById('home-match-action-label').textContent = live || inQuickMatch ? 'Resume match' : 'Play Match';
-  document.getElementById('matchcentre-play').textContent = inQuickMatch ? 'Resume Quick Match' : 'Play Quick Match';
-  action.onclick = live ? () => openLiveMatch(lm.match_id)
-    : () => navigate(inQuickMatch ? 'match' : 'matchcentre');
+  const quick = ['playing', 'phases', 'innings-break'].includes(quickMatchStep) || lastInitData?.quick_match_active;
+  const fixture = lastInitData?.tournament?.my_fixture;
+  const timedFixture = fixture && Date.parse(fixture.deadline) > Date.now();
+  const needsXi = lastInitData?.onboarding?.xi_set === false;
+  let label = 'Play Cricket', title = 'Quick Match', detail = 'Set your tactics phase by phase against the AI.';
+  let open = () => navigate('matchcentre');
+  if (live?.match_id) {
+    title = 'Resume your match'; label = 'Resume match';
+    detail = [live.bat_team, live.bowl_team].filter(Boolean).join(' vs ');
+    open = () => openLiveMatch(live.match_id);
+  } else if (quick) {
+    title = 'Quick Match in progress'; label = 'Resume Quick Match';
+    detail = 'Return to your score and choose your next tactic.';
+    open = () => navigate('match');
+  } else if (timedFixture) {
+    title = 'Prepare for your fixture'; label = 'View fixtures';
+    detail = fixture.teams.join(' vs ') + ' · Deadline ' + fixture.deadline_label;
+    open = () => openDirectoryTournament(fixture.tournament_id, false, 'matches');
+  } else if (needsXi) {
+    title = 'Set your Playing XI'; label = 'Manage Playing XI';
+    detail = 'Choose your lineup and batting order before taking the field.';
+    open = () => navigate('xi');
+  }
+  document.getElementById('home-match-title').textContent = title;
+  document.getElementById('home-match-detail').textContent = detail;
+  document.getElementById('home-match-action-label').textContent = label;
+  document.getElementById('matchcentre-play').textContent = quick ? 'Resume Quick Match' : 'Play Quick Match';
+  action.disabled = !userData;
+  action.onclick = open;
+}
+
+function openCommunityArena() {
+  const fragment = location.hash.startsWith('#tgWebApp') ? location.hash : '';
+  location.href = '/webapp/community' + fragment;
+}
+
+function openFranchiseModes(season) {
+  const base = {{ franchise_website | tojson }};
+  if (base) {
+    try {
+      const url = new URL(base);
+      if (url.protocol === 'https:' && !url.username && !url.password) {
+        if (season) url.searchParams.set('season_id', season);
+        if (tg?.openLink) tg.openLink(url.href);
+        else window.open(url.href, '_blank', 'noopener');
+        return;
+      }
+    } catch (_) { /* Use the bot link when the franchise site is unavailable. */ }
+  }
+  const username = lastInitData?.bot_username;
+  if (!/^[a-zA-Z0-9_]{5,32}$/.test(username || '')) {
+    toast('Open the CMU bot in Telegram for Franchise Auction and Draft.');
+    return;
+  }
+  const link = 'https://t.me/' + username;
+  if (tg?.openTelegramLink) tg.openTelegramLink(link);
+  else window.open(link, '_blank', 'noopener');
 }
 
 function renderTopLinks(branding) {
@@ -4371,6 +4519,7 @@ function showMatchStep(step) {
 }
 
 function openQuickMatch() {
+  if (quickMatchActionPending) return;
   if (quickMatchStep === 'result') resetMatchScreen();
   else if (quickMatchStep === 'intro') loadMatchQuota();
 }
@@ -4387,15 +4536,17 @@ async function endQuickMatch(button) {
   try {
     if (!await askConfirm('End this Quick Match? The current score will be lost.')) return;
     const { ok, data } = await api('/api/webapp/quickmatch/abandon', {});
-    if (ok) resetMatchScreen();
-    else toast(data.message || 'Could not end match. Try again.', 'error');
+    if (ok) {
+      if (lastInitData) lastInitData.quick_match_active = false;
+      resetMatchScreen();
+    } else toast(data.message || 'Could not end match. Try again.', 'error');
   } finally {
     quickMatchActionPending = false;
     button.disabled = false;
   }
 }
 
-async function loadMatchQuota() {
+async function loadMatchQuota(recoverResult = false) {
   const display = document.getElementById('qm-quota-display');
   const btn = document.getElementById('qm-play-button');
   if (!display) return;
@@ -4405,15 +4556,42 @@ async function loadMatchQuota() {
   if (!ok) {
     matchQuota = null;
     display.textContent = 'Limit unavailable';
-    btn.disabled = false;
+    btn.disabled = true;
     btn.textContent = 'Go to toss';
+    document.getElementById('elite-quick-retry').hidden = false;
     return;
   }
+  document.getElementById('elite-quick-retry').hidden = true;
   matchQuota = data;
+  if (lastInitData) lastInitData.quick_match_active = Boolean(data.match && !data.match.complete);
+  if (data.match && !data.match.complete) {
+    matchState = data.match;
+    if (matchState.innings === 2 && matchState.phase_index === 0) showInningsBreak();
+    else {
+      renderPhase();
+      showMatchStep('phases');
+    }
+    return;
+  }
+  if (recoverResult && data.scorecard) {
+    matchState = data.match;
+    renderMatchResult(data.scorecard);
+    showMatchStep('result');
+    refreshDashboard();
+    return;
+  }
   const remaining = data.remaining;
   display.textContent = `${remaining} of ${data.limit} left`;
   btn.disabled = remaining <= 0;
   btn.textContent = remaining <= 0 ? 'Daily limit reached' : 'Go to toss';
+}
+
+async function checkQuickMatchStatus() {
+  quickMatchStep = 'intro';
+  ['intro', 'toss', 'phases', 'innings-break', 'playing', 'result'].forEach(step => {
+    document.getElementById('match-step-' + step).style.display = step === 'intro' ? 'block' : 'none';
+  });
+  await loadMatchQuota(true);
 }
 
 function startMatch() {
@@ -4436,9 +4614,10 @@ async function submitToss(choice) {
   haptic('medium');
   matchQuotaRequest++;
   showMatchStep('playing');
-  const { ok, data } = await api('/api/webapp/quickmatch/start', {
+  const { ok, status, data } = await api('/api/webapp/quickmatch/start', {
     toss_choice: choice,
     difficulty: matchDifficulty,
+    resume_existing: true,
   });
   if (!ok) {
     if (data.error === 'invalid_xi') {
@@ -4447,6 +4626,8 @@ async function submitToss(choice) {
     } else if (data.error === 'daily_limit_reached') {
       showMatchStep('intro');
       toast(data.message, 'error');
+    } else if (status === 0 || status >= 500 || status === 409) {
+      await checkQuickMatchStatus();
     } else {
       toast(data.message || 'Could not start match', 'error');
       showMatchStep('intro');
@@ -4455,8 +4636,11 @@ async function submitToss(choice) {
   }
   matchState = data.state;
   if (data.quota) matchQuota = data.quota;
-  renderPhase();
-  showMatchStep('phases');
+  if (matchState.innings === 2 && matchState.phase_index === 0) showInningsBreak();
+  else {
+    renderPhase();
+    showMatchStep('phases');
+  }
 }
 
 function showXiErrorModal(errors) {
@@ -4555,10 +4739,13 @@ async function pickPhase(choice) {
   const buttons = document.querySelectorAll('#match-step-phases button');
   buttons.forEach(button => button.disabled = true);
   try {
-    const { ok, data } = await api('/api/webapp/quickmatch/phase', { choice });
+    const expected = [matchState.match_id, matchState.innings, matchState.phase_index];
+    const { ok, status, data } = await api('/api/webapp/quickmatch/phase', { choice, expected });
     if (!ok) {
       toast(data.message || 'Could not play this phase. Try again.', 'error');
-      if (data.error === 'no_match') resetMatchScreen();
+      if (status === 0 || status === 409 || status >= 500 || ['no_match','already_complete'].includes(data.error)) {
+        await checkQuickMatchStatus();
+      }
       return;
     }
 
@@ -5693,13 +5880,17 @@ function showReward(r) {
 
 // ════════════════ Browse (players with filters) ════════════════
 let browsePage = 1;
-let browseInFlight = false;
+let browseRequest = 0;
+let browseLoading = false;
+let browsePlayers = new Map();
+const compareCards = new Map();
 let browseTimer = null;
 let countriesLoaded = false;
 
 document.getElementById('search-input').addEventListener('input', e => {
   clearTimeout(browseTimer);
-  browseTimer = setTimeout(() => onFilterChange(), 280);
+  browseRequest++;
+  browseTimer = setTimeout(onFilterChange, 280);
 });
 
 function resetFilters() {
@@ -5707,6 +5898,8 @@ function resetFilters() {
   document.getElementById('role-select').value = '';
   document.getElementById('country-select').value = '';
   document.getElementById('ovr-select').value = '0-100';
+  document.getElementById('version-select').value = '';
+  document.getElementById('browse-sort').value = 'overall';
   document.getElementById('unowned-only').checked = false;
   ['adv-min-ovr', 'adv-max-ovr', 'adv-min-price', 'adv-max-price'].forEach(id => {
     const el = document.getElementById(id);
@@ -5724,8 +5917,8 @@ function toggleAdvanced() {
 }
 
 function onFilterChange() {
-  browsePage = 1;
-  document.getElementById('browse-results').innerHTML = '';
+  clearTimeout(browseTimer);
+  document.getElementById('browse-results').replaceChildren();
   doBrowse(false);
 }
 
@@ -5739,12 +5932,16 @@ async function loadCountries() {
     opt.value = c; opt.textContent = c;
     sel.appendChild(opt);
   });
+  const versions = document.getElementById('version-select');
+  (data.versions || []).forEach(version => versions.add(new Option(version, version)));
   countriesLoaded = true;
 }
 
 async function doBrowse(append) {
-  if (browseInFlight) return;
-  browseInFlight = true;
+  if (append && browseLoading) return;
+  const request = ++browseRequest;
+  const page = append ? browsePage + 1 : 1;
+  browseLoading = true;
 
   const q = document.getElementById('search-input').value;
   const role = document.getElementById('role-select').value;
@@ -5766,8 +5963,11 @@ async function doBrowse(append) {
   const moreBtn = document.getElementById('load-more');
   const summary = document.getElementById('browse-summary');
 
+  moreBtn.disabled = true;
   if (!append) {
-    resultsEl.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+    browsePlayers.clear();
+    resultsEl.innerHTML = '<div class="empty" role="status">Loading players…</div>';
+    moreBtn.style.display = 'none';
   }
 
   const body = {
@@ -5777,19 +5977,27 @@ async function doBrowse(append) {
     min_rating: minR,
     max_rating: maxR,
     only_unowned: onlyUnowned,
-    page: 1,
-    per_page: 'all',
+    version: document.getElementById('version-select').value,
+    sort: document.getElementById('browse-sort').value,
+    page,
+    per_page: 24,
   };
   if (!isNaN(advMinPrice) && advMinPrice > 0) body.min_price = advMinPrice;
   if (!isNaN(advMaxPrice) && advMaxPrice > 0) body.max_price = advMaxPrice;
 
   const { ok, data } = await api('/api/webapp/players', body);
-  browseInFlight = false;
+  if (request !== browseRequest) return;
+  browseLoading = false;
+  moreBtn.disabled = false;
   if (!ok) {
-    resultsEl.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Failed')}</div>`;
+    summary.textContent = 'Could not load players.';
+    if (!append) resultsEl.innerHTML = '<div class="empty"><button type="button" class="hub-button" onclick="doBrowse(false)">Retry</button></div>';
     return;
   }
-  const html = (data.results || []).map(p => playerRow(p)).join('');
+  browsePage = page;
+  const rows = data.results || [];
+  rows.forEach(player => browsePlayers.set(player.id, player));
+  const html = rows.map(playerRow).join('');
   if (append) {
     resultsEl.insertAdjacentHTML('beforeend', html);
   } else {
@@ -5799,13 +6007,12 @@ async function doBrowse(append) {
       resultsEl.innerHTML = html;
     }
   }
-  const shown = (data.results || []).length;
+  const shown = browsePlayers.size;
   summary.textContent = `${data.total || 0} player${data.total === 1 ? '' : 's'} found · showing ${shown}`;
   moreBtn.style.display = data.has_more ? 'block' : 'none';
 }
 
 function loadMore() {
-  browsePage++;
   doBrowse(true);
 }
 
@@ -5827,17 +6034,67 @@ function playerRow(p) {
   else if (p.blocked) badges += `<span class="badge-mini blocked">Blocked</span>`;
   const image = cardImg(p.card_url || playerCardUrl(p.id), `${p.name} card`, 'player-card-thumb browse');
   return `
-    <div class="player-row ${cls.join(' ')}" onclick="openPlayer(${p.id})">
-      ${image}
-      <div class="player-rating ${ratingTier(p.rating)}">${p.rating}</div>
-      <div class="player-info">
-        <div class="player-name">${escapeHtml(p.name)} ${badges}</div>
-        <div class="player-meta">${escapeHtml(p.category)} · ${escapeHtml(p.country)}</div>
-      </div>
-      <div class="player-price">${formatNum(p.price)} 🪙</div>
-    </div>
+    <article class="elite-catalog-row">
+      <button type="button" class="player-row ${cls.join(' ')}" onclick="openPlayer(${p.id})">
+        ${image}
+        <span class="player-rating ${ratingTier(p.rating)}">${p.rating}</span>
+        <span class="player-info">
+          <span class="player-name">${escapeHtml(p.name)} ${badges}</span>
+          <span class="player-meta">${escapeHtml(p.category)} · ${escapeHtml(p.country)}</span>
+        </span>
+        <span class="player-price">${formatNum(p.price)} coins</span>
+      </button>
+      <button type="button" class="elite-text elite-compare-choice" data-compare-id="${p.id}" aria-label="Select ${escapeHtmlAttr(p.name + ' ' + p.version)} for comparison" aria-pressed="${compareCards.has(p.id)}">Compare</button>
+    </article>
   `;
 }
+
+document.getElementById('browse-layout').addEventListener('change', event => {
+  document.getElementById('browse-results').dataset.layout = event.target.value;
+});
+
+document.getElementById('browse-results').addEventListener('click', event => {
+  const button = event.target.closest('[data-compare-id]');
+  if (!button) return;
+  const id = Number(button.dataset.compareId);
+  if (compareCards.has(id)) compareCards.delete(id);
+  else if (compareCards.size < 2 && browsePlayers.has(id)) compareCards.set(id, browsePlayers.get(id));
+  else {
+    toast('Clear a selected card before adding another.', 'info');
+    return;
+  }
+  button.setAttribute('aria-pressed', String(compareCards.has(id)));
+  updateComparisonButton();
+});
+
+function updateComparisonButton() {
+  const button = document.getElementById('browse-compare');
+  button.disabled = compareCards.size === 0;
+  button.textContent = 'Compare cards (' + compareCards.size + '/2)';
+}
+
+document.getElementById('browse-compare').addEventListener('click', () => {
+  const dialog = document.getElementById('browse-comparison');
+  const root = document.getElementById('browse-comparison-body');
+  const cards = Array.from(compareCards.values());
+  const names = cards.map(player => `<th scope="col">${escapeHtml(player.name)}<small>${escapeHtml(player.version)} · ${escapeHtml(player.category)}</small></th>`).join('');
+  const fields = [['Overall', 'rating'], ['Batting', 'bat_rating'], ['Bowling', 'bowl_rating']];
+  const metrics = fields.map(([label, key]) => {
+    const difference = cards.length === 2 ? cards[1][key] - cards[0][key] : null;
+    return `<tr><th scope="row">${label}</th>${cards.map(player => '<td>' + escapeHtml(String(player[key])) + '</td>').join('')}${difference == null ? '' : '<td>' + (difference > 0 ? '+' : '') + difference + '</td>'}</tr>`;
+  }).join('');
+  root.innerHTML = `<div class="lm-sc-scroll"><table><thead><tr><th scope="col">Rating</th>${names}${cards.length === 2 ? '<th scope="col">Δ second</th>' : ''}</tr></thead><tbody>${metrics}</tbody></table></div>
+    ${cards.length === 1 ? '<p>Pick one more card to compare ratings.</p>' : ''}
+    <button type="button" class="elite-text" id="browse-clear-comparison">Clear selection</button>`;
+  document.getElementById('browse-clear-comparison').onclick = () => {
+    compareCards.clear();
+    document.querySelectorAll('[data-compare-id]').forEach(button => button.setAttribute('aria-pressed', 'false'));
+    updateComparisonButton();
+    dialog.close();
+    document.getElementById('search-input').focus();
+  };
+  dialog.showModal();
+});
 
 function escapeHtml(s) {
   if (!s) return '';
@@ -6460,13 +6717,13 @@ function renderXiList() {
         <div class="xi-handle">⠿</div>
         <div class="xi-pos">${i + 1}</div>
         <span onclick="openPlayerDetail(${r.roster_id})">${cardImg(r.card_url || playerCardUrl(r.player_id), `${r.name} card`, 'player-card-thumb xi')}</span>
-        <div class="xi-info" onclick="openPlayerDetail(${r.roster_id})" style="cursor:pointer;">
-          <div class="xi-name">${escapeHtml(r.name)} ${ratingBadge(r.rating)}${r.is_captain ? ' <span class="captain-tag" style="position:static;margin-left:0.3rem;">C</span>' : r.is_vice_captain ? ' <span>VC</span>' : ''}</div>
-          <div class="xi-meta"><span class="cat-tag cat-${categoryKey(r.category)}">${escapeHtml(XI_CATEGORY_SHORT[r.category] || r.category)}</span> · ${escapeHtml(r.country)}</div>
-        </div>
+        <button type="button" class="xi-info xi-player-name" onclick="openPlayerDetail(${r.roster_id})">
+          <span class="xi-name">${escapeHtml(r.name)} ${ratingBadge(r.rating)}${r.is_captain ? ' <span class="captain-tag" style="position:static;margin-left:0.3rem;">C</span>' : r.is_vice_captain ? ' <span>VC</span>' : ''}</span>
+          <span class="xi-meta"><span class="cat-tag cat-${categoryKey(r.category)}">${escapeHtml(XI_CATEGORY_SHORT[r.category] || r.category)}</span> · ${escapeHtml(r.country)}</span>
+        </button>
         <div class="xi-move">
-          <button class="xi-move-btn" onclick="moveXiRow(${r.roster_id}, -1)" ${isFirst ? 'disabled' : ''} title="Move up">▲</button>
-          <button class="xi-move-btn" onclick="moveXiRow(${r.roster_id}, +1)" ${isLast ? 'disabled' : ''} title="Move down">▼</button>
+          <button class="xi-move-btn" onclick="moveXiRow(${r.roster_id}, -1)" ${isFirst ? 'disabled' : ''} aria-label="Move ${escapeHtmlAttr(r.name)} up">▲</button>
+          <button class="xi-move-btn" onclick="moveXiRow(${r.roster_id}, +1)" ${isLast ? 'disabled' : ''} aria-label="Move ${escapeHtmlAttr(r.name)} down">▼</button>
         </div>
       </div>
     `;
@@ -6479,7 +6736,7 @@ function renderXiList() {
   if (typeof Sortable === 'undefined' || window.__sortableFailed) return;
   try {
     xiSortable = Sortable.create(list, {
-      animation: 150,
+      animation: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 150,
       handle: '.xi-handle',
       ghostClass: 'xi-ghost',
       onEnd: persistXiOrder,
@@ -9517,15 +9774,17 @@ async function joinTournament(id, button) {
   }
 }
 
-function openDirectoryTournament(id, archive) {
+function openDirectoryTournament(id, archive, section = 'overview') {
   stopTournamentPolling();
   tnDirectoryOpen = false;
   tnArchive = archive;
   tnId = id;
   tnData = null;
-  tnSub = 'overview';
+  tnSub = section;
+  if (section === 'matches') tnSeg = 'upcoming';
   tnInvalidateStats();
-  loadTournament();
+  if (currentScreen === 'tournament') loadTournament();
+  else navigate('tournament');
 }
 
 function tnTeamsView(data) {
@@ -9896,11 +10155,12 @@ function maybeFantasyRedirect() {
 
 // (2) Telegram start_param (?startapp=spin) used by group t.me deep links.
 function handleHashDeepLink() {
-  const validScreens = ['home', 'explore', 'notifications', 'appearance', 'traits', 'career', 'matchcentre', 'wallet', 'rewards', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'profile', 'season', 'clubs', 'playerdetail', 'livematch', 'tournament'];
+  const validScreens = ['home', 'compete', 'explore', 'notifications', 'appearance', 'traits', 'career', 'matchcentre', 'wallet', 'rewards', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'profile', 'season', 'clubs', 'playerdetail', 'livematch', 'tournament'];
   const alias = {
     // 'wheel' and 'gspin' stay mapped: deep links to the old prize wheel are
     // already out there in group chats and still belong on this screen.
     gspin: 'spin', wheel: 'spin', pick: 'spin', cards: 'spin',
+    play: 'matchcentre', more: 'explore', settings: 'appearance',
     myroster: 'roster', squad: 'roster',
     lb: 'leaderboard', ranks: 'leaderboard', pack: 'packs',
     quest: 'quests', achievement: 'achievements', club: 'clubs',
@@ -9926,6 +10186,9 @@ function handleHashDeepLink() {
   // Strip an origin-chat suffix (e.g. "home_c-100123") used to echo Mini App
   // activity back to a group; the tab name is everything before "_c<digits>".
   target = target.replace(/_c-?\d+$/, '');
+  if (target === 'community') { openCommunityArena(); return; }
+  const franchise = target.match(/^(?:auction(?:_(\d+))?|franchisedraft)$/);
+  if (franchise) { openFranchiseModes(franchise[1]); return; }
   target = alias[target] || target;
   // CMU News / poll links from the channel: news_<id>, poll_<id>, news.
   const newsLink = target.match(/^news_(\d+)$/);
@@ -9950,7 +10213,17 @@ function handleHashDeepLink() {
 // Open directly into a match if launched via a match/scorecard link,
 // WITHOUT first showing the dashboard (no home-screen flash).
 (function bootstrap() {
+  window.MiniappTheme.start(tg);
   tg?.BackButton?.onClick(goBack);
+  window.history.replaceState({cmuRoute: {screen: currentScreen, tab: activeTabScreen, trail: [], scroll: 0}}, '');
+  window.history.scrollRestoration = 'manual';
+  window.addEventListener('popstate', event => {
+    const route = event.state?.cmuRoute;
+    if (!route || maintenanceShown || currentScreen === 'onboarding') return;
+    routeHistory.splice(0, routeHistory.length, ...route.trail);
+    navigate(route.screen, route);
+  });
+  window.addEventListener('hashchange', () => { if (userData && !maintenanceShown) handleHashDeepLink(); });
   // Fantasy deep link → jump straight to the picker (no dashboard flash).
   if (maybeFantasyRedirect()) return;
   const ml = resolveMatchLaunch();
@@ -9958,7 +10231,7 @@ function handleHashDeepLink() {
     handleHashDeepLink();   // opens the match screen immediately
     refreshDashboard();     // load home data quietly in the background
   } else {
-    refreshDashboard().then(() => { handleHashDeepLink(); });
+    refreshDashboard().then(loaded => { if (loaded) handleHashDeepLink(); });
   }
 })();
 

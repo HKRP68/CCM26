@@ -79,7 +79,7 @@ const template = fs.readFileSync(process.argv[1], 'utf8');
 const start = template.indexOf('const TN_SUBS =');
 const controller = template.slice(start, template.indexOf('function tnLogo(team)', start));
 const navigation = template.slice(template.indexOf('const tabRoutes ='),
-  template.indexOf('async function refreshDashboard()'));
+  template.indexOf('let dashboardRequest;'));
 const tick = () => new Promise(setImmediate);
 
 function boot() {

@@ -4767,7 +4767,8 @@ def webapp():
     the template — see ``ad_service.client_config``.
     """
     from services import ad_service
-    return render_template("webapp.html", ad_config=ad_service.client_config())
+    return render_template("webapp.html", ad_config=ad_service.client_config(),
+                           franchise_website=os.getenv("FRANCHISE_WEBSITE_URL", "").strip())
 
 
 @app.route("/webapp/player-card/<int:player_id>")
@@ -5247,10 +5248,13 @@ def webapp_init():
         latest = (db.query(Match).filter(or_(Match.user1_id == user.id, Match.user2_id == user.id),
                                         Match.status == "completed", Match.winner_id.isnot(None))
                   .order_by(Match.id.desc()).first())
+        from services.quick_match_service import get_phase_match
+        quick_match = get_phase_match(tg_id)
         unclaimed_gifts = db.query(MiniappGift).filter_by(user_id=user.id, claimed_at=None).count()
         return {
             "ok": True,
             "live_match": live_match,
+            "quick_match_active": bool(quick_match and not quick_match.get("complete")),
             "unclaimed_gifts": unclaimed_gifts,
             "bot_username": os.getenv("BOT_USERNAME", "").strip().lstrip("@"),
             "ai_match_daily_cap": get_config(db).get("ai_match_reward_daily_cap", AI_MATCH_REWARD_DAILY_CAP),
@@ -5308,7 +5312,7 @@ def webapp_init():
             "events": _get_events_safe(db),
             "news_unread": _get_news_unread_safe(db, user),
             "poll": _get_poll_safe(db, user),
-            "tournament": _get_live_tournament_safe(db),
+            "tournament": _get_live_tournament_safe(db, tg_id),
         }
     except Exception as e:
         logger.exception("webapp_init failed")
@@ -5443,11 +5447,14 @@ def _get_poll_safe(db, user):
         return None
 
 
-def _get_live_tournament_safe(db):
+def _get_live_tournament_safe(db, telegram_id=None):
     """Which tournaments are live, for the Mini App's Tournament tab."""
     try:
-        from services.tournament_webapp import live_summary
-        return live_summary(db)
+        from services import tournament_webapp
+        summary = tournament_webapp.live_summary(db)
+        if telegram_id and summary["live"]:
+            summary["my_fixture"] = tournament_webapp.clubhouse_fixture(db, telegram_id)
+        return summary
     except Exception:
         db.rollback()
         logger.exception("live tournament lookup failed")
@@ -6641,9 +6648,8 @@ def webapp_daily():
 def webapp_players():
     """Browse all players with filters: rating range, category, country, version.
 
-    The miniapp Browse tab requests all filtered players at once so the user can
-    scroll through the full result set without a separate Load more step.
-    Pagination remains available for older clients that send a numeric per_page.
+    Numeric per_page opts into pagination. Clients that request all results
+    retain the original response shape and ordering.
     """
     auth, tg_id, err = _webapp_auth()
     if err:
@@ -6677,6 +6683,7 @@ def webapp_players():
             max_price = 0
         category = (data.get("category") or "").strip()
         country = (data.get("country") or "").strip()
+        version = (data.get("version") or "").strip()
         page = max(1, int(data.get("page") or 1))
         raw_per_page = data.get("per_page")
         show_all = raw_per_page in (None, "", "all")
@@ -6688,11 +6695,8 @@ def webapp_players():
         # Version is shown as a badge in the row.
 
         if q:
-            # Search matches name OR country (case-insensitive)
             like = f"%{q}%"
-            query = query.filter(
-                (Player.name.ilike(like)) | (Player.country.ilike(like))
-            )
+            query = query.filter(Player.name.ilike(like) | Player.country.ilike(like) | Player.version.ilike(like))
         if min_r > 0:
             query = query.filter(Player.rating >= min_r)
         if max_r < 100:
@@ -6716,6 +6720,9 @@ def webapp_players():
             query = query.filter(Player.category == category)
         if country:
             query = query.filter(Player.country == country)
+        if version:
+            query = query.filter(Player.version == version if version != "Base"
+                                 else (Player.version == "Base") | Player.version.is_(None) | (Player.version == ""))
 
         from models import UserRoster
         owned_ids = {p[0] for p in (
@@ -6725,7 +6732,9 @@ def webapp_players():
             query = query.filter(~Player.id.in_(owned_ids))
 
         total = query.count()
-        ordered_query = query.order_by(Player.rating.desc(), Player.name.asc())
+        sort = {"batting": Player.bat_rating, "bowling": Player.bowl_rating}.get(str(data.get("sort")))
+        order = [sort.desc().nullslast()] if sort is not None else []
+        ordered_query = query.order_by(*order, Player.rating.desc(), Player.name.asc(), Player.id.asc())
         if per_page is None:
             players = ordered_query.all()
         else:
@@ -6778,7 +6787,9 @@ def webapp_countries():
                                    Player.country != ""))
                 .distinct().order_by(Player.country.asc()).all())
         countries = [r[0] for r in rows if r[0]]
-        return {"ok": True, "countries": countries}
+        version_rows = not_career(db.query(Player.version).filter(Player.is_active == True)).distinct().all()
+        versions = sorted({version or "Base" for (version,) in version_rows}, key=str.casefold)
+        return {"ok": True, "countries": countries, "versions": versions}
     except Exception as e:
         logger.exception("webapp_countries failed")
         return {"ok": False, "error": str(e)}, 500
@@ -7059,9 +7070,14 @@ def webapp_quickmatch_start():
     if err:
         return err
     db, user, tg_id = auth
+    guard_key = f"webapp_quickmatch_{user.id}"
+    if not claim_once(guard_key, ttl=_WEBAPP_CLAIM_GUARD_TTL):
+        db.close()
+        return {"ok": False, "error": "in_progress",
+                "message": "A Quick Match update is already in progress."}, 409
     try:
         from services.quick_match_service import (
-            start_phase_match, drop_phase_match, get_phase_match,
+            start_phase_match, drop_phase_match, get_phase_match, _public_state,
         )
         data = request.get_json(silent=True) or {}
         toss_choice = (data.get("toss_choice") or "bat").lower()
@@ -7074,6 +7090,8 @@ def webapp_quickmatch_start():
         # Abandon any stale in-flight match (defensive cleanup)
         existing = get_phase_match(tg_id)
         if existing and not existing.get("complete"):
+            if data.get("resume_existing") is True:
+                return {"ok": True, "state": _public_state(existing)}
             drop_phase_match(tg_id)
 
         result = start_phase_match(db, user, tg_id, toss_choice, difficulty)
@@ -7086,6 +7104,7 @@ def webapp_quickmatch_start():
         logger.exception("webapp_quickmatch_start failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
+        release(guard_key)
         db.close()
 
 
@@ -7098,22 +7117,41 @@ def webapp_quickmatch_phase():
     if err:
         return err
     db, user, tg_id = auth
+    guard_key = f"webapp_quickmatch_{user.id}"
+    if not claim_once(guard_key, ttl=_WEBAPP_CLAIM_GUARD_TTL):
+        db.close()
+        return {"ok": False, "error": "in_progress",
+                "message": "A Quick Match update is already in progress."}, 409
+    previous = None
     try:
-        from services.quick_match_service import play_phase
+        from copy import deepcopy
+        from services.quick_match_service import get_phase_match, play_phase, restore_phase_match
         data = request.get_json(silent=True) or {}
         choice = (data.get("choice") or "balanced").lower()
         if choice not in ("aggressive", "balanced", "defensive"):
             choice = "balanced"
 
+        active = get_phase_match(tg_id)
+        expected = data.get("expected")
+        if expected is not None:
+            coordinates = [active["match_id"], active["innings"], active["phase_index"]] if active else None
+            if active is None or active.get("complete") or expected != coordinates:
+                return {"ok": False, "error": "stale_phase",
+                        "message": "This phase changed. Reload the match to continue."}, 409
+        previous = deepcopy(active)
         result = play_phase(db, user, tg_id, choice)
         if result.get("match_complete"):
             db.commit()  # Persist QM counters + coins
+            active["final_scorecard"] = result["scorecard"]
         return result
     except Exception as e:
         db.rollback()
+        if previous is not None:
+            restore_phase_match(tg_id, previous)
         logger.exception("webapp_quickmatch_phase failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
+        release(guard_key)
         db.close()
 
 
@@ -7125,6 +7163,11 @@ def webapp_quickmatch_abandon():
     if err:
         return err
     db, user, tg_id = auth
+    guard_key = f"webapp_quickmatch_{user.id}"
+    if not claim_once(guard_key, ttl=_WEBAPP_CLAIM_GUARD_TTL):
+        db.close()
+        return {"ok": False, "error": "in_progress",
+                "message": "A Quick Match update is already in progress."}, 409
     try:
         from services.quick_match_service import drop_phase_match
         drop_phase_match(tg_id)
@@ -7133,6 +7176,7 @@ def webapp_quickmatch_abandon():
         logger.exception("webapp_quickmatch_abandon failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
+        release(guard_key)
         db.close()
 
 
@@ -7144,13 +7188,21 @@ def webapp_quickmatch_quota():
     if err:
         return err
     db, user, tg_id = auth
+    guard_key = f"webapp_quickmatch_{user.id}"
+    if not claim_once(guard_key, ttl=_WEBAPP_CLAIM_GUARD_TTL):
+        db.close()
+        return {"ok": False, "error": "in_progress",
+                "message": "A Quick Match update is already in progress."}, 409
     try:
-        from services.quick_match_service import get_quick_match_quota
+        from services.quick_match_service import get_quick_match_quota, get_phase_match, _public_state
         used, limit, remaining = get_quick_match_quota(db, user)
         db.commit()  # Persist any date-reset
+        active = get_phase_match(tg_id)
         return {
             "ok": True,
             "used": used, "limit": limit, "remaining": remaining,
+            "match": _public_state(active) if active else None,
+            "scorecard": active.get("final_scorecard") if active and active.get("complete") else None,
             "stats": {
                 "quick_matches_played": user.quick_matches_played or 0,
                 "quick_matches_won": user.quick_matches_won or 0,
@@ -7162,6 +7214,7 @@ def webapp_quickmatch_quota():
         logger.exception("webapp_quickmatch_quota failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
+        release(guard_key)
         db.close()
 
 

@@ -965,6 +965,12 @@ def drop_phase_match(tg_id):
         _PHASE_MATCH_STORE.pop(tg_id, None)
 
 
+def restore_phase_match(tg_id, state):
+    """Restore the pre-action snapshot after a failed database transaction."""
+    with _PHASE_MATCH_LOCK:
+        _PHASE_MATCH_STORE[tg_id] = state
+
+
 def get_daily_limit(session):
     """Read daily Quick Match limit from GameConfig (with fallback)."""
     try:

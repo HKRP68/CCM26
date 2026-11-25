@@ -11,6 +11,7 @@ unpublished competitions stay in the admin panel.
 """
 import json
 import logging
+from datetime import datetime, timezone
 from sqlalchemy import and_, func, or_
 
 from models import (Tournament, TournamentGroup, TournamentMatch, TournamentTeam)
@@ -72,6 +73,48 @@ def live_summary(session):
     return {"live": True, "tournaments": [
         {"id": tour.id, "name": tour.name, "kind": kind, "kind_label": KIND_LABEL.get(kind, "")}
     ]}
+
+
+def clubhouse_fixture(session, telegram_id):
+    """Viewer-owned scheduled fixture in the featured competition's timed window."""
+    from services import league_schedule_service as schedule
+    from utils.tournament_time import format_ist
+
+    tour = featured_tournament(session)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if not tour or not tour.round_deadline_at or tour.round_deadline_at <= now:
+        return None
+    mine = my_team_ids(session, tour, telegram_id)
+    if not mine:
+        return None
+    round_key = schedule.deadline_round(session, tour)
+    if not round_key or round_key != tour.round_tracked:
+        return None
+    first = schedule.current_round(session, tour.id)
+    if first is None:
+        return None
+    fixture = (session.query(TournamentMatch)
+               .filter(TournamentMatch.tournament_id == tour.id,
+                       TournamentMatch.status == "scheduled",
+                       TournamentMatch.stage.in_(schedule.LEAGUE_STAGES),
+                       TournamentMatch.round_no.between(first, round_key),
+                       TournamentMatch.team1_id.isnot(None), TournamentMatch.team2_id.isnot(None),
+                       or_(TournamentMatch.team1_id.in_(mine), TournamentMatch.team2_id.in_(mine)))
+               .order_by(TournamentMatch.round_no, TournamentMatch.match_no, TournamentMatch.id)
+               .first())
+    if not fixture or not schedule.fixture_in_open_round(session, fixture):
+        return None
+    teams = [session.get(TournamentTeam, team_id) for team_id in (fixture.team1_id, fixture.team2_id)]
+    if not all(teams):
+        return None
+    return {
+        "tournament_id": tour.id, "tournament_name": tour.name,
+        "fixture_id": fixture.id, "match_no": fixture.match_no,
+        "teams": [team.name for team in teams],
+        "deadline": tour.round_deadline_at.replace(tzinfo=timezone.utc).isoformat(),
+        "deadline_label": format_ist(tour.round_deadline_at),
+        "venue": fixture.venue, "pitch": fixture.pitch_type,
+    }
 
 
 def resolve_live(session, tournament_id=None):

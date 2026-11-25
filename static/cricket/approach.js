@@ -25,6 +25,7 @@ function escHtml(v) {
 }
 
 function haptic(kind) {
+  if (window.MiniappTheme && !window.MiniappTheme.haptics) return;
   try {
     const h = window.Telegram?.WebApp?.HapticFeedback;
     if (!h) return;
