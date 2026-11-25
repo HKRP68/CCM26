@@ -44,11 +44,21 @@ def _bound(period, now=None):
 
 
 def _name_for(user):
+    """A plain, non-pinging display name for a leaderboard row.
+
+    Deliberately never returns an ``@username`` (or a ``tg://user`` mention):
+    the leaderboard is viewed repeatedly, and a real mention would notify that
+    manager every time, which is spammy. We use the manager's first name / team
+    name instead, and strip any stray leading '@' so a username-shaped name
+    can't sneak a mention back in.
+    """
     if user is None:
         return "Unknown"
-    if user.username:
-        return f"@{user.username}"
-    return user.first_name or f"Manager {user.id}"
+    name = (getattr(user, "first_name", None)
+            or getattr(user, "team_name", None)
+            or getattr(user, "username", None)
+            or f"Manager {user.id}")
+    return str(name).lstrip("@").strip() or f"Manager {user.id}"
 
 
 def _rows_ledger(session, *, kind, activities, period, now):
