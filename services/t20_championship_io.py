@@ -19,11 +19,12 @@ COLUMNS = ("team_name", "short_name", "logo_url", "primary_color", "secondary_co
 CSV_ALIASES = {"name": "team_name", "logo": "logo_url", "team_logo": "logo_url",
                "primary_colour": "primary_color", "secondary_colour": "secondary_color",
                "team_owner": "owner", "owner_id": "owner",
-               "team_co_owner": "co_owner", "co_owner_id": "co_owner", "stadium": "home_stadium"}
+               "team_co_owner": "co_owner", "co_owner_id": "co_owner", "co_owners": "co_owner",
+               "stadium": "home_stadium"}
 TEMPLATE = [
     {"team_name": "India", "short_name": "IND", "primary_color": "#1d4ed8",
      "secondary_color": "#facc15", "owner": "@owner_username",
-     "co_owner": "@co_owner_username", "logo_url": "", "home_stadium": "Eden Gardens",
+     "co_owner": "@co_owner_username, @second_co_owner", "logo_url": "", "home_stadium": "Eden Gardens",
      "players": ["Virat Kohli", "Jasprit Bumrah"]},
     {"team_name": "Australia", "short_name": "AUS", "primary_color": "#ffcd00",
      "secondary_color": "#006341", "owner": "@another_owner", "home_stadium": "Melbourne Cricket Ground",
@@ -137,20 +138,18 @@ def export_teams(entries):
     for row, entry in zip(rows, entries):
         players = sorted(entry.team.players, key=lambda member: (member.sort_order, member.id))
         row.update(owner=str(entry.owner_id),
-                   co_owner=str(entry.co_owner_id) if entry.co_owner_id else "",
+                   co_owner=", ".join(map(str, entry.co_owner_ids)),
                    home_stadium=entry.home_stadium,
                    players=[member.name for member in players])
     return rows
 
 
-def captain_id(db, value, label, *, optional=False):
+def captain_id(db, value, label):
     from models import User
 
     if isinstance(value, bool) or not isinstance(value, (str, int)):
         raise ValueError(f"Enter a Telegram ID or @username for the {label}.")
     value = str(value).strip()
-    if not value and optional:
-        return None
     if re.fullmatch(r"@[a-zA-Z0-9_]{1,32}", value):
         user = db.query(User).filter(func.lower(User.username) == value[1:].lower()).first()
         if user:
@@ -159,6 +158,17 @@ def captain_id(db, value, label, *, optional=False):
     if value.isdecimal() and len(value) <= 16 and int(value) > 0:
         return int(value)
     raise ValueError(f"Enter a valid Telegram ID or @username for the {label}.")
+
+
+def resolve_co_owners(db, value, owner_id):
+    if isinstance(value, str):
+        value = [part for part in value.split(",") if part.strip()]
+    elif not isinstance(value, list):
+        value = [] if value is None else [value]
+    ids = list(dict.fromkeys(captain_id(db, part, "co-owner") for part in value))
+    if owner_id in ids:
+        raise ValueError("Use different IDs for the owner and co-owners.")
+    return ids
 
 
 def _highest_card(db, name):
@@ -282,22 +292,20 @@ def import_teams(db, championship, rows):
             if not stadium and entry:
                 stadium = entry.home_stadium
             owner = row.get("owner", row.get("owner_id"))
-            co_owner = row.get("co_owner", row.get("co_owner_id"))
+            co_owners = row.get("co_owners", row.get("co_owner", row.get("co_owner_id")))
             owner = owner.strip() if isinstance(owner, str) else owner
-            co_owner = co_owner.strip() if isinstance(co_owner, str) else co_owner
+            co_owners = co_owners.strip() if isinstance(co_owners, str) else co_owners
             owner_id = (entry.owner_id if entry and owner in (None, "") else
                         captain_id(db, owner, "owner"))
-            co_owner_id = (entry.co_owner_id if entry and co_owner in (None, "") else
-                           captain_id(db, co_owner if co_owner is not None else "", "co-owner", optional=True))
-            if owner_id == co_owner_id:
-                raise ValueError("Use different IDs for the owner and co-owner.")
+            co_owner_ids = resolve_co_owners(
+                db, entry.co_owner_ids if entry and co_owners in (None, "") else co_owners, owner_id)
             names = row.get("players", [])
             if not isinstance(names, list) or any(not isinstance(p, str) for p in names):
                 raise ValueError("Players must be a list of names.")
             team = entry.team if entry else None
             cards, player_errors = _squad_changes(team, names, resolve)
             errors.extend(f"{label} · {message}" for message in player_errors)
-            plans.append((name, entry, values, owner_id, co_owner_id, stadium, cards))
+            plans.append((name, entry, values, owner_id, co_owner_ids, stadium, cards))
         except ValueError as exc:
             errors.append(f"{label} · {exc}")
 
@@ -305,19 +313,19 @@ def import_teams(db, championship, rows):
         raise SquadImportError(errors)
 
     created = updated = added = 0
-    for name, entry, values, owner_id, co_owner_id, stadium, cards in plans:
+    for name, entry, values, owner_id, co_owner_ids, stadium, cards in plans:
         if entry is None:
             team = ChallengeTeam(league=championship.league, name=name, **values)
             db.add(T20ChampionshipTeam(championship=championship, team=team,
-                                       owner_id=owner_id, co_owner_id=co_owner_id, home_stadium=stadium))
+                                       owner_id=owner_id, co_owner_ids=co_owner_ids, home_stadium=stadium))
             created += 1
         else:
             team = entry.team
-            if (cards or entry.owner_id != owner_id or entry.co_owner_id != co_owner_id
+            if (cards or entry.owner_id != owner_id or entry.co_owner_ids != co_owner_ids
                     or entry.home_stadium != stadium
                     or any(getattr(team, key) != value for key, value in values.items())):
                 updated += 1
-            entry.owner_id, entry.co_owner_id = owner_id, co_owner_id
+            entry.owner_id, entry.co_owner_ids = owner_id, co_owner_ids
             entry.home_stadium = stadium
             for key, value in values.items():
                 setattr(team, key, value)

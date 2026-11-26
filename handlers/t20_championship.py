@@ -244,12 +244,16 @@ def render(db, championship, view, args):
                 for row in (headers, *values)]
     if view == "teams":
         names = person_names(db, (uid for team in championship.teams
-                                 for uid in (team.owner_id, team.co_owner_id)))
+                                 for uid in cup.captain_ids(team)))
         lines = []
         for team in sorted(championship.teams, key=lambda team: team.name.casefold()):
             reserve = " · Reserve team" if not team.is_participating else ""
-            lines.append(f"\n#{team.id} · {team.name}{reserve} · Owner {names.get(team.owner_id, team.owner_id)}"
-                         + (f" · Co-owner {names.get(team.co_owner_id, team.co_owner_id)}" if team.co_owner_id else ""))
+            line = f"\n#{team.id} · {team.name}{reserve} · Owner {names.get(team.owner_id, team.owner_id)}"
+            co_owners = team.co_owner_ids
+            if co_owners:
+                label = "Co-owner" if len(co_owners) == 1 else "Co-owners"
+                line += f" · {label} " + ", ".join(str(names.get(uid, uid)) for uid in co_owners)
+            lines.append(line)
             lines.append(f"Home stadium · {team.home_stadium or 'Needs a stadium'}")
             lines.extend(f"{p.name} · {p.source_player.version or 'Base'}"
                          if p.source_player else p.name for p in team.team.players)

@@ -16890,7 +16890,7 @@ def _t20_master_players(db):
 def _t20_team(db, championship, existing=None):
     from models import T20ChampionshipTeam
     from services.t20_championship import validate_stadium
-    from services.t20_championship_io import captain_id
+    from services.t20_championship_io import captain_id, resolve_co_owners
     name = request.form.get("team_name", "").strip()
     if not name or len(name) > 120 or any(
         team is not existing and team.name.casefold() == name.casefold()
@@ -16898,9 +16898,9 @@ def _t20_team(db, championship, existing=None):
     ):
         raise ValueError("Use a unique team name of up to 120 characters.")
     owner = captain_id(db, request.form.get("owner", ""), "owner")
-    co_owner = captain_id(db, request.form.get("co_owner", ""), "co-owner", optional=True)
-    if owner == co_owner:
-        raise ValueError("Use different IDs for the owner and co-owner.")
+    co_owner_input = request.form.get("co_owner")
+    co_owners = resolve_co_owners(
+        db, existing.co_owner_ids if existing and co_owner_input is None else co_owner_input, owner)
     home_stadium = (validate_stadium(request.form["home_stadium"]) if "home_stadium" in request.form
                     else existing.home_stadium if existing else None)
     if championship.started_at and not home_stadium:
@@ -16908,11 +16908,11 @@ def _t20_team(db, championship, existing=None):
     if existing is None:
         existing = T20ChampionshipTeam(championship=championship,
                                        team=ChallengeTeam(league=championship.league, name=name),
-                                       owner_id=owner, co_owner_id=co_owner)
+                                       owner_id=owner, co_owner_ids=co_owners)
         db.add(existing)
     else:
         existing.team.name = name
-        existing.owner_id, existing.co_owner_id = owner, co_owner
+        existing.owner_id, existing.co_owner_ids = owner, co_owners
     existing.home_stadium = home_stadium
     team = existing.team
     team.short_name = request.form.get("short_name", "").strip()[:30] or None

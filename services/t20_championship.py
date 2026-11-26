@@ -567,8 +567,12 @@ def _teams_for_fixture(fixture):
     return fixture.series.home, fixture.series.away
 
 
+def captain_ids(team):
+    return [team.owner_id, *team.co_owner_ids]
+
+
 def assigned(team, telegram_id):
-    return telegram_id in (team.owner_id, team.co_owner_id)
+    return telegram_id in captain_ids(team)
 
 
 def meeting(fixture, host_telegram, target_telegram):

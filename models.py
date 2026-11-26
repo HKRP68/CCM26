@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 from sqlalchemy import (
     Column, Integer, BigInteger, String, Float, Boolean, DateTime, ForeignKey, Index,
-    LargeBinary, Text, UniqueConstraint, text
+    JSON, LargeBinary, Text, UniqueConstraint, text
 )
 from sqlalchemy.orm import relationship
 from database import Base
@@ -2899,6 +2899,7 @@ class T20ChampionshipTeam(Base):
     challenge_team_id = Column(Integer, ForeignKey("challenge_teams.id"), nullable=False, unique=True)
     owner_id = Column(BigInteger, nullable=False)
     co_owner_id = Column(BigInteger)
+    additional_co_owner_ids = Column(JSON(none_as_null=True))
     is_participating = Column(Boolean, nullable=False, default=True)
     home_stadium = Column(String(120))
 
@@ -2909,6 +2910,17 @@ class T20ChampionshipTeam(Base):
     @property
     def name(self):
         return self.team.name
+
+    @property
+    def co_owner_ids(self):
+        first = [self.co_owner_id] if self.co_owner_id else []
+        return first + (self.additional_co_owner_ids or [])
+
+    @co_owner_ids.setter
+    def co_owner_ids(self, ids):
+        # Keep the first assignment in the original column for existing teams.
+        self.co_owner_id = ids[0] if ids else None
+        self.additional_co_owner_ids = ids[1:] or None
 
 
 class T20ChampionshipCommand(Base):

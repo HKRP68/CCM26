@@ -92,6 +92,8 @@ def test_played_fixture_stats_series_and_final(competition):
 
     db, championship = competition
     india, australia, england = championship.teams
+    australia.co_owner_ids = [90, 91]
+    db.add(User(telegram_id=91, first_name="Australia co-owner"))
     today = date.today()
     now = datetime.utcnow()
     championship.final_format = "best_of_3"
@@ -114,7 +116,7 @@ def test_played_fixture_stats_series_and_final(competition):
         cup.update_points(championship, cup.POINTS)
 
     host = db.query(User).filter_by(telegram_id=india.owner_id).one()
-    guest = db.query(User).filter_by(telegram_id=australia.owner_id).one()
+    guest = db.query(User).filter_by(telegram_id=91).one()
     game = Match(user1_id=guest.id, user2_id=host.id, status="active",
                  stadium=australia.home_stadium, pitch_type=PITCH_TYPES[0])
     db.add(game)
@@ -466,11 +468,11 @@ def test_admin_bulk_roster_templates_and_roundtrip(roster_admin):
 
     csv_data = (
         "team_name,short_name,logo_url,primary_colour,secondary_color,owner,co_owner,player_name,home_stadium\n"
-        "=India,IND,/static/challenge_leagues/india.png,#abc,#123456,@OwnerName,556,Virat Kohli,Eden\n"
+        '=India,IND,/static/challenge_leagues/india.png,#abc,#123456,@OwnerName,"556, 557",Virat Kohli,Eden\n'
         "=india,,,,,,,Jasprit Bumrah\n"
         "=India,,,,,,,virat kohli\n"
         '"Australia, XI",AUS,,#ffcd00,,999,,Glenn Maxwell\n'
-        "Reserve XI,RES,,,,999,,\n"
+        "Reserve XI,RES,,,,999,558,\n"
     ).encode()
     response = _roster_upload(client, championship.id, "source.CSV", csv_data)
     assert response.status_code == 200
@@ -479,11 +481,12 @@ def test_admin_bulk_roster_templates_and_roundtrip(roster_admin):
     db.expire_all()
     india, australia, reserve = roster_io.championship_teams(db, championship.id)
     assert india.name == "=India"
-    assert (india.owner_id, india.co_owner_id) == (555, 556)
+    assert india.owner_id == 555 and india.co_owner_ids == [556, 557]
     assert india.home_stadium == "Eden Gardens"
     assert india.team.primary_color == "#aabbcc" and india.team.secondary_color == "#123456"
     assert [p.source_player.version for p in india.team.players] == ["2026", "Base"]
     assert australia.name == "Australia, XI" and not reserve.team.players
+    assert reserve.co_owner_ids == [558]
     assert not roster_io.championship_teams(db, rival.id)
 
     csv_export = client.get(base + "/teams/export.csv")
@@ -505,7 +508,14 @@ def test_admin_bulk_roster_templates_and_roundtrip(roster_admin):
     db.expire_all()
     copied = roster_io.championship_teams(db, destination.id)[0]
     assert copied.name == "=India" and copied.owner_id == 555 and copied.team.primary_color == "#aabbcc"
+    assert copied.co_owner_ids == [556, 557]
     assert len(copied.team.players) == 3
+
+    replacement = [{"team_name": "=India", "co_owners": [558, 559]}]
+    response = _roster_upload(client, destination.id, "reassign.json", json.dumps(replacement).encode())
+    assert response.status_code == 200 and b"Teams updated 1" in response.data
+    db.refresh(copied)
+    assert copied.co_owner_ids == [558, 559]
 
 
 def test_admin_bulk_roster_errors_leave_the_whole_file_unapplied(roster_admin):
@@ -765,7 +775,7 @@ def test_today_reminder_previews_rechecks_and_sends_once_per_captain(competition
     utc_now = datetime(2026, 11, 19, 20)
     today = date(2026, 11, 20)
     india, australia, england = championship.teams
-    australia.co_owner_id = 88
+    australia.co_owner_ids = [88, 89]
     first = cup.add_series(db, championship, india, australia, 3, today)
     second = cup.add_series(db, championship, england, australia, 3, today)
     cup.start(championship, utc_now)
@@ -806,15 +816,48 @@ def test_today_reminder_previews_rechecks_and_sends_once_per_captain(competition
     update.callback_query = preview()
     asyncio.run(reminders.matchremind_callback(update, context))
     deliveries = {call.args[1]: call for call in send.await_args_list}
-    assert send.await_count == len(deliveries) == 5
-    assert set(deliveries) == {-123, 1, 2, 3, 88}
+    assert send.await_count == len(deliveries) == 6
+    assert set(deliveries) == {-123, 1, 2, 3, 88, 89}
     assert deliveries[-123].kwargs["message_thread_id"] == 321
-    assert 'href="tg://user?id=88"' in deliveries[-123].args[-1]
-    assert all(cup.match_reference(series.fixtures[0]) in deliveries[88].args[-1] for series in (first, second))
+    for uid in (88, 89):
+        assert f'href="tg://user?id={uid}"' in deliveries[-123].args[-1]
+        assert all(cup.match_reference(series.fixtures[0]) in deliveries[uid].args[-1]
+                   for series in (first, second))
     assert first.fixtures[0].last_reminded_at == second.fixtures[0].last_reminded_at == utc_now
 
     asyncio.run(reminders.matchremind_callback(update, context))
-    assert send.await_count == 5
+    assert send.await_count == 6
+
+
+def test_admin_saves_and_edits_multiple_world_t20_co_owners(roster_admin):
+    from handlers.t20_championship import render
+    from services import t20_championship as cup, t20_championship_io as roster_io
+
+    client, db, championship, _, _ = roster_admin
+    base = f"/world-t20/{championship.id}"
+    team_details = {"team_name": "India", "owner": "800", "home_stadium": "Eden Gardens"}
+    response = client.post(base, data={**team_details, "action": "add_team",
+                                       "co_owner": "556, @OwnerName, 555"}, follow_redirects=True)
+    entry, = roster_io.championship_teams(db, championship.id)
+    assert entry.co_owner_ids == [556, 555]
+    assert b'value="556, 555"' in response.data
+    assert any("Co-owners 556, @ownername" in line for line in render(db, championship, "teams", []))
+    assert all(cup.assigned(entry, uid) for uid in (800, 556, 555))
+    assert not cup.assigned(entry, 999)
+
+    edit = {**team_details, "action": "edit_team", "team_id": entry.id}
+    response = client.post(base, data={**edit, "co_owner": "558, 800"}, follow_redirects=True)
+    assert b"Use different IDs for the owner and co-owners." in response.data
+    db.refresh(entry)
+    assert entry.co_owner_ids == [556, 555]
+
+    client.post(base, data={**edit, "co_owner": "@OwnerName, 558"})
+    db.refresh(entry)
+    assert entry.co_owner_ids == [555, 558] and not cup.assigned(entry, 556)
+
+    client.post(base, data={**edit, "co_owner": ""})
+    db.refresh(entry)
+    assert entry.co_owner_ids == [] and cup.assigned(entry, 800)
 
 
 def test_admin_home_stadium_and_pitch_settings(roster_admin):

@@ -35,7 +35,7 @@ def _card(title, lines):
 def _recipients(fixture):
     series = fixture.series
     return tuple(dict.fromkeys(uid for team in (series.home, series.away)
-                               for uid in (team.owner_id, team.co_owner_id) if uid))
+                               for uid in cup.captain_ids(team) if uid))
 
 
 def _pending(db, championship, day, now):
