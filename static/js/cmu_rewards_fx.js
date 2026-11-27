@@ -296,12 +296,22 @@
   }
 
   /**
-   * Community XP level-up. Fills the meter to full, then announces the new
-   * level. Both the level and its title come from the server's profile.
+   * Community XP level-up. Fills the meter to full, announces the new level,
+   * then settles the meter on the new level's real progress.
+   *
+   * Both the level and its title come from the server's profile, and
+   * `settleTo` is the progress the server reports for the level just reached —
+   * without it the bar would be left reading 100% of a level the player has
+   * already moved past.
    */
-  async function levelUp(meterEl, { level = null, title = '', host = null } = {}) {
+  async function levelUp(meterEl, { level = null, title = '', host = null, settleTo = null } = {}) {
     if (meterEl) await meter(meterEl, 1, { complete: true });
-    if (level == null) return;
+    const settle = () => {
+      if (meterEl && Number.isFinite(Number(settleTo))) {
+        meter(meterEl, Number(settleTo), { complete: false });
+      }
+    };
+    if (level == null) { settle(); return; }
     const target = host || meterEl?.parentElement;
     if (!target) return;
     const badge = document.createElement('div');
@@ -316,6 +326,7 @@
     badge.classList.add('is-leaving');
     await FX.sleep(300);
     badge.remove();
+    settle();
   }
 
   /* ════════════════════════ Small shared beats ════════════════════════ */

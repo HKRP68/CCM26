@@ -199,8 +199,11 @@ async function loadOverview(){
     } else {
       rankPill.textContent = "—";
     }
-    // A level the server reports as higher than the one we last showed.
-    if (climbed) FXR.levelUp(bar, {level: p.level, title: p.title, host: bar.parentElement});
+    // A level the server reports as higher than the one we last showed. The
+    // meter fills to full for the celebration, then settles on the progress
+    // the server reports for the level just reached.
+    if (climbed) FXR.levelUp(bar, {level: p.level, title: p.title, host: bar.parentElement,
+                                   settleTo: pr.next_level ? pr.pct / 100 : 1});
   } else {
     document.getElementById("xp_life").textContent = fmt(p.lifetime_xp);
     document.getElementById("xp_week").textContent = fmt(p.week);
