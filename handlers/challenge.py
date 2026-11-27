@@ -314,6 +314,47 @@ def _reply_target_telegram_user(update):
     return getattr(reply, "from_user", None) if reply is not None else None
 
 
+# Why ``_challenge_target_user`` could not resolve an opponent. Sentinels rather
+# than a (user, reason) pair so the existing call sites stay one-line checks.
+_CHALLENGE_TARGET_IS_BOT = object()
+_CHALLENGE_TARGET_IS_SELF = object()
+_CHALLENGE_TARGET_NOT_FOUND = object()
+
+
+def _challenge_target_user(session, update, args, command_name):
+    """The opponent a league challenge names, by reply or by tag.
+
+    A reply is still the primary form, but ``/cipl @someone`` and
+    ``/cipl 50 @someone`` work too: ``args`` is what is left of the command's
+    words once the over count has been taken out, so the @username, the
+    numeric Telegram id or the tapped no-username mention is all that reaches
+    the lookup. Returns the :class:`User`, ``None`` when nobody was named, or
+    one of the ``_CHALLENGE_TARGET_*`` sentinels.
+    """
+    from services.telegram_user_service import resolve_command_target
+
+    target_tg = _reply_target_telegram_user(update)
+    if target_tg is not None:
+        if getattr(target_tg, "is_bot", False):
+            return _CHALLENGE_TARGET_IS_BOT
+        sender = getattr(update, "effective_user", None)
+        if sender is not None and target_tg.id == sender.id:
+            return _CHALLENGE_TARGET_IS_SELF
+        return sync_telegram_user(session, target_tg) or _CHALLENGE_TARGET_NOT_FOUND
+
+    # No reply: read the tag. resolve_command_target reads context.args, so
+    # hand it the words left over from the over-count parse.
+    from types import SimpleNamespace
+    target, reason = resolve_command_target(
+        session, update, SimpleNamespace(args=list(args or [])), command_name)
+    if target is None:
+        return None if reason in ("missing", "not_mention") else _CHALLENGE_TARGET_NOT_FOUND
+    sender = getattr(update, "effective_user", None)
+    if sender is not None and target.telegram_id == sender.id:
+        return _CHALLENGE_TARGET_IS_SELF
+    return target
+
+
 
 def _max_overs(session=None):
     """Return the website-configured challenge limit, clamped defensively."""
@@ -555,7 +596,7 @@ def parse_multi_args(words):
     words = list(words or [])
     if not words or str(words[0]).strip().lower() != MULTI_ARG:
         return False, None, None, None
-    from services.match_formats import extract_overs_arg
+    from services.match_formats import ball_format_for_overs, extract_overs_arg
     rest = words[1:]
     hundred = [w for w in rest if str(w).strip().lower() in _HUNDRED_TOKENS]
     rest = [w for w in rest if str(w).strip().lower() not in _HUNDRED_TOKENS]
@@ -565,7 +606,8 @@ def parse_multi_args(words):
     if hundred and overs:
         return True, None, None, (
             "The Hundred is always 100 balls — drop the over count.")
-    return True, overs, ("The100" if hundred else "T20"), None
+    # The over count owns the engine here too: `/cmulti 30` is an ODI.
+    return True, overs, ("The100" if hundred else ball_format_for_overs(overs)), None
 
 
 def _multi_leagues(session):
@@ -845,7 +887,7 @@ def _challenge_created_blocks(draft, session=None):
         series = (f"CL Tour · Match {draft.get('cl_tour_match_no')}"
                   f"/{draft.get('cl_tour_match_count')}")
     if draft.get("overs") and not series:
-        series = f"⏱️ {draft['overs']}-over match"
+        series = f"⏱️ {_draft_length_label(draft)}"
     bot_xi = None
     if draft.get("vs_bot"):
         names = draft.get("bot_xi_names") or []
@@ -1208,6 +1250,14 @@ def _team_emoji(team_name):
     return IPL_TEAM_META.get((team_name or "").strip(), (None, "🏏"))[1]
 
 
+def _draft_length_label(draft):
+    """``"6-over match"``, or ``"50-over ODI"`` once ODI rules apply."""
+    overs = draft.get("overs")
+    if draft.get("ball_format") == "ODI":
+        return f"{overs}-over ODI"
+    return f"{overs}-over match"
+
+
 def _challenge_created_text(draft, session=None):
     host = draft.get("host") or {}
     target = draft.get("target") or {}
@@ -1229,7 +1279,7 @@ def _challenge_created_text(draft, session=None):
             f"🏆 <i>CL Tour · Match {draft.get('cl_tour_match_no')}"
             f"/{draft.get('cl_tour_match_count')}</i>")
     elif draft.get("overs"):
-        lines.append(f"⏱️ <i>{draft['overs']}-over match</i>")
+        lines.append(f"⏱️ <i>{_draft_length_label(draft)}</i>")
     lines.extend([
         "═════════════════════════════",
         f"👑 <b>Host:</b>  {_mention(host.get('tg_id'), host.get('name') or 'User 1')}",
@@ -2036,7 +2086,7 @@ def _local_static_path(image_url):
     return None
 
 
-async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None, tournament_id=None, tournament_name=None, is_tournament=False, vs_bot=False, owner_locked=False, host_teams=None, guest_teams=None, overs=None, multi_leagues=None, ball_format=None, standalone_super_over=False):
+async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None, tournament_id=None, tournament_name=None, is_tournament=False, vs_bot=False, owner_locked=False, host_teams=None, guest_teams=None, overs=None, multi_leagues=None, ball_format=None, odi_settings=None, standalone_super_over=False):
     # ``effective_message`` rather than ``update.message`` so this also works when
     # the picker is opened from a button (the /ciplbot Rematch), where
     # ``update.message`` is None.
@@ -2141,10 +2191,16 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
     if league_record is not None:
         draft["league_id"] = league_record.id
     if ball_format:
-        # Chosen on the command (/cipl multi 100B) — the leagues' own formats
-        # must not override it at XI selection.
+        # Chosen on the command (/cipl multi 100B, or an over count of 21+
+        # which is an ODI) — the leagues' own formats must not override it at
+        # XI selection.
         draft["ball_format"] = ball_format
         draft["ball_format_locked"] = True
+    if odi_settings:
+        # Verified when the command was typed, pinned here so the match plays
+        # the tuning and measured reference that were current at that moment —
+        # a later release cannot change a game already being set up.
+        draft["odi_settings"] = odi_settings
     caption = _team_picker_prompt(draft, "host")
     markup = _team_keyboard_for(draft, draft_id)
     image_url = _league_image_url(league_record)
@@ -2730,12 +2786,26 @@ async def _start_multi_challenge(update, context, session, overs, ball_format):
             "❌ No leagues are enabled for Multi yet. An admin can tick "
             "“Include in Multi” on a league in the admin panel.")
         return
+    odi_settings = None
+    if ball_format == "ODI":
+        # Verified and pinned before anyone picks a league, exactly as the
+        # single-league path does.
+        from engine.realism import odi as _odi
+        if not _odi.enabled():
+            await update.message.reply_text("ODI Approach is currently unavailable.")
+            return
+        try:
+            odi_settings = _odi.new_settings()
+        except _odi.ODIUnavailable as exc:
+            await update.message.reply_text(str(exc))
+            return
     await _send_league_team_picker(
         update, context, challenger=challenger, target=target,
         league_key=MULTI_LEAGUE_KEY, league_name=MULTI_LEAGUE_NAME,
         league_record=None, teams=[], session=session,
         overs=(overs if ball_format != "The100" else None),
         multi_leagues=leagues, ball_format=ball_format,
+        odi_settings=odi_settings,
     )
 
 
@@ -2854,22 +2924,46 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
         if overs_error:
             await update.message.reply_text(
                 f"❌ {overs_error}\nExample: reply to someone with "
-                f"<code>/{_esc(command_name)} 6</code>", parse_mode="HTML")
+                f"<code>/{_esc(command_name)} 6</code> or "
+                f"<code>/{_esc(command_name)} 50 @username</code>",
+                parse_mode="HTML")
             return
 
-        target_tg = _reply_target_telegram_user(update)
-        if not target_tg:
-            await update.message.reply_text(CHALLENGE_REPLY_REQUIRED_MESSAGE)
-            return
-        if getattr(target_tg, "is_bot", False):
+        # 21 overs or more is an ODI: the league match runs on the measured ODI
+        # engine with its phases and ten-over quota scaled to the length asked
+        # for. Verify the tuning before anyone picks a team, so a paused ODI
+        # release fails here rather than at the toss.
+        from services.match_formats import ball_format_for_overs, is_medium_format
+        league_ball_format, odi_settings = None, None
+        if is_medium_format(custom_overs):
+            from engine.realism import odi as _odi
+            if not _odi.enabled():
+                await update.message.reply_text("ODI Approach is currently unavailable.")
+                return
+            try:
+                odi_settings = _odi.new_settings()
+            except _odi.ODIUnavailable as exc:
+                await update.message.reply_text(str(exc))
+                return
+            league_ball_format = ball_format_for_overs(custom_overs)
+
+        # The opponent: a reply, an @username, a numeric id or a tapped
+        # no-username mention — the same resolution /letsplay uses, so a league
+        # challenge can be sent by tagging someone instead of replying.
+        target = _challenge_target_user(session, update, _rest, command_name)
+        if target is _CHALLENGE_TARGET_IS_BOT:
             await update.message.reply_text("❌ Bot accounts cannot be challenged.")
             return
-        if update.effective_user and target_tg.id == update.effective_user.id:
+        if target is _CHALLENGE_TARGET_IS_SELF:
             await update.message.reply_text("❌ You cannot challenge yourself.")
             return
-
-        target = sync_telegram_user(session, target_tg)
-        if not target:
+        if target is None:
+            await update.message.reply_text(
+                f"{CHALLENGE_REPLY_REQUIRED_MESSAGE}\n"
+                f"You can also tag them: <code>/{_esc(command_name)} @username</code>",
+                parse_mode="HTML")
+            return
+        if target is _CHALLENGE_TARGET_NOT_FOUND:
             await update.message.reply_text("❌ User not found. They need to use /debut first.")
             return
 
@@ -2893,7 +2987,8 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
             update, context, challenger=challenger, target=target,
             league_key=league_key, league_name=league_name,
             league_record=league_record, teams=teams, session=session,
-            overs=custom_overs,
+            overs=custom_overs, ball_format=league_ball_format,
+            odi_settings=odi_settings,
             standalone_super_over=standalone_super_over,
         )
     finally:

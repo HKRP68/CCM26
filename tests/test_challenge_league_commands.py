@@ -238,7 +238,7 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(challenge.is_challenge_league_command("csa20", session), ("sa20", "SA20"))
             self.assertEqual(challenge.is_challenge_league_command("challengeSA20", session), ("sa20", "SA20"))
 
-    async def test_league_command_requires_reply(self):
+    async def test_league_command_requires_a_reply_or_a_tag(self):
         message = DummyMessage("/cipl")
         update = SimpleNamespace(
             effective_message=message,
@@ -250,8 +250,182 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
              patch.object(challenge, "_start_challenge_lobby", new=AsyncMock()) as start:
             await challenge.challenge_league_handler(update, SimpleNamespace())
 
-        self.assertEqual(message.replies[0][0], challenge.CHALLENGE_REPLY_REQUIRED_MESSAGE)
+        self.assertIn(challenge.CHALLENGE_REPLY_REQUIRED_MESSAGE, message.replies[0][0])
+        self.assertIn("tag them", message.replies[0][0])
         start.assert_not_called()
+
+    async def test_league_command_accepts_a_tagged_opponent(self):
+        """``/cipl @guest`` names the opponent without a reply."""
+        message = DummyMessage("/cipl @guest")
+        update = SimpleNamespace(
+            effective_message=message, message=message,
+            effective_user=SimpleNamespace(id=1),
+            effective_chat=SimpleNamespace(id=-100),
+        )
+        host = SimpleNamespace(id=10, telegram_id=1)
+        guest = SimpleNamespace(id=20, telegram_id=2)
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "_challenge_target_user", return_value=guest), \
+             patch.object(challenge, "sync_telegram_user", return_value=host), \
+             patch.object(challenge, "_get_challenge_league_record", return_value=None), \
+             patch.object(challenge, "_league_teams", return_value=["MI", "CSK"]), \
+             patch.object(challenge, "_send_league_team_picker", new=AsyncMock()) as picker:
+            await challenge.challenge_league_handler(update, SimpleNamespace())
+        picker.assert_awaited_once()
+        self.assertIs(picker.await_args.kwargs["target"], guest)
+        self.assertIsNone(picker.await_args.kwargs["overs"])
+        self.assertIsNone(picker.await_args.kwargs["ball_format"])
+
+    async def test_a_fifty_over_league_challenge_is_an_odi(self):
+        """``/cipl 50 @guest`` hands the picker an ODI and its pinned tuning."""
+        message = DummyMessage("/cipl 50 @guest")
+        update = SimpleNamespace(
+            effective_message=message, message=message,
+            effective_user=SimpleNamespace(id=1),
+            effective_chat=SimpleNamespace(id=-100),
+        )
+        host = SimpleNamespace(id=10, telegram_id=1)
+        guest = SimpleNamespace(id=20, telegram_id=2)
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "_challenge_target_user", return_value=guest), \
+             patch.object(challenge, "sync_telegram_user", return_value=host), \
+             patch.object(challenge, "_get_challenge_league_record", return_value=None), \
+             patch.object(challenge, "_league_teams", return_value=["MI", "CSK"]), \
+             patch.object(challenge, "_send_league_team_picker", new=AsyncMock()) as picker:
+            await challenge.challenge_league_handler(update, SimpleNamespace())
+        picker.assert_awaited_once()
+        kwargs = picker.await_args.kwargs
+        self.assertEqual(kwargs["overs"], 50)
+        self.assertEqual(kwargs["ball_format"], "ODI")
+        self.assertEqual(kwargs["odi_settings"]["version"], "odi-approach-1")
+
+    async def test_a_thirty_over_league_challenge_is_an_odi_too(self):
+        message = DummyMessage("/cipl 30")
+        update = SimpleNamespace(
+            effective_message=message, message=message,
+            effective_user=SimpleNamespace(id=1),
+            effective_chat=SimpleNamespace(id=-100),
+        )
+        guest = SimpleNamespace(id=20, telegram_id=2)
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "_challenge_target_user", return_value=guest), \
+             patch.object(challenge, "sync_telegram_user",
+                          return_value=SimpleNamespace(id=10, telegram_id=1)), \
+             patch.object(challenge, "_get_challenge_league_record", return_value=None), \
+             patch.object(challenge, "_league_teams", return_value=["MI"]), \
+             patch.object(challenge, "_send_league_team_picker", new=AsyncMock()) as picker:
+            await challenge.challenge_league_handler(update, SimpleNamespace())
+        kwargs = picker.await_args.kwargs
+        self.assertEqual((kwargs["overs"], kwargs["ball_format"]), (30, "ODI"))
+
+    async def test_a_short_league_challenge_stays_a_t20(self):
+        message = DummyMessage("/cipl 6")
+        update = SimpleNamespace(
+            effective_message=message, message=message,
+            effective_user=SimpleNamespace(id=1),
+            effective_chat=SimpleNamespace(id=-100),
+        )
+        guest = SimpleNamespace(id=20, telegram_id=2)
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "_challenge_target_user", return_value=guest), \
+             patch.object(challenge, "sync_telegram_user",
+                          return_value=SimpleNamespace(id=10, telegram_id=1)), \
+             patch.object(challenge, "_get_challenge_league_record", return_value=None), \
+             patch.object(challenge, "_league_teams", return_value=["MI"]), \
+             patch.object(challenge, "_send_league_team_picker", new=AsyncMock()) as picker:
+            await challenge.challenge_league_handler(update, SimpleNamespace())
+        kwargs = picker.await_args.kwargs
+        self.assertEqual(kwargs["overs"], 6)
+        self.assertIsNone(kwargs["ball_format"])
+        self.assertIsNone(kwargs["odi_settings"])
+
+    async def test_a_league_challenge_over_fifty_overs_is_refused(self):
+        message = DummyMessage("/cipl 60")
+        update = SimpleNamespace(
+            effective_message=message, message=message,
+            effective_user=SimpleNamespace(id=1),
+            effective_chat=SimpleNamespace(id=-100),
+        )
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "_send_league_team_picker", new=AsyncMock()) as picker:
+            await challenge.challenge_league_handler(update, SimpleNamespace())
+        picker.assert_not_called()
+        self.assertIn("between 1 and 50", message.replies[0][0])
+
+    def test_target_resolution_prefers_the_reply(self):
+        guest_tg = SimpleNamespace(id=2, is_bot=False)
+        message = DummyMessage("/cipl", reply_user=guest_tg)
+        update = SimpleNamespace(effective_message=message, message=message,
+                                 effective_user=SimpleNamespace(id=1))
+        guest = SimpleNamespace(id=20, telegram_id=2)
+        with patch.object(challenge, "sync_telegram_user", return_value=guest):
+            self.assertIs(
+                challenge._challenge_target_user(DummySession(), update, [], "cipl"),
+                guest)
+
+    def test_target_resolution_rejects_a_bot_and_a_self_challenge(self):
+        bot_reply = DummyMessage("/cipl", reply_user=SimpleNamespace(id=9, is_bot=True))
+        update = SimpleNamespace(effective_message=bot_reply, message=bot_reply,
+                                 effective_user=SimpleNamespace(id=1))
+        self.assertIs(
+            challenge._challenge_target_user(DummySession(), update, [], "cipl"),
+            challenge._CHALLENGE_TARGET_IS_BOT)
+
+        self_reply = DummyMessage("/cipl", reply_user=SimpleNamespace(id=1, is_bot=False))
+        update = SimpleNamespace(effective_message=self_reply, message=self_reply,
+                                 effective_user=SimpleNamespace(id=1))
+        self.assertIs(
+            challenge._challenge_target_user(DummySession(), update, [], "cipl"),
+            challenge._CHALLENGE_TARGET_IS_SELF)
+
+    def test_target_resolution_reads_the_leftover_words(self):
+        """The over count is already gone; only the tag reaches the lookup."""
+        message = DummyMessage("/cipl 50 @guest")
+        update = SimpleNamespace(effective_message=message, message=message,
+                                 effective_user=SimpleNamespace(id=1))
+        guest = SimpleNamespace(id=20, telegram_id=2)
+        seen = {}
+
+        def resolve(session, upd, ctx, command_name):
+            seen["args"] = list(ctx.args)
+            seen["command"] = command_name
+            return guest, "username"
+
+        with patch.dict(sys.modules):
+            stub = types.ModuleType("services.telegram_user_service")
+            stub.resolve_command_target = resolve
+            stub.sync_telegram_user = lambda *a, **k: None
+            sys.modules["services.telegram_user_service"] = stub
+            result = challenge._challenge_target_user(
+                DummySession(), update, ["@guest"], "cipl")
+        self.assertIs(result, guest)
+        self.assertEqual(seen, {"args": ["@guest"], "command": "cipl"})
+
+    def test_target_resolution_tells_not_found_from_not_named(self):
+        message = DummyMessage("/cipl @ghost")
+        update = SimpleNamespace(effective_message=message, message=message,
+                                 effective_user=SimpleNamespace(id=1))
+        with patch.dict(sys.modules):
+            stub = types.ModuleType("services.telegram_user_service")
+            stub.resolve_command_target = lambda *a, **k: (None, "username")
+            stub.sync_telegram_user = lambda *a, **k: None
+            sys.modules["services.telegram_user_service"] = stub
+            self.assertIs(
+                challenge._challenge_target_user(DummySession(), update, ["@ghost"], "cipl"),
+                challenge._CHALLENGE_TARGET_NOT_FOUND)
+
+        with patch.dict(sys.modules):
+            stub = types.ModuleType("services.telegram_user_service")
+            stub.resolve_command_target = lambda *a, **k: (None, "missing")
+            stub.sync_telegram_user = lambda *a, **k: None
+            sys.modules["services.telegram_user_service"] = stub
+            self.assertIsNone(
+                challenge._challenge_target_user(DummySession(), update, [], "cipl"))
+
+    def test_the_draft_recap_names_a_long_match_as_an_odi(self):
+        odi = {"overs": 50, "ball_format": "ODI"}
+        self.assertEqual(challenge._draft_length_label(odi), "50-over ODI")
+        self.assertEqual(challenge._draft_length_label({"overs": 6}), "6-over match")
 
     async def test_league_command_rejects_self_challenge(self):
         reply_user = SimpleNamespace(id=1, is_bot=False)

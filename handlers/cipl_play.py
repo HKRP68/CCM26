@@ -80,7 +80,10 @@ ODI_WARNING_COUNT = 3
 # opponent — see _forfeit_live_match.
 CIPL_FORFEIT_COINS = int(os.getenv("CIPL_FORFEIT_COINS", "3000"))
 CIPL_FORFEIT_GEMS = int(os.getenv("CIPL_FORFEIT_GEMS", "5"))
-CIPL_OVERS = 20    # Challenge League / League Battle matches are always 20 overs
+# The default Challenge League length. A friendly may ask for any length from 1
+# to 50 overs (services.match_formats.CUSTOM_OVERS_MAX), and 21 or more plays
+# under ODI rules; tournament, CL Tour and The Hundred matches are always this.
+CIPL_OVERS = 20
 
 # Pause before the AI captain (/lpbot, /ciplbot) reveals a decision, so its
 # moves read as moves rather than as the board teleporting.
@@ -2080,20 +2083,52 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         # XI selection; default to the over-based format if it is missing.
         overs = CIPL_OVERS
         ball_format = draft.get("ball_format", "T20")
-        # A friendly can be shorter (/cipl 6). Tournament, CL Tour and The
-        # Hundred matches are always the full 20 units.
-        if (draft.get("overs") and ball_format == "T20"
+        odi_settings = draft.get("odi_settings")
+        # A friendly can be shorter (/cipl 6) or longer (/cipl 50, an ODI).
+        # Tournament, CL Tour and The Hundred matches are always the full 20
+        # units.
+        if (draft.get("overs") and ball_format in ("T20", "ODI")
                 and not draft.get("is_tournament") and not draft.get("tournament_id")
                 and not draft.get("cl_tour_id")):
-            overs = max(1, min(CIPL_OVERS, int(draft["overs"])))
+            from services.match_formats import CUSTOM_OVERS_MAX, ball_format_for_overs
+            overs = max(1, min(CUSTOM_OVERS_MAX, int(draft["overs"])))
+            # The over count owns the engine, so a draft that lost its ODI
+            # label (or carries one for a short match) is corrected here rather
+            # than playing 50 overs on T20 rates.
+            ball_format = ball_format_for_overs(overs)
+        if ball_format == "ODI" and not odi_settings:
+            # The command mints and verifies these; a draft without them (an
+            # older draft, or a league whose format is ODI) gets a fresh read.
+            from engine.realism import odi as _odi
+            try:
+                odi_settings = _odi.new_settings()
+            except _odi.ODIUnavailable as exc:
+                await _fail(str(exc))
+                return
         standalone_super_over = bool(draft.get("standalone_super_over"))
         match_type, expire_seconds = TYPE_CIPL, MATCH_EXPIRE
         if standalone_super_over:
             from services.match_outcome import TYPE_SUPER_OVER
             from handlers.play_super_over import GAME_SECONDS
             # Six legal balls in every league, including Hundred squads.
-            overs, ball_format = 1, "T20"
+            overs, ball_format, odi_settings = 1, "T20", None
             match_type, expire_seconds = TYPE_SUPER_OVER, GAME_SECONDS
+        if ball_format == "ODI":
+            # An ODI must be bowled out under the quota, so both XIs are
+            # checked HERE — before the Match row exists. The league XI picker
+            # already asks for five bowling options, which covers a 50-over
+            # innings; this catches a squad whose admin-entered roles leave the
+            # engine seeing part-timers, where the alternative is a committed
+            # match with no board.
+            short = [name for name, xi in ((bat_team_name, bat_xi),
+                                           (bowl_team_name, bowl_xi))
+                     if not cipl_match.odi_approach.valid_xi(xi, overs)]
+            if short:
+                await _fail(
+                    f"{' and '.join(short)} cannot bowl {overs} overs under the "
+                    f"{cipl_match.max_bowler_overs({'overs': overs})}-over quota. "
+                    "Pick an XI with more front-line bowlers, or play a shorter match.")
+                return
         settings = random_match_settings()
         # Honour the host's chosen pitch (selected during setup); fall back to the
         # randomised surface only when no pitch was picked.
@@ -2104,6 +2139,9 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         match = Match(
             user1_id=host.id, user2_id=target.id, status="active",
             match_type=match_type,
+            # Recorded on the row, not just in the live state: ODI career
+            # stats are keyed off it long after the match state is gone.
+            **({"ball_format": "ODI"} if ball_format == "ODI" else {}),
             overs=overs, toss_winner_id=winner.id, toss_decision=decision,
             batting_first_id=bat_user.id, bowling_first_id=bowl_user.id,
             stadium=draft.get("stadium") or settings["stadium"], pitch_type=chosen_pitch,
@@ -2190,7 +2228,13 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
     except Exception:
         logger.debug("toss callback answer failed (already answered)", exc_info=True)
     winner_name = (draft.get(winner_side) or {}).get("name", "Winner")
-    fmt_label = "The Hundred (100 balls)" if ball_format == "The100" else f"{match_obj.overs} overs"
+    if ball_format == "The100":
+        fmt_label = "The Hundred (100 balls)"
+    elif ball_format == "ODI":
+        fmt_label = cipl_match.format_label({"ball_format": "ODI",
+                                             "overs": match_obj.overs})
+    else:
+        fmt_label = f"{match_obj.overs} overs"
     unit_flow = "set by set" if ball_format == "The100" else "over by over"
     if draft.get("standalone_super_over"):
         fmt_label = "Unranked Super Over · 6 balls · 2 wickets"
@@ -2222,6 +2266,7 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
                                bat_team_code=bat_team_code, bowl_team_code=bowl_team_code,
                                bat_team_emoji=bat_team_emoji, bowl_team_emoji=bowl_team_emoji,
                                draft=draft, ball_format=ball_format,
+                               odi_settings=odi_settings,
                                bat_bench=bat_bench, bowl_bench=bowl_bench)
     except Exception:
         logger.exception("/cipl match hand-off failed for match %s", match_obj.id)
@@ -2281,7 +2326,8 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
                            bat_xi, bowl_xi, bat_team_name, bowl_team_name,
                            pitch_type, bat_team_code="", bowl_team_code="",
                            bat_team_emoji="🏏", bowl_team_emoji="🏏", draft=None,
-                           ball_format="T20", bat_bench=None, bowl_bench=None):
+                           ball_format="T20", bat_bench=None, bowl_bench=None,
+                           odi_settings=None):
     conditions = (draft or {}).get("conditions")
     if not conditions:
         # /letsplay (and any other flow that skipped the Pitch Report) still
@@ -2304,7 +2350,8 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         bat_team_code=bat_team_code, bowl_team_code=bowl_team_code,
         bat_team_emoji=bat_team_emoji, bowl_team_emoji=bowl_team_emoji,
         conditions=conditions, ball_format=ball_format,
-        bat_bench=bat_bench, bowl_bench=bowl_bench)
+        bat_bench=bat_bench, bowl_bench=bowl_bench,
+        odi_settings=odi_settings or (draft or {}).get("odi_settings"))
     state["user_names"] = {
         str(bat_user.telegram_id): bat_user.username or bat_user.first_name or "Player",
         str(bowl_user.telegram_id): bowl_user.username or bowl_user.first_name or "Player",
@@ -2482,7 +2529,9 @@ def _match_start_announcement(state):
     stadium = html.escape(str(state.get("stadium") or "Neutral Venue"))
     pitch = html.escape(str(state.get("pitch_type") or "Hard"))
     overs = state.get("overs", 20)
-    overs_label = "The Hundred (100 balls)" if state.get("ball_format") == "The100" else f"{overs} overs"
+    overs_label = ("The Hundred (100 balls)" if state.get("ball_format") == "The100"
+                   else f"{overs} overs · ODI rules" if state.get("ball_format") == "ODI"
+                   else f"{overs} overs")
     rule = "━" * 15
     # Compact live-conditions strip (weather · temp · dew) from the Pitch Report.
     cond = state.get("conditions") or {}
@@ -2934,8 +2983,9 @@ def is_cipl_state(state):
 def _innings_quota_used(state):
     """True when the current innings has nothing left to bowl.
 
-    That is: the format's full quota of overs (20) or balls (100 = 20 sets) has
-    been bowled, the side is all out, or the chase is won. Once this is true no
+    That is: the match's full quota — its over count (1 to 50) or The Hundred's
+    100 balls as 20 five-ball sets — has been bowled, the side is all out, or
+    the chase is won. Once this is true no
     further over/set may be played in this innings — the match must move to the
     innings break or the result. Never raises on a malformed state.
     """
@@ -3054,9 +3104,9 @@ async def _resume_locked(context, mid, only_if_stalled=False):
     if medical.pending(state):
         await _prompt_concussion(context, mid, state)
         return True
-    # The innings has already used its full quota (20 overs / 100 balls, all
-    # out, or the chase won). /rcl must NEVER re-prompt a pick here: doing so
-    # played a 21st over whenever an end-of-innings handler had failed
+    # The innings has already used its full quota (its over count / 100 balls,
+    # all out, or the chase won). /rcl must NEVER re-prompt a pick here: doing
+    # so played one over too many whenever an end-of-innings handler had failed
     # part-way (a dropped Telegram send left next_action on the consumed
     # approach pick). Drive the terminal step instead.
     if _innings_quota_used(state):
@@ -4401,7 +4451,7 @@ async def _run_over(context, mid, state):
     if medical.pending(state):
         await _prompt_concussion(context, mid, state)
         return
-    # Hard stop on the format limit. Once the innings quota is used — 20 overs,
+    # Hard stop on the format limit. Once the innings quota is used — its overs,
     # or 100 balls (20 sets) in The Hundred — no further over may be simulated,
     # no matter how we got here (a stale approach button, a /rcl on a match whose
     # end-of-innings handler failed, an inactivity auto-pick). Finish the innings
@@ -6333,9 +6383,12 @@ def _summary_caption(state, result_line):
         stadium = state.get("stadium")
         if stadium:
             # Match the start card's wording: a 100-ball match is not "20 overs".
+            _overs = state.get("overs", CIPL_OVERS)
             overs_label = ("The Hundred (100 balls)"
                            if state.get("ball_format") == "The100"
-                           else f"{state.get('overs', CIPL_OVERS)} overs")
+                           else f"{_overs} overs · ODI rules"
+                           if state.get("ball_format") == "ODI"
+                           else f"{_overs} overs")
             lines.append(f"🏟️ {html.escape(str(stadium))} • {overs_label}")
         if _is_bot_match(state):
             from services.bot_captain import persona_label

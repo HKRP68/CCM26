@@ -1221,7 +1221,11 @@ function renderGameplayScreen() {
   tossBadge.textContent = tossText;
   tossBadge.classList.toggle('hidden', tossText === 'Unavailable');
   document.getElementById('arena-toss').textContent = tossText;
-  document.getElementById('arena-format').textContent = matchState.ballFormat === 'ODI' ? 'ODI · 50 overs per innings'
+  // An ODI is any innings of 21 to 50 overs, so it names its own length
+  // rather than always claiming fifty.
+  document.getElementById('arena-format').textContent =
+      matchState.ballFormat === 'ODI'
+        ? 'ODI · ' + (matchState.totalOvers || 50) + ' overs per innings'
     : isHundredFormat() ? 'The Hundred'
     : matchState.totalOvers ? matchState.totalOvers + ' overs per innings' : 'Unavailable';
   document.getElementById('arena-pitch').textContent = matchState.pitch || 'Unavailable';

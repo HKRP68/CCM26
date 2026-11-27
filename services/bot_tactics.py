@@ -734,7 +734,7 @@ def _odi_payoff_matrix(state, bowler):
     price = (3.1 + 0.22 * overs_to_bat + settled_value) * tail
     price *= 1.0 + max(0, 5 - hand) * 0.13
     projected = ctx.runs + odi_approach.mean_remaining(ctx.balls_remaining, hand, ctx, cfg, edge=edge)
-    par = odi_approach.mean_remaining(300, 10, ctx, cfg)
+    par = odi_approach.mean_remaining(ctx.innings_balls, 10, ctx, cfg)
     if projected > par:
         price *= 1 + min(0.12, (projected - par) * 0.002)
     def value(bat, bowl):

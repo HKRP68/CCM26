@@ -443,7 +443,8 @@ def _calibrated_par_total(state):
         from services import odi_approach
         from engine.realism import odi
         ctx = odi_approach.context(state)
-        return round(odi_approach.mean_remaining(300, 10, ctx, odi.settings(state))), True
+        return round(odi_approach.mean_remaining(
+            ctx.innings_balls, 10, ctx, odi.settings(state))), True
     innings_balls = _total_balls(state)
     fmt = _format_config(innings_balls)
     curve = getattr(fmt, "par_scores", None) if fmt else None

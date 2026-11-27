@@ -148,8 +148,12 @@ class ParseMultiArgsTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIsNotNone(error)
 
+    def test_multi_over_twenty_overs_is_an_odi(self):
+        self.assertEqual(self.parse(["multi", "50"]), (True, 50, "ODI", None))
+        self.assertEqual(self.parse(["multi", "30ov"]), (True, 30, "ODI", None))
+
     def test_out_of_range_overs(self):
-        self.assertIsNotNone(self.parse(["multi", "50"])[3])
+        self.assertIsNotNone(self.parse(["multi", "51"])[3])
 
 
 class MultiLeagueListTests(unittest.TestCase):

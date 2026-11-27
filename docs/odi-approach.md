@@ -2,6 +2,18 @@
 
 The ODI experiment is available by default. **CMU_ODI_APPROACH_ENABLED** defaults to **1**. The experiment supports **/letsplay ODI @user**, **/letsplay 50**, **/lpbot ODI app** and **/lpbot 50 chat**. Reply to a player's message when omitting their username. **/lpbot** carries the chosen format through the difficulty prompt and remembers the chat or Mini App preference.
 
+## Any length from 21 to 50 overs
+
+ODI rules apply to any innings of **21 to 50 overs**, not only the full fifty. The over count is the only switch: **services/match_formats.py** holds the range (**CUSTOM_OVERS_MIN** 1, **MEDIUM_OVERS_MIN** 21, **ODI_OVERS** and **CUSTOM_OVERS_MAX** 50) and **ball_format_for_overs** maps a count to **ODI** or **T20**. A command never decides the engine from the spelling of its argument, so **/lp 30**, **/lp t30** and **/lp 30overs** all start the same 30-over ODI, and 1 to 20 overs stay on the short-format realism engine exactly as before.
+
+Entry points: **/letsplay**, **/lp**, **/lpbot**, **/lpmulti**, and every Challenge League command — **/c&lt;league&gt; 50 @user** or a reply. A league command resolves its opponent by reply, **@username**, numeric Telegram id or a tapped no-username mention. A league with a fixed non-T20 format does not take a custom length, and tournament, CL Tour and The Hundred matches always play their full length. **/sim** keeps its own 20-over custom cap and its **ODI** keyword.
+
+Everything the model reads scales from the innings length rather than a constant. The phase boundaries are the ODI split as fractions, **ODI_POWERPLAY_END** 0.20 and **ODI_DEATH_START** 0.80 in **engine/realism/phases.py**; at 300 balls they land on ball 60 and ball 240, the split the measured reference filed its deliveries under, so a full ODI is unchanged. **services/odi_approach.py** reads **innings_overs**, **innings_balls** and **phase_windows** from the state for the delivery context, pitch wear, required rate, pressure input, par curve, chase forecast, bowling horizon and death reserve. The per-bowler quota is already a fifth of the innings — ten overs at fifty, six at thirty — and part-timers stay capped at two. **valid_xi** takes the length and asks for that much legal bowling capacity.
+
+A paired-seed regression compared 24 innings of 50-over ODI play before and after the change: every over's bowler, phase, running score and the full batting and bowling figures were identical. Across 30 paired matches at each of 21, 30, 35, 45 and 50 overs, every innings completed, no bowler exceeded quota or bowled consecutive overs, and first-innings means ran 130.4, 183.1, 211.2, 254.8 and 278.2 — 6.21 down to 5.56 runs an over, the shorter games scoring faster per over as they do in the real game.
+
+**matches.ball_format** is written as **ODI** for every such match, including Challenge League ones, so the career split below holds after the live state is gone.
+
 Set **CMU_ODI_APPROACH_ENABLED=0** to pause new ODI matches. Existing ODI matches use their saved tuning, engine version, reference version and reference SHA-256. Keep the reference version on disk while any save uses it. If a saved reference is unavailable, restore the pinned file and use **/rcl** to continue. A future tuning or data release should use a new version and retain the old settings reader for unfinished matches.
 
 ## Data and attribution
@@ -34,6 +46,14 @@ The baseline and its ODI rating curve own rating, pitch, wear and new-ball effec
 The chase forecast estimates remaining runs from phase rates and wickets available. The AI applies the same forecast to approximate the over's value using the delivery probabilities. It also uses role-specific priors and previously completed overs. Projection and win-chance displays remain advisory. The over loop samples each delivery from a match-local stream and adjudicates extras before advancing its legal-ball count. Short-format scoring floors, outcome steering and scripted scenarios are outside this path.
 
 Database startup adds nullable **matches.ball_format** and creates **odi_player_innings** via the existing migration and table creation routines. Eligible competitive ODI innings are written idempotently to the ODI table. Existing matches retain their format conventions. Practice remains unranked. The scorecard archive retains the ODI label and totals after live-state cleanup.
+
+## Separate ODI career stats
+
+An innings of 21 overs or more is recorded in **odi_player_innings** and never in **player_game_stats**, so a long-format hundred cannot flatter a short-format strike rate and a T20 spell cannot flatter an ODI economy. The table is one row per match, innings, discipline and player holding the raw live-state figures as JSON, which keeps the record auditable: nothing printed is a counter that can drift from the innings it came from.
+
+**services/odi_stats_service.py** is the read side. **fold_batting** and **fold_bowling** sum the per-innings blobs; **career** returns one player's record for one owner, or for every owner when **user_id** is omitted; **squad_careers** folds a whole roster in one query. The derived figures — batting and bowling average, strike rate, economy, highest score with its not-out star, best bowling, overs — return **None** rather than dividing by zero, and **record_block** renders the two-column layout **/stats** uses. The module never writes.
+
+**/odistats &lt;player&gt;** shows the caller's own card's ODI career; **/odistats &lt;player&gt; global** sums every owner's innings for that card, as **/gstats** does for the short formats. Both answer in DM, every edition of a re-released card folds into one record, and the command is registered as **/odistats**, **/odistat** and **/statsodi**. Unranked practice and bot matches earn no ODI innings, which is the rule the short formats already follow.
 
 ## Reproduce
 
@@ -83,7 +103,9 @@ The neutral holdout simulation missed the provisional limits for powerplay run r
 
 ~~~sh
 python -m pytest -q \
-  tests/test_odi_approach.py tests/test_custom_overs_and_roster_full.py \
+  tests/test_odi_approach.py tests/test_long_format_matches.py \
+  tests/test_custom_overs_and_roster_full.py \
+  tests/test_challenge_league_commands.py tests/test_dm_only_commands.py \
   tests/test_cipl_approach.py tests/test_approach_miniapp_play.py \
   tests/test_bot_tactics.py tests/test_realism_ai_parity.py \
   tests/test_realism_reference.py tests/test_realism_deterministic.py \

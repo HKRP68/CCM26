@@ -73,8 +73,13 @@ async def lpbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if play_mode:
         remember_play_mode(context.bot_data, tg.id, play_mode)
     if not answered:
-        await prompt_difficulty(update, context, "lp",
-                                "ODI" if ball_format == "ODI" else str(overs or ""))
+        # Bank the length the player typed so the button restarts the same
+        # match: "ODI" for a full fifty, otherwise the bare over count (which
+        # extract_approach_format reads back as an ODI above 20 overs).
+        from services.match_formats import ODI_OVERS
+        await prompt_difficulty(
+            update, context, "lp",
+            "ODI" if (ball_format == "ODI" and overs == ODI_OVERS) else str(overs or ""))
         return
 
     session = get_session()

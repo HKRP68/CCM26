@@ -52,6 +52,7 @@ THROTTLE_SECONDS = 60
 DM_ONLY_COMMANDS = {
     "stats": "Player stats",
     "gstats": "Global player stats",
+    "odistats": "ODI career stats",
     "statscl": "Challenge League stats",
     "setbo": "Batting order",
     "recentmatches": "Recent matches",

@@ -212,6 +212,7 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/myprofile` | `/profile` `/me` | Your profile |
 | `/stats` 💬 | `/st` | A player's game statistics |
 | `/gstats` 💬 | `/globalstats` | Global stats — every owner, every match type 🌍 |
+| `/odistats` 💬 | `/odistat` `/statsodi` | **ODI career** — every innings of 21 overs or more, kept apart from the short-format record. Add `global` for every owner's innings 🥇 |
 | `/statscl` 💬 | — | Any Challenge League player's stats |
 | `/statstour` | — | A player's **This Season Stats** and **Total Season Stats**, with batting/bowling innings, runs, wickets, 50s, 100s, 4s/6s, averages, strike rates, economy, ducks, HS (with `*` for not out), 3-/5-fers, hat-tricks, best bowling, overs and POTM awards. Linked past seasons and saved deleted seasons count toward totals; unavailable older records show `—`. Each season section expands on tap |
 | `/tvs [#ID] Batter \| Bowler` | — | Recorded batter–bowler encounters in one tournament: runs, balls, dismissals, dots, boundaries, strike rate and average. Use `Player @ Team` for duplicate names |
@@ -243,8 +244,8 @@ Use commas to compare values within a filter and pipes to combine filters. Both 
 
 | Command | Aliases | What it does |
 |---------|---------|--------------|
-| `/letsplay` | `/lp` | 20-over match with your own roster — reply or tag to invite |
-| `/lpmulti` | `/lpm` `/letsplaymulti` | **Lets Play Multi** — your own roster vs a league team. `/lpmulti AI`: you pick League → Team and the AI captains it. `/lpmulti @user` (or reply): they accept, pick League → Team and captain it. The league team's best XI is auto-picked. Unranked |
+| `/letsplay` | `/lp` | 20-over match with your own roster — reply or tag to invite. Add a length for anything from 1 to 50 overs (`/lp 50`, `/lp ODI`); 21 overs or more plays as an ODI |
+| `/lpmulti` | `/lpm` `/letsplaymulti` | **Lets Play Multi** — your own roster vs a league team. `/lpmulti 30` sets the length (1–50 overs; 21+ is an ODI). `/lpmulti AI`: you pick League → Team and the AI captains it. `/lpmulti @user` (or reply): they accept, pick League → Team and captain it. The league team's best XI is auto-picked. Unranked |
 | `/playmatch` | `/pm` `/match` | Challenge another user to a match |
 | `/cm` | — | Two-wicket challenge match |
 | `/cdraft` 👥 | `/challengedraft` | Challenge Draft — both captains build an XI pick by pick, then play |
@@ -310,17 +311,32 @@ Use commas to compare values within a filter and pipes to combine filters. Both 
   Pitch Report forecast. Each change is announced in the over summary; the
   approach card both captains pick from shows the pitch type. There is **no
   rain**: nothing stops play, shortens an innings or sets a DLS target.
-* **Custom overs** — `/letsplay 5 @user` or `/cipl 6` (as a reply) plays a
-  shorter friendly, 1–20 overs. Tournament fixtures, CL Tour matches and The
-  Hundred leagues always play their full length. Matches under 5 overs still
-  pay rewards and count for rivalries, but are not ranked.
+* **Custom overs, 1–50** — `/letsplay 5 @user`, `/cipl 6` or `/cipl 50 @user`
+  plays whatever length you ask for. **1–20 overs** is a T20-engine match,
+  exactly as before. **21–50 overs is an ODI**: the match runs on the measured
+  ODI engine, so the powerplay is the first fifth of the innings, the death the
+  last fifth, each bowler gets a fifth of the overs (ten in a 50-over game, six
+  in a 30), the part-time cap stays at two overs, Impact Player is unavailable
+  and a tie finishes level. Tournament fixtures, CL Tour matches and The Hundred
+  leagues always play their full length. Matches under 5 overs still pay rewards
+  and count for rivalries, but are not ranked.
+* **ODI stats are separate** — every innings of 21 overs or more is recorded in
+  the ODI career table, never mixed into the short-format record, so a 50-over
+  hundred never flatters a T20 strike rate. See `/odistats`.
 
 ## 9. Challenge Leagues
 
 League commands are **dynamic**: every active league answers to both
-`/c<league>` and `/challenge<league>`. Reply to the person you want to play.
-Add a number for a shorter friendly — `/cipl 6` plays 6 overs (1–20). Tournament,
-CL Tour and The Hundred matches always play their full length.
+`/c<league>` and `/challenge<league>`. **Reply to the person you want to play,
+or tag them** — `/cipl @rahul` works without a reply, as does a numeric
+Telegram id or a tapped no-username mention.
+
+Add a number for the length: `/cipl 6` plays a 6-over friendly and
+**`/cipl 50 @rahul` plays a 50-over ODI**. Anything from **21 to 50 overs** is
+an ODI — the full ODI engine with its phases and per-bowler quota scaled to the
+length — and earns ODI career stats rather than short-format ones. Tournament,
+CL Tour and The Hundred matches always play their full length, and a league
+with a fixed non-T20 format (The Hundred) does not take a custom length.
 
 | Command | What it does |
 |---------|--------------|
@@ -328,7 +344,7 @@ CL Tour and The Hundred matches always play their full length.
 | `/cbbl` · `/challengeBBL` | Start a BBL challenge |
 | `/cint` · `/challengeINT` | Start an international challenge |
 | `/c<league>` | Any extra league an admin has added on the website answers the same way |
-| `/cmulti [overs\|100B]` | **Multi League** — the host picks a league, then a team from it; the guest does the same (e.g. MI vs Sydney Sixers). `/cmulti 10` plays 10 overs, `/cmulti 100B` plays The Hundred (`/cipl multi` still works). Admins choose which leagues appear with the **Include in Multi** tick on the website |
+| `/cmulti [overs\|100B]` | **Multi League** — the host picks a league, then a team from it; the guest does the same (e.g. MI vs Sydney Sixers). `/cmulti 10` plays 10 overs, `/cmulti 50` a 50-over ODI (21+ overs always is), `/cmulti 100B` plays The Hundred (`/cipl multi` still works). Admins choose which leagues appear with the **Include in Multi** tick on the website |
 
 In **Challenge Data → League → Add Team** and **Team Settings**, both Primary color
 and Secondary color accept typed hex codes beside the colour picker. For example,
@@ -816,6 +832,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 |-------|---------|
 | `/stats <player name>` | `/stats Virat Kohli` |
 | `/gstats <player name>` | `/gstats Virat Kohli` |
+| `/odistats <player name> [global]` | `/odistats Virat Kohli` · `/odistats Kohli global` |
 | `/statscl <player name>` | `/statscl Virat Kohli` |
 | `/statstour <player name>` | `/statstour Virat Kohli` |
 | `/h2h @username` | `/h2h @rahul` |
@@ -831,7 +848,8 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | Usage | Example |
 |-------|---------|
 | `/letsplay @username` *(or reply)* | `/letsplay @rahul` |
-| `/letsplay <overs> @username` — a shorter friendly, 1–20 overs (tournament fixtures are always 20) | `/lp 5 @rahul` |
+| `/letsplay <overs> @username` — any length from 1 to 50 overs; 21+ is an ODI (tournament fixtures are always 20) | `/lp 5 @rahul` · `/lp 50 @rahul` |
+| `/letsplay ODI @username` — the full 50-over ODI | `/lp ODI @rahul` |
 | `/playmatch @username` | `/playmatch @rahul` |
 | `/cm @username` | `/cm @rahul` |
 | `/cdraft` | `/cdraft` |
@@ -844,9 +862,9 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/lpmulti [overs] @username` *(or reply)* | `/lpmulti @rahul` |
 | `/ciplbot [league] [chat\|app]` | `/ciplbot ipl app` |
 | `/pbo @username` | `/pbo @rahul` |
-| `/cipl` *(reply to a user)* | `/cipl` |
-| `/cipl <overs>` *(reply to a user)* — a shorter friendly, 1–20 overs | `/cipl 6` |
-| `/cmulti [overs\|100B]` *(reply to a user)* — each side picks its own league, then a team (`/cipl multi` also works) | `/cmulti 100B` |
+| `/cipl` *(reply to a user, or `/cipl @username`)* | `/cipl` · `/cipl @rahul` |
+| `/cipl <overs>` *(reply **or** tag)* — any length from 1 to 50 overs; 21+ is an ODI | `/cipl 6` · `/cipl 50 @rahul` |
+| `/cmulti [overs\|100B]` *(reply to a user)* — each side picks its own league, then a team; 1–50 overs, 21+ is an ODI (`/cipl multi` also works) | `/cmulti 100B` · `/cmulti 50` |
 | `/matchinfo` | `/matchinfo` |
 | `/resume` · `/rcl` | `/rcl` · `/rcl 1234` |
 | `/pause` · `/continue <MatchId>` · `/saved` | `/pause` · `/continue 1234` |
@@ -1175,7 +1193,8 @@ because Telegram caps each scope at 100 commands.
 In a group these post a one-line deep link instead of the answer
 (`services/dm_only.py`):
 
-`/stats` · `/gstats` · `/statscl` · `/setbo` · `/recentmatches` · `/traits` ·
+`/stats` · `/gstats` · `/odistats` · `/statscl` · `/setbo` · `/recentmatches` ·
+`/traits` ·
 `/traitboost` · `/traitshop` · `/traitapply` · `/traitupgrade` ·
 `/traitreplace` · `/removetrait` · `/selltrait`
 
@@ -1291,6 +1310,7 @@ admin panel, but the commands are not registered.
 | `/fstats` | `/fantasystats` |
 | `/fullguide`, `/matchtypes`, `/mguide` | `/matchguide` |
 | `/globalstats` | `/gstats` |
+| `/odistat`, `/statsodi` | `/odistats` |
 | `/gs` | `/gspin` |
 | `/guide`, `/help` | `/howto` |
 | `/headtohead` | `/h2h` |
@@ -1399,7 +1419,8 @@ admin panel, but the commands are not registered.
 | `/daily` | Every 24h, grows with your streak |
 | `/gspin` | Every 8h |
 | `/cmuweekly` | Every 7 days (Platinum / Diamond) |
-| `/sim`, `/wpm`, `/wpmbot`, `/vsbot`, `/letsplay` | Up to 20 overs (`/sim ODI` plays 50, `/sim Test` five days) |
+| `/letsplay`, `/lpbot`, `/lpmulti`, `/c<league>` | 1–50 overs; 21 or more is an ODI (`/lp ODI`, `/cipl 50`) |
+| `/sim`, `/wpm`, `/wpmbot`, `/vsbot` | Up to 20 overs (`/sim ODI` plays 50, `/sim Test` five days) |
 | `/vsbot` default | 5 overs |
 | Coins → gems | 1000 coins = 1 gem |
 | Challenge League setup timeout | 5 minutes per turn, with a reminder at 4:30 (`CL_SELECT_WINDOW_SECONDS`) |

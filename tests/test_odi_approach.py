@@ -45,10 +45,15 @@ def extra(kind, count, *, runs=0, byes=0, wicket=None):
 
 @pytest.mark.parametrize("tokens,fmt,length,remaining", [
     ([], "T20", None, []), (["1"], "T20", 1, []), (["T20"], "T20", 20, []),
+    (["20"], "T20", 20, []),
     (["ODI", "@some_user"], "ODI", 50, ["@some_user"]),
     (["@ODI", "50"], "ODI", 50, ["@ODI"]),
     (["50", "1234567"], "ODI", 50, ["1234567"]),
     (["ODI"], "ODI", 50, []),
+    # 21 overs and up is an ODI, whichever way the length is written.
+    (["21"], "ODI", 21, []), (["25", "@cap"], "ODI", 25, ["@cap"]),
+    (["49"], "ODI", 49, []), (["t30"], "ODI", 30, []),
+    (["35overs"], "ODI", 35, []), (["40ov"], "ODI", 40, []),
 ])
 def test_explicit_format_parser(monkeypatch, tokens, fmt, length, remaining):
     monkeypatch.setenv("CMU_ODI_APPROACH_ENABLED", "true")
@@ -56,13 +61,31 @@ def test_explicit_format_parser(monkeypatch, tokens, fmt, length, remaining):
 
 
 @pytest.mark.parametrize("tokens", [
-    ["25"], ["21"], ["49"], ["ODI", "50"], ["ODI", "20"], ["5", "3"],
-    ["ODI50"], ["50.5"], ["-5"], ["t50"],
+    ["ODI", "50"], ["ODI", "20"], ["5", "3"], ["51"], ["0"],
+    ["ODI50"], ["50.5"], ["-5"], ["120"],
 ])
 def test_reject_invalid_lengths(monkeypatch, tokens):
     monkeypatch.setenv("CMU_ODI_APPROACH_ENABLED", "true")
     assert extract_approach_format(tokens)[-1]
-    assert extract_overs_arg(["25"])[-1]
+
+
+@pytest.mark.parametrize("token,overs", [("21", 21), ("35", 35), ("50", 50)])
+def test_medium_over_counts_are_accepted_and_classified(token, overs):
+    from services.match_formats import ball_format_for_overs, is_medium_format
+    assert extract_overs_arg([token]) == (overs, [], None)
+    assert is_medium_format(overs) and ball_format_for_overs(overs) == "ODI"
+
+
+@pytest.mark.parametrize("overs", [1, 6, 20])
+def test_short_over_counts_stay_on_the_t20_engine(overs):
+    from services.match_formats import ball_format_for_overs, is_medium_format
+    assert not is_medium_format(overs)
+    assert ball_format_for_overs(overs) == "T20"
+
+
+@pytest.mark.parametrize("token", ["51", "0", "100"])
+def test_over_counts_outside_the_range_are_refused(token):
+    assert extract_overs_arg([token])[-1]
 
 
 def test_odis_are_available_without_an_environment_override(monkeypatch):

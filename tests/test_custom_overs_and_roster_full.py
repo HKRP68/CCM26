@@ -19,10 +19,15 @@ class ExtractOversTests(unittest.TestCase):
         self.assertEqual(extract_overs_arg([]), (None, [], None))
         self.assertEqual(extract_overs_arg(None), (None, [], None))
 
+    def test_medium_lengths_are_in_range(self):
+        # 21 to 50 overs are played under ODI rules, not refused.
+        self.assertEqual(extract_overs_arg(["25"]), (25, [], None))
+        self.assertEqual(extract_overs_arg(["50", "@a"]), (50, ["@a"], None))
+
     def test_out_of_range(self):
-        overs, _rest, err = extract_overs_arg(["25"])
+        overs, _rest, err = extract_overs_arg(["51"])
         self.assertIsNone(overs)
-        self.assertIn("between 1 and 20", err)
+        self.assertIn("between 1 and 50", err)
         self.assertIsNotNone(extract_overs_arg(["0"])[2])
 
     def test_a_telegram_id_is_left_for_the_target_lookup(self):

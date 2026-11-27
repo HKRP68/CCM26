@@ -77,6 +77,11 @@ def draft_format_label(draft):
                                     "overs": draft_overs(draft)})
 
 
+def _odi_title(overs):
+    """"ODI · 50 overs", or the shortened ODI's own length."""
+    return cipl_match.format_label({"ball_format": "ODI", "overs": overs})
+
+
 def _fixed_guest(draft):
     """True when the guest side fields an XI held on the draft, not a roster.
 
@@ -527,9 +532,13 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
     # fixture is always the full LETSPLAY_OVERS, whatever was typed.
     overs, ball_format, odi_settings = LETSPLAY_OVERS, "T20", None
     if not tour_ctx:
-        from services.match_formats import extract_approach_format, extract_overs_arg
+        from services.match_formats import (
+            ball_format_for_overs, extract_approach_format, extract_overs_arg)
         if multi:
             custom, rest, overs_error = extract_overs_arg(getattr(context, "args", None))
+            # /lpmulti takes a plain over count, but the engine still follows
+            # the length: 21 overs or more is an ODI, just as /lp 21 is.
+            ball_format = ball_format_for_overs(custom)
         else:
             ball_format, custom, rest, overs_error = extract_approach_format(getattr(context, "args", None))
         if overs_error:
@@ -591,9 +600,9 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if not guest_user:
             if ball_format == "ODI":
                 await msg.reply_text(
-                    "🏏 <b>ODI · 50 overs</b>\n\n"
-                    "Reply to your opponent's message with <code>/lp 50</code> "
-                    "or use <code>/lp 50 @username</code>.",
+                    f"🏏 <b>{_odi_title(overs)}</b>\n\n"
+                    f"Reply to your opponent's message with <code>/lp {overs}</code> "
+                    f"or use <code>/lp {overs} @username</code>.",
                     parse_mode="HTML")
                 return
             await msg.reply_text(
@@ -2342,9 +2351,14 @@ async def _launch_match(context, draft, decision, winner_side):
                 session,
                 _bench_pairs_for_launch(session, guest.id, guest_xi_pairs),
                 with_traits=traits_on)
-        if is_odi and not (odi_approach.valid_xi(host_xi) and odi_approach.valid_xi(guest_xi)):
-            await _abandon_launch(context, draft, "Each ODI XI needs 50 overs of legal bowling capacity.")
-            return
+        if is_odi:
+            _odi_overs = draft_overs(draft)
+            if not (odi_approach.valid_xi(host_xi, _odi_overs)
+                    and odi_approach.valid_xi(guest_xi, _odi_overs)):
+                await _abandon_launch(
+                    context, draft,
+                    f"Each ODI XI needs {_odi_overs} overs of legal bowling capacity.")
+                return
         session.commit()
 
         bat_is_host = (bat_info["user_id"] == host_info["user_id"])

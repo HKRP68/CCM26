@@ -12,14 +12,47 @@ from engine.realism.styles import bowling_family
 from services import chemistry
 
 
+# An ODI-rules innings is scheduled for this many overs unless the match says
+# otherwise. ``services.match_formats`` owns the range a command may ask for
+# (21 to 50); everything below reads the length off the match state, so a
+# shortened ODI keeps the same phase proportions, quotas and par curve.
+FULL_OVERS = 50
+
+
 def is_odi(state):
     return (state or {}).get("ball_format") == "ODI"
 
 
-def valid_xi(xi):
+def innings_overs(state):
+    """Overs scheduled for one innings of this ODI (50 unless shortened)."""
+    return max(1, int((state or {}).get("overs") or FULL_OVERS))
+
+
+def innings_balls(state):
+    """Legal balls in one innings of this ODI."""
+    return 6 * innings_overs(state)
+
+
+def phase_windows(total_balls):
+    """``(powerplay_end, death_start)`` in legal balls, as the ODI split.
+
+    The real ODI powerplay is the first ten overs of fifty and the death the
+    last ten, so the boundaries are 20% and 80% of the innings — which is
+    exactly balls 60 and 240 at the full 300, the split the measured reference
+    filed its deliveries under.
+    """
+    from engine.realism.phases import ODI_DEATH_START, ODI_POWERPLAY_END
+    total = max(1, int(total_balls))
+    return round(total * ODI_POWERPLAY_END), round(total * ODI_DEATH_START)
+
+
+def valid_xi(xi, overs=FULL_OVERS):
+    """True when an XI can legally bowl out an ``overs``-long ODI innings."""
     from services.cipl_match import is_part_time_bowler, PART_TIME_MAX_OVERS
-    return len(xi) == 11 and sum(PART_TIME_MAX_OVERS if is_part_time_bowler(p) else 10
-                                 for p in xi) >= 50
+    overs = max(1, int(overs or FULL_OVERS))
+    quota = max(1, -(-overs // 5))
+    return len(xi) == 11 and sum(min(quota, PART_TIME_MAX_OVERS) if is_part_time_bowler(p)
+                                 else quota for p in xi) >= overs
 
 
 @lru_cache(maxsize=8192)
@@ -41,7 +74,7 @@ def candidates(state, xi):
     from services.cipl_match import overs_left, is_part_time_bowler
 
     previous = str(state.get("prev_bowler_rid"))
-    remaining = 51 - state["current_over"]
+    remaining = innings_overs(state) + 1 - state["current_over"]
     if remaining <= 0 or state["total_wickets"] >= state.get("wicket_limit", 10):
         return []
     quotas = tuple(overs_left(state, p) for p in xi)
@@ -88,19 +121,20 @@ def context(state, bowler=None, *, free_hit=None, workload=None):
     striker, partner, bowl = _players(state, bowler)
     faced = state.get("bat_stats", {}).get(str(striker.get("roster_id")), {})
     done = cm.balls_bowled(state)
+    total = innings_balls(state)
     innings = state["innings"]
     pitch = state.get("pitch_type") or "Hard"
     target = state.get("target")
     # Use List A's ODI chase and rebuild response. Bound its effect before
     # passing it to the measured model and leave the outcome entirely random.
-    required = max(0, target - state["total_runs"]) * 6 / max(1, 300 - done) if target else 0
+    required = max(0, target - state["total_runs"]) * 6 / max(1, total - done) if target else 0
     pressure = _pressure(innings, done, state["total_runs"], state["total_wickets"],
-                         required, pitch, fmt.name)
+                         required, pitch, fmt.name, total)
     bond = chemistry.partnership_bond(striker, partner) if striker and partner else 0
     carry = state.get("approach_carry") or {}
     return BallContext(
         format_name="ODI", over=done // 6, ball_in_over=done % 6, innings=innings,
-        balls_per_over=6, innings_balls=300, runs=state["total_runs"], wickets=state["total_wickets"],
+        balls_per_over=6, innings_balls=total, runs=state["total_runs"], wickets=state["total_wickets"],
         balls_bowled=done, target=target,
         bat_rating=float(striker.get("bat_rating") or striker.get("batting_rating") or 50),
         bowl_rating=float(bowl.get("bowl_rating") or bowl.get("bowling_rating") or 50),
@@ -109,7 +143,7 @@ def context(state, bowler=None, *, free_hit=None, workload=None):
         bowling_type=cm.approach_bowling_type(bowl),
         batter_runs=faced.get("runs", 0), balls_faced=faced.get("balls", 0),
         batting_position=state.get("striker_idx", 0) + 1,
-        pitch=pitch, pitch_wear=pitch_state.carry_wear(innings, done, 300), dew=_dew(state),
+        pitch=pitch, pitch_wear=pitch_state.carry_wear(innings, done, total), dew=_dew(state),
         free_hit=bool(state.get("free_hit") if free_hit is None else free_hit),
         extra={"workload": workload or bowler_workload(state, bowl),
                "chemistry": max(0, min(1, float(bond or 0))),
@@ -127,12 +161,13 @@ def _pressure_engine(mechanical_name):
     return PressureEngine(format_config=get_format(mechanical_name))
 
 
-def _pressure(innings, done, score, wickets, required, pitch, mechanical_name):
+def _pressure(innings, done, score, wickets, required, pitch, mechanical_name,
+              total_balls=6 * FULL_OVERS):
     engine = _pressure_engine(mechanical_name)
     risk = engine.calculate_unified_risk_factor({
         "innings": innings, "current_over": done // 6, "score": score,
         "wickets": wickets, "required_run_rate": required,
-        "overs_remaining": (300 - done) / 6, "pitch": pitch,
+        "overs_remaining": (total_balls - done) / 6, "pitch": pitch,
     })
     return max(-1.0, min(1.0, risk - 1.0))
 
@@ -174,11 +209,14 @@ def bowl_delivery(state, bowler, bat, bowl, rng, *, free_hit, workload, collecto
 def mean_remaining(balls, hand, ctx, cfg, *, edge=0):
     if balls <= 0 or hand <= 0:
         return 0.0
-    start = 300 - balls
+    total = max(1, int(ctx.innings_balls))
+    balls = min(balls, total)
+    start = total - balls
     rates = cfg["phase_rates"]
-    pp = max(0, 60 - start)
-    middle = max(0, 240 - max(start, 60))
-    death = 300 - max(start, 240)
+    pp_end, death_start = phase_windows(total)
+    pp = max(0, pp_end - start)
+    middle = max(0, death_start - max(start, pp_end))
+    death = total - max(start, death_start)
     par = sum(n * rates[phase] / 6 for n, phase in
               ((pp, "powerplay"), (middle, "middle"), (death, "death")))
     per_wicket = 29 + 2 * hand
@@ -212,10 +250,15 @@ def forecast(state):
 
 
 @lru_cache(maxsize=8192)
-def _reserve_score(quotas, selected, overs_left, preferred, demand):
-    """Evaluate the next legal choice and one further over toward the death."""
+def _reserve_score(quotas, selected, overs_left, preferred, demand, cap=5):
+    """Evaluate the next legal choice and one further over toward the death.
+
+    ``cap`` is how much of a single bowler's quota counts toward the death
+    reserve — half of it, so the full ODI quota of ten contributes at most five
+    and a shortened ODI's smaller quota contributes proportionally less.
+    """
     def quality(available):
-        return sum(min(5, available[i]) for i in preferred)
+        return sum(min(cap, available[i]) for i in preferred)
 
     after = quotas[:selected] + (quotas[selected] - 1,) + quotas[selected + 1:]
     if overs_left <= 0 or demand <= 0:
@@ -243,8 +286,14 @@ def bowling_scores(state, options):
     preferred = tuple(sorted(range(len(xi)), key=lambda i: (-death_quality(xi[i]), str(ids[i])))[:3])
     over = state["current_over"]
     chase = cm.chase(state)
-    demand = 10 if over < 41 else 0
-    if chase and chase["rrr"] < 5.5 and chase["runs_required"] < max(0, (40 - over) * 4):
+    total_overs = innings_overs(state)
+    # The scheduled death is the last fifth of the innings — ten overs of
+    # fifty. Hold back that many top-three overs until it starts.
+    death_overs = max(1, round(total_overs * 0.2))
+    middle_end = total_overs - death_overs
+    cap = max(1, cm.max_bowler_overs(state) // 2)
+    demand = death_overs if over <= middle_end else 0
+    if chase and chase["rrr"] < 5.5 and chase["runs_required"] < max(0, (middle_end - over) * 4):
         # A well-placed chase may finish before the scheduled death.
         demand = 0
     scores = []
@@ -254,7 +303,7 @@ def bowling_scores(state, options):
         runs, wickets = odi.expectations(probabilities(model), ctx, cfg)
         index = ids.index(player["roster_id"])
         rating = float(player.get("bowl_rating") or 0)
-        reserve = _reserve_score(quotas, index, 50 - over, preferred, demand)
+        reserve = _reserve_score(quotas, index, total_overs - over, preferred, demand, cap)
         matchup = -14 * runs + 125 * wickets
         freshness = 4 * ctx.extra["workload"].penalty
         scores.append(0.45 * rating + matchup + reserve - freshness)

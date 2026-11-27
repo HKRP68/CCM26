@@ -145,14 +145,33 @@ def _rows(mode, league, current, owner_id, play_mode=DEFAULT_PLAY_MODE):
     return InlineKeyboardMarkup([buttons, where])
 
 
-def _prompt_text(play_mode, odi=False):
+def length_banner(mode, league):
+    """The format line above the difficulty prompt, or ``""``.
+
+    ``league`` is the token the command banked in the callback data. For
+    /lpbot and /lpmulti that is the match length — ``"ODI"`` for a full
+    fifty, or a bare over count — so a shortened ODI announces its own
+    length instead of silently reading as a T20.
+    """
+    if mode not in ("lp", "lpm"):
+        return ""
+    from services.match_formats import ODI_OVERS, is_medium_format
+    token = str(league or "").strip()
+    if token.upper() == "ODI":
+        return f"🏏 ODI · {ODI_OVERS} overs\n"
+    if token.isdigit() and is_medium_format(token):
+        return f"🏏 ODI rules · {token} overs\n"
+    return ""
+
+
+def _prompt_text(play_mode, banner=""):
     lines = "\n".join(
         f"{DIFFICULTIES[k]['label']} — <i>{BLURBS[k]}</i>" for k in DIFFICULTY_ORDER)
     where = ("📱 <b>Play in:</b> Mini App — every pick in the app, the chat "
              "just follows the score." if play_mode == PLAY_APP else
              "💬 <b>Play in:</b> Chat — every pick with the buttons here.")
     return (
-        ("🏏 ODI · 50 overs\n" if odi else "") +
+        (banner or "") +
         "🤖 <b>How hard should the bot play?</b>\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         f"{lines}\n"
@@ -176,7 +195,7 @@ async def prompt_difficulty(update, context, mode, league=""):
     current = remembered_level(context.bot_data, user.id)
     play_mode = play_mode_for(context.bot_data, user.id)
     await message.reply_text(
-        _prompt_text(play_mode, mode == "lp" and league == "ODI"), parse_mode="HTML",
+        _prompt_text(play_mode, length_banner(mode, league)), parse_mode="HTML",
         reply_markup=_rows(mode, league, current, user.id, play_mode))
 
 
@@ -198,7 +217,7 @@ async def play_mode_callback(update, context):
     await query.answer(f"Playing in: {PLAY_LABELS[pm]}")
     try:
         await query.edit_message_text(
-            _prompt_text(pm, mode == "lp" and league == "ODI"), parse_mode="HTML",
+            _prompt_text(pm, length_banner(mode, league)), parse_mode="HTML",
             reply_markup=_rows(mode, league,
                                remembered_level(context.bot_data, user.id),
                                user.id, pm))

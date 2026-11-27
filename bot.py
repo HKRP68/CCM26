@@ -48,6 +48,7 @@ from handlers.playerinfo import playerinfo_handler, player_version_callback
 from handlers.owners import owners_handler, owners_page_callback
 from handlers.gstats import (gstats_handler, gstats_page_callback,
                              gstats_owners_callback, gstats_close_callback)
+from handlers.odistats import odistats_handler
 from services.dm_only import DM_ONLY_COMMANDS, dm_only
 
 # Phase 2 handlers
@@ -546,6 +547,7 @@ BOT_MENU_COMMANDS = (
     ("cmushop", "Browse the CMU shop 🛍️"),
     ("stats", "View player game statistics"),
     ("gstats", "Global player stats — every owner, every match type 🌍"),
+    ("odistats", "ODI career stats — every innings of 21+ overs 🥇"),
     ("owners", "See who owns a player in this group 👥"),
     ("statscl", "View any Challenge League player's stats"),
     ("statstour", "View a player's active-tournament stats"),
@@ -812,6 +814,7 @@ def _dm_only_handlers():
     return {
         "stats": stats_handler,
         "gstats": gstats_handler,
+        "odistats": odistats_handler,
         "statscl": statscl_handler,
         "setbo": setbo_handler,
         "recentmatches": recentmatches_handler,
@@ -1663,6 +1666,12 @@ def main():
         # one stays in the group: naming the people around you is its point.
         app.add_handler(CommandHandler(
             ["gstats", "globalstats"], dm_only("gstats", gstats_handler)))
+        # /odistats — the long-format career, kept in its own table because an
+        # innings of 21 overs or more is played under ODI rules and never
+        # mixed into the short-format record. See handlers/odistats.py.
+        app.add_handler(CommandHandler(
+            ["odistats", "odistat", "statsodi"],
+            dm_only("odistats", odistats_handler)))
         app.add_handler(CallbackQueryHandler(gstats_page_callback,
                                              pattern=r"^gstpg_"))
         app.add_handler(CallbackQueryHandler(gstats_owners_callback,

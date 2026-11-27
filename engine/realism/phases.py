@@ -38,6 +38,15 @@ PHASES = (POWERPLAY, MIDDLE, DEATH)
 POWERPLAY_END = 0.30
 DEATH_START = 0.80
 
+#: The same two thresholds for an ODI-rules innings, whose real powerplay is
+#: the first ten overs of fifty and whose death is the last ten — 20% and 80%
+#: rather than 30% and 80%. Expressed as fractions so a shortened ODI (a
+#: 21-to-49-over match on the same engine) splits proportionally; at the full
+#: 300 balls they land on ball 60 and ball 240, which is where the measured
+#: reference filed its deliveries.
+ODI_POWERPLAY_END = 0.20
+ODI_DEATH_START = 0.80
+
 
 def phase_for_fraction(frac: float) -> str:
     """The phase at a given fraction (0..1) through the innings."""
@@ -57,6 +66,8 @@ def phase_for_ball(balls_bowled: int, innings_balls: int, format_name=None) -> s
     """
     total = max(1, int(innings_balls))
     done = min(total - 1, max(0, int(balls_bowled)))
+    frac = done / float(total)
     if format_name == "ODI":
-        return POWERPLAY if done < 60 else MIDDLE if done < 240 else DEATH
-    return phase_for_fraction(done / float(total))
+        return (POWERPLAY if frac < ODI_POWERPLAY_END
+                else MIDDLE if frac < ODI_DEATH_START else DEATH)
+    return phase_for_fraction(frac)

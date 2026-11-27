@@ -84,10 +84,39 @@ def phase_for(over, fmt):
 
 # ── Custom overs for /letsplay and the Challenge League commands ──────
 CUSTOM_OVERS_MIN = 1
-CUSTOM_OVERS_MAX = 20
+CUSTOM_OVERS_MAX = 50
+# The shortest innings that runs under ODI rules. 1-20 overs stay on the T20
+# realism engine exactly as before; 21-50 run on the measured ODI model
+# (``engine.realism.odi``) with its phases, ten-over quota and par curve
+# scaled to the length asked for. The over count is the only switch, which is
+# also what makes "ODI career stats" a clean rule: an innings earns them when
+# it is 21 overs or longer.
+MEDIUM_OVERS_MIN = 21
+# A full-length ODI.
+ODI_OVERS = 50
 # A bare number below this is an over count; anything larger is left alone,
 # because a bare number is also how a command names a Telegram user id.
 _OVERS_TOKEN_CEILING = 1000
+
+
+def is_medium_format(overs):
+    """True when an over count runs under ODI rules (21 to 50 overs)."""
+    try:
+        overs = int(overs or 0)
+    except (TypeError, ValueError):
+        return False
+    return MEDIUM_OVERS_MIN <= overs <= ODI_OVERS
+
+
+def ball_format_for_overs(overs):
+    """The match-state ``ball_format`` an over count should be played under.
+
+    ``"ODI"`` for 21 to 50 overs, ``"T20"`` for anything shorter — the single
+    rule every entry point (``/letsplay``, ``/lpbot``, ``/lpmulti`` and the
+    Challenge League commands) uses, so one over count never means two
+    different engines depending on which command typed it.
+    """
+    return "ODI" if is_medium_format(overs) else "T20"
 
 
 def extract_overs_arg(args, lo=CUSTOM_OVERS_MIN, hi=CUSTOM_OVERS_MAX):
@@ -116,8 +145,19 @@ def extract_overs_arg(args, lo=CUSTOM_OVERS_MIN, hi=CUSTOM_OVERS_MAX):
     return overs, rest, error
 
 
+#: What a bad length token is told to use instead.
+_LENGTH_HELP = (f"Use ODI, or a length between {CUSTOM_OVERS_MIN} and "
+                f"{CUSTOM_OVERS_MAX} overs.")
+
+
 def extract_approach_format(args):
-    """Parse one explicit Approach format and leave opponent/mode tokens intact."""
+    """Parse one explicit Approach format and leave opponent/mode tokens intact.
+
+    Returns ``(ball_format, overs, remaining_args, error)``. ``ball_format`` is
+    ``"ODI"`` for any length of :data:`MEDIUM_OVERS_MIN` overs or more (``ODI``
+    on its own means the full :data:`ODI_OVERS`) and ``"T20"`` below that; the
+    engine follows the over count, never the spelling of the token.
+    """
     import re
 
     from engine.realism import odi
@@ -127,24 +167,23 @@ def extract_approach_format(args):
         word = str(token).strip().lower()
         match = re.fullmatch(r"(?:t(\d{1,3})|(\d{1,3})\s*(?:ov|ovs|over|overs)?)", word)
         if word == "odi":
-            length = 50
+            length = ODI_OVERS
         elif match:
             length = int(match[1] or match[2])
         elif (re.fullmatch(r"odi[+-]?\d.*", word) or re.fullmatch(r"t[+-]?\d.*", word)
               or re.fullmatch(r"[+-]?\d{1,3}\.\d+", word) or re.fullmatch(r"-\d{1,3}", word)):
-            return None, None, remaining, "Use ODI, 50, or a custom length between 1 and 20 overs."
+            return None, None, remaining, _LENGTH_HELP
         else:
             remaining.append(token)
             continue
         if overs is not None:
             return None, None, remaining, "Choose one match format or over limit."
-        if length == 50 and not word.startswith("t"):
-            if not odi.enabled():
-                return None, None, remaining, "ODI Approach is currently unavailable."
-            format_name, overs = "ODI", 50
-        elif CUSTOM_OVERS_MIN <= length <= CUSTOM_OVERS_MAX:
-            overs = length
-        else:
+        if not CUSTOM_OVERS_MIN <= length <= CUSTOM_OVERS_MAX:
             return (None, None, remaining,
                     f"Custom matches must be between {CUSTOM_OVERS_MIN} and {CUSTOM_OVERS_MAX} overs.")
+        if is_medium_format(length):
+            if not odi.enabled():
+                return None, None, remaining, "ODI Approach is currently unavailable."
+            format_name = "ODI"
+        overs = length
     return format_name, overs, remaining, None

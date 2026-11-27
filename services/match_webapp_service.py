@@ -2613,6 +2613,10 @@ def build_scorecard(match_id, user_id):
     return {"ok": True, "record_detail": detail(state), "innings": innings, "current_innings": cur_inn,
             "target": state.get("target"),
             "ball_format": state.get("ball_format", "T20"),
+            # An ODI is any innings of 21 to 50 overs, so the scheduled length
+            # travels with the card: a saved scorecard has no live state left
+            # to read it from.
+            "total_overs": state.get("overs"),
             "impact_players": _impact_player_summary(state)}
 
 
@@ -2655,6 +2659,7 @@ def save_final_scorecard(session, match_id, result_text=None, extra_innings=None
                                     "current_innings": sc.get("current_innings"),
                                     "target": sc.get("target"),
                                     "ball_format": sc.get("ball_format"),
+                                    "total_overs": sc.get("total_overs"),
                                     "impact_players": sc.get("impact_players", []),
                                     "super_over": super_over,
                                     # Keep the completed Arena board queryable

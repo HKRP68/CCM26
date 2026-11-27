@@ -80,6 +80,10 @@ WICKET_LIMIT = 10  # all out after 10 wickets (11-man side)
 # ends after every two five-ball sets and allows two consecutive sets.
 # state["overs"] always stores the number of captain turns per innings.
 FORMAT_SPECS = {
+    # ODI rules apply to any innings of MEDIUM_OVERS_MIN..50 overs (see
+    # services.match_formats). ``units`` is the full-length ODI; a shortened
+    # one reads its length off state["overs"] and scales the powerplay and
+    # death with it, so the phase proportions never change.
     "ODI": {
         "balls_per_unit": 6, "swap_balls": 6, "powerplay_units": 10,
         "death_units": 10, "units": 50, "max_consecutive_units": 1,
@@ -105,8 +109,11 @@ def approach_engine_format(state):
     """Select mechanics independently of the match's reference identity."""
     overs = int((state or {}).get("overs") or 20)
     if odi_approach.is_odi(state):
-        if overs != FORMAT_SPECS["ODI"]["units"]:
-            raise odi.ODIUnavailable("An ODI Approach innings must be scheduled for 50 overs.")
+        from services.match_formats import MEDIUM_OVERS_MIN
+        if not MEDIUM_OVERS_MIN <= overs <= FORMAT_SPECS["ODI"]["units"]:
+            raise odi.ODIUnavailable(
+                "An ODI Approach innings must be scheduled for "
+                f"{MEDIUM_OVERS_MIN} to {FORMAT_SPECS['ODI']['units']} overs.")
         from engine.format_config import get_format
         return get_format("ListA")
     if is_hundred(state):
@@ -118,7 +125,12 @@ def approach_engine_format(state):
 
 
 def format_label(state):
-    if odi_approach.is_odi(state) or is_hundred(state):
+    if odi_approach.is_odi(state):
+        overs = int(state.get("overs") or FORMAT_SPECS["ODI"]["units"])
+        if overs == FORMAT_SPECS["ODI"]["units"]:
+            return _spec(state)["label"]
+        return f"ODI rules · {overs} overs"
+    if is_hundred(state):
         return _spec(state)["label"]
     overs = int(state.get("overs") or 20)
     return f"{overs} Over{'s' if overs != 1 else ''}"
@@ -157,7 +169,7 @@ def approach_phase(state):
     over = max(1, int((state or {}).get("current_over") or 1))
     if odi_approach.is_odi(state):
         from engine.realism.phases import phase_for_ball
-        return phase_for_ball((over - 1) * 6, 300, "ODI")
+        return phase_for_ball((over - 1) * 6, total_balls(state), "ODI")
     if total >= 20:
         pp, death = _spec(state)["powerplay_units"], DEATH_UNITS
     else:
@@ -735,8 +747,15 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
                      ball_format="T20", bat_bench=None, bowl_bench=None, odi_settings=None):
     """Build the initial state dict for a Challenge League approach match."""
     if ball_format == "ODI":
-        if overs != 50 or not (odi_approach.valid_xi(bat_xi) and odi_approach.valid_xi(bowl_xi)):
-            raise odi.ODIUnavailable("ODI requires two XIs with at least 50 overs of legal bowling capacity.")
+        from services.match_formats import MEDIUM_OVERS_MIN
+        overs = int(overs or 0)
+        if not MEDIUM_OVERS_MIN <= overs <= FORMAT_SPECS["ODI"]["units"]:
+            raise odi.ODIUnavailable(
+                f"An ODI runs over {MEDIUM_OVERS_MIN} to "
+                f"{FORMAT_SPECS['ODI']['units']} overs.")
+        if not (odi_approach.valid_xi(bat_xi, overs) and odi_approach.valid_xi(bowl_xi, overs)):
+            raise odi.ODIUnavailable(
+                f"ODI requires two XIs with at least {overs} overs of legal bowling capacity.")
         odi_settings = odi_settings if odi_settings is not None else odi.new_settings()
     bat_stats = {str(p["roster_id"]): _new_bat_stat() for p in bat_xi}
     bowl_stats = {str(p["roster_id"]): _new_bowl_stat() for p in bowl_xi}
