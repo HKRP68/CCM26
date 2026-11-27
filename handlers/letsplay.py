@@ -1154,16 +1154,32 @@ async def letsplay_pitch_callback(update: Update, context: ContextTypes.DEFAULT_
     if pitch not in PITCH_TYPES:
         await q.answer("Unknown pitch.", show_alert=True)
         return
-    await q.answer()
+    previous_pitch = draft.get("pitch_type")
     draft["pitch_type"] = pitch
     # The toss comes BEFORE the Playing XIs, so each captain knows whether they
     # bat or bowl first while they settle their line-up.
     draft["status"] = "toss"
     _rearm_setup_timeout(context, invite_id)
+    try:
+        await q.answer()
+    except TelegramError:
+        logger.debug("letsplay pitch acknowledgement failed for invite %s", invite_id, exc_info=True)
+    # Keep the pitch buttons usable until the toss buttons have been sent.
+    try:
+        await _start_toss(context, draft)
+    except Exception:
+        logger.exception("letsplay toss prompt failed for invite %s", invite_id)
+        draft.update(status="pitch", pitch_type=previous_pitch)
+        _rearm_setup_timeout(context, invite_id)
+        try:
+            await context.bot.send_message(
+                draft["chat_id"], "The toss prompt couldn't be sent. Tap your pitch again to retry.")
+        except TelegramError:
+            logger.debug("letsplay pitch retry notice failed for invite %s", invite_id, exc_info=True)
+        return
     await R.edit_rich(
         q, lpr.pitch_locked_blocks(pitch),
         f"🌱 Pitch locked: <b>{_PITCH_EMOJI.get(pitch, '🏏')} {pitch}</b>")
-    await _start_toss(context, draft)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1972,12 +1988,15 @@ async def _start_toss(context, draft):
     ]])
     blocks = lpr.toss_call_blocks(caller, vs_bot=bool(draft.get("vs_bot")))
     if draft.get("ball_format") == "ODI":
-        text += "\n" + draft_format_label(draft)
-        blocks = list(blocks or []) + [[draft_format_label(draft)]]
+        label = draft_format_label(draft)
+        text += "\n" + label
+        if blocks:
+            blocks.append(R.paragraph(label))
     sent = await R.send_rich_message(
         context.bot, draft["chat_id"], blocks, text, reply_markup=kb)
-    if sent and getattr(sent, "message_id", None):
-        draft["toss_msg_id"] = sent.message_id
+    if not sent or not getattr(sent, "message_id", None):
+        raise TelegramError("The toss prompt returned no message ID.")
+    draft["toss_msg_id"] = sent.message_id
 
 
 async def letsplay_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

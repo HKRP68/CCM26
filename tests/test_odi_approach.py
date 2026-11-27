@@ -122,14 +122,42 @@ def test_letsplay_passes_target_arguments_unchanged(monkeypatch, args, target_ar
     assert "/lp 50 @username" in message.reply_text.await_args.args[0]
 
 
-def test_toss_shows_odi_and_saved_settings_survive(monkeypatch, state):
-    send = AsyncMock()
-    monkeypatch.setattr(letsplay.R, "send_rich_message", send)
+@pytest.mark.parametrize("vs_bot", [False, True])
+def test_odi_pitch_selection_delivers_a_rich_toss_prompt(monkeypatch, state, vs_bot):
+    from types import SimpleNamespace
+
+    from telegram.error import BadRequest
+
+    async def post(endpoint, payload):
+        assert endpoint == "sendRichMessage"
+        blocks = payload["rich_message"]["blocks"]
+        if any(not isinstance(block, dict) for block in blocks):
+            raise BadRequest("Invalid rich message blocks")
+        return {"message_id": 7, "date": 0, "chat": {"id": -100, "type": "group"}}
+
+    monkeypatch.setattr(letsplay.R.config, "RICH_TEXT_ENABLED", True)
+    monkeypatch.setattr(letsplay.R, "edit_rich", AsyncMock(return_value=True))
     draft = {"ball_format": "ODI", "overs": 50, "chat_id": -100, "invite_id": 1,
-             "guest": {"name": "Peer", "tg_id": 321}, "odi_settings": state["odi_settings"]}
-    asyncio.run(letsplay._start_toss(MagicMock(), json.loads(json.dumps(draft))))
-    assert "ODI · 50 overs" in send.await_args.args[3]
+             "status": "pitch", "vs_bot": vs_bot, "odi_settings": state["odi_settings"],
+             "host": {"name": "Host", "tg_id": 123}, "guest": {"name": "Peer", "tg_id": 321}}
+    draft = json.loads(json.dumps(draft))
+    bot = SimpleNamespace(_post=AsyncMock(side_effect=post), send_message=AsyncMock())
+    context = SimpleNamespace(bot=bot, bot_data={letsplay._dkey(1): draft}, job_queue=None)
+    query = SimpleNamespace(data="lp_pitch_1_Hard", from_user=SimpleNamespace(id=123),
+                            answer=AsyncMock())
+    asyncio.run(letsplay.letsplay_pitch_callback(SimpleNamespace(callback_query=query), context))
+
+    assert draft["status"] == "toss"
+    assert draft["toss_msg_id"] == 7
     assert draft["odi_settings"]["reference_sha256"] == state["odi_settings"]["reference_sha256"]
+    payload = bot._post.await_args.args[1]
+    assert letsplay.R.paragraph("ODI · 50 overs") in payload["rich_message"]["blocks"]
+    assert [button.callback_data for button in payload["reply_markup"].inline_keyboard[0]] == [
+        "lp_coin_heads_1", "lp_coin_tails_1",
+    ]
+    caller = draft["host"] if vs_bot else draft["guest"]
+    assert f"tg://user?id={caller['tg_id']}" in json.dumps(payload["rich_message"])
+    bot.send_message.assert_not_awaited()
 
 
 def test_canonical_odi_phase_and_reference(state):
