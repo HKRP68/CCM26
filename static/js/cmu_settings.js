@@ -36,15 +36,22 @@
     const status = document.getElementById('cmu-motion-status');
     const note = document.getElementById('cmu-motion-system-note');
     const hint = document.getElementById('cmu-motion-level-hint');
+    const unavailable = document.getElementById('cmu-motion-unavailable');
 
     if (!FX) {
       // Without the engine there is nothing to configure: say so plainly
-      // rather than leaving a form that silently does nothing.
+      // rather than leaving a form that silently does nothing. The form is
+      // hidden in the markup, so this is also what the player sees when this
+      // module itself fails to download and open() never runs at all.
       form.hidden = true;
-      if (status) status.textContent = 'Animation settings are unavailable in this session.';
+      if (unavailable) {
+        unavailable.hidden = false;
+        unavailable.textContent = 'Animation settings are unavailable in this session.';
+      }
       return;
     }
     form.hidden = false;
+    if (unavailable) unavailable.hidden = true;
 
     const paint = () => {
       const settings = FX.settings;

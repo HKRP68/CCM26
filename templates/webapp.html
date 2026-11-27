@@ -3099,7 +3099,8 @@
      only took effect after Save could not be previewed, and closing the screen
      would lose a choice the player had just watched work. Save confirms what
      is already stored. #}
-  <form id="cmu-motion-form" class="cmu-appearance" aria-labelledby="animations-heading">
+  <p class="cmu-settings-note" id="cmu-motion-unavailable">Animation settings are unavailable in this session.</p>
+  <form id="cmu-motion-form" class="cmu-appearance" aria-labelledby="animations-heading" hidden>
     <fieldset>
       <legend>Animation level</legend>
       <label><input type="radio" name="motion" value="cinematic"> Full cinematic animations</label>

@@ -296,7 +296,14 @@ Driven against the real app served from a throwaway SQLite database.
 | Arena | A ball through the real `triggerMatchEvent` raises a banner. With both engine scripts blocked the arena still boots, still handles the ball and logs no errors. |
 | Settings | Every control applies and persists; survives reload; particles disabled and budget 0 at Minimal; `ms(1000) === 0` at Off; both haptics controls stay in step; reduced motion floors the level, shows the note and suppresses the walkout. |
 
-### Two real bugs found and fixed during testing
+**Full degradation path.** With every engine script blocked, the Mini App
+still opens a pack through the pre-engine flat reveal (CSS foil intact, cards,
+receipt, overflow note), claims a daily reward, animates nothing, shows the
+wallet, fires the original confetti, and leaves the theme form usable. With
+only `cmu_settings.js` blocked, the Animations form stays hidden behind an
+honest note rather than rendering controls that do nothing.
+
+### Three real bugs found and fixed during testing
 
 1. **Cards rendered already-flipped** (Skip / Animations off / reduced motion)
    left their back `<button>` enabled and in the tab order behind the card, so
@@ -304,6 +311,13 @@ Driven against the real app served from a throwaway SQLite database.
 2. **`drain()` while the queue was idle** set a flag only the run loop cleared,
    so it stayed set and every task pushed afterwards was silently skipped. The
    generation counter alone now does the job.
+3. **The Animations form rendered live but dead** when `cmu_settings.js` alone
+   failed to download: the markup was visible and nothing was left to hide it.
+   The form now starts hidden behind a note that `open()` swaps out.
+
+A fourth, smaller one: the pack theatre's unmount left `.cmu-pack-mounted` on
+the shared opening button, so a Free Pack opened straight after a foil pack
+inherited the foil's rules — including the torn state's `visibility: hidden`.
 
 ---
 

@@ -397,6 +397,21 @@ class MotionSettingsTests(unittest.TestCase):
         self.assertLess(arena.index('src="/static/js/cmu_animation_engine.js'),
                         arena.index('src="/static/js/miniapp_theme.js'))
 
+    def test_the_settings_form_fails_visibly_rather_than_silently(self):
+        """A dead form is worse than an honest message.
+
+        The form is hidden in the markup behind a note, so if cmu_settings.js
+        never downloads — and open() therefore never runs — the player sees
+        the note rather than controls that do nothing.
+        """
+        self.assertIn(
+            'id="cmu-motion-form" class="cmu-appearance" '
+            'aria-labelledby="animations-heading" hidden', self.html)
+        self.assertIn('id="cmu-motion-unavailable"', self.html)
+        self.assertIn("unavailable.hidden = true", self.settings,
+                      "open() must reveal the form and hide the note")
+        self.assertIn("form.hidden = false;", self.settings)
+
     def test_the_walkout_is_suppressed_at_the_reduced_levels(self):
         body = _function(self.engine, "function deservesWalkout(")
         self.assertIn("if (isMinimal()) return false;", body)
