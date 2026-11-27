@@ -213,6 +213,7 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/stats` 💬 | `/st` | A player's game statistics |
 | `/gstats` 💬 | `/globalstats` | Global stats — every owner, every match type 🌍 |
 | `/odistats` 💬 | `/odistat` `/statsodi` | **ODI career** — every innings of 21 overs or more, kept apart from the short-format record. Add `global` for every owner's innings 🥇 |
+| `/odirecords` | `/odilb` `/odileaderboard` | **ODI leaderboards** — most runs, most wickets, highest score, best bowling, batting average, economy and strike rate, on one row of buttons 🏅 |
 | `/statscl` 💬 | — | Any Challenge League player's stats |
 | `/statstour` | — | A player's **This Season Stats** and **Total Season Stats**, with batting/bowling innings, runs, wickets, 50s, 100s, 4s/6s, averages, strike rates, economy, ducks, HS (with `*` for not out), 3-/5-fers, hat-tricks, best bowling, overs and POTM awards. Linked past seasons and saved deleted seasons count toward totals; unavailable older records show `—`. Each season section expands on tap |
 | `/tvs [#ID] Batter \| Bowler` | — | Recorded batter–bowler encounters in one tournament: runs, balls, dismissals, dots, boundaries, strike rate and average. Use `Player @ Team` for duplicate names |
@@ -249,7 +250,7 @@ Use commas to compare values within a filter and pipes to combine filters. Both 
 | `/playmatch` | `/pm` `/match` | Challenge another user to a match |
 | `/cm` | — | Two-wicket challenge match |
 | `/cdraft` 👥 | `/challengedraft` | Challenge Draft — both captains build an XI pick by pick, then play |
-| `/sim` | `/simmatch` | Simulate a full match instantly — T10, T20, ODI or a 5-day Test |
+| `/sim` | `/simmatch` | Simulate a full match instantly — T10, T20, any length from 1 to 50 overs (21+ plays as an ODI), ODI or a 5-day Test |
 | `/wpm` | — | Match lobby up to 20 overs (Mini App) — tag/reply to invite |
 | `/vsbot` | `/vsb` | Play a bot opponent in chat |
 | `/wpmbot` | `/wpmb` | Play a bot opponent in the Mini App |
@@ -833,6 +834,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/stats <player name>` | `/stats Virat Kohli` |
 | `/gstats <player name>` | `/gstats Virat Kohli` |
 | `/odistats <player name> [global]` | `/odistats Virat Kohli` · `/odistats Kohli global` |
+| `/odirecords [board]` | `/odirecords` · `/odilb wickets` · `/odirecords best_bowling` |
 | `/statscl <player name>` | `/statscl Virat Kohli` |
 | `/statstour <player name>` | `/statstour Virat Kohli` |
 | `/h2h @username` | `/h2h @rahul` |
@@ -853,7 +855,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/playmatch @username` | `/playmatch @rahul` |
 | `/cm @username` | `/cm @rahul` |
 | `/cdraft` | `/cdraft` |
-| `/sim [T10\|T20\|ODI\|Test\|<overs 1-20>]` | `/sim T10` · `/sim ODI` · `/sim Test` |
+| `/sim [T10\|T20\|ODI\|Test\|<overs 1-50>]` | `/sim T10` · `/sim 35` · `/sim ODI` · `/sim Test` |
 | `/wpm <overs 1-20> [@user]` | `/wpm 10 @rahul` |
 | `/vsbot <overs 1-20>` *(default 5)* | `/vsbot 10` |
 | `/wpmbot <overs 1-20>` | `/wpmbot 20` |
@@ -1420,7 +1422,8 @@ admin panel, but the commands are not registered.
 | `/gspin` | Every 8h |
 | `/cmuweekly` | Every 7 days (Platinum / Diamond) |
 | `/letsplay`, `/lpbot`, `/lpmulti`, `/c<league>` | 1–50 overs; 21 or more is an ODI (`/lp ODI`, `/cipl 50`) |
-| `/sim`, `/wpm`, `/wpmbot`, `/vsbot` | Up to 20 overs (`/sim ODI` plays 50, `/sim Test` five days) |
+| `/sim` | 1–50 overs; 21+ plays as an ODI on the Conditions Engine (`/sim Test` five days) |
+| `/wpm`, `/wpmbot`, `/vsbot` | Up to 20 overs |
 | `/vsbot` default | 5 overs |
 | Coins → gems | 1000 coins = 1 gem |
 | Challenge League setup timeout | 5 minutes per turn, with a reminder at 4:30 (`CL_SELECT_WINDOW_SECONDS`) |

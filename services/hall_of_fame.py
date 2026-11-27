@@ -336,7 +336,50 @@ def career_boards(session, limit=5):
                        [(f"{getattr(g, col.key)} {unit}",
                          f"{p.name} ({_user_name(u)})", u.id)
                         for g, p, u in rows]))
+    boards.extend(_odi_career_boards(session, limit))
     return boards
+
+
+def _odi_career_boards(session, limit=5):
+    """The long-format career boards, from ``odi_player_innings``.
+
+    ODI innings are kept out of ``player_game_stats`` on purpose (see
+    ``services/odi_stats_service.py``), so the boards above cannot see them and
+    a 50-over career would be missing from the Hall of Fame entirely. These are
+    appended rather than merged: a 300-run ODI career and a 300-run T20 career
+    are not the same achievement and should not share a board.
+
+    Only non-empty boards are returned, so a game that has never played an ODI
+    does not grow two blank sections.
+    """
+    from models import Player, User
+    from services import odi_stats_service as odi_stats
+
+    out = []
+    for metric, title, emoji in (("runs", "Most ODI runs by one card", "🥇"),
+                                 ("wickets", "Most ODI wickets by one card", "🎯")):
+        try:
+            rows = odi_stats.leaders(session, metric, limit)
+        except Exception:
+            logger.exception("hall of fame: ODI %s board failed", metric)
+            continue
+        if not rows:
+            continue
+        players = {p.id: p for p in session.query(Player).filter(
+            Player.id.in_({r["player_id"] for r in rows})).all()}
+        users = {u.id: u for u in session.query(User).filter(
+            User.id.in_({r["user_id"] for r in rows})).all()}
+        entries = []
+        for row in rows:
+            user = users.get(row["user_id"])
+            # The short-format boards are humans only; so are these.
+            if user is None or (user.telegram_id or 0) <= 0 or user.is_banned:
+                continue
+            name = getattr(players.get(row["player_id"]), "name", "Unknown")
+            entries.append((row["text"], f"{name} ({_user_name(user)})", user.id))
+        if entries:
+            out.append((title, emoji, entries))
+    return out
 
 
 def _user_name(user):

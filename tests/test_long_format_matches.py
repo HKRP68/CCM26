@@ -390,6 +390,194 @@ def test_overs_text():
         ["0", "0.1", "1", "1.3", "10"]
 
 
+# ── The ODI leaderboards ─────────────────────────────────────────────
+def _leaderboard_session():
+    """A session holding two owners' ODI innings for four players."""
+    from models import ODIPlayerInnings, Player, User
+    session = _stats_session()
+    session.add_all([
+        User(id=1, telegram_id=111, username="skipper"),
+        User(id=2, telegram_id=222, username="rival"),
+    ])
+    for pid, name, country in ((1, "Opener", "India"), (2, "Anchor", "England"),
+                               (3, "Seamer", "Australia"), (4, "Spinner", "India")):
+        session.add(Player(id=pid, name=name, rating=85, category="All-rounder",
+                           country=country, bat_hand="Right", bowl_hand="Right",
+                           bowl_style="Fast"))
+    # (match, owner, player, discipline, figures)
+    rows = [
+        (1, 1, 1, "bat", {"runs": 120, "balls": 100, "out": True}),
+        (2, 1, 1, "bat", {"runs": 80, "balls": 70, "out": True}),
+        (3, 1, 1, "bat", {"runs": 40, "balls": 30, "out": False}),
+        (1, 2, 2, "bat", {"runs": 150, "balls": 140, "out": True}),
+        (2, 2, 2, "bat", {"runs": 10, "balls": 20, "out": True}),
+        # One big innings, below the qualifying bar for the rate boards.
+        (3, 2, 4, "bat", {"runs": 99, "balls": 40, "out": False}),
+        (1, 1, 3, "bowl", {"balls": 60, "runs": 30, "wickets": 5}),
+        (2, 1, 3, "bowl", {"balls": 60, "runs": 40, "wickets": 2}),
+        (3, 1, 3, "bowl", {"balls": 60, "runs": 35, "wickets": 1}),
+        (1, 2, 4, "bowl", {"balls": 60, "runs": 25, "wickets": 5}),
+        (2, 2, 4, "bowl", {"balls": 60, "runs": 20, "wickets": 3}),
+    ]
+    for match_id, user_id, player_id, discipline, figures in rows:
+        session.add(ODIPlayerInnings(
+            match_id=match_id, innings=1 if discipline == "bat" else 2,
+            discipline=discipline, user_id=user_id, player_id=player_id,
+            figures=json.dumps(figures)))
+    session.flush()
+    odi_stats.reset_leaderboard_cache()
+    return session
+
+
+def _top(session, metric):
+    return [(r["player_id"], r["text"])
+            for r in odi_stats.leaders(session, metric, 10, fresh=True)]
+
+
+def test_the_runs_board_ranks_careers_not_innings():
+    with _leaderboard_session() as session:
+        assert _top(session, "runs")[0] == (1, "240 (3 inns)")
+        # Player 2's 160 from two innings is second; player 4's single 99 last.
+        assert [pid for pid, _ in _top(session, "runs")] == [1, 2, 4]
+
+
+def test_the_wickets_board_shows_overs_bowled():
+    with _leaderboard_session() as session:
+        board = _top(session, "wickets")
+    assert board[0][0] in (3, 4)
+    assert "ov" in board[0][1]
+    assert {pid for pid, _ in board} == {3, 4}
+
+
+def test_the_highest_score_board_is_a_single_innings():
+    with _leaderboard_session() as session:
+        board = _top(session, "highest")
+    assert board[0] == (2, "150")
+    assert (4, "99*") in board          # unbeaten, so starred
+
+
+def test_best_bowling_prefers_wickets_then_fewer_runs():
+    with _leaderboard_session() as session:
+        board = _top(session, "best_bowling")
+    assert board[0] == (4, "5/25")      # 5/25 beats 5/30
+    assert board[1] == (3, "5/30")
+
+
+def test_the_rate_boards_hold_a_qualifying_bar():
+    with _leaderboard_session() as session:
+        for metric in ("batting_average", "strike_rate"):
+            pids = [pid for pid, _ in _top(session, metric)]
+            # Player 4 has one innings; the bar is MIN_BATTING_INNINGS.
+            assert 4 not in pids, metric
+            assert 1 in pids, metric
+        econ = [pid for pid, _ in _top(session, "economy")]
+        # Player 4 has two bowling innings — below MIN_BOWLING_INNINGS.
+        assert econ == [3]
+
+
+def test_the_economy_board_puts_the_cheapest_first():
+    from models import ODIPlayerInnings
+    with _leaderboard_session() as session:
+        session.add(ODIPlayerInnings(
+            match_id=9, innings=2, discipline="bowl", user_id=2, player_id=4,
+            figures=json.dumps({"balls": 60, "runs": 60, "wickets": 0})))
+        session.flush()
+        board = odi_stats.leaders(session, "economy", 10, fresh=True)
+    # Player 3 concedes 105 off 30 overs (3.50); player 4, 105 off 30 (3.50)…
+    # both qualify now, and whichever is cheaper leads.
+    assert len(board) == 2
+    economies = [row["record"]["economy"] for row in board]
+    assert economies == sorted(economies)
+
+
+def test_an_unknown_metric_is_an_empty_board_not_an_error():
+    with _leaderboard_session() as session:
+        assert odi_stats.leaders(session, "catches", 10) == []
+
+
+def test_every_metric_has_a_title_and_a_place_in_the_order():
+    assert set(odi_stats.METRIC_ORDER) == set(odi_stats.METRICS)
+    for metric in odi_stats.METRIC_ORDER:
+        assert odi_stats.metric_title(metric)
+    assert odi_stats.metric_title("nope") == "ODI records"
+
+
+def test_the_fold_is_cached_and_can_be_dropped():
+    from models import ODIPlayerInnings
+    with _leaderboard_session() as session:
+        before = _top(session, "runs")[0]
+        session.add(ODIPlayerInnings(
+            match_id=8, innings=1, discipline="bat", user_id=2, player_id=2,
+            figures=json.dumps({"runs": 300, "balls": 200, "out": True})))
+        session.flush()
+        # The cached fold has not seen it.
+        assert odi_stats.leaders(session, "runs", 10)[0]["player_id"] == before[0]
+        odi_stats.reset_leaderboard_cache()
+        assert odi_stats.leaders(session, "runs", 10)[0]["player_id"] == 2
+
+
+def test_the_board_renders_with_names_owners_and_flags():
+    from handlers import odirecords
+    with _leaderboard_session() as session:
+        text = odirecords.board_text(session, "runs")
+    assert "ODI RECORDS" in text and "Most runs" in text
+    assert "Opener" in text and "@skipper" in text
+    assert "21 overs or more" in text
+
+
+def test_an_empty_board_says_how_to_fill_it():
+    from handlers import odirecords
+    odi_stats.reset_leaderboard_cache()
+    with _stats_session() as session:
+        text = odirecords.board_text(session, "runs")
+    assert "No qualifying ODI innings yet" in text and "/lp 50" in text
+
+
+def test_the_hall_of_fame_gains_odi_career_boards():
+    """A 50-over career is invisible to the short-format boards, so it gets
+    boards of its own rather than being merged into them."""
+    from services import hall_of_fame
+    with _leaderboard_session() as session:
+        boards = hall_of_fame._odi_career_boards(session, 5)
+    titles = [title for title, _emoji, _rows in boards]
+    assert titles == ["Most ODI runs by one card", "Most ODI wickets by one card"]
+    runs_rows = boards[0][2]
+    assert runs_rows and "Opener" in runs_rows[0][1]
+    assert "240" in runs_rows[0][0]
+
+
+def test_the_odi_hall_of_fame_boards_are_absent_with_no_odis():
+    from services import hall_of_fame
+    odi_stats.reset_leaderboard_cache()
+    with _stats_session() as session:
+        assert hall_of_fame._odi_career_boards(session, 5) == []
+
+
+def test_the_odi_hall_of_fame_boards_skip_non_humans():
+    """The short-format boards are humans only; so are these."""
+    from models import User
+    from services import hall_of_fame
+    with _leaderboard_session() as session:
+        # telegram_id is unique, so give each a distinct non-human id.
+        for offset, user in enumerate(session.query(User).order_by(User.id).all()):
+            user.telegram_id = -1 - offset
+        session.flush()
+        odi_stats.reset_leaderboard_cache()
+        assert hall_of_fame._odi_career_boards(session, 5) == []
+
+
+def test_the_board_keyboard_marks_the_one_being_shown():
+    from handlers import odirecords
+    markup = odirecords.board_keyboard("wickets")
+    labels = [b.text for row in markup.inline_keyboard for b in row]
+    assert sum(1 for label in labels if label.startswith("• ")) == 1
+    assert any(label.startswith("• ") and "wickets" in label.lower()
+               for label in labels)
+    assert len(labels) == len(odi_stats.METRIC_ORDER)
+    data = {b.callback_data for row in markup.inline_keyboard for b in row}
+    assert data == {f"odirec_{m}" for m in odi_stats.METRIC_ORDER}
+
+
 # ── The /odistats command ────────────────────────────────────────────
 def test_the_record_sums_every_edition_of_a_card():
     """A re-released card's ODI record is the sum over its editions."""

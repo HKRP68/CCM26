@@ -260,6 +260,136 @@ def squad_careers(session, user_id: int) -> Dict[int, Dict[str, Any]]:
             for player_id, player_rows in by_player.items()}
 
 
+# ── Leaderboards ─────────────────────────────────────────────────────
+#: How long a folded leaderboard is reused. The table only grows when a match
+#: ends, so a minute of staleness costs nothing and saves re-folding every
+#: innings in the game on each tap of a metric button.
+LEADERBOARD_TTL_SECONDS = 60
+
+#: The qualifying bar for a rate metric, so one 40-ball innings at a strike
+#: rate of 180 does not sit above a career.
+MIN_BATTING_INNINGS = 3
+MIN_BOWLING_INNINGS = 3
+
+_cache: Dict[str, Any] = {"at": 0.0, "records": None}
+
+
+def _all_records(session, *, fresh=False):
+    """Every owner's ODI career record, keyed by ``(user_id, player_id)``.
+
+    One pass over the table, cached for :data:`LEADERBOARD_TTL_SECONDS`.
+    """
+    import time
+
+    now = time.monotonic()
+    if not fresh and _cache["records"] is not None and now - _cache["at"] < LEADERBOARD_TTL_SECONDS:
+        return _cache["records"]
+    grouped: Dict[Any, List[Any]] = {}
+    for row in _rows(session):
+        grouped.setdefault((int(row.user_id), int(row.player_id)), []).append(row)
+    records = {key: _fold_rows(rows, player_id=key[1], user_id=key[0])
+               for key, rows in grouped.items()}
+    _cache.update(at=now, records=records)
+    return records
+
+
+def reset_leaderboard_cache():
+    """Drop the folded leaderboard — for tests, and after a bulk import."""
+    _cache.update(at=0.0, records=None)
+
+
+#: ``key -> (title, qualifies, sort value, printed value)``. A metric that
+#: cannot be computed for a record returns ``None`` and the record is dropped,
+#: so an unbeaten batter never appears in the averages table at infinity.
+METRICS = {
+    "runs": (
+        "🏏 Most runs",
+        lambda r: r["batting"]["innings"] > 0,
+        lambda r: r["batting"]["runs"],
+        lambda r: f"{r['batting']['runs']} ({r['batting']['innings']} inns)",
+    ),
+    "wickets": (
+        "🎯 Most wickets",
+        lambda r: r["bowling"]["innings"] > 0,
+        lambda r: r["bowling"]["wickets"],
+        lambda r: f"{r['bowling']['wickets']} ({r['overs']} ov)",
+    ),
+    "highest": (
+        "💥 Highest score",
+        lambda r: r["batting"]["innings"] > 0,
+        lambda r: r["batting"]["highest"],
+        lambda r: r["highest"],
+    ),
+    "best_bowling": (
+        "🔥 Best bowling",
+        lambda r: r["bowling"]["best_wickets"] > 0,
+        # Wickets first, then the fewest runs — so 5/20 beats 5/41 beats 4/10.
+        lambda r: (r["bowling"]["best_wickets"], -r["bowling"]["best_runs"]),
+        lambda r: r["best_bowling"],
+    ),
+    "batting_average": (
+        "📊 Batting average",
+        lambda r: (r["batting"]["innings"] >= MIN_BATTING_INNINGS
+                   and r["batting_average"] is not None),
+        lambda r: r["batting_average"],
+        lambda r: f"{r['batting_average']} ({r['batting']['runs']} runs)",
+    ),
+    "economy": (
+        "🪙 Best economy",
+        lambda r: (r["bowling"]["innings"] >= MIN_BOWLING_INNINGS
+                   and r["economy"] is not None),
+        # Lower is better, so the sort value is negated.
+        lambda r: -r["economy"],
+        lambda r: f"{r['economy']} ({r['overs']} ov)",
+    ),
+    "strike_rate": (
+        "⚡ Batting strike rate",
+        lambda r: (r["batting"]["innings"] >= MIN_BATTING_INNINGS
+                   and r["strike_rate"] is not None),
+        lambda r: r["strike_rate"],
+        lambda r: f"{r['strike_rate']} ({r['batting']['runs']} runs)",
+    ),
+}
+
+#: The order the metric buttons appear in.
+METRIC_ORDER = ("runs", "wickets", "highest", "best_bowling",
+                "batting_average", "economy", "strike_rate")
+
+
+def metric_title(metric):
+    entry = METRICS.get(metric)
+    return entry[0] if entry else "ODI records"
+
+
+def leaders(session, metric, limit=10, fresh=False):
+    """The top ``limit`` ODI careers by ``metric``.
+
+    Returns ``[{"user_id", "player_id", "value", "text", "record"}]``, already
+    ranked. Names are left to the caller: this module never touches Player or
+    User, so it stays usable from a command, a card renderer or the website.
+    """
+    entry = METRICS.get(metric)
+    if not entry:
+        return []
+    _title, qualifies, sort_value, printed = entry
+    out = []
+    for (user_id, player_id), record in _all_records(session, fresh=fresh).items():
+        if not qualifies(record):
+            continue
+        out.append({"user_id": user_id, "player_id": player_id,
+                    "value": sort_value(record), "text": printed(record),
+                    "record": record})
+    # A stable tie-break, so the same careers do not swap places between taps.
+    out.sort(key=lambda row: (_sort_key(row["value"]), -row["player_id"]),
+             reverse=True)
+    return out[:max(1, int(limit))]
+
+
+def _sort_key(value):
+    """Order tuples and numbers together without comparing across types."""
+    return value if isinstance(value, tuple) else (value,)
+
+
 # ── Display ──────────────────────────────────────────────────────────
 def record_block(rec: Dict[str, Any]) -> str:
     """The two-column career block, in the layout ``/stats`` uses."""

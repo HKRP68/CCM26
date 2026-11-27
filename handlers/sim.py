@@ -1,6 +1,7 @@
 """/sim — instant auto-simulated match (your XI vs an auto-generated Sim XI).
 
-Formats: T10, T20 (default), a custom 1-20 overs, ``/sim ODI`` (50 overs) and
+Formats: T10, T20 (default), a custom 1-50 overs (21 and up play as an ODI
+on the Conditions Engine, at that length), ``/sim ODI`` (50 overs) and
 ``/sim Test`` (five days). The long formats run on the Conditions Engine via
 services.sim_long — real grounds, weather, new balls, sessions, follow-ons,
 declarations and draws — while the short ones keep services.sim_match.
@@ -51,7 +52,10 @@ from services.player_service import not_career
 
 logger = logging.getLogger(__name__)
 
-MAX_OVERS = 20
+# /sim plays any length from 1 to 50 overs. 1-20 run on the short-format
+# simulator (services.sim_match); 21-50 are ODIs on the Conditions Engine
+# (services.sim_long), which is the same split the interactive modes use.
+MAX_OVERS = 50
 
 
 def _player_to_dict(p):
@@ -216,8 +220,11 @@ def _xi_from_roster(session, user_id, roster):
 def _parse_format(args):
     """Resolve the /sim argument into a format config.
 
-    Accepts a format name (T10 / T20 / ODI / Test) or a custom over count,
-    defaulting to T20. Returns (fmt_dict, error).
+    Accepts a format name (T10 / T20 / ODI / Test) or a custom over count from
+    1 to :data:`MAX_OVERS`, defaulting to T20. A count of 21 or more plays
+    under ODI rules on the Conditions Engine — the same rule the interactive
+    modes use (``services.match_formats.ball_format_for_overs``) — so one over
+    count never means two different engines. Returns (fmt_dict, error).
     """
     if not args:
         return get_format("T20"), None
@@ -231,6 +238,11 @@ def _parse_format(args):
         return None, "Use a format (T10, T20, ODI, Test) or a number of overs."
     if n < 1 or n > MAX_OVERS:
         return None, f"Overs must be between 1 and {MAX_OVERS}."
+    from services.match_formats import is_medium_format
+    if is_medium_format(n):
+        # The long game, at the length asked for. ``label`` stays "ODI" because
+        # that is the key services.sim_long resolves its engine config from.
+        return {**get_format("ODI"), "overs": n}, None
     return custom_format(n), None
 
 
@@ -429,7 +441,8 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if long_format:
             long_res = sim_long.simulate_long_match(
-                user_xi, opponent_xi, team_name, opponent_name, fmt["label"], pitch=pitch)
+                user_xi, opponent_xi, team_name, opponent_name, fmt["label"],
+                pitch=pitch, overs=overs)
             pitch_desc = pitch_meta.get("description", "")
             potm_name = long_res.get("potm")
             potm_team = long_res.get("potm_team")

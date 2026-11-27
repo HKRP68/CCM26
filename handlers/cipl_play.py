@@ -56,9 +56,12 @@ from services.match_state_store import (
     A_PICK_BAT_APPROACH,
     A_PICK_CIPL_NEW_BATSMAN,
     A_PICK_CONCUSSION,
+    A_PICK_DRINKS_BOWL,
+    A_PICK_DRINKS_BAT,
     A_COMPLETED,
 )
 from services import cipl_match
+from services import drinks_break
 from services import score_projection
 from services import impact_player
 from services import concussion_substitute as medical
@@ -1146,7 +1149,8 @@ def _idle_actor(state, expected):
         incident = medical.pending(state) or {}
         if str(incident.get("user_id")) == str(state.get("bat_team_id")):
             expected = A_PICK_BAT_APPROACH
-    if expected in (A_PICK_BAT_APPROACH, A_PICK_CIPL_NEW_BATSMAN):
+    if expected in (A_PICK_BAT_APPROACH, A_PICK_CIPL_NEW_BATSMAN,
+                    A_PICK_DRINKS_BAT):
         return (state.get("bat_team_id"), state.get("bat_user_tg"),
                 state.get("bat_team_name", "Batting side"),
                 state.get("bowl_team_id"), state.get("bowl_user_tg"),
@@ -1160,7 +1164,8 @@ def _idle_actor(state, expected):
 
 def _odi_idle_turn(state, expected):
     if (not cipl_match.odi_approach.is_odi(state)
-            or expected in (A_PICK_CONCUSSION, A_PICK_CIPL_NEW_BATSMAN)):
+            or expected in (A_PICK_CONCUSSION, A_PICK_CIPL_NEW_BATSMAN,
+                            A_PICK_DRINKS_BOWL, A_PICK_DRINKS_BAT)):
         return None
     return [expected, _idle_actor(state, expected)[1], state.get("innings"),
             state.get("current_over"), state.get("current_ball")]
@@ -1229,6 +1234,10 @@ async def _on_remind(context):
             nag = (f"⏳ {_mention(idle_tg, idle_name)}, pick your next batsman"
                    f"{where} within <b>{secs} seconds</b> — or the next in your "
                    f"batting order walks in.")
+        elif expected in (A_PICK_DRINKS_BOWL, A_PICK_DRINKS_BAT):
+            nag = (f"🥤 {_mention(idle_tg, idle_name)}, call your session plan "
+                   f"within <b>{secs} seconds</b> — or your assistant coach "
+                   f"calls it for you. No fine.")
         elif _is_bot_match(state):
             nag = (f"⏳ {_mention(idle_tg, idle_name)}, you have "
                    f"<b>{secs} seconds</b> to play your turn{where} — or the "
@@ -1295,6 +1304,23 @@ async def _on_timeout(context):
                 await _send_in_batsman(context, mid, state, None)
             except Exception:
                 await _recover_from_error(context, mid, "auto new batsman")
+            return
+        if expected in (A_PICK_DRINKS_BOWL, A_PICK_DRINKS_BAT):
+            # The drinks interval is a bonus decision, not a turn anyone should
+            # lose a match over. An unanswered one is called the way the AI
+            # captain would call it and the innings carries on.
+            try:
+                await _clear_action_reminder(context, state)
+                side = "bowl" if expected == A_PICK_DRINKS_BOWL else "bat"
+                choice = drinks_break.ai_plan(state, side)
+                if side == "bowl":
+                    state["drinks_pending_bowl"] = choice
+                    await _ss(context, mid, state, next_action=A_PICK_DRINKS_BAT)
+                    await _prompt_drinks(context, mid, state, "bat")
+                else:
+                    await _settle_drinks(context, mid, state, choice)
+            except Exception:
+                await _recover_from_error(context, mid, "auto session plan")
             return
         if turn is not None:
             try:
@@ -2884,6 +2910,102 @@ async def _prompt_bat_approach(context, mid, state, auto=False):
 
 
 # ════════════════════════════════════════════════════════════════════
+# Drinks — halfway through an ODI innings, both captains commit to a plan
+# for the rest of it. The bowling captain is asked first and their pick is
+# held back, so the batting captain cannot read it; both are revealed
+# together once the second one is in. See services/drinks_break.py for the
+# plans, the match-ups and what the pair does to the deliveries that follow.
+#
+# The interval is asked in the CHAT on both surfaces. It is a between-overs
+# event rather than a delivery pick, so a Mini App match does not have to wait
+# for an app release to use it — see _SURFACE_EXEMPT.
+# ════════════════════════════════════════════════════════════════════
+
+def _drinks_card(state):
+    """The scoreboard line the interval leads with."""
+    overs = cipl_match.format_overs(state)
+    return (f"🥤 <b>Drinks</b> — {state.get('bat_team_name', 'Batting')} "
+            f"{cipl_match.format_score(state)} ({overs}/{state.get('overs')})")
+
+
+async def _prompt_drinks(context, mid, state, side):
+    """Ask one captain for their session plan, or let the AI call it.
+
+    ``side`` is ``"bowl"`` (asked first) or ``"bat"``. A bot captain answers
+    immediately and the flow carries straight on.
+    """
+    is_bot = _bot_bowls(state) if side == "bowl" else _bot_bats(state)
+    if is_bot:
+        choice = await asyncio.to_thread(drinks_break.ai_plan, state, side)
+        if side == "bowl":
+            state["drinks_pending_bowl"] = choice
+            await _ss(context, mid, state, next_action=A_PICK_DRINKS_BAT)
+            await _prompt_drinks(context, mid, state, "bat")
+        else:
+            await _settle_drinks(context, mid, state, choice)
+        return
+
+    plans = drinks_break.BOWL_PLANS if side == "bowl" else drinks_break.BAT_PLANS
+    tag = "drinksbowl" if side == "bowl" else "drinksbat"
+    who = state["bowl_user_tg"] if side == "bowl" else state["bat_user_tg"]
+    word = "Bowling Plan" if side == "bowl" else "Batting Plan"
+    rows = [[InlineKeyboardButton(f"{emoji} {label}",
+                                  callback_data=f"cipl_{tag}_{mid}_{idx}")]
+            for idx, (_, emoji, label, _blurb) in enumerate(plans)]
+    left = max(0, int(state.get("overs") or 0) - int(state.get("current_over") or 1) + 1)
+    menu = "\n".join(f"{emoji} <b>{label}</b> — <i>{html.escape(blurb)}</i>"
+                      for _k, emoji, label, blurb in plans)
+    text = (f"{_drinks_card(state)}\n"
+            f"<i>{left} over{'' if left == 1 else 's'} left this innings.</i>\n\n"
+            f"{_mention_tg(state, who)}, choose your <b>{word}</b> for the rest "
+            f"of the innings:\n\n{menu}\n\n"
+            f"<i>Both plans are revealed together.</i>")
+    action = A_PICK_DRINKS_BOWL if side == "bowl" else A_PICK_DRINKS_BAT
+    try:
+        await _edit_action_message(context, state, text, rows)
+        delivered = True
+    except Exception:
+        logger.exception("cipl: drinks prompt send failed for match %s", mid)
+        delivered = False
+    await _mark_prompt_delivered(context, mid, state, delivered, action)
+
+
+async def _settle_drinks(context, mid, state, bat_plan):
+    """Record both plans, reveal them, and resume the innings."""
+    bowl_plan = state.pop("drinks_pending_bowl", None) or drinks_break.ai_plan(state, "bowl")
+    entry = drinks_break.record(state, bat_plan, bowl_plan)
+    _cancel_timer(context, mid)
+    await _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
+    lines = drinks_break.reveal_lines(state)
+    text = ("🥤 <b>Drinks — plans for the second half</b>\n"
+            f"{_drinks_card(state)}\n\n" + "\n".join(lines))
+    try:
+        await _post_tracked(context, state, text, legacy=True)
+    except Exception:
+        logger.exception("cipl drinks reveal post failed for match %s", mid)
+    logger.info("cipl drinks interval for match %s innings %s: bat=%s bowl=%s",
+                mid, state.get("innings"), entry.get("bat"), entry.get("bowl"))
+    await _prompt_bowler(context, mid, state)
+
+
+async def _maybe_drinks_break(context, mid, state):
+    """Take drinks if they are due. True when the interval now owns the flow."""
+    if not drinks_break.due(state):
+        return False
+    try:
+        await _ss(context, mid, state, next_action=A_PICK_DRINKS_BOWL)
+        await _prompt_drinks(context, mid, state, "bowl")
+    except Exception:
+        logger.exception("cipl drinks interval failed for match %s", mid)
+        # Never strand an innings on a failed interval: carry on without it.
+        state.pop("drinks_pending_bowl", None)
+        drinks_break.record(state, "build", "rotate")
+        await _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
+        return False
+    return True
+
+
+# ════════════════════════════════════════════════════════════════════
 # New batsman — a wicket mid-over, and the human batting captain picks
 # who walks in (bot matches). The over waits, then carries on.
 # ════════════════════════════════════════════════════════════════════
@@ -3132,6 +3254,9 @@ async def _resume_locked(context, mid, only_if_stalled=False):
                 await _prompt_new_batsman(context, mid, state)
             else:
                 await _run_over(context, mid, state)
+        elif action in (A_PICK_DRINKS_BOWL, A_PICK_DRINKS_BAT):
+            side = "bowl" if action == A_PICK_DRINKS_BOWL else "bat"
+            await _prompt_drinks(context, mid, state, side)
         elif action == A_PICK_BOWL_APPROACH and state.get("current_bowler"):
             await _prompt_bowl_approach(context, mid, state)
         elif action == A_PICK_BAT_APPROACH and state.get("current_bowler"):
@@ -3397,19 +3522,31 @@ PICK_BOWL_APPROACH = "bowl_approach"
 PICK_BAT_APPROACH = "bat_approach"
 PICK_NEW_BATSMAN = "new_batsman"
 PICK_CONCUSSION = "concussion"
+# The drinks interval, halfway through an ODI innings — see
+# services/drinks_break.py. Two picks, bowling captain first, each private.
+PICK_DRINKS_BOWL = "drinks_bowl"
+PICK_DRINKS_BAT = "drinks_bat"
 
 _PICK_ACTION = {
     PICK_BOWLER: A_PICK_CIPL_BOWLER,
     PICK_BOWL_APPROACH: A_PICK_BOWL_APPROACH,
     PICK_BAT_APPROACH: A_PICK_BAT_APPROACH,
     PICK_NEW_BATSMAN: A_PICK_CIPL_NEW_BATSMAN,
+    PICK_DRINKS_BOWL: A_PICK_DRINKS_BOWL,
+    PICK_DRINKS_BAT: A_PICK_DRINKS_BAT,
 }
 _PICK_ALREADY = {
     PICK_BOWLER: "Bowler already chosen.",
     PICK_BOWL_APPROACH: "Already chosen.",
     PICK_BAT_APPROACH: "Already chosen.",
     PICK_NEW_BATSMAN: "The new batsman is already in.",
+    PICK_DRINKS_BOWL: "Your session plan is already in.",
+    PICK_DRINKS_BAT: "Your session plan is already in.",
 }
+# The drinks interval is a between-overs event, not a delivery pick, and it is
+# asked in the chat on both surfaces — so it is exempt from the surface gate
+# that keeps a Mini App match's deliveries in the Mini App.
+_SURFACE_EXEMPT = frozenset({PICK_DRINKS_BOWL, PICK_DRINKS_BAT})
 
 
 def _pick_surface_error(state, source):
@@ -3425,7 +3562,7 @@ def _pick_surface_error(state, source):
 
 def _pick_actor_error(state, kind, actor_tg):
     """The refusal for a pick made by the wrong captain, or None."""
-    if kind in (PICK_BOWLER, PICK_BOWL_APPROACH):
+    if kind in (PICK_BOWLER, PICK_BOWL_APPROACH, PICK_DRINKS_BOWL):
         if actor_tg != state.get("bowl_user_tg"):
             return ("Only the bowling captain picks the bowler."
                     if kind == PICK_BOWLER else
@@ -3473,9 +3610,10 @@ async def submit_pick(context, mid, actor_tg, kind, value, on_accept=None,
         err = _pick_actor_error(state, kind, actor_tg)
         if err:
             return False, err
-        err = _pick_surface_error(state, source)
-        if err:
-            return False, err
+        if kind not in _SURFACE_EXEMPT:
+            err = _pick_surface_error(state, source)
+            if err:
+                return False, err
         if _innings_quota_used(state):
             return False, ("This innings is already over — the full quota of "
                            "overs has been bowled.")
@@ -3498,6 +3636,13 @@ async def submit_pick(context, mid, actor_tg, kind, value, on_accept=None,
         elif kind == PICK_BAT_APPROACH:
             if not (0 <= value < len(BATTING_APPROACHES)):
                 return False, "Invalid approach."
+        elif kind in (PICK_DRINKS_BOWL, PICK_DRINKS_BAT):
+            plans = (drinks_break.BOWL_PLANS if kind == PICK_DRINKS_BOWL
+                     else drinks_break.BAT_PLANS)
+            if not (0 <= value < len(plans)):
+                return False, "Invalid session plan."
+            if not drinks_break.due(state):
+                return False, _PICK_ALREADY[kind]
         else:
             if not cipl_match.needs_new_batsman(state):
                 return False, _PICK_ALREADY[kind]
@@ -3533,6 +3678,21 @@ async def submit_pick(context, mid, actor_tg, kind, value, on_accept=None,
                 await _run_over(context, mid, state)
             except Exception:
                 await _recover_from_error(context, mid, "over simulation")
+        elif kind == PICK_DRINKS_BOWL:
+            # Held, not revealed: the batting captain picks next and must not
+            # see this. Both land together in state["drinks"] below.
+            state["drinks_pending_bowl"] = drinks_break.BOWL_PLANS[value][0]
+            try:
+                await _ss(context, mid, state, next_action=A_PICK_DRINKS_BAT)
+                await _prompt_drinks(context, mid, state, "bat")
+            except Exception:
+                await _recover_from_error(context, mid, "drinks interval")
+        elif kind == PICK_DRINKS_BAT:
+            try:
+                await _settle_drinks(context, mid, state,
+                                     drinks_break.BAT_PLANS[value][0])
+            except Exception:
+                await _recover_from_error(context, mid, "drinks interval")
         else:
             try:
                 await _send_in_batsman(context, mid, state, value)
@@ -3579,6 +3739,16 @@ async def cipl_batapp_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 async def cipl_newbat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """``cipl_newbat_<mid>_<rid>`` — the batting captain sends in a batsman."""
     await _run_pick_callback(update, context, PICK_NEW_BATSMAN)
+
+
+async def cipl_drinksbowl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """``cipl_drinksbowl_<mid>_<idx>`` — the bowling captain's session plan."""
+    await _run_pick_callback(update, context, PICK_DRINKS_BOWL)
+
+
+async def cipl_drinksbat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """``cipl_drinksbat_<mid>_<idx>`` — the batting captain's session plan."""
+    await _run_pick_callback(update, context, PICK_DRINKS_BAT)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -4535,7 +4705,12 @@ async def _run_over(context, mid, state):
     if innings_over:
         await _ss(context, mid, state)
     else:
-        next_action = A_PICK_CONCUSSION if medical.pending(state) else A_PICK_CIPL_BOWLER
+        if medical.pending(state):
+            next_action = A_PICK_CONCUSSION
+        elif drinks_break.due(state):
+            next_action = A_PICK_DRINKS_BOWL
+        else:
+            next_action = A_PICK_CIPL_BOWLER
         await _ss(context, mid, state, next_action=next_action)
 
     # The final match summary contains the finished score. Do not put another
@@ -4570,7 +4745,7 @@ async def _run_over(context, mid, state):
 
     if innings_over:
         await _finish_innings(context, mid, state)
-    else:
+    elif not await _maybe_drinks_break(context, mid, state):
         await _prompt_bowler(context, mid, state)
 
 

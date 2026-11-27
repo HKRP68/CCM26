@@ -24,6 +24,7 @@ COMMAND_CATEGORIES = (
         '/stats /st [name] - Player game stats',
         '/gstats [name] - Global stats — every owner, every match type',
         '/odistats [name] [global] - ODI career — every innings of 21+ overs',
+        '/odirecords /odilb - ODI leaderboards — runs, wickets, best figures',
         '/owners [name] - Who owns this player in this group',
         '/searchpl /sp [name] - Search player',
         '/searchovr /so [rating] - Search by OVR',

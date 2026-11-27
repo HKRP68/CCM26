@@ -10,6 +10,7 @@ from engine.realism.context import BallContext
 from engine.realism.phases import phase_for_ball
 from engine.realism.styles import bowling_family
 from services import chemistry
+from services import drinks_break
 
 
 # An ODI-rules innings is scheduled for this many overs unless the match says
@@ -151,6 +152,9 @@ def context(state, bowler=None, *, free_hit=None, workload=None):
                "bat_repeat": state.get("bat_repeat", 0), "bowl_repeat": state.get("bowl_repeat", 0),
                "last_bat": state.get("last_bat_approach"), "last_bowl": state.get("last_bowl_approach"),
                "carry": 0.015 if carry else 0.0,
+               # Both captains' drinks-interval plans for this session, as a
+               # (runs, wicket) pair — the identity until they are called.
+               "session": drinks_break.modifier(state),
                "fielding": cm._fielding_quality(state.get("bowl_xi") or []) if bowl else 60},
     )
 

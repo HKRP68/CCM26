@@ -290,8 +290,23 @@ class _Match:
     def _quota_left(self, inn, b):
         if self.fmt == "Test":
             return 10 ** 6
-        q = self.cfg["formats"][self.fmt]["maxBowlerOvers"]
-        return q - inn.bowl[b.id]["balls"] // 6
+        return self._bowler_quota() - inn.bowl[b.id]["balls"] // 6
+
+    def _bowler_quota(self):
+        """The per-bowler over cap, scaled when the innings is shortened.
+
+        ``MatchSetup.overs`` can play a format at another length — ``/sim 35``
+        is an ODI of 35 overs — and the quota has to move with it, or one
+        bowler could take ten of thirty-five. The format's own ratio is kept
+        (a fifth of the innings for both T20 and ODI) and rounded up, which is
+        the standard rule and the one the interactive modes apply.
+        """
+        fcfg = self.cfg["formats"][self.fmt]
+        quota = int(fcfg["maxBowlerOvers"])
+        full = int(fcfg.get("overs") or 0)
+        if full and self.overs and self.overs != full:
+            quota = max(1, -(-quota * self.overs // full))
+        return quota
 
     def _feasible(self, inn, choice, overs_left_after):
         if self.fmt == "Test" or overs_left_after <= 0:
@@ -616,6 +631,10 @@ class _Match:
                                 "text": f"Rain cost {lost} overs of play"})
             return
         min_o = self.cfg["weather"]["rain"]["minOversPerSide"][self.fmt]
+        # The configured floor is written for the format's full length. A
+        # shortened match keeps it proportional rather than letting a 20-over
+        # floor swallow a 21-over innings whole.
+        min_o = min(min_o, max(1, (self.overs or min_o) // 2))
         bowled = inn.legal_balls / 6.0
         lost = rain_dls.cap_overs_lost(inn.max_overs, bowled, lost, min_o)
         if lost <= 0:

@@ -48,9 +48,47 @@ def test_parse_format_long_formats_and_custom_cap():
     fmt, err = sim_mod._parse_format(["Test"])
     assert err is None and fmt["label"] == "Test" and fmt["long_format"]
     fmt, err = sim_mod._parse_format(["51"])
-    assert fmt is None and "between 1 and 20" in err
+    assert fmt is None and "between 1 and 50" in err
     fmt, err = sim_mod._parse_format(["T20"])
     assert not fmt.get("long_format")
+
+
+@pytest.mark.parametrize("overs", [1, 6, 20])
+def test_short_custom_lengths_stay_on_the_short_simulator(overs):
+    fmt, err = sim_mod._parse_format([str(overs)])
+    assert err is None and fmt["overs"] == overs and not fmt.get("long_format")
+
+
+@pytest.mark.parametrize("overs", [21, 35, 50])
+def test_long_custom_lengths_are_odis_at_that_length(overs):
+    """``/sim 35`` is a 35-over ODI, not a T20 played for 35 overs."""
+    fmt, err = sim_mod._parse_format([str(overs)])
+    assert err is None
+    assert fmt["label"] == "ODI" and fmt["long_format"] and fmt["overs"] == overs
+
+
+@pytest.mark.parametrize("overs,quota", [(21, 5), (30, 6), (35, 7), (50, 10)])
+def test_a_shortened_odi_scales_its_bowling_quota(overs, quota):
+    """One bowler must not take ten of thirty-five overs."""
+    res = sim_long.simulate_long_match(
+        _xi("A", 82), _xi("B", 80), "Alpha", "Bravo", "ODI",
+        pitch="Even", stadium=None, seed=7, overs=overs)
+    for inn in res["innings"]:
+        assert float(inn["overs"]) <= overs
+        for figures in inn["bowling"]:
+            assert figures["balls"] // 6 <= quota, (overs, figures)
+
+
+def test_a_full_length_odi_is_unchanged_by_the_overs_override():
+    """Passing the format's own length must be the same as passing nothing."""
+    from engine.sim import stadium as _stadium
+    ground = _stadium.all_stadiums()[0]
+    def play(overs):
+        res = sim_long.simulate_long_match(
+            _xi("A", 82), _xi("B", 80), "Alpha", "Bravo", "ODI",
+            pitch="Even", stadium=ground, seed=4242, overs=overs)
+        return [(i["runs"], i["wickets"], i["overs"]) for i in res["innings"]]
+    assert play(None) == play(50)
 
 
 # ── the engine through services.sim_long ────────────────────────────────

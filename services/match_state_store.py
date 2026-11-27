@@ -65,6 +65,12 @@ A_PICK_BAT_APPROACH = "PICK_BAT_APPROACH"    # batting side picks batting approa
 A_PICK_CIPL_NEW_BATSMAN = "PICK_CIPL_NEW_BATSMAN"
 # A tournament medical assessment pauses play for the affected captain.
 A_PICK_CONCUSSION = "PICK_CONCUSSION"
+# The drinks interval, halfway through an ODI innings: each captain commits to
+# a plan for the rest of the innings. Asked in this order — bowling first, then
+# batting — so neither reads the other, exactly as the per-over flow does.
+# See services/drinks_break.py.
+A_PICK_DRINKS_BOWL = "PICK_DRINKS_BOWL"
+A_PICK_DRINKS_BAT = "PICK_DRINKS_BAT"
 
 
 def _mem_key(mid):

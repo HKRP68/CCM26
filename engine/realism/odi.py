@@ -243,9 +243,14 @@ def approach_distribution(base, ctx, cfg, bat=None, bowl=None, trait_hook=None):
     if bat not in ("aggressive", "ultra"):
         phase_push = 1.0
     carry = x["carry"]
-    run_factor = _clamp(bat_runs * bowl_runs * counter_runs * phase_push
+    # The drinks-interval session plans, if both captains have called them
+    # (services.drinks_break). Absent — every T20, every Hundred match, every
+    # ODI before its interval — this is the identity pair and the factors below
+    # are exactly what they were before the interval existed.
+    session_runs, session_wkt = x.get("session") or (1.0, 1.0)
+    run_factor = _clamp(bat_runs * bowl_runs * counter_runs * phase_push * session_runs
                         * (1 - 0.035 * read_bat + 0.035 * read_bowl + carry), 0.70, 1.40)
-    wkt_factor = _clamp(bat_wkt * bowl_wkt * counter_wkt
+    wkt_factor = _clamp(bat_wkt * bowl_wkt * counter_wkt * session_wkt
                         * (1 + 0.05 * read_bat - 0.035 * read_bowl), 0.60, 1.80)
     scoring = run_expectancy(base) * run_factor
     boundary_share = _clamp(boundary_expectancy(base) / run_expectancy(base)

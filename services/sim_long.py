@@ -44,8 +44,12 @@ def _pick_stadium():
 
 
 def simulate_long_match(home_xi, away_xi, home_name, away_name, fmt_key,
-                        pitch=None, stadium=None, seed=None):
+                        pitch=None, stadium=None, seed=None, overs=None):
     """Play an ODI or a Test between two /sim XIs.
+
+    ``overs`` shortens a limited-overs match — ``/sim 35`` plays 35 overs a
+    side under ODI rules, with the engine scaling the bowling quota and the
+    phases from it. ``None`` plays the format's own length. Ignored for a Test.
 
     Returns ``engine.sim.report.build_result``'s dict plus ``potm`` (a name)
     and ``potm_team``. The toss is the engine's own: the winner reads the
@@ -60,6 +64,7 @@ def simulate_long_match(home_xi, away_xi, home_name, away_name, fmt_key,
         pitch=pitch,
         stadium=stadium if stadium is not None else _pick_stadium(),
         seed=seed if seed is not None else random.getrandbits(48),
+        overs=(int(overs) if overs and fmt_key != "Test" else None),
     )
     res = simulate_match(setup)
     res["potm"], res["potm_team"] = player_of_the_match(res)
