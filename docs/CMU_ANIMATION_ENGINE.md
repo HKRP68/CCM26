@@ -278,8 +278,34 @@ hat-trick not inferred; banner layer non-interactive; queue bounded; all four
 levels; reduced motion as a floor only; persistence; 3:2 artwork; focus trap;
 safe areas; teardown; and the queue-drain regression.
 
-Full existing suite re-run — see **Known limitations** for the one pre-existing
-failure unrelated to this work.
+**Full existing suite, compared against the pre-change commit.** Both runs were
+done serially in one process, from a clean worktree at `02fd7f5` and from this
+branch:
+
+| | failed | passed | errors |
+| --- | --- | --- | --- |
+| Baseline (`02fd7f5`) | 109 | 8,395 | 52 |
+| This branch | 115 | 8,439 | 52 |
+
+Diffing the two failure lists leaves exactly two differences, neither caused by
+this work:
+
+* **`test_match_summary_delivery.py` — 6 tests.** These fail *identically on the
+  baseline commit* when that file is run on its own; the baseline's full-suite
+  run happened to mask them through ordering. Verified by running the same file
+  in a clean worktree at `02fd7f5`: same six names, same failures.
+* **`test_pitch_calibration.py::test_first_innings_par_in_band` — one band.**
+  `[Even]` fails on the baseline and `[Hard]` on this branch; both pass when the
+  file is run on its own. A seed-dependent simulation band, not a regression.
+
+The 52 errors are the same on both sides, all in
+`test_undo_purchase_integrity.py` and `test_t20_championship.py`. Both files
+pass cleanly in isolation on this branch (55 passed), so they are full-suite
+resource pollution, not a change in behaviour.
+
+The passed count rises by 44: the 50 new engine tests, less the 6 above.
+
+**Net effect of this work on the existing suite: no regressions.**
 
 ### Browser (Chromium via Playwright, 390×844)
 
