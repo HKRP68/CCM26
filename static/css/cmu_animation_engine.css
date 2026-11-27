@@ -408,3 +408,36 @@ body > .cmu-fx-confetti { position: fixed; }
   .cmu-fx-overlay { place-items: start center; }
   .cmu-fx-stage { margin: 0 auto; }
 }
+
+/* ════════════════════════ Settings form ════════════════════════ */
+
+.cmu-settings-heading {
+  margin: 22px 0 8px;
+  font-size: 1.05rem;
+  letter-spacing: -.02em;
+}
+.cmu-settings-hint,
+.cmu-settings-note {
+  margin: 6px 0 0;
+  color: var(--text-muted, #999A9B);
+  font-size: .78rem;
+  line-height: 1.5;
+}
+.cmu-settings-note {
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary, #D9DCDE);
+}
+.cmu-settings-note[hidden] { display: none; }
+.cmu-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 12px;
+}
+.cmu-settings-actions > * { flex: 1 1 9rem; min-height: var(--touch-target, 44px); }
+
+/* A control the active level has made inert still reads, but says so. */
+.cmu-appearance label.is-muted { opacity: .55; }

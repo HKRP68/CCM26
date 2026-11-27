@@ -8,6 +8,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>CMU Match Arena</title>
   <meta name="theme-color" content="#08090c">
+  <!-- Engine first: miniapp_theme.js mirrors its haptics preference at parse
+       time, so it has to exist by then. -->
+  <script src="/static/js/cmu_animation_engine.js?v=fx-1"></script>
   <script src="/static/js/miniapp_theme.js?v=elite-main-1"></script>
   <link rel="stylesheet" href="/static/css/miniapp_tokens.css?v=elite-main-1">
   <!-- Telegram Web App SDK -->
@@ -17,7 +20,6 @@
   <!-- CMU Animation Engine: broadcast overlays for confirmed match events.
        Presentation only — the arena renders every score, wicket and result
        exactly as before if these fail to load. -->
-  <script src="/static/js/cmu_animation_engine.js?v=fx-1"></script>
   <script src="/static/js/cmu_match_fx.js?v=fx-1"></script>
   <link rel="stylesheet" href="/static/css/cmu_animation_engine.css?v=fx-1">
   <link rel="stylesheet" href="/static/css/cmu_match_fx.css?v=fx-1">

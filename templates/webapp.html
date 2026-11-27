@@ -8,15 +8,18 @@
 <meta name="theme-color" content="#08090c">
 <script src="{{ url_for('static', filename='js/ad_reward_confirmation.js', v='4') }}"></script>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="{{ url_for('static', filename='js/miniapp_theme.js', v='elite-main-1') }}"></script>
 {# CMU Animation Engine — presentation-only motion layer. Core first: every
    feature module below degrades to a no-op if it is missing, so a failed
-   download costs animation, never a reward. #}
+   download costs animation, never a reward. It also loads ahead of
+   miniapp_theme.js, which mirrors the engine's haptics preference at parse
+   time so the two controls for it cannot disagree. #}
 <script src="{{ url_for('static', filename='js/cmu_animation_engine.js', v='fx-1') }}"></script>
+<script src="{{ url_for('static', filename='js/miniapp_theme.js', v='elite-main-1') }}"></script>
 <script src="{{ url_for('static', filename='js/cmu_pack_theatre.js', v='fx-1') }}"></script>
 <script src="{{ url_for('static', filename='js/cmu_kitbag.js', v='fx-1') }}"></script>
 <script src="{{ url_for('static', filename='js/cmu_walkout.js', v='fx-1') }}"></script>
 <script src="{{ url_for('static', filename='js/cmu_rewards_fx.js', v='fx-1') }}"></script>
+<script src="{{ url_for('static', filename='js/cmu_settings.js', v='fx-1') }}"></script>
 <script>
   // Track third-party SDK load state so a DNS/network failure on these
   // hosts (e.g. net::ERR_NAME_NOT_RESOLVED where an ISP/region blocks the
@@ -3090,6 +3093,33 @@
     <button class="club-link primary" type="submit">Save appearance</button>
     <p role="status" id="cmu-appearance-status"></p>
   </form>
+
+  <h3 class="cmu-settings-heading" id="animations-heading">Animations</h3>
+  {# Settings apply as they change rather than on submit: a motion level that
+     only took effect after Save could not be previewed, and closing the screen
+     would lose a choice the player had just watched work. Save confirms what
+     is already stored. #}
+  <form id="cmu-motion-form" class="cmu-appearance" aria-labelledby="animations-heading">
+    <fieldset>
+      <legend>Animation level</legend>
+      <label><input type="radio" name="motion" value="cinematic"> Full cinematic animations</label>
+      <label><input type="radio" name="motion" value="standard"> Standard animations</label>
+      <label><input type="radio" name="motion" value="minimal"> Minimal animations</label>
+      <label><input type="radio" name="motion" value="off"> Animations off</label>
+      <p class="cmu-settings-hint" id="cmu-motion-level-hint"></p>
+    </fieldset>
+    <label><input type="checkbox" name="sound"> Sound effects</label>
+    <label><input type="checkbox" name="haptics"> Haptic feedback</label>
+    <label data-motion-particles><input type="checkbox" name="particles"> Particle effects</label>
+    <label><input type="checkbox" name="fastplay"> Fast play in matches</label>
+    <p class="cmu-settings-hint">Fast play shortens match overlays so they keep up with autoplay. Results and the scorecard are never delayed by an animation.</p>
+    <p class="cmu-settings-note" id="cmu-motion-system-note" hidden></p>
+    <div class="cmu-settings-actions">
+      <button class="club-link primary" type="submit">Save animations</button>
+      <button class="hub-button" type="button" id="cmu-motion-preview">Preview</button>
+    </div>
+    <p role="status" id="cmu-motion-status"></p>
+  </form>
 </section>
 
 <section class="screen" id="screen-captains" aria-labelledby="captains-title">
@@ -3552,7 +3582,10 @@ function navigate(screen, back = null) {
   syncCommunityCards();
   if (screen === 'roster' && (!back || !cachedRoster)) loadRoster();
   if (screen === 'home' && !back) refreshDashboard();
-  if (screen === 'appearance') window.CmuTheme.open();
+  if (screen === 'appearance') {
+    window.CmuTheme.open();
+    window.CmuMotionSettings?.open();
+  }
   if (screen === 'notifications') window.CmuOverview.notifications();
   if (screen === 'traits') window.CmuOverview.traits();
   if (screen === 'captains') loadCaptainMode();

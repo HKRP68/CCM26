@@ -61,6 +61,13 @@
   if (system.addEventListener) system.addEventListener('change', checkAuto);
   else system.addListener?.(checkAuto);
 
+  // The engine is the app-wide home for the haptics preference; mirror its
+  // value here so haptic() calls that still go through this module agree.
+  try {
+    window.CMUAnim?.onChange?.(settings => { haptics = settings.haptics; });
+    if (window.CMUAnim) haptics = window.CMUAnim.settings.haptics;
+  } catch (_) { /* The engine is optional. */ }
+
   window.MiniappTheme = {
     start(telegram) {
       webApp = telegram;
@@ -98,6 +105,13 @@
       form.onsubmit = event => {
         event.preventDefault();
         haptics = form.elements.haptics.checked;
+        // The Animation Engine owns this preference app-wide (the Animations
+        // form below sets the same thing). Write through it so the two
+        // controls cannot disagree, and keep the local copy for the fallback
+        // path when the engine is not loaded.
+        try { window.CMUAnim?.set('haptics', haptics); } catch (_) {}
+        const motionForm = document.getElementById('cmu-motion-form');
+        if (motionForm && motionForm.elements.haptics) motionForm.elements.haptics.checked = haptics;
         try {
           persist(form.elements.appearance.value);
           status.textContent = 'Appearance saved.';
