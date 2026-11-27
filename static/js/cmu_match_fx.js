@@ -156,10 +156,15 @@
    * clears it when a new match starts.
    */
   let seen = new Set();
-  let matchKey = '';
+  // null, not '': a payload with no usable match id still resets exactly once
+  // rather than on every poll. The guard compared truthiness, so an empty key
+  // fell through each time and cleared the de-duplication set — every ball of
+  // the over would have been announced again on the next state update.
+  let matchKey = null;
   function reset(key = '') {
-    if (key && key === matchKey) return;
-    matchKey = key;
+    const next = String(key || '');
+    if (next === matchKey) return;
+    matchKey = next;
     seen = new Set();
     clear();
   }

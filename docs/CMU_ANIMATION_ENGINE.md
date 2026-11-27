@@ -311,7 +311,7 @@ wallet, fires the original confetti, and leaves the theme form usable. With
 only `cmu_settings.js` blocked, the Animations form stays hidden behind an
 honest note rather than rendering controls that do nothing.
 
-### Three real bugs found and fixed during testing
+### Five real bugs found and fixed during testing
 
 1. **Cards rendered already-flipped** (Skip / Animations off / reduced motion)
    left their back `<button>` enabled and in the tab order behind the card, so
@@ -323,7 +323,16 @@ honest note rather than rendering controls that do nothing.
    failed to download: the markup was visible and nothing was left to hide it.
    The form now starts hidden behind a note that `open()` swaps out.
 
-A fourth, smaller one: the pack theatre's unmount left `.cmu-pack-mounted` on
+4. **`reset('')` cleared the de-duplication set on every poll.** The guard was
+   `if (key && key === matchKey)`, so a match payload carrying neither
+   `matchId` nor `id` fell through each time and re-announced the whole over.
+   `matchKey` now starts as `null` and the comparison is on the normalised
+   string.
+5. **The XP meter stayed at 100% after a level-up**, reading full for a level
+   the player had already moved past. `levelUp()` now takes `settleTo` and
+   animates back to the new level's real progress.
+
+A sixth, smaller one: the pack theatre's unmount left `.cmu-pack-mounted` on
 the shared opening button, so a Free Pack opened straight after a foil pack
 inherited the foil's rules — including the torn state's `visibility: hidden`.
 

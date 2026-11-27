@@ -330,6 +330,20 @@ class MatchOverlayTests(unittest.TestCase):
         self.assertIn("comm.hatTrick || bowler.hatTrick", body)
         self.assertNotIn("bowlerWickets >= 3 ?", body)
 
+    def test_a_payload_with_no_match_id_still_deduplicates(self):
+        """Regression: reset('') cleared the de-duplication set every poll.
+
+        The guard was ``if (key && key === matchKey)``, so an empty key — a
+        match payload carrying neither matchId nor id — fell through on every
+        state update and wiped `seen`, re-announcing the whole over.
+        """
+        body = _function(self.src, "function reset(")
+        self.assertIn("const next = String(key || '');", body)
+        self.assertIn("if (next === matchKey) return;", body)
+        self.assertIn("let matchKey = null;", self.src,
+                      "matchKey must start as null so an empty key still "
+                      "resets exactly once")
+
     def test_the_module_never_writes_to_match_state(self):
         for token in ("matchState =", "matchState.score =", "state.score ="):
             self.assertNotIn(token, self.src)
