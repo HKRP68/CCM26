@@ -296,6 +296,14 @@ Driven against the real app served from a throwaway SQLite database.
 | Arena | A ball through the real `triggerMatchEvent` raises a banner. With both engine scripts blocked the arena still boots, still handles the ball and logs no errors. |
 | Settings | Every control applies and persists; survives reload; particles disabled and budget 0 at Minimal; `ms(1000) === 0` at Off; both haptics controls stay in step; reduced motion floors the level, shows the note and suppresses the walkout. |
 
+**Every mode, every reward surface.** The daily receipt and its chest, quest
+meters and the wallet counters were driven at Cinematic, Standard, Minimal,
+Off and under a system reduced-motion preference. All five produce byte-identical
+confirmed values — receipt `Coins +7,500 / Gems +2 / Streak 4/7`, chest contents
+readable, Collect reachable, meter at `75.00%`, counter at `88.9k` with `88888`
+stored — and all five leave the receipt on screen and the body unlocked after
+Collect.
+
 **Full degradation path.** With every engine script blocked, the Mini App
 still opens a pack through the pre-engine flat reveal (CSS foil intact, cards,
 receipt, overflow note), claims a daily reward, animates nothing, shows the
