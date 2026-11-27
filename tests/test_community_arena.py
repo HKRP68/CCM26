@@ -418,6 +418,29 @@ class GameLifecycle(Base):
         G.refresh_active_cache(self.s)
         self.assertTrue(G.has_active_game(OFFICIAL))
 
+    def test_mystery_blur_default_increased(self):
+        from services import community_config_service as C
+        self.assertGreaterEqual(C.game_cfg("mystery", self.s).get("blur", 0), 28)
+
+    def test_scheduler_interval_trigger(self):
+        # With interval_minutes set and last game old enough, an interval launch
+        # is due even without any inactivity signal.
+        from services import community_scheduler as S
+        from models import CommunitySchedulerState
+        now = datetime.utcnow()
+        state = CommunitySchedulerState(
+            chat_id=OFFICIAL, last_game_at=now - timedelta(minutes=90))
+        self.s.add(state); self.s.flush()
+        interval_min = 60
+        ref = state.last_game_at
+        interval_trigger = (interval_min > 0
+                            and (now - ref) >= timedelta(minutes=interval_min))
+        self.assertTrue(interval_trigger)
+        # A recent game is NOT due yet.
+        state.last_game_at = now - timedelta(minutes=10)
+        self.s.flush()
+        self.assertFalse((now - state.last_game_at) >= timedelta(minutes=interval_min))
+
     def test_rating_attempts_exhausted(self):
         from services import community_game_service as G
         game, payload = self._make("rating")

@@ -163,16 +163,7 @@ async def _maybe_launch_auto(context):
     max_per_day = int(sched.get("max_games_per_day", 8))
     min_gap = timedelta(minutes=int(sched.get("min_gap_minutes", 45)))
     inactivity = timedelta(minutes=int(sched.get("inactivity_minutes", 30)))
-
-    # A conversation we have never heard from since boot is no basis to launch
-    # (and prevents a catch-up burst right after a restart).
-    lh = last_human_at(official)
-    if lh is None or (now - lh) < inactivity:
-        return
-    # Also require the process to have been up at least `inactivity` so a
-    # restart during a quiet spell doesn't immediately fire.
-    if (now - _BOOT_AT) < inactivity:
-        return
+    interval_min = int(sched.get("interval_minutes", 0) or 0)
 
     exclude_player_ids = []
     game_type = None
@@ -192,6 +183,24 @@ async def _maybe_launch_auto(context):
             session.commit()
             return
         if sched.get("match_protection", True) and _protected_match_live(session, official):
+            session.commit()
+            return
+
+        # Decide whether to launch now. Two independent triggers:
+        #   • inactivity — the group has gone quiet for `inactivity` minutes
+        #     (needs a genuine human message since boot, so a restart during a
+        #     quiet spell can't fire a catch-up burst);
+        #   • interval  — a random game every `interval_min` minutes regardless
+        #     of activity (measured from the last game, or boot if none yet, so
+        #     it also can't fire the instant the process starts).
+        lh = last_human_at(official)
+        inactive_trigger = (
+            lh is not None and (now - lh) >= inactivity
+            and (now - _BOOT_AT) >= inactivity)
+        ref = state.last_game_at or _BOOT_AT
+        interval_trigger = (
+            interval_min > 0 and (now - ref) >= timedelta(minutes=interval_min))
+        if not (inactive_trigger or interval_trigger):
             session.commit()
             return
 
