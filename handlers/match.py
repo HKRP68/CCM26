@@ -791,6 +791,12 @@ async def _action_warning(context):
 
 
 async def _action_timeout(context):
+    mid = context.job.data["match_id"]
+    async with get_match_lock(mid):
+        await _forfeit_on_timeout(context)
+
+
+async def _forfeit_on_timeout(context):
     """90s inactivity → forfeit. The idle user loses; the opponent wins.
 
     Side effects:
@@ -835,13 +841,19 @@ async def _action_timeout(context):
     # effects — just clean up the match as forfeited.
     winner_is_bot = (winner_tg == BOT_TG_ID_)
 
+    from services.saved_match_service import save_forfeit_snapshot
     session = get_session()
     try:
+        m = session.get(Match, mid, with_for_update=True)
+        if not m or m.status not in ACTIVE_MATCH_STATUSES:
+            return
+        saved = save_forfeit_snapshot(session, m, s)
+        count_result = not s.get("restored_from_forfeit")
         idle_user = session.query(User).filter(User.telegram_id == idle_tg).first()
         winner_user = (None if winner_is_bot
                        else session.query(User).filter(User.telegram_id == winner_tg).first())
 
-        if idle_user:
+        if idle_user and count_result:
             idle_user.total_coins = max(0, idle_user.total_coins - FINE_COINS)
             idle_user.total_gems = max(0, idle_user.total_gems - FINE_GEMS)
             log_activity(session, idle_user.id, "match_forfeit",
@@ -849,7 +861,6 @@ async def _action_timeout(context):
                          coins_change=-FINE_COINS, gems_change=-FINE_GEMS)
 
         # Finalize Match record
-        m = session.get(Match, mid)
         tour_announce = None
         if m and m.status != "completed":
             m.status = "completed"
@@ -877,12 +888,12 @@ async def _action_timeout(context):
             # would have broken.
             from services.match_rewards import (
                 apply_win_streak, record_active_day)
-            if winner_user and not winner_is_bot:
+            if count_result and winner_user and not winner_is_bot:
                 winner_user.matches_played = (winner_user.matches_played or 0) + 1
                 winner_user.matches_won = (winner_user.matches_won or 0) + 1
                 apply_win_streak(winner_user, True)
                 record_active_day(winner_user)
-            if idle_user and idle_tg != BOT_TG_ID_:
+            if count_result and idle_user and idle_tg != BOT_TG_ID_:
                 idle_user.matches_played = (idle_user.matches_played or 0) + 1
                 idle_user.matches_lost = (idle_user.matches_lost or 0) + 1
                 apply_win_streak(idle_user, False)
@@ -922,6 +933,10 @@ async def _action_timeout(context):
         idle_mention = _mention(idle_user) if idle_user else "Player"
         winner_mention = ("🤖 Bot" if winner_is_bot
                           else (_mention(winner_user) if winner_user else "Opponent"))
+        fine_note = (f"⚠️ Fined: <b>-{FINE_COINS:,}</b> 🪙   <b>-{FINE_GEMS}</b> 💎\n\n"
+                     if count_result else "")
+        saved_note = (f"\n💾 Match #{mid} is in /saved for admin restoration."
+                      if saved else "")
         try:
             await context.bot.send_message(
                 d["chat_id"],
@@ -929,8 +944,7 @@ async def _action_timeout(context):
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"{idle_mention} left the game.\n"
                 f"<i>(did not {d['action']} within {ACTION_TIMEOUT}s)</i>\n\n"
-                f"⚠️ Fined: <b>-{FINE_COINS:,}</b> 🪙   <b>-{FINE_GEMS}</b> 💎\n\n"
-                f"🏆 {winner_mention} won the match!",
+                f"{fine_note}🏆 {winner_mention} won the match!{saved_note}",
                 parse_mode="HTML")
         except Exception:
             pass
@@ -1370,6 +1384,8 @@ def _gather_top_per_team(s, top_n=4):
 
 
 async def _save_match_stats(s):
+    if s.get("restored_from_forfeit"):
+        return
     session = get_session()
     try:
         def build_lookup(xi_list, user_id):
@@ -2172,7 +2188,8 @@ async def endmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     s_prompt = _gs(context, mid)
     balls = _match_balls_bowled(s_prompt)
-    est_fine = balls * ENDMATCH_FINE_PER_BALL
+    restored = bool((s_prompt or {}).get("restored_from_forfeit"))
+    est_fine = 0 if restored else balls * ENDMATCH_FINE_PER_BALL
     # Snapshot the ball count into the callback data so the player is charged
     # exactly the amount shown here, even if play continues before they tap Yes.
     kb = InlineKeyboardMarkup([[
@@ -2181,24 +2198,28 @@ async def endmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]])
     # Said out loud so nobody quits expecting to hand their opponent a payday —
     # and skipped against the AI, which has no wallet to be told about.
-    comp_line = ("" if (s_prompt and s_prompt.get("is_vsbot"))
+    comp_line = ("" if restored or (s_prompt and s_prompt.get("is_vsbot"))
                  else "\n<i>The fine is forfeited, not paid to your opponent.</i>")
+    fine_line = ("This unranked match ends without a fine." if restored else
+                 f"You will be fined {est_fine:,} Coins 💰 ({balls} balls x {ENDMATCH_FINE_PER_BALL}) "
+                 f"and {FINE_GEMS} Gems 💎.")
     await update.message.reply_text(
         f"🏏 <b>/endmatch</b> ⚡\n\nDo you want to End the match? 🛑\n"
-        f"You will be fined {est_fine:,} Coins 💰 ({balls} balls x {ENDMATCH_FINE_PER_BALL}) "
-        f"and {FINE_GEMS} Gems 💎.{comp_line}\n\n"
-        f"✅ Yes — You get fined ⚠️\n❌ No — Match continues 🔄",
+        f"{fine_line}{comp_line}\n\n"
+        f"✅ Yes — End match\n❌ No — Match continues 🔄",
         parse_mode="HTML", reply_markup=kb)
 
 async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mid = int(update.callback_query.data.split("_")[1])
+    async with get_match_lock(mid):
+        await _endmatch_confirmed(update, context)
+
+
+async def _endmatch_confirmed(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; parts = q.data.split("_"); mid, uid_tg = int(parts[1]), int(parts[2])
     if q.from_user.id != uid_tg: await q.answer("Not your action!"); return
     await q.answer()
-    _cancel_action_timer(context, mid)
-    # Save stats before anything else
     s = _gs(context, mid)
-    if s:
-        await _save_match_stats(s)
     # Use the ball count snapshotted in the button (the amount the player agreed
     # to), falling back to a fresh count for legacy buttons without it.
     if len(parts) > 3:
@@ -2210,15 +2231,28 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
         balls = _match_balls_bowled(s)
     fine_coins = balls * ENDMATCH_FINE_PER_BALL
     fine_gems = FINE_GEMS
+    from services.saved_match_service import save_forfeit_snapshot
     session = get_session()
     try:
         u = session.query(User).filter(User.telegram_id == uid_tg).first()
-        m = session.get(Match, mid)
+        m = session.get(Match, mid, with_for_update=True)
+        if not m or m.status not in ACTIVE_MATCH_STATUSES:
+            await q.edit_message_text("This match has already ended.")
+            return
+        if not u or (u.id not in (m.user1_id, m.user2_id)
+                     and uid_tg not in ((s or {}).get("bat_user_tg"), (s or {}).get("bowl_user_tg"))):
+            return
+        archive_state = s
+        if s and context.bot_data.get(f"so_{mid}"):
+            from handlers.super_over import forfeit_snapshot
+            if so := forfeit_snapshot(context, mid):
+                archive_state = {**s, "forfeit_super_over": so}
+        saved = save_forfeit_snapshot(session, m, archive_state)
         # The fine leaves the economy. Nothing is credited to the opponent —
         # see ENDMATCH_FINE_PER_BALL for why that channel was closed.
         charged_coins = 0
         charged_gems = 0
-        if u:
+        if u and not (s or {}).get("restored_from_forfeit"):
             charged_coins = min(u.total_coins or 0, fine_coins)
             charged_gems = min(u.total_gems or 0, fine_gems)
             u.total_coins = (u.total_coins or 0) - charged_coins
@@ -2256,16 +2290,27 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     m.margin_type, m.margin_value = "forfeit", 0
         session.commit()
         u_mention = _mention(u) if u else "Player"
+    except Exception:
+        session.rollback(); logger.exception("endmatch_yes_callback failed")
+        await q.message.reply_text("The match could not be ended. Please try again.")
+        return
+    finally: session.close()
+
+    _cancel_action_timer(context, mid)
+    if s and s.get("mode") == "cipl_approach":
+        from handlers.cipl_play import _cancel_timer
+        _cancel_timer(context, mid)
+    if s:
+        await _save_match_stats(s)
+    saved_note = (f"\n💾 Match #{mid} is in /saved for admin restoration." if saved else "")
+    try:
         await q.edit_message_text(
             f"🛑 <b>MATCH ENDED</b>\n\n{u_mention} ended the match.\n"
             f"⚠️ Fine ({balls} balls x {ENDMATCH_FINE_PER_BALL}): "
-            f"-{charged_coins:,} Coins 💰 -{charged_gems} Gems 💎\n"
-            f"📊 Player stats saved.", parse_mode="HTML")
+            f"-{charged_coins:,} Coins 💰 -{charged_gems} Gems 💎" + saved_note,
+            parse_mode="HTML")
     except Exception:
-        session.rollback(); logger.exception("endmatch_yes_callback failed")
-        try: await q.answer("⚠️ Something went wrong, try again.", show_alert=True)
-        except Exception: pass
-    finally: session.close()
+        logger.debug("Endmatch notice failed for match %s", mid, exc_info=True)
 
     # Scorecards for visual record (best-effort, non-fatal)
     try:
@@ -6718,7 +6763,7 @@ async def _end_innings(ctx, mid):
         s["potm_owner_user_id"] = potm_owner_uid
 
         # Increment PlayerGameStats.potm
-        if potm_pid and potm_owner_uid:
+        if potm_pid and potm_owner_uid and not s.get("restored_from_forfeit"):
             _ses2 = get_session()
             try:
                 gs_potm = (_ses2.query(PlayerGameStats)

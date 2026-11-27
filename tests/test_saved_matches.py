@@ -93,6 +93,59 @@ class _DB(unittest.TestCase):
 
 class SaveAndReviveTests(_DB):
 
+    def test_forfeit_save_is_admin_only_and_restores_the_waiting_pick_once(self):
+        from models import Match, MatchState
+        from services import saved_match_service as svc
+        from services.match_state_store import A_COMPLETED, _deserialize, serialize_state
+
+        self.match.chat_id = self.state["chat_id"] = -100_000 - self.mid
+        self.state.update(total_runs=87, current_over=12, current_ball=2,
+                          bowling_approach="variation", play_mode="app")
+        original_state = MatchState(match_id=self.mid, state_json=serialize_state(self.state),
+                                    next_action=A_PICK_BAT_APPROACH)
+        self.session.add(original_state)
+        self.session.flush()
+        row = svc.save_forfeit_snapshot(self.session, self.match, self.state,
+                                        A_PICK_BAT_APPROACH)
+        self.match.status = "completed"
+        self.match.margin_type = "forfeit"
+        self.match.winner_id = self.u2.id
+        self.session.commit()
+
+        self.assertEqual(row["reason"], svc.REASON_FORFEIT)
+        self.assertEqual(original_state.next_action, A_COMPLETED)
+        for user in (self.u1, self.u2):
+            self.assertIn(self.mid, [r["match_id"] for r in svc.list_saved(user.telegram_id)])
+        self.assertFalse(svc.claim(self.mid))
+        self.assertFalse(svc.discard(self.mid))
+
+        blocker = Match(user1_id=self.u1.id, user2_id=self.u2.id,
+                        chat_id=self.match.chat_id, status="playing")
+        self.session.add(blocker)
+        self.session.commit()
+        with self.assertRaisesRegex(svc.ReviveError, "original chat"):
+            svc.restore_forfeited_match(self.mid)
+        self.assertEqual(svc.get_saved(self.mid)["status"], svc.ST_SAVED)
+        blocker.status = "completed"
+        self.session.commit()
+
+        new_mid, _, _ = svc.restore_forfeited_match(self.mid)
+        self.assertNotEqual(new_mid, self.mid)
+        live = self.session.query(MatchState).filter_by(match_id=new_mid).one()
+        state = _deserialize(live.state_json)
+        self.assertEqual(live.next_action, A_PICK_BAT_APPROACH)
+        for key in ("total_runs", "current_over", "current_ball", "bowling_approach", "play_mode"):
+            self.assertEqual(state[key], self.state[key])
+        self.assertEqual(state["match_id"], new_mid)
+        self.assertTrue(state["stats_disabled"])
+        self.assertNotIn("reserved_fixture_id", state)
+        self.assertNotIn("tournament_id", state)
+        self.assertNotIn("action_msg_id", state)
+        self.assertEqual(self._fresh(Match, self.mid).winner_id, self.u2.id)
+        self.assertEqual(self._fresh(Match, self.mid).margin_type, "forfeit")
+        with self.assertRaisesRegex(svc.ReviveError, "already been restored"):
+            svc.restore_forfeited_match(self.mid)
+
     def test_a_paused_match_keeps_its_fixture_and_state(self):
         from models import Match, TournamentMatch
         from services import saved_match_service as svc
@@ -414,6 +467,122 @@ class PauseContinueFlowTests(_ChatHarness):
         # Friendlies and CL Tour games keep forfeiting.
         self.assertFalse(self.pause.saves_on_timeout({**self.state, "tournament_id": None}))
         self.assertFalse(self.pause.saves_on_timeout({**self.state, "cl_tour_match_id": 3}))
+
+    def test_odi_sends_three_warnings_and_pauses_with_no_result(self):
+        from models import Match, TournamentMatch
+        from services import saved_match_service as svc
+        self.state.update(ball_format="ODI", overs=50, current_over=12,
+                          current_ball=2, total_runs=71, idle_saves=1)
+        self.ctx.job.data = {"mid": self.mid, "expected": A_PICK_BAT_APPROACH}
+
+        async def run_clock():
+            await cp._on_remind(self.ctx)
+            for _ in range(2):
+                await cp._on_timeout(self.ctx)
+                self.ctx.job.data = self.ctx.job_queue.run_once.call_args.kwargs["data"]
+            self.assertEqual(self._fresh(Match, self.mid).status, "active")
+            self.assertIsNone(svc.get_saved(self.mid))
+            await cp._on_timeout(self.ctx)
+
+        asyncio.run(run_clock())
+        messages = [call.args[1] for call in self.ctx.bot.send_message.call_args_list]
+        self.assertEqual(len(messages), 4)
+        for index, warning in enumerate(messages[:3], 1):
+            self.assertIn(f"ODI warning {index}/3", warning)
+        self.assertIn("paused", messages[-1])
+        match = self._fresh(Match, self.mid)
+        self.assertEqual(match.status, "paused")
+        self.assertIsNone(match.winner_id)
+        self.assertEqual(self._fresh(TournamentMatch, self.fx.id).match_id, self.mid)
+        row = svc.get_saved(self.mid)
+        self.assertEqual(row["reason"], svc.REASON_AUTO)
+        self.assertEqual(row["next_action"], A_PICK_BAT_APPROACH)
+        snapshot = json.loads(row["state_json"])
+        self.assertEqual(snapshot["current_ball"], 2)
+        self.assertNotIn("odi_idle_warning", snapshot)
+
+    def test_odi_stale_warning_cannot_count_against_the_next_over(self):
+        self.state.update(ball_format="ODI", overs=50, current_over=12)
+        self.ctx.job.data = {"mid": self.mid, "expected": A_PICK_BAT_APPROACH}
+
+        async def advance_after_first_warning():
+            await cp._on_remind(self.ctx)
+            await cp._on_timeout(self.ctx)
+            self.ctx.job.data = self.ctx.job_queue.run_once.call_args.kwargs["data"]
+            self.state["current_over"] += 1
+            await cp._on_timeout(self.ctx)
+
+        asyncio.run(advance_after_first_warning())
+        self.assertEqual(self.ctx.bot.send_message.await_count, 2)
+        self.assertEqual(self.ctx.job_queue.run_once.call_count, 1)
+
+    def test_t20_inactivity_forfeit_is_saved_with_the_current_approach_pick(self):
+        from database import get_session
+        from models import Match
+        from services import saved_match_service as svc
+        self.state.update(total_runs=91, current_over=12, current_ball=2, idle_saves=1)
+        self.ctx.job.data = {"mid": self.mid, "expected": A_PICK_BAT_APPROACH}
+        with patch.object(cp, "get_session", get_session), \
+                patch("services.match_state_store.get_session", get_session):
+            asyncio.run(cp._on_timeout(self.ctx))
+        match = self._fresh(Match, self.mid)
+        self.assertEqual(match.margin_type, "forfeit")
+        self.assertEqual(match.winner_id, self.u2.id)
+        row = svc.get_saved(self.mid)
+        self.assertEqual(row["reason"], svc.REASON_FORFEIT)
+        self.assertEqual(row["next_action"], A_PICK_BAT_APPROACH)
+        self.assertEqual(json.loads(row["state_json"])["total_runs"], 91)
+
+    def test_ball_by_ball_timeout_saves_the_pending_delivery(self):
+        from database import get_session
+        from handlers import match
+        from models import Match
+        from services import saved_match_service as svc
+        from services.match_state_store import A_PICK_SHOT, save_state
+
+        self.state.pop("mode")
+        self.state.update(current_delivery="Yorker", current_ball=2, total_runs=46)
+        self.ctx.job.data = {"match_id": self.mid, "chat_id": self.state["chat_id"],
+                             "user_tg": self.u1.telegram_id, "action": "pick a shot"}
+        with patch.object(match, "get_session", get_session), \
+                patch("services.match_state_store.get_session", get_session), \
+                patch.object(match, "_save_match_stats", new_callable=AsyncMock), \
+                patch.object(match, "_send_innings_scorecards", new_callable=AsyncMock), \
+                patch.object(match, "_send_text_scorecard_to_storage", new_callable=AsyncMock):
+            save_state(self.ctx, self.mid, self.state, next_action=A_PICK_SHOT)
+            asyncio.run(match._action_timeout(self.ctx))
+        self.assertEqual(self._fresh(Match, self.mid).margin_type, "forfeit")
+        row = svc.get_saved(self.mid)
+        self.assertEqual(row["reason"], svc.REASON_FORFEIT)
+        self.assertEqual(row["next_action"], A_PICK_SHOT)
+        self.assertEqual(json.loads(row["state_json"])["current_delivery"], "Yorker")
+
+    def test_only_bot_admin_can_run_restorematch_and_players_see_the_save(self):
+        from services import saved_match_service as svc
+        self.ctx.args = [f"#{self.mid}"]
+        row = svc.save_snapshot(self.mid, self.state, A_PICK_BAT_APPROACH,
+                                svc.REASON_FORFEIT)
+        player = self._update(self.u1.telegram_id)
+        with patch("services.admin_ids.is_bot_admin", return_value=False), \
+                patch.object(svc, "restore_forfeited_match") as restore:
+            asyncio.run(self.pause.restorematch_handler(player, self.ctx))
+        restore.assert_not_called()
+        self.assertIn("Only bot admins", self._replies(player)[-1])
+        text, keyboard = self.pause._saved_list_view([row])
+        self.assertIn("admin restore only", text)
+        self.assertIsNone(keyboard)
+        text = asyncio.run(self.pause.request_resume(
+            self.ctx, player.effective_chat, player.effective_user, self.mid))
+        self.assertIn("Ask a bot admin", text)
+
+        with patch("services.admin_ids.is_bot_admin", return_value=True), \
+                patch.object(svc, "restore_forfeited_match",
+                             return_value=(12345, self.state, row["title"])) as restore, \
+                patch("handlers.match.render_screen", new_callable=AsyncMock,
+                      return_value=True) as render:
+            asyncio.run(self.pause.restorematch_handler(player, self.ctx))
+        restore.assert_called_once_with(self.mid)
+        render.assert_awaited_once_with(self.ctx, 12345)
 
 
 # ════════════════════════════════════════════════════════════════════

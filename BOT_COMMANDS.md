@@ -264,7 +264,8 @@ Use commas to compare values within a filter and pipes to combine filters. Both 
 | `/rcl` | `/resumecl` | Resume a stuck Challenge League / Lets Play match. `/rcl <MatchId>` resumes by id; one resume per match every 5 seconds |
 | `/pause` | `/pausematch` | Pause a live Challenge League / Lets Play match (tournament fixtures too) and save it exactly where it is — the chat is free and nobody is on the clock ⏸️ |
 | `/continue` | `/unpause` | Carry on a saved match from the very ball it stopped on — `/continue <MatchId>`, in any group; the other captain taps ✅ Ready first (a bot match resumes at once) |
-| `/saved` | `/savedmatches` | Your paused, cleared and timed-out matches, each with ▶️ Continue and 🗑 Discard 💾 |
+| `/saved` | `/savedmatches` | Your paused, cleared, timed-out and forfeited matches. ODI Approach pauses after three unanswered inactivity warnings. Forfeits are marked admin restore only. |
+| `/restorematch #123` | — | Bot admins can continue a saved forfeit from its stopped position. Play resumes in the original chat or Mini App under a new unranked match ID. The original match holds the official result and any fines. |
 | `/playapp` | `/appmode` | Move the live match to the Mini App: each captain picks privately, and neither side's plans are shown — not to the opponent, not in the chat 📱 |
 | `/playchat` | `/chatmode` | Move the live match back to the chat buttons 💬 |
 | `/endmatch` | `/em` | Request to end your active match (a fine applies) |

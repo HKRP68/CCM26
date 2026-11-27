@@ -139,6 +139,22 @@ class MatchTerminationEconomyTests(unittest.TestCase):
         self.assertEqual(self.quitter.matches_lost or 0, 1)
         self.assertEqual(self.match.margin_type, "forfeit")
 
+    def test_mini_app_forfeit_saves_the_position_before_the_result(self):
+        import json
+        from models import SavedMatch
+        from services.saved_match_service import REASON_FORFEIT
+
+        (ok, _), _saved = self._terminate(self._state())
+        self.assertTrue(ok)
+        row = self.db.query(SavedMatch).filter_by(match_id=self.match.id).one()
+        self.assertEqual(row.reason, REASON_FORFEIT)
+        self.assertEqual({row.user1_tg, row.user2_tg},
+                         {self.quitter.telegram_id, self.opponent.telegram_id})
+        snapshot = json.loads(row.state_json)
+        self.assertEqual(snapshot["current_over"], 6)
+        self.assertEqual(snapshot["total_runs"], 44)
+        self.assertNotIn("match_result", snapshot)
+
     def test_a_match_with_no_balls_bowled_is_still_a_free_cancel(self):
         (ok, info), _saved = self._terminate(
             self._state(current_over=1, current_ball=0, total_runs=0,

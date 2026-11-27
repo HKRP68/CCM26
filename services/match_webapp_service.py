@@ -2619,7 +2619,8 @@ def build_scorecard(match_id, user_id):
 # ══════════════════ Persisted scorecards (completed matches) ═════════
 
 def save_final_scorecard(session, match_id, result_text=None, extra_innings=None,
-                         super_over=None, potm=None, archive_loop=None):
+                         super_over=None, potm=None, archive_loop=None,
+                         arena_state=None):
     """Snapshot the final scorecard from live state into MatchScorecard so it
     can be viewed read-only after the match. Idempotent. Call at completion,
     BEFORE the live state is cleaned up.
@@ -2660,7 +2661,8 @@ def save_final_scorecard(session, match_id, result_text=None, extra_innings=None
                                     # after live match_state cleanup. This lets
                                     # /wpm Play Match reopen as a read-only
                                     # result screen instead of a dead room.
-                                    "arena_state": mwa.get_state(match_id)}),
+                                    "arena_state": arena_state if arena_state is not None
+                                                   else mwa.get_state(match_id)}),
         result_text=(result_text or "")[:300] or None,
     )
     session.add(row)
@@ -3428,11 +3430,15 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit",
     """
     from models import Match, User
     from services.activity_service import log_activity
-    m = session.get(Match, match_id)
+    from services.match_state_store import cleanup_state
+    from services.saved_match_service import save_forfeit_snapshot
+    m = session.get(Match, match_id, with_for_update=True)
     if not m:
         return False, "Match not found."
     if m.status == "completed":
         return False, "Match already finished."
+    if m.status in ("paused", "abandoned", "expired", "cancelled"):
+        return False, "Match is no longer live."
     if quitter_id not in (m.user1_id, m.user2_id):
         return False, "You're not in this match."
 
@@ -3496,14 +3502,16 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit",
         margin_type = "forfeit"
         win_id, lose_id = opponent_id, quitter_id
         result_text = "Championship match forfeited."
+    if margin_type == "forfeit":
+        save_forfeit_snapshot(session, m, state)
     if state:
+        state = dict(state)
         state["match_result"] = {
             "winner_team_id": win_id, "loser_team_id": lose_id,
             "margin_type": margin_type, "margin_value": 0,
             "text": result_text,
             "penalty": applied_penalty, "compensation": compensation,
         }
-        mwa.save_state(match_id, state)
 
     m.status = "completed"
     m.completed_at = __import__("datetime").datetime.utcnow()
@@ -3523,7 +3531,7 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit",
         m.inn1_runs = state.get("inn1_runs"); m.inn1_wickets = state.get("inn1_wickets")
         m.inn2_runs = state.get("total_runs"); m.inn2_wickets = state.get("total_wickets")
     try:
-        save_final_scorecard(session, match_id, result_text=result_text)
+        save_final_scorecard(session, match_id, result_text=result_text, arena_state=state)
     except Exception:
         pass
     try:
@@ -3535,7 +3543,11 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit",
         logger.exception("terminated webapp player-stat persistence failed")
     session.commit()
     try:
-        from services.match_state_store import cleanup_state
+        if state:
+            mwa.save_state(match_id, state)
+    except Exception:
+        logger.exception("Could not publish terminated webapp state for match %s", match_id)
+    try:
         cleanup_state(mwa.fresh_ctx(), match_id)
     except Exception:
         pass
@@ -3554,23 +3566,28 @@ def abandon_match(session, match_id, by_user_id, reason="abandoned",
     tapping forfeit, so the end reason names the system instead of them.
     """
     from models import Match
-    state = mwa.get_state(match_id)
-    m = session.get(Match, match_id)
+    from services.match_state_store import cleanup_state
+    from services.saved_match_service import save_forfeit_snapshot
+    m = session.get(Match, match_id, with_for_update=True)
     if not m:
         return False, "Match not found."
     if m.status == "completed":
         return False, "Match already finished."
+    if m.status in ("paused", "abandoned", "expired", "cancelled"):
+        return False, "Match is no longer live."
     if by_user_id not in (m.user1_id, m.user2_id):
         return False, "You're not in this match."
 
+    state = mwa.get_state(match_id)
+    saved = save_forfeit_snapshot(session, m, state)
     winner_id = m.user2_id if by_user_id == m.user1_id else m.user1_id
     if state:
+        state = dict(state)
         state["match_result"] = {
             "winner_team_id": winner_id, "loser_team_id": by_user_id,
             "margin_type": "forfeit", "margin_value": 0,
             "text": f"Won by forfeit ({reason})",
         }
-        mwa.save_state(match_id, state)
     m.status = "completed"
     m.completed_at = __import__("datetime").datetime.utcnow()
     # The Mini App's forfeit button, or the sweep timing out a vsbot match.
@@ -3586,7 +3603,8 @@ def abandon_match(session, match_id, by_user_id, reason="abandoned",
         m.inn1_runs = state.get("inn1_runs"); m.inn1_wickets = state.get("inn1_wickets")
         m.inn2_runs = state.get("total_runs"); m.inn2_wickets = state.get("total_wickets")
     try:
-        save_final_scorecard(session, match_id, result_text="Match abandoned (forfeit)")
+        save_final_scorecard(session, match_id, result_text="Match abandoned (forfeit)",
+                             arena_state=state)
     except Exception:
         pass
     try:
@@ -3629,7 +3647,11 @@ def abandon_match(session, match_id, by_user_id, reason="abandoned",
     t20_championship.record_forfeit(session, m, winner_id, state)
     session.commit()
     try:
-        from services.match_state_store import cleanup_state
+        if state:
+            mwa.save_state(match_id, state)
+    except Exception:
+        logger.exception("Could not publish abandoned webapp state for match %s", match_id)
+    try:
         cleanup_state(mwa.fresh_ctx(), match_id)
     except Exception:
         pass
@@ -3643,7 +3665,10 @@ def abandon_match(session, match_id, by_user_id, reason="abandoned",
         except Exception:
             logger.exception("forfeit tour announcement dispatch failed (non-fatal)")
 
-    return True, "Match ended (forfeit)."
+    message = "Match ended (forfeit)."
+    if saved:
+        message += f" Match #{match_id} is in /saved for admin restoration."
+    return True, message
 
 
 def restore_active_matches(session):
@@ -3727,10 +3752,11 @@ def sweep_stale_webapp_matches(session):
         if last >= cutoff:
             continue
         state = mwa.get_state(ms.match_id)
-        if not state or state.get("played_via") != "webapp":
+        if (not state or state.get("played_via") != "webapp"
+                or state.get("mode") == "cipl_approach"):
             continue
         m = session.get(Match, ms.match_id)
-        if not m or m.status == "completed":
+        if not m or m.status not in ("playing", "active", "in_progress"):
             continue
         # Whoever's turn it is forfeits (they're the idle one)
         na = mwa.get_next_action(ms.match_id)
@@ -3743,13 +3769,13 @@ def sweep_stale_webapp_matches(session):
             # player is treated as the quitter). vsbot → plain forfeit (no
             # penalty against a human for a bot stall).
             if state.get("is_vsbot"):
-                abandon_match(session, ms.match_id, idle, reason="timeout",
-                              automatic=True)
+                ok, _ = abandon_match(session, ms.match_id, idle, reason="timeout",
+                                      automatic=True)
             else:
-                handle_match_termination(session, ms.match_id, idle,
-                                         reason="inactivity timeout",
-                                         automatic=True)
-            ended += 1
+                ok, _ = handle_match_termination(session, ms.match_id, idle,
+                                                 reason="inactivity timeout",
+                                                 automatic=True)
+            ended += int(ok)
     return ended
 
 

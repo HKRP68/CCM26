@@ -1,10 +1,9 @@
-"""Saved over-by-over matches — pause one now, carry on from the same ball later.
+"""Saved match positions for player continuation and admin restoration.
 
 A Challenge League / Lets Play match (``handlers.cipl_play``) lives in the
 ``match_state`` table while it is being played. When it stops before a result
 — ``/pause``, ``/clearmatches``, ``/removematch``, or a tournament match's idle
-timeout — the state would normally be deleted with it. This module keeps a
-copy in ``saved_matches`` instead, and puts it back later:
+timeout — this module keeps a copy in ``saved_matches`` so it can be continued:
 
 * :func:`save_snapshot` stores the state and the pick it was waiting on;
 * :func:`park_match_row` takes the ``Match`` row out of play (``paused``) while
@@ -12,6 +11,9 @@ copy in ``saved_matches`` instead, and puts it back later:
 * :func:`revive_match` puts the SAME ``Match`` row back in play — re-reserving
   the tournament fixture / CL Tour slot if a clear handed it back — so the
   result, when it comes, is recorded exactly as if the match had never stopped.
+
+Forfeits in live modes also save the last playable position. An admin can
+continue that position as a new unranked match while the original result stands.
 
 Everything here is blocking DB work: async callers run it in a worker thread.
 The async side (the commands, the chat messages, the resume itself) is in
@@ -28,11 +30,13 @@ logger = logging.getLogger(__name__)
 REASON_PAUSED = "paused"          # /pause
 REASON_CLEARED = "cleared"        # /clearmatches, /removematch
 REASON_AUTO = "auto_ended"        # an idle timeout that saved instead of forfeiting
+REASON_FORFEIT = "forfeited"       # a settled result, restorable by a bot admin
 
 REASON_LABELS = {
     REASON_PAUSED: "⏸ Paused",
     REASON_CLEARED: "🧹 Cleared",
     REASON_AUTO: "⏱ Timed out",
+    REASON_FORFEIT: "🏳️ Forfeited · admin restore only",
 }
 
 # Lifecycle of a saved row.
@@ -46,7 +50,7 @@ ST_VOID = "void"              # can never be resumed (fixture played, tour over�
 # message ids from a chat the match may not even be resumed in, and a delivery
 # flag that has to be earned again by the resumed prompt.
 TRANSIENT_KEYS = ("action_msg_id", "action_remind_msg_id", "over_msg_ids",
-                  "pinned_msg_id", "prompt_delivered")
+                  "pinned_msg_id", "prompt_delivered", "odi_idle_warning")
 
 # Match.status values a revived match must not be sitting in.
 _LIVE_STATUSES = ("pending", "accepted", "toss", "selecting", "playing",
@@ -85,7 +89,7 @@ def participants(state):
 
 def human_user_ids(state):
     """The DB user ids of the human captains (the AI captain left out)."""
-    bot_uid = state.get("bot_user_id") if state.get("is_bot_match") else None
+    bot_uid = state.get("bot_user_id")
     # Both the current captains and the stable result identities must be free
     # before reviving the same Match row.
     ids = [uid for uid, _tg in participants(state)]
@@ -209,16 +213,59 @@ def get_saved(mid):
         session.close()
 
 
+def save_forfeit_snapshot(session, match, state, next_action=None):
+    """Archive the playable position in the same transaction as the forfeit."""
+    from models import MatchState, User
+    from services.match_state_store import A_COMPLETED, A_PICK_DELIVERY
+
+    if not state or state.get("result_finalized") or state.get("match_result"):
+        return None
+    live = session.query(MatchState).filter_by(match_id=match.id).first()
+    if next_action is None:
+        next_action = live.next_action if live else A_PICK_DELIVERY
+    if next_action == A_COMPLETED:
+        return None
+    state = dict(state)
+    if state.get("chat_id") is None:
+        state["chat_id"] = match.chat_id
+    for side, uid in (("bat", match.batting_first_id or match.user1_id),
+                      ("bowl", match.bowling_first_id or match.user2_id)):
+        team_key, tg_key = f"{side}_team_id", f"{side}_user_tg"
+        uid = state.setdefault(team_key, uid)
+        if state.get(tg_key) is None and uid is not None:
+            user = session.get(User, uid)
+            if user is not None:
+                state[tg_key] = user.telegram_id
+    saved = save_snapshot(match.id, state, next_action, REASON_FORFEIT,
+                          prev_status=match.status, session=session)
+    _stop_live_state(live)
+    return saved
+
+
+def _stop_live_state(live):
+    """Stop recovery from re-opening an interrupted turn before cleanup."""
+    from services.match_state_store import A_COMPLETED
+
+    if live is not None:
+        live.next_action = A_COMPLETED
+        live.version = (live.version or 0) + 1
+
+
 def list_saved(tg_id, limit=10):
     """Resumable matches ``tg_id`` is a captain in, newest first."""
-    from sqlalchemy import or_
-    from models import SavedMatch
+    from sqlalchemy import and_, or_
+    from models import Match, SavedMatch, User
     session = _session()
     try:
+        user = session.query(User.id).filter_by(telegram_id=tg_id).scalar_subquery()
+        original_captain = (session.query(Match.id)
+                            .filter(or_(Match.user1_id == user, Match.user2_id == user)))
         rows = (session.query(SavedMatch)
                 .filter(SavedMatch.status == ST_SAVED,
                         or_(SavedMatch.user1_tg == tg_id,
-                            SavedMatch.user2_tg == tg_id))
+                            SavedMatch.user2_tg == tg_id,
+                            and_(SavedMatch.reason == REASON_FORFEIT,
+                                 SavedMatch.match_id.in_(original_captain))))
                 .order_by(SavedMatch.saved_at.desc())
                 .limit(limit).all())
         return [_row_dict(r) for r in rows]
@@ -234,7 +281,8 @@ def _set_status(mid, from_status, to_status, **extra):
         values[getattr(SavedMatch, k)] = v
     session = _session()
     try:
-        q = session.query(SavedMatch).filter(SavedMatch.match_id == int(mid))
+        q = session.query(SavedMatch).filter(SavedMatch.match_id == int(mid),
+                                             SavedMatch.reason != REASON_FORFEIT)
         if isinstance(from_status, (tuple, list)):
             q = q.filter(SavedMatch.status.in_(tuple(from_status)))
         else:
@@ -269,24 +317,32 @@ def void(mid):
 
 
 def park_match_row(mid, status="paused", end_reason=None, by_user_id=None,
-                   control_action_id=None):
+                   control_action_id=None, *, snapshot=None):
     """Take the live ``Match`` row out of play. Returns its previous status.
+
+    When given a snapshot, save it in the same transaction and return the save.
 
     A tournament fixture stays reserved for it (``heal_live_fixtures`` leaves a
     fixture alone while its match is in any status it doesn't know as ended,
     and ``paused`` is one of those), so nobody can start the same fixture from
     scratch while this one waits to be finished.
     """
-    from models import Match
+    from models import Match, MatchState
     from services.match_outcome import END_PAUSED, mark_end
     session = _session()
     try:
         m = session.query(Match).filter_by(id=int(mid)).with_for_update().first()
         if m is None:
             return None
-        if control_action_id is not None and m.status not in _LIVE_STATUSES:
+        if (snapshot is not None or control_action_id is not None) and m.status not in _LIVE_STATUSES:
             return None
         prev = m.status
+        saved = None
+        if snapshot is not None:
+            state, next_action, reason = snapshot
+            saved = save_snapshot(mid, state, next_action, reason, by_user_id,
+                                  prev_status=prev, session=session)
+            _stop_live_state(session.query(MatchState).filter_by(match_id=mid).first())
         m.status = status
         m.completed_at = datetime.utcnow()
         m.winner_id = None
@@ -303,7 +359,7 @@ def park_match_row(mid, status="paused", end_reason=None, by_user_id=None,
             from services.match_control_service import finish_in_session
             finish_in_session(session, control_action_id, {"match_ids": [int(mid)]})
         session.commit()
-        return prev
+        return saved if snapshot is not None else prev
     except Exception:
         session.rollback()
         raise
@@ -324,6 +380,7 @@ def discard(mid, by_user_id=None):
     try:
         row = (session.query(SavedMatch)
                .filter(SavedMatch.match_id == int(mid),
+                       SavedMatch.reason != REASON_FORFEIT,
                        SavedMatch.status == ST_SAVED).first())
         if row is None:
             return False
@@ -386,6 +443,92 @@ class ReviveError(Exception):
         Exception.__init__(self, message)
         self.message = message
         self.permanent = permanent
+
+
+def restore_forfeited_match(mid):
+    """Create one unranked continuation of a settled forfeit, atomically."""
+    from sqlalchemy import or_
+    from models import BotChat, Match, MatchState, SavedMatch, User
+    from services.match_handover import controlled_match
+    from services.match_state_store import A_COMPLETED, _deserialize, serialize_state
+
+    session = _session()
+    try:
+        row = session.query(SavedMatch).filter_by(
+            match_id=mid, reason=REASON_FORFEIT).with_for_update().first()
+        if row is None:
+            raise ReviveError(f"No restorable forfeit was saved for match #{mid}.")
+        if row.status != ST_SAVED:
+            raise ReviveError(f"Match #{mid} has already been restored.")
+        original = session.get(Match, mid)
+        state = _deserialize(row.state_json)
+        if (not original or original.status != "completed" or not state
+                or not row.next_action or row.next_action == A_COMPLETED):
+            raise ReviveError(f"Match #{mid} has no playable saved position.")
+        chat_id = row.chat_id or original.chat_id
+        if not chat_id and state.get("played_via") != "webapp":
+            raise ReviveError(f"Match #{mid} has no original chat.")
+
+        claimed = session.query(SavedMatch).filter_by(
+            id=row.id, status=ST_SAVED, reason=REASON_FORFEIT).update(
+            {"status": ST_RESUMED, "resumed_at": datetime.utcnow()},
+            synchronize_session=False)
+        if not claimed:
+            raise ReviveError(f"Match #{mid} has already been restored.")
+
+        # Serialize restores that share a chat or captain before checking for a
+        # conflicting match. The claim rolls back if the restore cannot go ahead.
+        if chat_id:
+            session.query(BotChat.id).filter_by(chat_id=chat_id).with_for_update().first()
+        humans = set(human_user_ids(state)) | {original.user1_id, original.user2_id}
+        humans.discard(state.get("bot_user_id"))
+        session.query(User.id).filter(User.id.in_(humans)).order_by(User.id).with_for_update().all()
+        busy = session.query(Match).filter(
+            Match.status.in_(_LIVE_STATUSES),
+            or_(Match.expires_at.is_(None), Match.expires_at >= datetime.utcnow(),
+                Match.status.in_(("playing", "active", "in_progress"))))
+        if chat_id and busy.filter(Match.chat_id == chat_id).first():
+            raise ReviveError("A match is already active in the original chat.")
+        if (busy.filter(or_(Match.user1_id.in_(humans), Match.user2_id.in_(humans))).first()
+                or any(controlled_match(session, uid) for uid in humans)):
+            raise ReviveError("One of the captains is already in another match.")
+
+        restored = Match(
+            user1_id=original.user1_id, user2_id=original.user2_id,
+            status=(row.prev_status if row.prev_status in _LIVE_STATUSES else "active"),
+            match_type=original.match_type, overs=original.overs,
+            ball_format=original.ball_format, toss_winner_id=original.toss_winner_id,
+            toss_decision=original.toss_decision, batting_first_id=original.batting_first_id,
+            bowling_first_id=original.bowling_first_id, stadium=original.stadium,
+            pitch_type=original.pitch_type, weather=original.weather,
+            temperature=original.temperature, umpire1=original.umpire1,
+            umpire2=original.umpire2, chat_id=chat_id)
+        session.add(restored)
+        session.flush()
+        new_mid = restored.id
+
+        # The original match has already settled any competition and rewards.
+        # Keep the lineups and gameplay position for the continuation.
+        for key in list(state):
+            if key.startswith(("tournament_", "cl_tour_", "tour_", "_planned_")):
+                state.pop(key)
+        for key in ("auction_league", "reserved_fixture_id", "t20_championship",
+                    "result_msg_id", "match_result", "result_finalized",
+                    "idle_saves", "idle_saved_tg"):
+            state.pop(key, None)
+        state.update(match_id=new_mid, chat_id=chat_id, original_lobby_chat_id=chat_id,
+                     is_private=bool(chat_id and chat_id > 0), prompt_delivered=False,
+                     unranked=True, stats_disabled=True, restored_from_forfeit=mid)
+        session.add(MatchState(match_id=new_mid, state_json=serialize_state(state),
+                               next_action=row.next_action, version=1))
+        title = row.title
+        session.commit()
+        return new_mid, state, title
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 def revive_match(mid, chat_id, state):

@@ -2056,11 +2056,12 @@ def main():
         # move a live one between the chat buttons and the Mini App.
         from handlers.cipl_pause import (
             continue_handler, pause_handler, playapp_handler, playchat_handler,
-            saved_callback, saved_handler,
+            restorematch_handler, saved_callback, saved_handler,
         )
         app.add_handler(CommandHandler(["pause", "pausematch"], pause_handler))
         app.add_handler(CommandHandler(["saved", "savedmatches"], saved_handler))
         app.add_handler(CommandHandler(["continue", "unpause"], continue_handler))
+        app.add_handler(CommandHandler("restorematch", restorematch_handler))
         app.add_handler(CommandHandler(["playapp", "appmode"], playapp_handler))
         app.add_handler(CommandHandler(["playchat", "chatmode"], playchat_handler))
         app.add_handler(CallbackQueryHandler(saved_callback, pattern=r"^svm_"))

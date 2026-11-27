@@ -9,6 +9,7 @@ Commands (Challenge League — tournament fixtures included — and Lets Play):
 * ``/continue [MatchId]`` — pick a saved match up again, in any group. Against
   a human the other captain taps ✅ Ready first, so nobody is put on the clock
   while they are away; a practice match against the bot resumes at once.
+* ``/restorematch #MatchId`` — a bot admin continues a settled forfeit unranked.
 * ``/playapp`` / ``/playchat`` — move the live match between the chat buttons
   and the Mini App. In the Mini App each captain makes their picks privately
   and neither side's plans are shown — not to the opponent, not in the chat.
@@ -118,18 +119,10 @@ async def park_match(context, mid, state, reason, *, by_user_id=None,
         return None
     try:
         row = await asyncio.to_thread(
-            svc.save_snapshot, mid, state, next_action, reason, by_user_id)
-    except Exception:
-        logger.exception("saving match %s failed — leaving it live", mid)
-        return None
-
-    try:
-        prev = await asyncio.to_thread(
             svc.park_match_row, mid, match_status, end_reason, by_user_id,
-            control_action_id)
-        if prev is None:
+            control_action_id, snapshot=(state, next_action, reason))
+        if row is None:
             return None
-        await asyncio.to_thread(_record_prev_status, mid, prev)
     except Exception:
         logger.exception("parking the Match row of %s failed; leaving it live", mid)
         return None
@@ -150,20 +143,6 @@ async def park_match(context, mid, state, reason, *, by_user_id=None,
     cleanup_state(context, mid)
     release_match_lock(mid)
     return row
-
-
-def _record_prev_status(mid, prev):
-    from database import get_session
-    from models import SavedMatch
-    session = get_session()
-    try:
-        (session.query(SavedMatch).filter(SavedMatch.match_id == int(mid))
-         .update({SavedMatch.prev_status: prev}, synchronize_session=False))
-        session.commit()
-    except Exception:
-        session.rollback()
-    finally:
-        session.close()
 
 
 def snapshot_before_clear(context, mid, by_user_id=None):
@@ -187,7 +166,7 @@ def snapshot_before_clear(context, mid, by_user_id=None):
 
 
 async def autosave_idle_match(context, mid, state, expected):
-    """A tournament turn ran out: save the match instead of forfeiting it.
+    """Save an idle ODI or the first idle timeout in a tournament match.
 
     Called by the inactivity timeout with the lock held. The first time a
     tournament match runs out of time it is parked (no fine, no winner, the
@@ -198,6 +177,22 @@ async def autosave_idle_match(context, mid, state, expected):
     cp = _cp()
     (idle_uid, idle_tg, idle_name, _w_uid, win_tg, win_name) = cp._idle_actor(
         state, expected)
+    if cp.cipl_match.odi_approach.is_odi(state):
+        row = await park_match(context, mid, state, svc.REASON_AUTO)
+        if row is None:
+            return False
+        try:
+            await context.bot.send_message(
+                state["chat_id"],
+                f"⏸ <b>ODI match #{mid} paused</b>\n"
+                f"The turn went unanswered after three warnings. "
+                f"The match is in /saved with no fine.\n"
+                f"📋 {html.escape(row.get('title') or '')}\n"
+                f"▶️ Carry on with <code>/continue {mid}</code>.",
+                parse_mode="HTML", reply_markup=_continue_kb(mid))
+        except Exception:
+            logger.exception("ODI pause notice failed for match %s", mid)
+        return True
     state["idle_saves"] = int(state.get("idle_saves") or 0) + 1
     state["idle_saved_tg"] = idle_tg
     from services.match_outcome import END_AUTO
@@ -371,15 +366,18 @@ def _saved_list_view(rows):
         when_txt = when.strftime("%d %b %H:%M UTC") if when else ""
         lines.append(f"<b>#{r['match_id']}</b> · {label} · <i>{when_txt}</i>\n"
                      f"   {html.escape(r.get('title') or '')}")
+        if r.get("reason") == svc.REASON_FORFEIT:
+            continue
         kb.append([
             InlineKeyboardButton(f"▶️ Continue #{r['match_id']}",
                                  callback_data=f"svm_go_{r['match_id']}"),
             InlineKeyboardButton("🗑", callback_data=f"svm_del_{r['match_id']}"),
         ])
-    lines += ["", "<i>Continue picks the match up from the very ball it "
-                  "stopped on. Against a human, the other captain taps "
-                  "✅ Ready first.</i>"]
-    return "\n".join(lines), InlineKeyboardMarkup(kb)
+    if kb:
+        lines += ["", "<i>Continue picks the match up from the very ball it "
+                      "stopped on. Against a human, the other captain taps "
+                      "✅ Ready first.</i>"]
+    return "\n".join(lines), InlineKeyboardMarkup(kb) if kb else None
 
 
 async def saved_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -420,6 +418,66 @@ async def continue_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = await request_resume(context, chat, user, mid)
     if text:
         await msg.reply_text(text, parse_mode="HTML")
+
+
+async def restorematch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/restorematch #MatchId — restore a forfeited game as unranked practice."""
+    from handlers.match import render_screen
+    from services.admin_ids import is_bot_admin
+    from services.match_broadcast import play_match_keyboard
+    from services.match_heartbeat_flags import increment_active_matches
+
+    msg, user = update.effective_message, update.effective_user
+    if msg is None or user is None:
+        return
+    if not is_bot_admin(user.id):
+        await msg.reply_text("Only bot admins can restore forfeited matches.")
+        return
+    args = getattr(context, "args", None) or []
+    match_id = args[0].removeprefix("#") if len(args) == 1 else ""
+    if not (match_id.isascii() and match_id.isdigit()
+            and len(match_id) <= 10 and 0 < int(match_id) <= 2147483647):
+        await msg.reply_text("Usage: /restorematch #123")
+        return
+    mid = int(match_id)
+    try:
+        new_mid, state, title = await asyncio.to_thread(svc.restore_forfeited_match, mid)
+    except svc.ReviveError as exc:
+        await msg.reply_text(exc.message)
+        return
+    except Exception:
+        logger.exception("Admin restore failed for match %s", mid)
+        await msg.reply_text("The match could not be restored. Please try again.")
+        return
+
+    increment_active_matches(context)
+    logger.info("Bot admin %s restored forfeit %s as match %s", user.id, mid, new_mid)
+    notice = (f"▶️ <b>Match #{mid} restored as #{new_mid}</b>\n"
+              f"📋 {html.escape(title or '')}\n"
+              "Play continues unranked from the saved position. "
+              f"Match #{mid} holds the official result.")
+    chat_id = state.get("chat_id")
+    mini_app = state.get("played_via") == "webapp" and state.get("mode") != "cipl_approach"
+    keyboard = (play_match_keyboard(new_mid, chat_id, is_private=bool(state.get("is_private")))
+                if mini_app else None)
+    announced = False
+    if chat_id:
+        try:
+            await context.bot.send_message(chat_id, notice, parse_mode="HTML",
+                                           reply_markup=keyboard)
+            announced = True
+        except Exception:
+            logger.exception("Restore announcement failed for match %s", new_mid)
+    if not chat_id or (not announced and chat_id == update.effective_chat.id):
+        await msg.reply_text(notice, parse_mode="HTML", reply_markup=keyboard)
+    elif not announced:
+        await msg.reply_text(
+            f"Match #{mid} was restored as #{new_mid}. The original chat could not be notified.")
+    elif chat_id != update.effective_chat.id:
+        await msg.reply_text(f"Match #{mid} was restored as #{new_mid} in its original chat.")
+    if not mini_app and not await render_screen(context, new_mid):
+        await msg.reply_text(
+            f"Match #{new_mid} is live. Use /resume in its original chat to re-show the turn.")
 
 
 def _chat_busy(chat_id, human_uids):
@@ -465,6 +523,10 @@ async def request_resume(context, chat, user, mid):
         return "⚠️ That save can't be read — it can't be resumed."
     captains = _captain_tgs(state)
     admin = _is_admin(user.id)
+    if row.get("reason") == svc.REASON_FORFEIT:
+        if user.id not in (row.get("user1_tg"), row.get("user2_tg")) and not admin:
+            return "❌ Only a bot admin can restore this match."
+        return f"🏳️ Match #{mid} was forfeited. Ask a bot admin to restore it."
     if user.id not in captains and not admin:
         return "❌ Only the two captains in that match can continue it."
     humans = _human_tgs(state)
@@ -673,6 +735,9 @@ async def saved_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         row = await asyncio.to_thread(svc.get_saved, mid)
         if row is None or row.get("status") != svc.ST_SAVED:
             await q.answer("That save is already gone.", show_alert=True)
+            return
+        if row.get("reason") == svc.REASON_FORFEIT:
+            await q.answer("Only a bot admin can restore a forfeited match.", show_alert=True)
             return
         if user.id not in (row.get("user1_tg"), row.get("user2_tg")) \
                 and not _is_admin(user.id):

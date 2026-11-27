@@ -73,6 +73,8 @@ logger = logging.getLogger(__name__)
 
 CIPL_TIMEOUT = int(os.getenv("CIPL_TIMEOUT_SECONDS", "120"))  # 2-min turn → forfeit
 CIPL_REMIND = int(os.getenv("CIPL_REMIND_SECONDS", "90"))     # warn 30s before forfeit
+ODI_WARNING_INTERVAL = 30
+ODI_WARNING_COUNT = 3
 # Forfeiting a *live* match (failing to pick bowler / bowling or batting
 # approach in time) fines the idle player. The fine is burned, not paid to the
 # opponent — see _forfeit_live_match.
@@ -986,10 +988,11 @@ def _between_overs_row(state, mid=None):
 
 
 # ════════════════════════════════════════════════════════════════════
-# Inactivity timer (5-min turn, reminder shortly before forfeit + fine)
+# Inactivity timer for a waiting Approach pick
 # ════════════════════════════════════════════════════════════════════
 
 def _cancel_timer(context, mid):
+    context.bot_data.pop(f"cipl_timer_{mid}", None)
     if not getattr(context, "job_queue", None):
         return
     for name in (f"cipl_to_{mid}", f"cipl_remind_{mid}"):
@@ -1001,7 +1004,9 @@ def _arm_timer(context, mid, expected_action):
     _cancel_timer(context, mid)
     if not getattr(context, "job_queue", None):
         return
-    data = {"mid": mid, "expected": expected_action}
+    token = object()
+    context.bot_data[f"cipl_timer_{mid}"] = token
+    data = {"mid": mid, "expected": expected_action, "timer_token": token}
     if CIPL_REMIND and CIPL_REMIND < CIPL_TIMEOUT:
         context.job_queue.run_once(
             _on_remind, CIPL_REMIND, name=f"cipl_remind_{mid}", data=data)
@@ -1150,11 +1155,42 @@ def _idle_actor(state, expected):
             state.get("bat_team_name", "Batting side"))
 
 
+def _odi_idle_turn(state, expected):
+    if (not cipl_match.odi_approach.is_odi(state)
+            or expected in (A_PICK_CONCUSSION, A_PICK_CIPL_NEW_BATSMAN)):
+        return None
+    return [expected, _idle_actor(state, expected)[1], state.get("innings"),
+            state.get("current_over"), state.get("current_ball")]
+
+
+def _odi_warning_count(state, turn):
+    warning = state.get("odi_idle_warning") or {}
+    return warning.get("count", 0) if warning.get("turn") == turn else 0
+
+
+async def _send_odi_idle_warning(context, mid, state, expected, turn, seconds):
+    count = _odi_warning_count(state, turn) + 1
+    _, idle_tg, idle_name, _, _, _ = _idle_actor(state, expected)
+    where = " in the Mini App" if _app_mode(state) else ""
+    next_step = ("The match will be paused and saved."
+                 if count == ODI_WARNING_COUNT else "The next warning will follow.")
+    await context.bot.send_message(
+        state["chat_id"],
+        f"⏳ <b>ODI warning {count}/{ODI_WARNING_COUNT}</b>\n"
+        f"{_mention(idle_tg, idle_name)}, play your turn{where} within "
+        f"<b>{seconds} seconds</b>. {next_step}",
+        parse_mode="HTML")
+    state["odi_idle_warning"] = {"turn": turn, "count": count}
+    await _ss(context, mid, state)
+
+
 async def _on_remind(context):
     d = context.job.data
     mid = d["mid"]
     expected = d["expected"]
     async with get_match_lock(mid):
+        if "timer_token" in d and d["timer_token"] is not context.bot_data.get(f"cipl_timer_{mid}"):
+            return
         if await _get_next_action(context, mid) != expected:
             return  # already acted — no nag
         state = await _gs(context, mid)
@@ -1162,6 +1198,15 @@ async def _on_remind(context):
             return
         if not state.get("prompt_delivered", True):
             return  # no picker in the chat to be late for — see _on_timeout
+        turn = _odi_idle_turn(state, expected)
+        if turn is not None:
+            if _odi_warning_count(state, turn) == 0:
+                try:
+                    await _send_odi_idle_warning(
+                        context, mid, state, expected, turn, CIPL_TIMEOUT - CIPL_REMIND)
+                except Exception:
+                    logger.exception("ODI warning failed for match %s", mid)
+            return
         _, idle_tg, idle_name, _, _, _ = _idle_actor(state, expected)
         secs = max(0, CIPL_TIMEOUT - CIPL_REMIND)
         prev = state.pop("action_remind_msg_id", None)
@@ -1208,10 +1253,15 @@ async def _on_timeout(context):
     mid = d["mid"]
     expected = d["expected"]
     async with get_match_lock(mid):
+        if "timer_token" in d and d["timer_token"] is not context.bot_data.get(f"cipl_timer_{mid}"):
+            return
         if await _get_next_action(context, mid) != expected:
             return  # the user already acted
         state = await _gs(context, mid)
         if not state:
+            return
+        turn = _odi_idle_turn(state, expected)
+        if "odi_turn" in d and d["odi_turn"] != turn:
             return
         # The prompt this clock was counting down never reached the chat —
         # there was nothing to tap, so nobody is idle. Re-send it and start the
@@ -1242,6 +1292,22 @@ async def _on_timeout(context):
                 await _send_in_batsman(context, mid, state, None)
             except Exception:
                 await _recover_from_error(context, mid, "auto new batsman")
+            return
+        if turn is not None:
+            try:
+                if _odi_warning_count(state, turn) < ODI_WARNING_COUNT:
+                    await _send_odi_idle_warning(
+                        context, mid, state, expected, turn, ODI_WARNING_INTERVAL)
+                else:
+                    from handlers.cipl_pause import autosave_idle_match
+                    if await autosave_idle_match(context, mid, state, expected):
+                        return
+            except Exception:
+                logger.exception("ODI inactivity handling failed for match %s", mid)
+            if getattr(context, "job_queue", None):
+                context.job_queue.run_once(
+                    _on_timeout, ODI_WARNING_INTERVAL, name=f"cipl_to_{mid}",
+                    data={**d, "odi_turn": turn})
             return
         try:
             if _is_bot_match(state):
@@ -1357,32 +1423,21 @@ async def _forfeit_live_match(context, mid, state, expected):
      win_uid, win_tg, win_name) = _idle_actor(state, expected)
     chat_id = state.get("chat_id")
 
-    prev = state.pop("action_remind_msg_id", None)
-    if prev and chat_id is not None:
-        try:
-            await context.bot.delete_message(chat_id, prev)
-        except Exception:
-            pass
-    # Remove the stale selection prompt's buttons so it can't be tapped.
-    try:
-        await _delete_prev_over(context, state)
-    except Exception:
-        pass
-
     from services.activity_service import log_activity
+    from services.saved_match_service import save_forfeit_snapshot
     session = get_session()
     try:
-        match = session.get(Match, mid)
-        if match and match.status not in ("completed", "abandoned"):
-            match.status = "completed"
-            match.completed_at = datetime.utcnow()
-            # The idle timer ended this, not a player. The forfeit winner
-            # still shows in the Winner column.
-            mark_end(match, END_AUTO)
-            match.winner_id = win_uid
-            match.loser_id = idle_uid
-            match.margin_type = "forfeit"
-            match.margin_value = 0
+        match = session.get(Match, mid, with_for_update=True)
+        if not match or match.status not in ("active", "playing", "in_progress"):
+            return
+        saved = save_forfeit_snapshot(session, match, state, expected)
+        match.status = "completed"
+        match.completed_at = datetime.utcnow()
+        mark_end(match, END_AUTO)
+        match.winner_id = win_uid
+        match.loser_id = idle_uid
+        match.margin_type = "forfeit"
+        match.margin_value = 0
         # CL Tour: a forfeit decides the match, so record it for the series too
         # (otherwise the slot stays 'playing' and the tour stalls).
         if isinstance(state, dict) and state.get("cl_tour_match_id") and win_uid:
@@ -1400,7 +1455,7 @@ async def _forfeit_live_match(context, mid, state, expected):
         from services.match_handover import controller_uid
         idle_user = session.get(User, controller_uid(state, idle_uid)) if idle_uid else None
         win_user = session.get(User, win_uid) if win_uid else None
-        if idle_user:
+        if idle_user and not state.get("restored_from_forfeit"):
             charged_coins = min(idle_user.total_coins or 0, CIPL_FORFEIT_COINS)
             charged_gems = min(idle_user.total_gems or 0, CIPL_FORFEIT_GEMS)
             idle_user.total_coins = (idle_user.total_coins or 0) - charged_coins
@@ -1426,19 +1481,28 @@ async def _forfeit_live_match(context, mid, state, expected):
         session.commit()
     except Exception:
         session.rollback()
-        charged_coins = charged_gems = 0
         logger.exception("cipl forfeit economy failed for match %s", mid)
+        _arm_timer(context, mid, expected)
+        return
     finally:
         session.close()
 
+    try:
+        await _clear_action_reminder(context, state)
+        await _delete_prev_over(context, state)
+    except Exception:
+        logger.debug("Could not clear forfeited match buttons for %s", mid, exc_info=True)
+
     if chat_id is not None:
+        saved_note = (f"\n💾 Match #{mid} is in /saved for admin restoration."
+                      if saved else "")
         try:
             await context.bot.send_message(
                 chat_id,
                 f"⌛ <b>Match forfeited</b>\n"
                 f"{_mention(idle_tg, idle_name)} didn't play in time.\n"
                 f"🏆 {_mention(win_tg, win_name)} wins!\n"
-                f"⚠️ Fine: −{charged_coins:,} 🪙 −{charged_gems} 💎",
+                f"⚠️ Fine: −{charged_coins:,} 🪙 −{charged_gems} 💎" + saved_note,
                 parse_mode="HTML")
         except Exception:
             logger.exception("cipl forfeit announce failed for match %s", mid)
@@ -2977,6 +3041,9 @@ async def _resume_locked(context, mid, only_if_stalled=False):
     # regulation overs and overwrite the tie with a wrong result).
     if _super_over_active(context, mid):
         return False
+    if state.get("forfeit_super_over"):
+        from handlers.super_over import resume_forfeited_super_over
+        return await resume_forfeited_super_over(context, mid, state)
     action = await _get_next_action(context, mid)
     if action == A_COMPLETED:
         # Finished match whose cleanup didn't land — clear it so /rcl stops

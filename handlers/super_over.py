@@ -130,6 +130,40 @@ def _get(context, mid):
     return context.bot_data.get(_so_key(mid))
 
 
+def forfeit_snapshot(context, mid):
+    """Capture a live tiebreaker alongside the regulation match."""
+    so = _get(context, mid)
+    if not so or "score" not in so or so.get("_winner_uid"):
+        return None
+    snapshot = {key: value for key, value in so.items()
+                if key not in ("main_state", "sel_msg_id", "inn")}
+    for key in ("batted", "used_bowlers"):
+        snapshot[key] = {uid: sorted(players) for uid, players in so[key].items()}
+    if inn := so.get("inn"):
+        snapshot["inn"] = {**inn, "at_crease": sorted(inn.get("at_crease", ())),
+                           "msg_id": None}
+    return snapshot
+
+
+async def resume_forfeited_super_over(context, mid, state):
+    """Recreate the tiebreaker as it stood in the admin-restored match."""
+    so = dict(state["forfeit_super_over"])
+    so.update(mid=mid, chat_id=state["chat_id"], main_state=state)
+    for key in ("teams", "score"):
+        so[key] = {int(uid): value for uid, value in so[key].items()}
+    for key in ("batted", "used_bowlers"):
+        so[key] = {int(uid): set(players) for uid, players in so[key].items()}
+    if so.get("inn"):
+        inn = so["inn"] = dict(so["inn"])
+        for key in ("bat", "streak"):
+            inn[key] = {int(rid): value for rid, value in inn[key].items()}
+        inn["at_crease"] = set(inn["at_crease"])
+        if inn.get("last_ball") is not None:
+            inn["last_ball"] = tuple(inn["last_ball"])
+    context.bot_data[_so_key(mid)] = so
+    return await resume_super_over(context, mid)
+
+
 async def _disable_message(context, chat_id, msg_id):
     """Strip the inline keyboard from a now-stale message so its buttons can't
     be tapped again (used selection messages are left in chat as a record)."""

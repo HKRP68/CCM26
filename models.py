@@ -5666,14 +5666,15 @@ class StartVisit(Base):
 
 
 class SavedMatch(Base):
-    """A paused, cleared or timed-out over-by-over match that can be resumed.
+    """A saved position from an interrupted or forfeited match.
 
     ``/pause`` parks a live Challenge League / Lets Play match here, and so do
     ``/clearmatches``, ``/removematch`` and a tournament match's idle timeout
     (see ``services.saved_match_service``). ``state_json`` is the match state
     exactly as it stood, with ``next_action`` the pick it was waiting on, so
     ``/continue`` puts the very same ``Match`` row back into play from that
-    point — no over is replayed and nothing is lost.
+    point. A settled forfeit instead continues through ``/restorematch`` as a
+    new unranked match.
 
     One row per match: pausing a match that was paused before overwrites the
     older snapshot.
@@ -5690,7 +5691,8 @@ class SavedMatch(Base):
     user2_tg = Column(BigInteger, nullable=True)
     tournament_id = Column(Integer, nullable=True, index=True)
     # "paused" (/pause), "cleared" (/clearmatches, /removematch) or
-    # "auto_ended" (an idle timeout that saved instead of forfeiting).
+    # "auto_ended" (an idle timeout that saved instead of forfeiting), or
+    # "forfeited" (admin restoration only).
     reason = Column(String(20), nullable=False, default="paused")
     # "saved" → resumable; "resumed" / "discarded" / "void" → done.
     status = Column(String(20), nullable=False, default="saved", index=True)
