@@ -107,4 +107,6 @@ python -m pytest -q tests/test_sim_long.py tests/test_sim_handler.py tests/test_
   tests/test_over_limit_resume.py tests/test_impact_xi_rules.py tests/test_cricket_realism.py
 ~~~
 
-In isolated comparisons, ten failing cases from the existing suite also failed at the base commit. These included auction and menu coverage, card rendering, the league XI picker, archived coaching, match handover and streak settlement.
+In isolated comparisons, eleven failing cases from the existing suite also failed at the base commit. These included auction and menu coverage, card rendering, the league XI picker, archived coaching, match handover, saved batting order and streak settlement.
+
+The full repository run collected the 8,560 existing tests while integration was in progress. It reported 8,396 passed, 110 failed, 52 errors and two skipped. The setup errors included missing model imports in the World T20 and undo fixtures. Isolated focused reruns used the final implementation and included the new ODI tests. Examples of the full-run outcomes were reproduced separately at the base commit. The full regression gate also failed. The runner was stopped after reporting results because post-test cleanup remained active.
