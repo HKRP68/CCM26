@@ -58,8 +58,18 @@
   }
 
   function walletCards(data) {
-    document.getElementById('club-balances').innerHTML = Object.entries(data.balance).map(([key, value]) =>
-      `<div><span>${labelsTitle[key]}</span><strong>${money(value)}</strong></div>`).join('');
+    const balances = document.getElementById('club-balances');
+    balances.innerHTML = Object.entries(data.balance).map(([key, value]) =>
+      `<div><span>${labelsTitle[key]}</span><strong data-cmu-balance="${key}">${money(value)}</strong></div>`).join('');
+    // Count each balance up from what was last on screen. The confirmed value
+    // is written to the element first, so an interrupted count still leaves
+    // the right number behind.
+    const fx = window.CMURewardsFX;
+    if (fx && fx.available) {
+      for (const [key, value] of Object.entries(data.balance)) {
+        fx.setCount(balances.querySelector(`[data-cmu-balance="${key}"]`), value, { format: money });
+      }
+    }
     return data.transactions.map(row => {
       const changes = ['coins', 'gems', 'quest_points'].filter(key => row[key]).map(key =>
         `<div class="${row[key] > 0 ? 'club-credit' : 'club-debit'}">${row[key] > 0 ? '+' : '−'}${money(Math.abs(row[key]))} ${labels[key]}</div>`).join('');
@@ -183,6 +193,20 @@
           if (action === 'claim') {
             revealedGift = id;
             feedback.textContent = `Claimed ${giftValue(data.gift)}.`;
+            // Cosmetic, and only once the server has confirmed the claim. The
+            // gift card below re-renders with its real contents either way.
+            const fx = window.CMURewardsFX;
+            if (fx && fx.available) {
+              const gift = data.gift || {};
+              fx.chest({
+                title: gift.title || 'Gift claimed',
+                eyebrow: 'Gift',
+                tier: gift.currency === 'player' ? 'legend'
+                      : gift.currency === 'pack' || gift.currency === 'gems' ? 'epic' : 'rare',
+                rewardHtml: `<p class="cmu-gift-prize">${escapeHtml(giftValue(gift))}</p>`,
+                doneLabel: 'Collect',
+              });
+            }
             refreshDashboard();
           } else {
             feedback.textContent = 'Entry confirmed.';

@@ -94,6 +94,8 @@
             </div></article>`;
         }).join('');
     }).join('') || '<div class="empty">No achievements match these filters.</div>';
+    const fx = window.CMURewardsFX;
+    if (fx && fx.available) fx.stagger(byId('achievements-content'), '.hub-ach-row');
   }
 
   async function achievements() {
@@ -107,11 +109,24 @@
       root.innerHTML = '<div class="empty">Could not load achievements. <button class="hub-button" onclick="PlayerHub.achievements()">Retry</button></div>';
       return;
     }
+    // Anything unlocked since the last look at this screen gets a celebration.
+    // Compared against the previous payload only — this never decides whether
+    // an achievement is unlocked, it just notices that the server says so.
+    const previouslyUnlocked = achievementData ? achievementData.unlocked : null;
     achievementData = data;
     const bar = byId('ach-progress-bar');
     bar.max = data.total || 1;
     bar.value = data.unlocked;
-    byId('ach-progress-text').textContent = `${data.unlocked} of ${data.total} unlocked`;
+    const fx = window.CMURewardsFX;
+    if (fx && fx.available) {
+      fx.setCount(byId('ach-progress-text'), data.unlocked,
+                  { format: (n) => `${num(n)} of ${num(data.total)} unlocked` });
+      if (previouslyUnlocked != null && data.unlocked > previouslyUnlocked) {
+        fx.celebrate('epic', byId('achievements-content').closest('.screen'));
+      }
+    } else {
+      byId('ach-progress-text').textContent = `${data.unlocked} of ${data.total} unlocked`;
+    }
     const category = byId('achievement-category');
     const selected = category.value;
     const categories = Object.keys(data.groups);

@@ -1,0 +1,231 @@
+/*
+ * CMU Rewards FX — Phase 4 stylesheet
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Counters, floating deltas, meters, the reward chest, rank movement and
+ * level-ups. Depends on cmu_animation_engine.css for the overlay shell,
+ * particles and motion gates.
+ */
+
+/* ════════════════════════ Counters ════════════════════════ */
+
+.cmu-fx-count { font-variant-numeric: tabular-nums; }
+.cmu-fx-count.is-up { color: var(--green, #6CD9AE); transition: color .4s var(--cmu-ease); }
+.cmu-fx-count.is-down { color: var(--red, #FF818D); transition: color .4s var(--cmu-ease); }
+
+/* The anchor is a zero-size marker so a floating delta can be positioned
+   without the counter's own layout changing at all. */
+.cmu-fx-delta-anchor {
+  position: relative;
+  display: inline-block;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  vertical-align: top;
+}
+.cmu-fx-delta {
+  position: absolute;
+  left: 2px;
+  bottom: 2px;
+  z-index: 5;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg-card);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 28%);
+  font-size: .72rem;
+  font-weight: 850;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: cmu-fx-delta-rise calc(1400ms * var(--cmu-motion-scale)) var(--cmu-ease) forwards;
+}
+.cmu-fx-delta.is-up { color: var(--green, #6CD9AE); }
+.cmu-fx-delta.is-down { color: var(--red, #FF818D); }
+@keyframes cmu-fx-delta-rise {
+  0% { opacity: 0; transform: translateY(6px) scale(.86); }
+  18% { opacity: 1; transform: translateY(-4px) scale(1); }
+  72% { opacity: 1; transform: translateY(-20px); }
+  100% { opacity: 0; transform: translateY(-30px); }
+}
+
+/* ════════════════════════ Meters ════════════════════════ */
+/*
+ * The app's existing quest and achievement bars are driven by inline width or
+ * a <progress> value. Adding data-cmu-meter opts a bar into animating from
+ * empty instead of appearing already full, without changing its markup.
+ */
+.home-quest-progress-fill[data-cmu-meter],
+.cmu-fx-meter[data-cmu-meter] { transition: width var(--cmu-fill-ms, 680ms) var(--cmu-ease); }
+.home-quest-progress-fill[data-cmu-meter] { width: var(--cmu-fill, 0%) !important; }
+
+progress.hub-progress[data-cmu-meter] { transition: none; }
+
+.cmu-fx-meter.is-complete::after {
+  background: linear-gradient(90deg, var(--green, #6CD9AE), var(--primary));
+}
+
+/* ════════════════════════ Reward chest ════════════════════════ */
+
+.cmu-chest-panel { display: grid; justify-items: center; gap: 10px; }
+.cmu-chest-title { margin: 0; font-size: 1.25rem; letter-spacing: -.02em; }
+
+.cmu-chest-stage {
+  display: block;
+  width: min(60%, 190px);
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.cmu-chest-stage:disabled { cursor: default; }
+.cmu-chest-svg { display: block; width: 100%; height: auto; overflow: visible; }
+
+.cmu-chest-hint {
+  margin: 0;
+  color: var(--primary);
+  font-size: .68rem;
+  font-weight: 850;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  animation: cmu-pulse 1.5s ease-in-out infinite;
+}
+.cmu-chest-hint[hidden] { display: none; }
+
+/* Chest palette, per celebration tier. */
+.cmu-chest-svg {
+  --ch-1: #6B5331;
+  --ch-2: #332714;
+  --ch-band-1: #E7A443;
+  --ch-band-2: #F8E3B4;
+  --ch-band-3: #C3652E;
+  --ch-glow: #FFD966;
+}
+.cmu-tier-rare .cmu-chest-svg { --ch-band-1: #4A9EFF; --ch-band-2: #C9E2FF; --ch-band-3: #23507E; --ch-glow: #91BEF1; }
+.cmu-tier-epic .cmu-chest-svg { --ch-band-1: #A78BFA; --ch-band-2: #DCD0FF; --ch-band-3: #5D3C9D; --ch-glow: #C6B1FF; }
+.cmu-tier-legend .cmu-chest-svg { --ch-band-1: #FFD966; --ch-band-2: #FFF2B3; --ch-band-3: #C98A33; --ch-glow: #FFD966; }
+[data-theme="light"] .cmu-chest-svg { --ch-1: #6B5433; --ch-2: #3B2D19; }
+
+.ch-a1 { stop-color: var(--ch-1); }
+.ch-a2 { stop-color: var(--ch-2); }
+.ch-b1 { stop-color: var(--ch-band-2); }
+.ch-b2 { stop-color: var(--ch-band-1); }
+.ch-b3 { stop-color: var(--ch-band-3); }
+.ch-shadow { fill: #000; opacity: .38; }
+.ch-shell { stroke: var(--ch-band-1); stroke-opacity: .55; stroke-width: 1.6; }
+.ch-rim { stroke: var(--ch-band-1); stroke-width: 2.4; stroke-linecap: round; fill: none; }
+.ch-lock { fill: var(--ch-2); stroke: var(--ch-band-1); stroke-width: 1.2; }
+.ch-keyhole { fill: var(--ch-band-2); }
+
+.cmu-chest-lid {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  transition: transform calc(620ms * var(--cmu-motion-scale)) var(--cmu-ease-pop);
+}
+.cmu-chest-light {
+  fill: var(--ch-glow);
+  opacity: 0;
+  filter: blur(9px);
+  transition: opacity calc(520ms * var(--cmu-motion-scale)) var(--cmu-ease);
+}
+/* Closed: the chest rocks as if something inside wants out. */
+.cmu-chest-overlay:not(.is-open) .cmu-chest-svg {
+  animation: cmu-chest-shake 1.8s ease-in-out infinite;
+}
+.cmu-chest-overlay.is-open .cmu-chest-lid { transform: perspective(300px) rotateX(-68deg) translateY(-9px); }
+.cmu-chest-overlay.is-open .cmu-chest-light { opacity: .95; }
+.cmu-chest-overlay.is-open .cmu-chest-stage { opacity: .55; transition: opacity .4s; }
+
+.cmu-chest-reward {
+  width: 100%;
+  opacity: 0;
+  transform: translateY(14px);
+  transition:
+    opacity calc(420ms * var(--cmu-motion-scale)) var(--cmu-ease),
+    transform calc(420ms * var(--cmu-motion-scale)) var(--cmu-ease-pop);
+}
+.cmu-chest-reward.is-on { opacity: 1; transform: translateY(0); }
+/* The reward markup is in the DOM from the start so it is never trapped behind
+   the lid; it is only visually held back. A reader reaches it either way. */
+.cmu-chest-reward:not(.is-on) { pointer-events: none; }
+
+/* ════════════════════════ Rank movement ════════════════════════ */
+
+.cmu-fx-rank { position: relative; }
+.cmu-fx-rank.is-up,
+.cmu-fx-rank.is-down { animation: cmu-pack-hit calc(640ms * var(--cmu-motion-scale)) var(--cmu-ease-pop); }
+.cmu-fx-rank.is-up::after,
+.cmu-fx-rank.is-down::after {
+  content: "▲";
+  margin-left: 5px;
+  font-size: .62em;
+  vertical-align: middle;
+  color: var(--green, #6CD9AE);
+}
+.cmu-fx-rank.is-down::after { content: "▼"; color: var(--red, #FF818D); }
+
+/* ════════════════════════ Level up ════════════════════════ */
+
+.cmu-fx-levelup {
+  position: absolute;
+  z-index: 6;
+  left: 50%;
+  top: 50%;
+  display: grid;
+  gap: 2px;
+  padding: 10px 18px;
+  border: 1px solid var(--primary);
+  border-radius: 14px;
+  background: var(--bg-card);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 38%), 0 0 26px var(--gold-glow);
+  text-align: center;
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+  animation: cmu-levelup-in calc(560ms * var(--cmu-motion-scale)) var(--cmu-ease-pop) both;
+}
+.cmu-fx-levelup strong { color: var(--primary); font-size: 1.05rem; }
+.cmu-fx-levelup span { color: var(--text-secondary); font-size: .74rem; }
+.cmu-fx-levelup.is-leaving { animation: cmu-levelup-out 280ms var(--cmu-ease) forwards; }
+@keyframes cmu-levelup-in {
+  from { opacity: 0; transform: translate(-50%, -34%) scale(.7); }
+}
+@keyframes cmu-levelup-out {
+  to { opacity: 0; transform: translate(-50%, -72%) scale(.92); }
+}
+
+/* ════════════════════════ Attention pop ════════════════════════ */
+
+.cmu-fx-pop { animation: cmu-fx-pop calc(520ms * var(--cmu-motion-scale)) var(--cmu-ease-pop); }
+@keyframes cmu-fx-pop {
+  40% { transform: scale(1.035); }
+  to { transform: scale(1); }
+}
+
+/* ════════════════════════ Motion gates ════════════════════════ */
+
+[data-cmu-motion="off"] .cmu-fx-delta,
+[data-cmu-motion="off"] .cmu-fx-pop,
+[data-cmu-motion="off"] .cmu-chest-hint,
+[data-cmu-motion="off"] .cmu-chest-overlay:not(.is-open) .cmu-chest-svg { animation: none !important; }
+[data-cmu-motion="off"] .cmu-chest-lid,
+[data-cmu-motion="off"] .cmu-chest-reward,
+[data-cmu-motion="off"] .cmu-chest-light { transition: none !important; }
+[data-cmu-motion="off"] .cmu-fx-delta { display: none; }
+[data-cmu-motion="minimal"] .cmu-chest-overlay:not(.is-open) .cmu-chest-svg,
+[data-cmu-motion="minimal"] .cmu-chest-hint { animation: none !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cmu-fx-delta,
+  .cmu-fx-pop,
+  .cmu-chest-hint,
+  .cmu-chest-overlay:not(.is-open) .cmu-chest-svg,
+  .cmu-fx-levelup { animation: none !important; }
+  .cmu-chest-lid, .cmu-chest-reward { transition-duration: .01ms !important; }
+}
+
+/* A gift's prize line inside the chest. */
+.cmu-gift-prize {
+  margin: 0;
+  color: var(--primary);
+  font-size: 1.15rem;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}

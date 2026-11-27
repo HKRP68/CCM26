@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>CMU Community Arena</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+{# Animation Engine: counters, the XP meter and the level-up badge. The page
+   renders correctly without it — every value below is written straight in when
+   CMURewardsFX is absent. #}
+<script src="{{ url_for('static', filename='js/cmu_animation_engine.js', v='fx-1') }}"></script>
+<script src="{{ url_for('static', filename='js/cmu_rewards_fx.js', v='fx-1') }}"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/cmu_animation_engine.css', v='fx-1') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/cmu_rewards_fx.css', v='fx-1') }}">
 <style>
   :root{
     --bg:#f6f1e7; --card:#fffdf8; --text:#1d2630; --muted:#7a8591;
@@ -147,6 +154,10 @@ function fmt(n){ return (n||0).toLocaleString(); }
 function showErr(m){ const e=document.getElementById("err"); e.textContent=m; e.classList.remove("hide"); }
 
 let STATE = { cat:"cxp", per:"all" };
+// What the page last displayed, so a refresh can tell a level-up or a rank
+// move from a first load. Display state only — the server decides both.
+let lastLevel = null;
+let lastRank = null;
 
 async function loadOverview(){
   const d = await api("/api/webapp/community/overview");
@@ -159,18 +170,42 @@ async function loadOverview(){
     b.classList.remove("hide");
   }
   const p = d.profile, pr = p.progress;
+  // Everything below is the server's confirmed profile. The engine animates
+  // towards those numbers and lands on them exactly; it never computes XP, a
+  // level or a rank of its own.
+  const FXR = window.CMURewardsFX && window.CMURewardsFX.available ? window.CMURewardsFX : null;
+  const bar = document.getElementById("progbar");
+  const rankPill = document.getElementById("rank");
+  const levelLine = document.getElementById("levelline");
+  const climbed = lastLevel !== null && p.level > lastLevel;
+  const previousRank = lastRank;
+  lastLevel = p.level;
+  lastRank = p.rank || null;
+
   document.getElementById("name").textContent = p.name;
-  document.getElementById("levelline").textContent = "Level "+p.level+" — "+p.title;
-  document.getElementById("rank").textContent = p.rank ? ("#"+p.rank) : "—";
-  document.getElementById("xp_life").textContent = fmt(p.lifetime_xp);
-  document.getElementById("xp_week").textContent = fmt(p.week);
-  if(pr.next_level){
-    document.getElementById("progbar").style.width = pr.pct.toFixed(1)+"%";
-    document.getElementById("progtext").textContent =
-      "Progress to L"+pr.next_level+" ("+pr.next_title+"): "+pr.pct.toFixed(1)+"% · "+fmt(pr.remaining)+" CXP to go";
+  levelLine.textContent = "Level "+p.level+" — "+p.title;
+  const progressText = pr.next_level
+    ? "Progress to L"+pr.next_level+" ("+pr.next_title+"): "+pr.pct.toFixed(1)+"% · "+fmt(pr.remaining)+" CXP to go"
+    : "Maximum level reached 🏆";
+  document.getElementById("progtext").textContent = progressText;
+
+  if (FXR) {
+    FXR.setCount(document.getElementById("xp_life"), p.lifetime_xp, {format: fmt});
+    FXR.setCount(document.getElementById("xp_week"), p.week, {format: fmt});
+    FXR.meter(bar, pr.next_level ? pr.pct / 100 : 1, {complete: !pr.next_level});
+    if (p.rank) {
+      rankPill.innerHTML = '<span data-cmu-rank-value>#' + p.rank + '</span>';
+      FXR.rankChange(rankPill, {from: previousRank, to: p.rank, label: "Community rank"});
+    } else {
+      rankPill.textContent = "—";
+    }
+    // A level the server reports as higher than the one we last showed.
+    if (climbed) FXR.levelUp(bar, {level: p.level, title: p.title, host: bar.parentElement});
   } else {
-    document.getElementById("progbar").style.width = "100%";
-    document.getElementById("progtext").textContent = "Maximum level reached 🏆";
+    document.getElementById("xp_life").textContent = fmt(p.lifetime_xp);
+    document.getElementById("xp_week").textContent = fmt(p.week);
+    rankPill.textContent = p.rank ? ("#"+p.rank) : "—";
+    bar.style.width = (pr.next_level ? pr.pct.toFixed(1) : "100") + "%";
   }
   const ci = d.checkin;
   document.getElementById("streakpill").textContent = "🔥 "+ci.streak;

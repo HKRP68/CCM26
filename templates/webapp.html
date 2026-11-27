@@ -16,6 +16,7 @@
 <script src="{{ url_for('static', filename='js/cmu_pack_theatre.js', v='fx-1') }}"></script>
 <script src="{{ url_for('static', filename='js/cmu_kitbag.js', v='fx-1') }}"></script>
 <script src="{{ url_for('static', filename='js/cmu_walkout.js', v='fx-1') }}"></script>
+<script src="{{ url_for('static', filename='js/cmu_rewards_fx.js', v='fx-1') }}"></script>
 <script>
   // Track third-party SDK load state so a DNS/network failure on these
   // hosts (e.g. net::ERR_NAME_NOT_RESOLVED where an ISP/region blocks the
@@ -2234,6 +2235,7 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_blueprint.css', v='elite-market-1') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/cmu_animation_engine.css', v='fx-1') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/cmu_reveal_theatre.css', v='fx-1') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/cmu_rewards_fx.css', v='fx-1') }}">
 </head>
 <body>
 <header class="appbar">
@@ -3629,13 +3631,13 @@ async function loadDashboard() {
   lastInitData = data;
   window.CmuOverview?.update(data);
   document.getElementById('user-name').textContent = userData.first_name || userData.username || 'Player';
-  document.getElementById('stat-coins').textContent = formatNum(userData.coins);
-  document.getElementById('stat-gems').textContent = formatNum(userData.gems);
-  document.getElementById('stat-qp').textContent = formatNum(userData.quest_points);
+  // Balances count from whatever was on screen to the figure the server just
+  // confirmed, and float the change. Presentation only: userData is the
+  // server's payload and the counter lands on it exactly, even if a
+  // navigation or a background cuts the animation short.
+  setWalletCounters(userData);
   const pill = document.getElementById('balance-pill');
   pill.style.display = 'flex';
-  document.getElementById('bp-coins').textContent = formatNum(userData.coins);
-  document.getElementById('bp-gems').textContent = '· ' + formatNum(userData.gems);
   pill.setAttribute('aria-label', 'Wallet, ' + userData.coins.toLocaleString() + ' coins, ' + userData.gems.toLocaleString() + ' gems');
   document.getElementById('elite-home-team').textContent = userData.team_name || '';
   document.getElementById('elite-record-played').textContent = userData.matches_played;
@@ -3714,6 +3716,31 @@ async function refreshHomeHighlights() {
   }
   if (freePackResult.ok) updateHomeFreePack(freePackResult.data);
   else document.getElementById('freepack-tile-sub').textContent = 'Open to check eligibility';
+}
+
+/** Animate every wallet readout to the confirmed balances in `user`.
+ *  Falls back to writing the numbers straight in when the engine is absent. */
+function setWalletCounters(user) {
+  const fx = window.CMURewardsFX;
+  const fields = {
+    'stat-coins': user.coins, 'stat-gems': user.gems, 'stat-qp': user.quest_points,
+    'bp-coins': user.coins,
+  };
+  if (fx && fx.available) {
+    // formatNum is the app's own compact style ("1.2M", "41.0k"); the engine
+    // must animate through it rather than silently switching to a plain
+    // grouped number halfway.
+    fx.wallet(fields, { format: formatNum });
+    fx.setCount(document.getElementById('bp-gems'), user.gems,
+                { prefix: '· ', format: formatNum });
+  } else {
+    for (const [id, value] of Object.entries(fields)) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = formatNum(value);
+    }
+    const gems = document.getElementById('bp-gems');
+    if (gems) gems.textContent = '· ' + formatNum(user.gems);
+  }
 }
 
 function rewardAvailability(quota, action) {
@@ -4435,6 +4462,28 @@ function showDailyReward(r) {
       ${lines ? `<div class="reward-receipt-detail">${lines}</div>` : ''}
     </div>
   `;
+  // The receipt above is already on the Daily screen. The chest is a second,
+  // optional presentation of the same confirmed numbers — closing it, failing
+  // to open it or having animations off all leave the receipt untouched.
+  const fx = window.CMURewardsFX;
+  if (!fx || !fx.available) return;
+  const tier = r.milestone ? 'legend' : (r.gems || 0) > 0 ? 'epic' : (r.coins || 0) >= 5000 ? 'rare' : '';
+  // The chest shows the totals only. The receipt behind it keeps the Replace
+  // and Release controls: those carry element ids and roster ids, and a second
+  // live copy in the overlay would leave markOverflowResolved() updating
+  // whichever copy happened to come first in the document.
+  const totals = el.querySelector('.reward-totals');
+  fx.chest({
+    title: 'Daily reward',
+    eyebrow: `Day streak ${r.streak}/${r.streak_max}`,
+    tier,
+    rewardHtml: `<dl class="reward-totals">${totals ? totals.innerHTML : ''}</dl>`
+      + (r.milestone && r.milestone_player
+        ? `<p class="cmu-gift-prize">${escapeHtml(r.milestone_player.name)} · ${Number(r.milestone_player.rating) || 0} OVR</p>`
+        : ''),
+    doneLabel: 'Collect',
+  });
+  if (tier) fx.celebrate(tier, el.closest('.screen') || document.body);
 }
 
 // ════════════════ Roster-full overflow → Replace / Release ════════════════
@@ -5260,13 +5309,23 @@ function revealPick(index) {
       card.classList.add('miss');
     }
     // The chosen card turns first; the others follow so the eye lands on the
-    // prize rather than on five simultaneous flips.
-    setTimeout(() => card.classList.add('flipped'),
-               reducedSpinMotion.matches ? 0 : (won ? 0 : 260 + i * 70));
+    // prize rather than on five simultaneous flips. Timings run through the
+    // engine so Minimal and Off shorten them without a second code path.
+    const fxms = window.CMUAnim ? (ms) => window.CMUAnim.ms(ms) : (ms) => ms;
+    setTimeout(() => {
+      card.classList.add('flipped');
+      if (won) {
+        window.CMUAnim?.particles?.(card, {
+          count: tier === 'legend' ? 30 : tier === 'epic' ? 24 : 16,
+          tier, spread: 140,
+        });
+      }
+    }, reducedSpinMotion.matches ? 0 : (won ? 0 : fxms(260 + i * 70)));
   });
 
   setPickHint('', false);
-  const delay = reducedSpinMotion.matches ? 0 : 520;
+  const delay = reducedSpinMotion.matches ? 0
+    : (window.CMUAnim ? window.CMUAnim.ms(520) : 520);
   setTimeout(() => {
     isRevealingPick = false;
     hapticNotif('success');
@@ -7800,13 +7859,23 @@ function renderQuestList() {
       ${q.description ? `<p class="quest-row-desc">${escapeHtml(q.description)}</p>` : ''}
       <div class="quest-progress">
         <span class="home-quest-progress-track" aria-hidden="true">
-          <span class="home-quest-progress-fill ${q.completed ? 'done' : ''}" style="width:${q.percent}%"></span>
+          <span class="home-quest-progress-fill ${q.completed ? 'done' : ''}"
+                data-cmu-meter="${(Number(q.percent) || 0) / 100}"
+                data-cmu-meter-complete="${q.completed ? 1 : 0}"
+                style="width:${q.percent}%"></span>
         </span>
         <span class="home-quest-count">${q.progress}/${q.target}</span>
       </div>
       <div class="quest-rewards">${rewards}${action}</div>
     </article>`;
   }).join('') + '</div>';
+  // Stagger the rows in and run the progress bars up from empty. Both are
+  // cosmetic passes over markup that is already correct without them.
+  const fx = window.CMURewardsFX;
+  if (fx && fx.available) {
+    fx.stagger(el, '.quest-row');
+    fx.meters(el);
+  }
 }
 
 // One quest claim at a time, covering both the per-quest buttons and Claim all
@@ -7845,6 +7914,10 @@ async function claimQuest(questId) {
   if (r.points) parts.push(`+${r.points} QP`);
   toast('🎉 ' + (parts.join(' ') || 'Claimed!'), 'success');
   hapticNotif('success');
+  // Cosmetic only, and after the server has answered: the claim is already
+  // recorded and the toast already states it.
+  window.CMURewardsFX?.celebrate?.(r.gems ? 'epic' : 'rare',
+    document.getElementById('screen-quests'));
   loadQuests();
   refreshDashboard();
 }
@@ -7876,6 +7949,8 @@ async function claimAllQuests(qtype) {
   if (t.points) parts.push(`+${t.points} QP`);
   toast(`🎉 Claimed ${data.count_claimed} quest${data.count_claimed === 1 ? '' : 's'} · ${parts.join(' ')}`, 'success');
   hapticNotif('success');
+  window.CMURewardsFX?.celebrate?.(t.gems ? 'epic' : 'rare',
+    document.getElementById('screen-quests'));
   loadQuests();
   refreshDashboard();
 }
@@ -8561,6 +8636,8 @@ function renderLoginLadder() {
     `;
   }).join('');
 
+  window.CMURewardsFX?.stagger?.(el, '.ladder-day', { step: 42, max: 7 });
+
   const btn = document.getElementById('login-claim-btn');
   if (ls.claimable_today) {
     btn.disabled = false;
@@ -8609,6 +8686,10 @@ async function claimLoginReward() {
   if (Number(r.tier_multiplier || 1) > 1) parts.push(`(${r.tier_multiplier}× perk)`);
   toast(`🎉 Day ${r.day}: ${parts.join(' ')}`, 'success');
   hapticNotif('success');
+  // Cosmetic, after the server answered. The toast above already states the
+  // confirmed reward and the ladder below repaints from data.status.
+  window.CMURewardsFX?.celebrate?.(r.granted_pack || r.gems ? 'epic' : 'rare',
+    document.getElementById('login-streak-modal'));
   loginStreakStatus = data.status;
   updateLoginStreakBanner();
   renderLoginLadder();
