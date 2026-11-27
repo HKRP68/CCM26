@@ -107,7 +107,7 @@ def new_settings():
 
 
 def enabled():
-    return os.getenv("CMU_ODI_APPROACH_ENABLED", "").strip().lower() in {"1", "yes", "true", "on"}
+    return os.getenv("CMU_ODI_APPROACH_ENABLED", "1").strip().lower() in {"1", "yes", "true", "on"}
 
 
 def settings(state):

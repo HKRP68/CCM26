@@ -1,8 +1,8 @@
 # ODI Approach experiment
 
-The release gate is closed. **CMU_ODI_APPROACH_ENABLED** defaults to **0**. The experiment supports **/letsplay ODI @user**, **/letsplay 50**, **/lpbot ODI app** and **/lpbot 50 chat**. Reply to a player's message when omitting their username. **/lpbot** carries the chosen format through the difficulty prompt and remembers the chat or Mini App preference.
+The ODI experiment is available by default. **CMU_ODI_APPROACH_ENABLED** defaults to **1**. The experiment supports **/letsplay ODI @user**, **/letsplay 50**, **/lpbot ODI app** and **/lpbot 50 chat**. Reply to a player's message when omitting their username. **/lpbot** carries the chosen format through the difficulty prompt and remembers the chat or Mini App preference.
 
-Turning off the flag closes match entry. Existing ODI matches use their saved tuning, engine version, reference version and reference SHA-256. Keep the reference version on disk while any save uses it. If a saved reference is unavailable, restore the pinned file and use **/rcl** to continue. A future tuning or data release should use a new version and retain the old settings reader for unfinished matches.
+Set **CMU_ODI_APPROACH_ENABLED=0** to pause new ODI matches. Existing ODI matches use their saved tuning, engine version, reference version and reference SHA-256. Keep the reference version on disk while any save uses it. If a saved reference is unavailable, restore the pinned file and use **/rcl** to continue. A future tuning or data release should use a new version and retain the old settings reader for unfinished matches.
 
 ## Data and attribution
 
@@ -77,7 +77,7 @@ All six ODI arms completed 1,000 matches each. The legacy arms completed 120 mat
 
 The +14 rating side won 94.1% of its matches. The Hard adaptive arm produced five 400-plus first innings. The ODI engine's p95 over simulation times ranged from 2.7 to 10.0 ms during the shared-workspace run. These timings measure the over engine separately from AI decisions, network transport and persistence.
 
-The neutral holdout simulation missed the provisional limits for powerplay run rate, death-over dot and single shares, and mean chase score. Its first innings averaged 277.4 versus 297.6 in the holdout. The second innings averaged 249.5 versus 224.4. The simulated powerplay ran at 4.96 runs per over, 0.63 below holdout. Death-over dot share differed by 5.59 percentage points. The 2019 powerplay averaged 4.89 runs per over and the 2019 chase averaged 246.4, both closer to the neutral simulation than to the holdout. Death overs also shifted toward more dots and fewer singles in 2023. These population differences help explain the direction of the errors. The experiment remains disabled by default, with no release manifest.
+The neutral holdout simulation missed the provisional limits for powerplay run rate, death-over dot and single shares, and mean chase score. Its first innings averaged 277.4 versus 297.6 in the holdout. The second innings averaged 249.5 versus 224.4. The simulated powerplay ran at 4.96 runs per over, 0.63 below holdout. Death-over dot share differed by 5.59 percentage points. The 2019 powerplay averaged 4.89 runs per over and the 2019 chase averaged 246.4, both closer to the neutral simulation than to the holdout. Death overs also shifted toward more dots and fewer singles in 2023. These population differences help explain the direction of the errors. The holdout gate failed. Match entry was enabled for experimental play on request, and the reference remains under the experiment manifest.
 
 ## Verification commands
 

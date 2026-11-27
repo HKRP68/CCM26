@@ -65,8 +65,14 @@ def test_reject_invalid_lengths(monkeypatch, tokens):
     assert extract_overs_arg(["25"])[-1]
 
 
-def test_flag_defaults_closed_and_rollback_keeps_saved_matches(monkeypatch, state):
+def test_odis_are_available_without_an_environment_override(monkeypatch):
     monkeypatch.delenv("CMU_ODI_APPROACH_ENABLED", raising=False)
+    assert extract_approach_format(["50"]) == ("ODI", 50, [], None)
+    assert extract_approach_format(["ODI"]) == ("ODI", 50, [], None)
+
+
+def test_explicit_rollback_keeps_saved_matches(monkeypatch, state):
+    monkeypatch.setenv("CMU_ODI_APPROACH_ENABLED", "0")
     assert "unavailable" in extract_approach_format(["ODI"])[-1]
     restored = json.loads(json.dumps(state))
     ready(restored)
@@ -96,9 +102,11 @@ def test_bot_difficulty_carries_format_and_remembers_mode(monkeypatch, args):
     assert ctx.user_data["_bot_difficulty_answered"]
 
 
-@pytest.mark.parametrize("args,target_args", [(["50", "@captain"], ["@captain"]), (["ODI"], [])])
+@pytest.mark.parametrize("args,target_args", [
+    (["50", "@captain"], ["@captain"]), (["50"], []), (["ODI"], []),
+])
 def test_letsplay_passes_target_arguments_unchanged(monkeypatch, args, target_args):
-    monkeypatch.setenv("CMU_ODI_APPROACH_ENABLED", "1")
+    monkeypatch.delenv("CMU_ODI_APPROACH_ENABLED", raising=False)
     monkeypatch.setattr(letsplay, "get_session", MagicMock())
     monkeypatch.setattr(letsplay, "sync_telegram_user", MagicMock())
     monkeypatch.setattr(letsplay, "_active_letsplay_in_chat", lambda *a: False)
@@ -111,6 +119,7 @@ def test_letsplay_passes_target_arguments_unchanged(monkeypatch, args, target_ar
     asyncio.run(letsplay.letsplay_handler(update, ctx))
     resolve.assert_called_once()
     assert ctx.args == target_args
+    assert "/lp 50 @username" in message.reply_text.await_args.args[0]
 
 
 def test_toss_shows_odi_and_saved_settings_survive(monkeypatch, state):

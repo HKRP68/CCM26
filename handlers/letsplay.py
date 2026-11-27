@@ -589,6 +589,13 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
             await msg.reply_text(USAGE_HTML, parse_mode="HTML")
             return
         if not guest_user:
+            if ball_format == "ODI":
+                await msg.reply_text(
+                    "🏏 <b>ODI · 50 overs</b>\n\n"
+                    "Reply to your opponent's message with <code>/lp 50</code> "
+                    "or use <code>/lp 50 @username</code>.",
+                    parse_mode="HTML")
+                return
             await msg.reply_text(
                 "🏏 <b>Lets Play</b> — challenge another player with your own roster.\n\n"
                 "• Reply to their message with <code>/letsplay</code>, or\n"
