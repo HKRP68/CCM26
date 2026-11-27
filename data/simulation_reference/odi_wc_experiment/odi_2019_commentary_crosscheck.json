@@ -1,0 +1,458 @@
+{
+  "commentary_rows": 24713,
+  "commit": "09b89840d639d9ca676eebb7a59467aaf4808cef",
+  "crosswalk": [
+    {
+      "icc_id": "8192",
+      "innings_segments": 3,
+      "matches": [
+        [
+          "1144483",
+          48,
+          48
+        ]
+      ]
+    },
+    {
+      "icc_id": "8193",
+      "innings_segments": 3,
+      "matches": [
+        [
+          "1144484",
+          48,
+          49
+        ]
+      ]
+    },
+    {
+      "icc_id": "8194",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144485",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8195",
+      "innings_segments": 3,
+      "matches": []
+    },
+    {
+      "icc_id": "8196",
+      "innings_segments": 5,
+      "matches": [
+        [
+          "1144487",
+          48,
+          48
+        ]
+      ]
+    },
+    {
+      "icc_id": "8197",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144488",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8198",
+      "innings_segments": 2,
+      "matches": []
+    },
+    {
+      "icc_id": "8199",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144490",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8200",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144491",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8201",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144492",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8203",
+      "innings_segments": 4,
+      "matches": [
+        [
+          "1144494",
+          48,
+          48
+        ]
+      ]
+    },
+    {
+      "icc_id": "8204",
+      "innings_segments": 3,
+      "matches": []
+    },
+    {
+      "icc_id": "8205",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144496",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8206",
+      "innings_segments": 1,
+      "matches": []
+    },
+    {
+      "icc_id": "8208",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144499",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8210",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144501",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8211",
+      "innings_segments": 3,
+      "matches": [
+        [
+          "1144502",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8212",
+      "innings_segments": 2,
+      "matches": []
+    },
+    {
+      "icc_id": "8213",
+      "innings_segments": 2,
+      "matches": []
+    },
+    {
+      "icc_id": "8214",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144505",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8215",
+      "innings_segments": 7,
+      "matches": []
+    },
+    {
+      "icc_id": "8216",
+      "innings_segments": 2,
+      "matches": []
+    },
+    {
+      "icc_id": "8217",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144508",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8218",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144509",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8219",
+      "innings_segments": 2,
+      "matches": []
+    },
+    {
+      "icc_id": "8220",
+      "innings_segments": 3,
+      "matches": [
+        [
+          "1144511",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8221",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144512",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8222",
+      "innings_segments": 3,
+      "matches": []
+    },
+    {
+      "icc_id": "8223",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144514",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8224",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144515",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8225",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144516",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8226",
+      "innings_segments": 3,
+      "matches": [
+        [
+          "1144517",
+          95,
+          95
+        ]
+      ]
+    },
+    {
+      "icc_id": "8227",
+      "innings_segments": 3,
+      "matches": []
+    },
+    {
+      "icc_id": "8228",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144519",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8229",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144520",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8230",
+      "innings_segments": 3,
+      "matches": [
+        [
+          "1144521",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8231",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144522",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8232",
+      "innings_segments": 10,
+      "matches": []
+    },
+    {
+      "icc_id": "8233",
+      "innings_segments": 3,
+      "matches": []
+    },
+    {
+      "icc_id": "8234",
+      "innings_segments": 3,
+      "matches": [
+        [
+          "1144525",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8235",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144526",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8236",
+      "innings_segments": 4,
+      "matches": [
+        [
+          "1144527",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8237",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144528",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8238",
+      "innings_segments": 2,
+      "matches": [
+        [
+          "1144529",
+          96,
+          96
+        ]
+      ]
+    },
+    {
+      "icc_id": "8239",
+      "innings_segments": 4,
+      "matches": [
+        [
+          "1144530",
+          96,
+          96
+        ]
+      ]
+    }
+  ],
+  "data_sha256_of_sorted_names_and_bytes": "a142c11788913843b2c99c003cf2dac4bd4fa418d3ec1c575493bba5e81f79c8",
+  "files": 45,
+  "files_with_unique_cricsheet_match": 32,
+  "fingerprint_exclusions": {
+    "no_regulation_ball_position": 10,
+    "unmapped_for_fingerprint": 934
+  },
+  "limitations": "ICC scraped commentary is used to cross-check the structured 2019 data. It has no match metadata, target revisions, or explicit dismissal fields. Missing or ambiguous events are not imputed into the measured reference.",
+  "name": "ppai22/cwc-2019-ball-by-ball-dataset",
+  "run_markers": {
+    "1": 7904,
+    "1B": 22,
+    "1Lb": 194,
+    "1Nb": 20,
+    "1W": 15,
+    "1Wd": 559,
+    "1WdW": 1,
+    "2": 1394,
+    "2B": 4,
+    "2Lb": 19,
+    "2Nb": 15,
+    "2Wd": 13,
+    "3": 140,
+    "3Nb": 2,
+    "3Wd": 2,
+    "4": 1980,
+    "4B": 11,
+    "4Lb": 20,
+    "5": 3,
+    "5Nb": 7,
+    "5Wd": 30,
+    "6": 359,
+    "W": 660,
+    "\u2022": 11339
+  }
+}

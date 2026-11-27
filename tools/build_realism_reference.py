@@ -294,7 +294,15 @@ def _iter_matches(paths):
 def build_from_cricsheet(paths, format_name, era_map, min_year=None,
                          max_year=None, holdout_from=None):
     """Count deliveries into the context hierarchy. Returns (counts, stats)."""
-    want = {"T20": ("T20", "IT20"), "ODI": ("ODI", "ODM")}.get(format_name,
+    if format_name == "ODI":
+        from tools import odi_reference
+        train, holdout, _ = odi_reference.build(paths, min_year, max_year, holdout_from)
+        return train.counts, holdout.counts, {
+            "matches": len(train.match_ids), "deliveries": train.metrics["all"]["deliveries"],
+            "holdout_matches": len(holdout.match_ids),
+        "development_fold": args.development_fold, "holdout_deliveries": holdout.metrics["all"]["deliveries"],
+        }
+    want = {"T20": ("T20", "IT20")}.get(format_name,
                                                                (format_name,))
     counts = collections.defaultdict(lambda: collections.Counter())
     stats = collections.Counter()
@@ -759,7 +767,84 @@ def _parse_eras(spec):
     return out
 
 
+def _cmd_odi_cricsheet(args):
+    from pathlib import Path
+    from tools import odi_reference as odi
+
+    train, holdout, provenance = odi.build(args.zip, args.min_year, args.max_year,
+                                            args.holdout_from, args.development_fold)
+    if not train.match_ids:
+        raise SystemExit("No complete men's international 50-over training matches")
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    nodes = _counts_to_nodes(train.counts, "ODI", args.min_node)
+    default = args.default_competition or "intl_odi_modern"
+    if f"ODI/{default}" not in nodes:
+        raise SystemExit(f"No observed competition node for ODI/{default}")
+    sample = train.report()
+    attribution = {"data_licence": odi.LICENCE, "attribution": odi.ATTRIBUTION,
+                   "url": "https://cricsheet.org/", "license_file": "CRICSHEET-LICENSE.txt"}
+
+    def write(name, payload):
+        (out / name).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                                encoding="utf-8")
+
+    with zipfile.ZipFile(args.zip[0]) as archive:
+        license_text = archive.read("LICENSE.txt").decode("utf-8")
+        (out / attribution["license_file"]).write_text(
+            "\n".join(line.rstrip() for line in license_text.splitlines()) + "\n", encoding="utf-8")
+    write("odi_baselines.json", {
+        "schema_version": SCHEMA_VERSION, "model_version": "odi-wc-2019-v1",
+        "format": "ODI", "outcomes": list(OUTCOMES), "nodes": nodes,
+        "default_competition": default, "extras_variants": train.extra_variants(),
+        "provenance": dict(attribution, mode="cricsheet", all_nodes_observed=True,
+                           level_measured=True, shape_measured=True, training_year=2019),
+    })
+    if args.over_stats:
+        phases = sample["completed_over_runs"]
+        def moments(hist):
+            n = sum(hist.values())
+            avg = sum(r * count for r, count in hist.items()) / n
+            return {"n": n, "mean": avg, "sd": math.sqrt(sum(
+                (r - avg) ** 2 * count for r, count in hist.items()) / n), "histogram": hist}
+        write("odi_over_volatility.json", {
+            "schema_version": SCHEMA_VERSION, "format": "ODI",
+            "provenance": attribution, "phases": {p: moments(hist) for p, hist in phases.items()}})
+    write("odi_training_report.json", sample)
+    if holdout.match_ids:
+        filename = "odi_development_report.json" if args.development_fold is not None else "odi_holdout_report.json"
+        write(filename, dict(holdout.report(), from_year=args.holdout_from,
+                             development_fold=args.development_fold, provenance=attribution))
+    if args.icc_commentary:
+        commentary = odi.audit_commentary(args.icc_commentary, train.fingerprints)
+        commentary["commit"] = args.icc_commit
+        write("odi_2019_commentary_crosscheck.json", commentary)
+    write("manifest.json", {
+        "schema_version": SCHEMA_VERSION, "model_version": "odi-wc-2019-v1",
+        "builder": "tools.build_realism_reference cricsheet",
+        "formats": {"ODI": {"file": "odi_baselines.json", "mode": "cricsheet",
+                            "default_competition": default, "nodes": len(nodes),
+                            "sha256": odi.digest(out / "odi_baselines.json")}},
+        **provenance, "licensing": attribution,
+        "training": {"matches": len(train.match_ids), "dates": sample["dates"],
+                     "deliveries": sample["metrics"]["all"]["deliveries"],
+                     "legal_balls": sample["metrics"]["all"]["legal_balls"]},
+        "holdout_matches": len(holdout.match_ids),
+        "classification": ("Extras, then dismissal, then batter runs. Probabilities are per "
+                           "physical delivery. Wickets on extras enter the conditional extras "
+                           "table and independent wicket counters. Wides and no-balls are illegal, "
+                           "and all other match deliveries use the scheduled 300-ball timeline."),
+        "smoothing": ("Measured nodes contain integer counts. The runtime regularizes sparse "
+                      "nodes using their ancestor distributions, keeping pseudo-weights separate."),
+    })
+    print(f"Wrote {len(nodes)} measured ODI nodes from {len(train.match_ids)} matches. "
+          f"Holdout: {len(holdout.match_ids)} matches.")
+    return 0
+
+
 def cmd_cricsheet(args):
+    if args.format == "ODI":
+        return _cmd_odi_cricsheet(args)
     era_map = _parse_eras(args.eras)
     counts, holdout, stats = build_from_cricsheet(
         args.zip, args.format, era_map, args.min_year, args.max_year,
@@ -919,6 +1004,10 @@ def main(argv=None):
     c.add_argument("--over-stats", action="store_true",
                    help="also emit <format>_over_volatility.json from the "
                         "real over-level counts (Feature 2)")
+    c.add_argument("--development-fold", type=int, choices=range(5),
+                   help="Hold back a hash-selected fifth of the 2019 matches")
+    c.add_argument("--icc-commentary", help="Optional directory of 2019 ICC commentary CSVs")
+    c.add_argument("--icc-commit", help="Commit of the optional ICC commentary source")
     c.set_defaults(func=cmd_cricsheet)
 
     a = sub.add_parser("anchors", help="build from in-repo measured aggregates")

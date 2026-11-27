@@ -176,6 +176,37 @@ def _update_bowling(session, user_id: int, player_id: int, bowling: Dict[str, An
     return True
 
 
+def _persist_odi_innings(session, state):
+    import json
+
+    from models import Match, ODIPlayerInnings
+    from sqlalchemy.dialects.postgresql import insert as postgres_insert
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    mid = state.get("match_id")
+    match = session.get(Match, mid) if mid else None
+    counts = {"batting": 0, "bowling": 0}
+    if not match or match.ball_format != "ODI":
+        return counts
+    insert = postgres_insert if session.get_bind().dialect.name == "postgresql" else sqlite_insert
+    active_innings = state.get("innings", 1)
+    for innings in range(1, active_innings + 1):
+        prefix = "inn1_" if innings < active_innings else ""
+        for role, discipline in (("bat", "batting"), ("bowl", "bowling")):
+            lookup = _build_lookup(state.get(f"{prefix}{role}_xi", []),
+                                   state.get(f"{prefix}{role}_team_id"))
+            for rid, figures in (state.get(f"{prefix}{role}_stats") or {}).items():
+                player = lookup.get(_rid_key(rid))
+                if not player or not (figures.get("balls") or figures.get("runs") or figures.get("out")):
+                    continue
+                statement = insert(ODIPlayerInnings).values(
+                    match_id=mid, innings=innings, discipline=role, user_id=player[1],
+                    player_id=player[0], figures=json.dumps(figures, sort_keys=True))
+                result = session.execute(statement.on_conflict_do_nothing())
+                counts[discipline] += max(0, result.rowcount)
+    return counts
+
+
 def persist_player_game_stats(session, state: Dict[str, Any]) -> Dict[str, int]:
     """Persist batting and bowling career stats from any full match state.
 
@@ -195,6 +226,11 @@ def persist_player_game_stats(session, state: Dict[str, Any]) -> Dict[str, int]:
     # stop players farming stats against deliberately weak opponents.
     if state.get("stats_disabled"):
         return {"batting": 0, "bowling": 0, "skipped": "stats_disabled"}
+
+    if state.get("ball_format") == "ODI":
+        if state.get("unranked") or state.get("is_bot_match"):
+            return {"batting": 0, "bowling": 0, "skipped": "unranked"}
+        return _persist_odi_innings(session, state)
 
     # If a match is abandoned in innings 1, snapshot the active innings so the
     # same persistence path can handle it.

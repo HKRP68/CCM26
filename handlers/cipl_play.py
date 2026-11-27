@@ -713,7 +713,7 @@ def _rematch_row(state):
         overs = str(state.get("lpmulti_overs") or "")
         data = f"botmatch_again_lpm_{overs}" if overs else "botmatch_again_lpm"
     elif state.get("is_letsplay"):
-        data = "botmatch_again_lp"
+        data = "botmatch_again_lp_ODI" if cipl_match.odi_approach.is_odi(state) else "botmatch_again_lp"
     else:
         league = str(state.get("league_key") or "")[:16]
         data = f"botmatch_again_cipl_{league}" if league else "botmatch_again_cipl"
@@ -2496,7 +2496,8 @@ def _header(state):
     if c:
         line += (f"\n🎯 Need <b>{c['runs_required']}</b> off "
                  f"{c['balls_remaining']} • RRR {c['rrr']:.2f}")
-    return f"Innings {inn} • {_unit_word(state, cap=True)} {state['current_over']}\n{line}"
+    fmt = f"{cipl_match.format_label(state)} • " if cipl_match.odi_approach.is_odi(state) else ""
+    return f"{fmt}Innings {inn} • {_unit_word(state, cap=True)} {state['current_over']}\n{line}"
 
 
 _APP_TURN_TEXT = {
@@ -2542,6 +2543,12 @@ async def _prompt_bowler(context, mid, state=None, first=False):
         await watch(context,state)
     if not first:
         await _delete_prev_over(context, state)
+    if (cipl_match.odi_approach.is_odi(state) and not cipl_match.eligible_bowlers(state)):
+        await _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
+        await context.bot.send_message(
+            state["chat_id"], "ODI paused because no legal bowling allocation remains. "
+            "Use /rcl after the match state is repaired.")
+        return
     if _bot_bowls(state):
         await _bot_take_the_ball(context, mid, state)
         return
@@ -2558,6 +2565,8 @@ async def _prompt_bowler(context, mid, state=None, first=False):
     for p in elig:
         tag = " 🧤" if cipl_match.is_part_time_bowler(p) else ""
         left = cipl_match.overs_left(state, p)
+        if cipl_match.odi_approach.is_odi(state):
+            tag += " · " + cipl_match.odi_approach.bowler_workload(state, p).label
         row.append(InlineKeyboardButton(
             f"{p['name']} ({cipl_match.display_rating(p, 'bowl_rating')}) "
             f"· {left} left{tag}",
@@ -2636,6 +2645,12 @@ async def _bot_take_the_ball(context, mid, state):
     # loop while every other live match waits its turn.
     await _bot_consider_impact(context, mid, state)
     bowler = await asyncio.to_thread(bot_captain.pick_bowler, state)
+    if bowler is None and cipl_match.odi_approach.is_odi(state):
+        await _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
+        await context.bot.send_message(
+            state["chat_id"], "ODI paused because no legal bowling allocation remains. "
+            "Use /rcl after the match state is repaired.")
+        return
     if bowler is None:
         # Nothing legal to bowl — the innings has nowhere left to go.
         logger.warning("bot captain: no bowler available for match %s — "
@@ -2650,11 +2665,18 @@ async def _bot_take_the_ball(context, mid, state):
         await asyncio.sleep(BOT_THINK_DELAY)
         await _prompt_bowl_approach(context, mid, state)
         return
+    advice = ""
+    if cipl_match.odi_approach.is_odi(state):
+        workload = cipl_match.odi_approach.bowler_workload(state, bowler)
+        left = cipl_match.overs_left(state, bowler)
+        style = cipl_match.approach_bowling_type(bowler)
+        advice = f"{workload.label} · {style} · {left} {'over' if left == 1 else 'overs'} left"
     text = (f"{_approach_card(state)}\n\n"
             f"🤖 <b>{html.escape(str(state.get('bowl_team_name', 'Bot')))}</b> "
             f"hands the ball to <b>{html.escape(str(bowler['name']))}</b> "
             f"({cipl_match.display_rating(bowler, 'bowl_rating')}) for "
-            f"{_unit_word(state)} {state['current_over']}…")
+            f"{_unit_word(state)} {state['current_over']}…"
+            + (f"\n{html.escape(advice)}" if advice else ""))
     # No extras on this one: it is the bot's "hands the ball to X" note, not a
     # prompt anyone acts on, and the human's approach prompt that follows it
     # carries View Match + Impact Player.
@@ -2662,7 +2684,8 @@ async def _bot_take_the_ball(context, mid, state):
         "🤖 ", R.bold(str(state.get('bowl_team_name', 'Bot'))),
         " hands the ball to ", R.bold(str(bowler['name'])),
         f" ({cipl_match.display_rating(bowler, 'bowl_rating')}) for "
-        f"{_unit_word(state)} {state['current_over']}…"]])
+        f"{_unit_word(state)} {state['current_over']}…"]
+        ] + ([[advice]] if advice else []))
     await _new_action_message(context, state, text, None, extras=False,
                               blocks=blocks)
     await asyncio.sleep(BOT_THINK_DELAY)
@@ -2764,7 +2787,7 @@ def _human_picks_batsman(state):
 def _over_strip(timeline, bpu=6):
     """``1 · 4 · W · _ · _`` — the over so far, with the balls still to come."""
     marks = [str(t) for t in (timeline or [])]
-    legal = sum(1 for t in marks if t not in ("WD", "NB"))
+    legal = sum(1 for t in marks if t not in ("WD", "NB", "WD+W", "NB+W"))
     marks += ["_"] * max(0, bpu - legal)
     return " · ".join(marks)
 
@@ -2776,7 +2799,7 @@ async def _prompt_new_batsman(context, mid, state, summary=None):
     progress = state.get("over_in_progress") or {}
     timeline = (summary or {}).get("over_timeline") or progress.get("over_timeline")
     bpu = cipl_match.balls_per_unit(state)
-    legal = sum(1 for t in (timeline or []) if t not in ("WD", "NB"))
+    legal = sum(1 for t in (timeline or []) if t not in ("WD", "NB", "WD+W", "NB+W"))
     left = max(0, bpu - legal)
 
     rows, row = [], []
@@ -4213,7 +4236,7 @@ def _announce_drama_async(context, state, summary, milestone_events=None):
 
 def _live_final_over(state):
     chase = cipl_match.chase(state)
-    return (bool(chase) and chase["runs_required"] > 0
+    return (not cipl_match.odi_approach.is_odi(state) and bool(chase) and chase["runs_required"] > 0
             and 0 < chase["balls_remaining"] <= cipl_match.balls_per_unit(state)
             and not cipl_match.is_innings_over(state))
 
@@ -4349,7 +4372,20 @@ async def _run_over(context, mid, state):
         summary = await _simulate_live_final_over(context, mid, state, pause)
         state.pop("over_milestones_before", None)
     else:
-        summary = await asyncio.to_thread(cipl_match.simulate_over, state, **pause)
+        try:
+            summary = await asyncio.to_thread(cipl_match.simulate_over, state, **pause)
+            chunks = 1
+            while summary.get("delivery_paused"):
+                await _ss(context, mid, state, next_action=A_PICK_BAT_APPROACH)
+                if chunks >= 4:
+                    await context.bot.send_message(
+                        state["chat_id"], "The ODI over is saved after a long run of extras. Use /rcl to resume.")
+                    return
+                summary = await asyncio.to_thread(cipl_match.simulate_over, state, **pause)
+                chunks += 1
+        except cipl_match.odi.ODIUnavailable as exc:
+            await context.bot.send_message(state["chat_id"], f"{exc} Use /rcl to resume.")
+            return
 
     if summary.get("paused"):
         # A wicket, and the human batting captain chooses who walks in. The
@@ -4446,7 +4482,9 @@ def _predictability_lines(state, summary):
         if bot_uid is not None and state.get(f"{side}_team_id") == bot_uid:
             continue                      # that side's picks are the hidden ones
         run = int(summary.get(f"{side}_repeat") or 0)
-        if run >= REPEAT_FROM:
+        repeat_from = (cipl_match.odi.settings(state)["repeat_grace"] + 1
+                       if cipl_match.odi_approach.is_odi(state) else REPEAT_FROM)
+        if run >= repeat_from:
             out.append(
                 f"🔍 <i>{html.escape(str(label or 'They'))} have used the same "
                 f"{word} {run} {_unit_word(state)}s running — the opposition "
@@ -4778,6 +4816,8 @@ def _card_heading(state):
     """``🏏 Innings 1 | Mumbai | 🌱 Hard | 🆔 #123`` — the card's first line."""
     inn, team, pitch, match_id = _card_heading_parts(state)
     parts = [f"🏏 <b>Innings {inn}</b>", f"<b>{html.escape(team)}</b>"]
+    if cipl_match.odi_approach.is_odi(state):
+        parts.append(cipl_match.format_label(state))
     if pitch:
         parts.append(html.escape(_pitch_text(state)))
     if match_id is not None:
@@ -5186,6 +5226,8 @@ def _build_approach_card_blocks(state, prompt):
     _inn, _team, pitch, match_id = _card_heading_parts(state)
     blocks = [R.heading(f"🏏 Innings {inn} · {bat_name}", size=3)]
     sub = []
+    if cipl_match.odi_approach.is_odi(state):
+        sub.append(cipl_match.format_label(state))
     if pitch:
         sub.append(_pitch_text(state))
     if match_id is not None:
@@ -5469,7 +5511,8 @@ def _completion_text(state, result, result_line, prize_info=None, injury_news=""
             f"+{prize_info['w_gems']} 💎\n"
             f"🤝 {html.escape(str(result['loser']))}: +{prize_info['l_coins']:,} coins, "
             f"+{prize_info['l_gems']} 💎")
-    text = (f"🏁 <b>Match Over</b>\n{result_line}\n"
+    format_line = (" · " + cipl_match.format_label(state)) if cipl_match.odi_approach.is_odi(state) else ""
+    text = (f"🏁 <b>Match Over{format_line}</b>\n{result_line}\n"
             f"<blockquote expandable>{body}</blockquote>")
     if injury_news:
         text += f"\n\n{injury_news}"
@@ -5490,7 +5533,7 @@ async def _complete_match(context, mid, state):
     # A practice match vs the bot stops at the tie: the Super Over is an
     # interactive two-human flow (handlers/super_over.py) with no AI captain,
     # so there is nobody to play the bot's half of it.
-    if result["tie"] and not _is_bot_match(state):
+    if result["tie"] and not _is_bot_match(state) and not cipl_match.odi_approach.is_odi(state):
         try:
             # Mention the Super Over in the Mini App commentary feed so spectators
             # know the tie is being resolved (the chat already announces it).
@@ -5575,7 +5618,7 @@ async def _complete_match(context, mid, state):
                 # A /letsplay mismatch flags the state ``stats_disabled`` (anti
                 # stat-farming) — skip the POTM career credit too, in step with
                 # persist_player_game_stats. Tournament matches never set it.
-                if not state.get("stats_disabled"):
+                if not state.get("stats_disabled") and not cipl_match.odi_approach.is_odi(state):
                     winner_for_potm = None if result["tie"] else result.get("winner")
                     best = _cipl_potm_select(state, winner_for_potm)
                     if best and best.get("player_id"):

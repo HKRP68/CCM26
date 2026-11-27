@@ -35,7 +35,7 @@ from handlers.match import (
     _chat_busy_message, _user_busy_message)
 from handlers.lineup import _get_ordered_roster, validate_xi
 from handlers.letsplay import (
-    _active_letsplay_in_chat, _dkey, _next_id, _prompt_pitch,
+    _active_letsplay_in_chat, _dkey, _next_id, _prompt_pitch, draft_format_label,
     _rearm_setup_timeout)
 
 logger = logging.getLogger(__name__)
@@ -55,15 +55,26 @@ async def lpbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # player, so a bare /lpbot keeps the last choice.
     from handlers.botlevel import (
         PLAY_LABELS, play_mode_for, remember_play_mode, split_play_mode)
-    play_mode, _rest = split_play_mode(getattr(context, "args", None))
+    from engine.realism import odi
+    from services.match_formats import extract_approach_format
+
+    play_mode, tokens = split_play_mode(getattr(context, "args", None))
+    ball_format, overs, remaining, error = extract_approach_format(tokens)
+    from handlers.botlevel import prompt_difficulty, take_pending_choice
+    answered = take_pending_choice(context)
+    if error or remaining:
+        await msg.reply_text(error or "Use /lpbot [ODI or 50] [app or chat].")
+        return
+    try:
+        odi_settings = odi.new_settings() if ball_format == "ODI" else None
+    except odi.ODIUnavailable as exc:
+        await msg.reply_text(str(exc))
+        return
     if play_mode:
         remember_play_mode(context.bot_data, tg.id, play_mode)
-
-    # Difficulty first: the prompt sends a keyboard and this returns, and the
-    # button re-enters here with the choice already banked.
-    from handlers.botlevel import prompt_difficulty, take_pending_choice
-    if not take_pending_choice(context):
-        await prompt_difficulty(update, context, "lp")
+    if not answered:
+        await prompt_difficulty(update, context, "lp",
+                                "ODI" if ball_format == "ODI" else str(overs or ""))
         return
 
     session = get_session()
@@ -134,7 +145,8 @@ async def lpbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "invite_id": invite_id, "chat_id": chat.id,
         "is_private": chat.id > 0,
         "status": "pitch",
-        "vs_bot": True,
+        "vs_bot": True, "overs": overs or 20, "ball_format": ball_format,
+        **({"odi_settings": odi_settings} if odi_settings is not None else {}),
         "host": host_info, "guest": guest_info,
         "host_preview": None,
         "pitch_type": None,
@@ -148,7 +160,7 @@ async def lpbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━━\n"
         f"👤 <b>You:</b> {html.escape(host_info['name'])}\n"
         f"🤖 <b>Opponent:</b> {BOT_TEAM_NAME} <i>(auto-picked XI)</i>\n"
-        "⏱️ <b>Format:</b> 20 Overs • Own Roster\n"
+        f"⏱️ <b>Format:</b> {draft_format_label(draft)} • Own Roster\n"
         "🎯 <b>Unranked practice</b> — no stats, coins, gems or Win/Loss\n"
         f"🕹️ <b>Play in:</b> {PLAY_LABELS[play_mode_for(context.bot_data, tg.id)]}"
         " <i>(/lpbot chat · /lpbot app)</i>\n"
@@ -194,4 +206,5 @@ async def botmatch_again_callback(update: Update, context: ContextTypes.DEFAULT_
         context.args = [league] if league else []
         await ciplbot_handler(update, context)
     else:
+        context.args = [league] if league else []
         await lpbot_handler(update, context)

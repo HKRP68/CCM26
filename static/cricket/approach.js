@@ -91,7 +91,7 @@ function ballsPerUnitApproach() {
 // ── strip of ball chips: "1 4 W _ _ _" ───────────────────────────────
 function overStripHtml(timeline, revealed) {
   const marks = (timeline || []).slice(0, revealed ?? (timeline || []).length);
-  const legal = marks.filter(m => !['WD', 'NB'].includes(String(m))).length;
+  const legal = marks.filter(m => !['WD', 'NB', 'WD+W', 'NB+W'].includes(String(m))).length;
   const chips = marks.map(m =>
     `<span class="ov-chip ov-${ballChipKind(m)}">${escHtml(ballChipLabel(m))}</span>`);
   for (let i = legal; i < ballsPerUnitApproach(); i++) {
@@ -252,13 +252,14 @@ function renderApproachBowlers(section, a) {
     <div class="selection-list mb-3" id="approach-bowler-list"></div>`;
   const box = section.querySelector('#approach-bowler-list');
   list.forEach(p => {
-    const div = document.createElement('div');
+    const div = document.createElement(p.fatigue ? 'button' : 'div');
+    if (p.fatigue) div.type = 'button';
     div.className = 'selection-item';
     const left = Number(p.oversLeft ?? 0);
     div.innerHTML = `
       <span class="selection-item-name">${escHtml(p.name)}${p.partTime ? ' 🧤' : ''}</span>
       <span class="selection-item-meta">${escHtml(p.displayRating ?? p.bowling_ovr ?? '')} BOWL •
-        ${escHtml(p.bowler_type || 'Bowler')} • ${p.figures ? `${escHtml(p.figures)} • ` : ''}<b>${left}</b> ${unitWord()}${left === 1 ? '' : 's'} left</span>`;
+        ${escHtml(p.bowler_type || 'Bowler')} • ${p.figures ? `${escHtml(p.figures)} • ` : ''}<b>${left}</b> ${unitWord()}${left === 1 ? '' : 's'} left${p.fatigue ? ' • ' + escHtml(p.fatigue) : ''}</span>`;
     div.onclick = () => {
       if (approachSubmitInFlight) return;
       haptic('medium');

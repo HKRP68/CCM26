@@ -48,7 +48,7 @@ def phase_for_fraction(frac: float) -> str:
     return DEATH
 
 
-def phase_for_ball(balls_bowled: int, innings_balls: int) -> str:
+def phase_for_ball(balls_bowled: int, innings_balls: int, format_name=None) -> str:
     """The phase of the next delivery, from balls bowled and the innings length.
 
     ``balls_bowled`` is clamped into ``[0, innings_balls)`` so the last ball of
@@ -57,4 +57,6 @@ def phase_for_ball(balls_bowled: int, innings_balls: int) -> str:
     """
     total = max(1, int(innings_balls))
     done = min(total - 1, max(0, int(balls_bowled)))
+    if format_name == "ODI":
+        return POWERPLAY if done < 60 else MIDDLE if done < 240 else DEATH
     return phase_for_fraction(done / float(total))

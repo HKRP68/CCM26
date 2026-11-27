@@ -9592,7 +9592,8 @@ function renderScorecard() {
         <p>${escapeHtml(inn.bat_team)}</p>
         <strong>${inn.runs}/${inn.wickets}</strong>
       </div>
-      <div><span>Innings ${inn.number}</span><span>${escapeHtml(elapsed)}</span></div>
+      <div><span>Innings ${inn.number}</span><span>${escapeHtml(elapsed)}</span>
+        ${d.ball_format === 'ODI' ? '<span>ODI · 50 overs</span>' : ''}</div>
       ${d.result_text ? `<p class="lm-sc-result">${escapeHtml(d.result_text)}</p>` : ''}
     </section>
     <section class="scorecard-section" aria-labelledby="scorecard-batting">

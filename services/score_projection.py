@@ -198,6 +198,11 @@ def project_first_innings(state):
     if bowled <= 0:
         return None
 
+    if state.get("ball_format") == "ODI":
+        from services import odi_approach
+        return {"runs": runs, "wickets": wkts, "expected": odi_approach.forecast(state),
+                "low": None, "high": None, "approximate": True, "complete": False}
+
     fmt = _format_config(innings_balls)
     curve = getattr(fmt, "par_scores", None) if fmt else None
     native = getattr(fmt, "overs", None) if fmt else None
@@ -434,6 +439,11 @@ def _calibrated_par_total(state):
     historical average is invented: without calibrated data this returns
     ``(None, True)`` and the caller labels any fallback approximate.
     """
+    if state.get("ball_format") == "ODI":
+        from services import odi_approach
+        from engine.realism import odi
+        ctx = odi_approach.context(state)
+        return round(odi_approach.mean_remaining(300, 10, ctx, odi.settings(state))), True
     innings_balls = _total_balls(state)
     fmt = _format_config(innings_balls)
     curve = getattr(fmt, "par_scores", None) if fmt else None
