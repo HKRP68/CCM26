@@ -24,6 +24,12 @@ Three properties are held by **tests/test_drinks_break.py** rather than claimed 
 
 The AI captain calls it from the score, the wickets standing and the chase. An unanswered interval is called the way the AI would call it: nobody is fined or forfeited for a bonus decision. An innings with no recorded plan behaves exactly as it did before the interval existed, so matches already in flight, every T20 and The Hundred are untouched. The interval is asked in the chat on both surfaces, so a Mini App match does not wait for an app release to use it; the Arena shows the plans in force.
 
+## ODI tournaments
+
+A tournament has carried an over count since tournaments did, and the admin panel has always offered **T20**, **List A (50 overs)**, **T10** and a custom 1-50 — but the match launch forced every fixture to twenty, so a "List A" tournament was a T20 with the wrong label. It is now honoured: **services.tournament_match_settings.apply_format_to_draft** puts the tournament's length on the draft, and 21 overs or more sets **ball_format** to ODI and pins the tuning, so a 50-over World Cup plays on the measured ODI model rather than at T20 scoring rates. The Challenge League path reads it at the toss; **/letsplay**'s tournament path reads it at the invitation, so the invitation card, the XI bowling-capacity gate and the Match row all agree on one value.
+
+A league whose own format is fixed keeps it — The Hundred's 100 balls as 20 five-ball sets is not an over count. Where ODI rules are paused, a Challenge League fixture says so and a Lets Play fixture falls back to the default length rather than becoming unplayable.
+
 ## Rain and revised targets
 
 **services/rain_interruption.py** lets weather shorten an ODI-rules match. Short formats are untouched, as are bot practice and Super Overs. The arithmetic is not new: **engine/dls.py** already holds the Duckworth-Lewis resource curve and **engine/sim/rain_dls.py** already turns it into targets for **/sim ODI**, so the interactive match and the auto-sim price a stoppage identically.

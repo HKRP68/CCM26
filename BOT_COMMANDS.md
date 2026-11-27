@@ -332,6 +332,10 @@ Use commas to compare values within a filter and pipes to combine filters. Both 
   revealed together, and the match-up shapes every remaining delivery. Squeeze
   beats acceleration, rotate beats building, strike beats blocking — and no plan
   is the right answer to everything. Short formats take no interval.
+* **ODI tournaments** — a tournament now plays the length it was created at.
+  The admin panel's **List A (50 overs)** option (and any custom 1–50) reaches
+  the match at last: 21 overs or more plays under ODI rules, so a 50-over World
+  Cup is a 50-over World Cup. The Hundred leagues keep their own format.
 * **Rain and DLS** — an ODI-rules match (21+ overs) can now be interrupted.
   Rain in the first innings shortens both and the target is set by DLS at the
   break; rain in the chase shortens it and revises the target. Each side always

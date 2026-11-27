@@ -66,11 +66,50 @@ LETSPLAY_OVERS = 20    # default length; /letsplay 5 plays a 5-over match
 
 
 def draft_overs(draft):
-    """Overs for this draft's match: the custom count, else the default."""
+    """Overs for this draft's match.
+
+    A tournament fixture plays its tournament's own length; otherwise the
+    custom count typed on the command, else the default.
+    """
+    draft = draft or {}
+    for key in ("tournament_overs", "overs"):
+        try:
+            value = int(draft.get(key) or 0)
+        except (TypeError, ValueError):
+            value = 0
+        if value:
+            return value
+    return LETSPLAY_OVERS
+
+
+def _tournament_format(session, tour_ctx):
+    """``{}``, or the format keys a Lets Play Tournament fixture overrides.
+
+    A tournament has carried an over count since tournaments did, and the admin
+    panel offers T20, List A (50), T10 and a custom 1-50; the match launch used
+    to ignore it. Resolved at invitation time so every later step — the card,
+    the XI gate, the Match row, the live state — reads one value.
+    """
+    if not tour_ctx or not tour_ctx.get("tournament_id"):
+        return {}
+    from models import Tournament
+    from services.tournament_match_settings import apply_format_to_draft
     try:
-        return int((draft or {}).get("overs") or LETSPLAY_OVERS)
-    except (TypeError, ValueError):
-        return LETSPLAY_OVERS
+        tour = session.get(Tournament, int(tour_ctx["tournament_id"]))
+    except Exception:
+        logger.exception("letsplay: could not read the tournament's format")
+        return {}
+    keys = {}
+    try:
+        apply_format_to_draft(tour, keys)
+    except ValueError:
+        # ODI rules are paused. The fixture still has to be playable, so it
+        # falls back to the default length rather than refusing to start.
+        logger.warning("letsplay: tournament %s wants ODI rules, which are "
+                       "paused — playing the default length",
+                       tour_ctx.get("tournament_id"))
+        return {}
+    return keys
 
 def draft_format_label(draft):
     return cipl_match.format_label({"ball_format": draft.get("ball_format"),
@@ -529,7 +568,8 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
         return
 
     # Custom length: /letsplay 5 @user (or reply with /lp 5). A tournament
-    # fixture is always the full LETSPLAY_OVERS, whatever was typed.
+    # fixture plays the length its tournament was created at, whatever was
+    # typed — resolved below, once there is a session to read it with.
     overs, ball_format, odi_settings = LETSPLAY_OVERS, "T20", None
     if not tour_ctx:
         from services.match_formats import (
@@ -686,6 +726,9 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
                       "name": guest_user.username or guest_user.first_name or "Guest"}
         # XI preview so the guest knows what they're up against (host's top 11).
         host_preview = _xi_preview(host_pairs)
+        # A tournament fixture's length comes from its tournament, and has to
+        # be read while the session is still open.
+        tour_format = _tournament_format(session, tour_ctx)
     except Exception:
         logger.exception("/letsplay setup failed")
         await msg.reply_text("⚠️ Couldn't start the match. Try again.")
@@ -706,6 +749,10 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
         # Official Lets Play Tournament fixture, or None for a friendly.
         "lpt": dict(tour_ctx) if tour_ctx else None,
         "overs": overs, "ball_format": ball_format,
+        # A tournament's own length (and the engine 21+ overs implies) is put
+        # on the draft here rather than at launch, so the invitation card, the
+        # XI bowling-capacity gate and the Match row all agree on it.
+        **tour_format,
         **({"odi_settings": odi_settings} if odi_settings is not None else {}),
         # /lpmulti: the guest picks a league team after accepting.
         "lpmulti": bool(multi) and not tour_ctx,
@@ -2230,6 +2277,15 @@ async def _launch_match(context, draft, decision, winner_side):
     from engine.realism import odi
     from services import odi_approach
     is_odi = draft.get("ball_format") == "ODI"
+    if is_odi and not draft.get("odi_settings"):
+        # A draft that carries the label but not the tuning (an older draft,
+        # or a tournament resolved before the settings were minted).
+        from engine.realism import odi as _odi
+        try:
+            draft["odi_settings"] = _odi.new_settings()
+        except _odi.ODIUnavailable as exc:
+            await _abandon_launch(context, draft, str(exc))
+            return
     if is_odi:
         if not odi.enabled():
             await _abandon_launch(context, draft, "ODI Approach is currently unavailable.")

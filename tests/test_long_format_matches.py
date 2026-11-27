@@ -775,3 +775,78 @@ def test_bot_prompt_banner(token, expected):
     from handlers.botlevel import length_banner
     assert length_banner("lp", token) == expected
     assert length_banner("cipl", token) == ""
+
+
+# ── A tournament plays the length it was created at ──────────────────
+def test_a_tournament_length_is_read_and_clamped():
+    from services.tournament_match_settings import tournament_overs
+    assert tournament_overs(NS(overs=20)) == 20
+    assert tournament_overs(NS(overs=50)) == 50
+    assert tournament_overs(NS(overs=10)) == 10
+    # Out-of-range or junk can only come from an older row or a hand edit.
+    assert tournament_overs(NS(overs=0)) is None
+    assert tournament_overs(NS(overs=None)) is None
+    assert tournament_overs(NS(overs=500)) == CUSTOM_OVERS_MAX
+    assert tournament_overs(NS(overs="nope")) is None
+    assert tournament_overs(None) is None
+
+
+@pytest.mark.parametrize("overs", (21, 35, 50))
+def test_a_long_tournament_plays_under_odi_rules(overs):
+    """The admin panel has always offered List A; the launch used to ignore it."""
+    from services.tournament_match_settings import apply_format_to_draft
+    draft = {}
+    assert apply_format_to_draft(NS(overs=overs), draft) == overs
+    assert draft["tournament_overs"] == overs
+    assert draft["ball_format"] == "ODI"
+    assert draft["ball_format_locked"] is True
+    assert draft["odi_settings"]["version"] == "odi-approach-1"
+
+
+@pytest.mark.parametrize("overs", (10, 16, 20))
+def test_a_short_tournament_stays_on_the_t20_engine(overs):
+    from services.tournament_match_settings import apply_format_to_draft
+    draft = {}
+    assert apply_format_to_draft(NS(overs=overs), draft) == overs
+    assert draft["tournament_overs"] == overs
+    assert "ball_format" not in draft and "odi_settings" not in draft
+
+
+def test_a_hundred_league_keeps_its_own_format():
+    """100 balls as 20 five-ball sets is not an over count."""
+    from services.tournament_match_settings import apply_format_to_draft
+    draft = {"ball_format": "The100"}
+    assert apply_format_to_draft(NS(overs=50), draft) is None
+    assert draft == {"ball_format": "The100"}
+
+
+def test_a_paused_odi_release_refuses_a_long_tournament(monkeypatch):
+    from services.tournament_match_settings import apply_format_to_draft
+    monkeypatch.setenv("CMU_ODI_APPROACH_ENABLED", "0")
+    with pytest.raises(ValueError, match="paused"):
+        apply_format_to_draft(NS(overs=50), {})
+
+
+def test_the_letsplay_draft_prefers_the_tournament_length():
+    from handlers.letsplay import LETSPLAY_OVERS, draft_overs
+    assert draft_overs({"overs": 5}) == 5
+    assert draft_overs({}) == LETSPLAY_OVERS
+    # A tournament fixture plays its tournament's length, not the default the
+    # command put on the draft.
+    assert draft_overs({"overs": LETSPLAY_OVERS, "tournament_overs": 50}) == 50
+    assert draft_overs({"tournament_overs": 0, "overs": 7}) == 7
+    assert draft_overs(None) == LETSPLAY_OVERS
+
+
+def test_a_paused_odi_release_leaves_a_tournament_fixture_playable(monkeypatch):
+    """A fixture must still start; it falls back to the default length."""
+    from handlers.letsplay import _tournament_format
+    monkeypatch.setenv("CMU_ODI_APPROACH_ENABLED", "0")
+
+    class _Session:
+        def get(self, _model, _pk):
+            return NS(overs=50)
+
+    assert _tournament_format(_Session(), {"tournament_id": 1}) == {}
+    assert _tournament_format(_Session(), None) == {}
+    assert _tournament_format(_Session(), {}) == {}

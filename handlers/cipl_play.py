@@ -2111,14 +2111,17 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         overs = CIPL_OVERS
         ball_format = draft.get("ball_format", "T20")
         odi_settings = draft.get("odi_settings")
-        # A friendly can be shorter (/cipl 6) or longer (/cipl 50, an ODI).
-        # Tournament, CL Tour and The Hundred matches are always the full 20
-        # units.
-        if (draft.get("overs") and ball_format in ("T20", "ODI")
-                and not draft.get("is_tournament") and not draft.get("tournament_id")
+        # A friendly can be shorter (/cipl 6) or longer (/cipl 50, an ODI), and
+        # a tournament plays whatever length it was created at — the admin
+        # panel has always offered T20, List A (50), T10 and a custom 1-50, but
+        # this used to force every fixture to twenty, so a "List A" tournament
+        # was a T20 with the wrong label. CL Tour and The Hundred keep their
+        # fixed lengths.
+        length = draft.get("tournament_overs") or draft.get("overs")
+        if (length and ball_format in ("T20", "ODI")
                 and not draft.get("cl_tour_id")):
             from services.match_formats import CUSTOM_OVERS_MAX, ball_format_for_overs
-            overs = max(1, min(CUSTOM_OVERS_MAX, int(draft["overs"])))
+            overs = max(1, min(CUSTOM_OVERS_MAX, int(length)))
             # The over count owns the engine, so a draft that lost its ODI
             # label (or carries one for a short match) is corrected here rather
             # than playing 50 overs on T20 rates.

@@ -148,8 +148,63 @@ def apply_to_draft(session, fixture, draft):
     tour = session.get(Tournament, fixture.tournament_id)
     if fixture.pitch_type and (pitch_locked(tour) or is_playoff(fixture)):
         draft['pitch_type'] = fixture.pitch_type
+    apply_format_to_draft(tour, draft)
     pitch = draft.get('pitch_type') or 'Hard'
     _, draft['conditions'] = build_pitch_report(pitch, day_night=period)
+
+
+def tournament_overs(tour):
+    """The over count a tournament's fixtures are played at.
+
+    ``Tournament.overs`` has existed since tournaments did, and the admin
+    panel has always offered T20, List A (50), T10 and a custom 1-50 — but the
+    match launch ignored it and played every fixture at twenty, so a
+    "List A" tournament was a T20 with the wrong label. Clamped to the range
+    a command may ask for, because a stored value outside it could only come
+    from an older row or a hand-edited database.
+    """
+    from services.match_formats import CUSTOM_OVERS_MAX, CUSTOM_OVERS_MIN
+
+    try:
+        overs = int(getattr(tour, "overs", None) or 0)
+    except (TypeError, ValueError):
+        overs = 0
+    if not overs:
+        return None
+    return max(CUSTOM_OVERS_MIN, min(CUSTOM_OVERS_MAX, overs))
+
+
+def apply_format_to_draft(tour, draft):
+    """Put the tournament's length — and the engine it implies — on the draft.
+
+    21 overs or more is an ODI, the same rule every other entry point uses
+    (``services.match_formats.ball_format_for_overs``), so a 50-over
+    tournament plays on the measured ODI model rather than at T20 scoring
+    rates. A league whose own format is fixed (The Hundred) keeps it: its
+    squads and its 100-ball innings are not an over count.
+    """
+    from engine.realism import odi
+    from services.match_formats import ball_format_for_overs
+
+    overs = tournament_overs(tour)
+    if not overs or draft.get("ball_format") == "The100":
+        return None
+    draft["tournament_overs"] = overs
+    ball_format = ball_format_for_overs(overs)
+    if ball_format != "ODI":
+        return overs
+    if not odi.enabled():
+        raise ValueError(
+            "This tournament is set to a 21-over-or-longer format, which plays "
+            "under ODI rules, and ODI matches are currently paused.")
+    draft["ball_format"] = "ODI"
+    draft["ball_format_locked"] = True
+    if not draft.get("odi_settings"):
+        try:
+            draft["odi_settings"] = odi.new_settings()
+        except odi.ODIUnavailable as exc:
+            raise ValueError(str(exc)) from exc
+    return overs
 
 
 def _tie_run_window(par, remaining, innings_balls):
