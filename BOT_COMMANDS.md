@@ -212,7 +212,7 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/myprofile` | `/profile` `/me` | Your profile |
 | `/stats` 💬 | `/st` | A player's game statistics |
 | `/gstats` 💬 | `/globalstats` | Global stats — every owner, every match type 🌍 |
-| `/odistats` 💬 | `/odistat` `/statsodi` | **ODI career** — every innings of 21 overs or more, kept apart from the short-format record. Add `global` for every owner's innings 🥇 |
+| `/odistats` | `/odistat` `/statsodi` | **ODI career** — every innings of 21 overs or more, kept apart from the short-format record. Add `global` for every owner's innings 🥇 |
 | `/odirecords` | `/odilb` `/odileaderboard` | **ODI leaderboards** — most runs, most wickets, highest score, best bowling, batting average, economy and strike rate, on one row of buttons 🏅 |
 | `/statscl` 💬 | — | Any Challenge League player's stats |
 | `/statstour` | — | A player's **This Season Stats** and **Total Season Stats**, with batting/bowling innings, runs, wickets, 50s, 100s, 4s/6s, averages, strike rates, economy, ducks, HS (with `*` for not out), 3-/5-fers, hat-tricks, best bowling, overs and POTM awards. Linked past seasons and saved deleted seasons count toward totals; unavailable older records show `—`. Each season section expands on tap |
@@ -1195,8 +1195,7 @@ because Telegram caps each scope at 100 commands.
 In a group these post a one-line deep link instead of the answer
 (`services/dm_only.py`):
 
-`/stats` · `/gstats` · `/odistats` · `/statscl` · `/setbo` · `/recentmatches` ·
-`/traits` ·
+`/stats` · `/gstats` · `/statscl` · `/setbo` · `/recentmatches` · `/traits` ·
 `/traitboost` · `/traitshop` · `/traitapply` · `/traitupgrade` ·
 `/traitreplace` · `/removetrait` · `/selltrait`
 

@@ -177,6 +177,13 @@ UNPUBLISHED_ON_PURPOSE = {
     # Tournament Help — advertised from /commands, /lpt, /ctour and /lptadmin;
     # both player menus and the admin bucket are at the ceiling.
     "tourhelp",
+    # The ODI career record and its leaderboards. Both player menus were
+    # already at Telegram's 100-command ceiling, and these two are reachable
+    # from the cards a player already opens: /stats and /gstats both carry a
+    # 🥇 ODI button that flips to the long-format record, and /odirecords is
+    # linked from there. Also in BOT_COMMANDS.md and the /commands catalog.
+    "odistats", "odistat", "statsodi",
+    "odirecords", "odilb", "odileaderboard",
     # The full match & tournament guide (a file) — named on /matchhelp,
     # /tourhelp, /howto and in the /commands catalogue; menus are at the ceiling.
     "matchguide",

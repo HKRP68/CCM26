@@ -548,8 +548,6 @@ BOT_MENU_COMMANDS = (
     ("cmushop", "Browse the CMU shop 🛍️"),
     ("stats", "View player game statistics"),
     ("gstats", "Global player stats — every owner, every match type 🌍"),
-    ("odistats", "ODI career stats — every innings of 21+ overs 🥇"),
-    ("odirecords", "ODI leaderboards — runs, wickets, best figures 🏅"),
     ("owners", "See who owns a player in this group 👥"),
     ("statscl", "View any Challenge League player's stats"),
     ("statstour", "View a player's active-tournament stats"),
@@ -816,7 +814,6 @@ def _dm_only_handlers():
     return {
         "stats": stats_handler,
         "gstats": gstats_handler,
-        "odistats": odistats_handler,
         "statscl": statscl_handler,
         "setbo": setbo_handler,
         "recentmatches": recentmatches_handler,
@@ -1671,9 +1668,13 @@ def main():
         # /odistats — the long-format career, kept in its own table because an
         # innings of 21 overs or more is played under ODI rules and never
         # mixed into the short-format record. See handlers/odistats.py.
+        # /odistats and /odirecords answer where they are typed. Both player
+        # slash menus are at Telegram's 100-command ceiling, so neither is
+        # published there (see tests/test_bot_menu_commands.py's
+        # UNPUBLISHED_ON_PURPOSE); they are reached from the 🥇 ODI button on
+        # /stats and /gstats, from /commands, and from BOT_COMMANDS.md.
         app.add_handler(CommandHandler(
-            ["odistats", "odistat", "statsodi"],
-            dm_only("odistats", odistats_handler)))
+            ["odistats", "odistat", "statsodi"], odistats_handler))
         # /odirecords — the long-format leaderboards. Seven boards behind one
         # row of buttons; see handlers/odirecords.py. Stays in the group: a
         # leaderboard is for the group to read, like /leaderboard.
