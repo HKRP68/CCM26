@@ -210,8 +210,8 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | Command | Aliases | What it does |
 |---------|---------|--------------|
 | `/myprofile` | `/profile` `/me` | Your profile |
-| `/stats` 💬 | `/st` | A player's game statistics |
-| `/gstats` 💬 | `/globalstats` | Global stats — every owner, every match type 🌍 |
+| `/stats` 💬 | `/st` | A player's game statistics — with a **🥇 ODI record** button that flips the same card to the long-format record |
+| `/gstats` 💬 | `/globalstats` | Global stats — every owner, every match type 🌍. **🥇 ODI** flips to every owner's long-format record |
 | `/odistats` | `/odistat` `/statsodi` | **ODI career** — every innings of 21 overs or more, kept apart from the short-format record. Add `global` for every owner's innings 🥇 |
 | `/odirecords` | `/odilb` `/odileaderboard` | **ODI leaderboards** — most runs, most wickets, highest score, best bowling, batting average, economy and strike rate, on one row of buttons 🏅 |
 | `/statscl` 💬 | — | Any Challenge League player's stats |

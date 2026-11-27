@@ -327,6 +327,55 @@ async def purse_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.close()
 
 
+def _blank_career_row(user_id, player_id):
+    """A zeroed ``PlayerGameStats`` for a card that has never played.
+
+    An ORM object built but not inserted has ``None`` in every defaulted
+    column — the defaults are applied on INSERT — and the record layout below
+    formats those columns with a width, which raises on None. So the stand-in
+    is filled in rather than left to the defaults, and nothing is added to the
+    session: reading a record must not write a row.
+    """
+    row = PlayerGameStats(user_id=user_id, player_id=player_id)
+    for column in PlayerGameStats.__table__.columns:
+        if column.name in ("id", "user_id", "player_id", "created_at", "updated_at"):
+            continue
+        if getattr(row, column.name, None) is None:
+            setattr(row, column.name,
+                    False if str(column.type) == "BOOLEAN" else 0)
+    return row
+
+
+def career_record_text(player, flag, owner_name, buy_val, gs):
+    """A player's short-format career record as the ``<code>`` block.
+
+    Extracted from ``stats_handler`` so the 🥇 ODI flip below can rebuild the
+    short-format side when a reader taps back, rather than keeping a second
+    copy of the layout that would drift from this one.
+    """
+    return (
+        f"📛 <b>{player.name}</b> {flag}\n"
+        f"⭐ {player.rating} OVR | {player.category}\n\n"
+        f"<code>"
+        f"Owner: {owner_name}\n"
+        f"Value: {buy_val:,} 🪙\n"
+        f"POTM(s): {gs.potm}\n"
+        f"\n"
+        f"{'🏏 BATTING':<20}{'🎯 BOWLING'}\n"
+        f"{'─' * 38}\n"
+        f"Inns: {gs.bat_inns:<14}Inns: {gs.bowl_inns}\n"
+        f"Runs: {gs.runs:<14}Wickets: {gs.wickets_taken}\n"
+        f"50s: {gs.fifties:<15}3-Fers: {gs.three_fers}\n"
+        f"100s: {gs.hundreds:<14}5-Fers: {gs.five_fers}\n"
+        f"4/6: {gs.fours}/{gs.sixes:<12}Hattricks: {gs.hattricks}\n"
+        f"Avg: {gs.bat_avg:<14}Avg: {gs.bowl_avg}\n"
+        f"SR: {gs.bat_sr:<15}Economy: {gs.bowl_economy}\n"
+        f"Ducks: {gs.ducks:<13}SR: {gs.bowl_sr}\n"
+        f"HS: {gs.hs_str:<15}BBF: {gs.bbf_str}\n"
+        f"</code>"
+    )
+
+
 def _career_blocks(player, flag, owner_name, buy_val, gs):
     """A player's career record as two tables — the twin of the ``<code>`` block.
 
@@ -435,27 +484,7 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         buy_val = get_buy_value(player.rating)
         owner_name = f"@{user.username}" if user.username else user.first_name
 
-        text = (
-            f"📛 <b>{player.name}</b> {flag}\n"
-            f"⭐ {player.rating} OVR | {player.category}\n\n"
-            f"<code>"
-            f"Owner: {owner_name}\n"
-            f"Value: {buy_val:,} 🪙\n"
-            f"POTM(s): {gs.potm}\n"
-            f"\n"
-            f"{'🏏 BATTING':<20}{'🎯 BOWLING'}\n"
-            f"{'─' * 38}\n"
-            f"Inns: {gs.bat_inns:<14}Inns: {gs.bowl_inns}\n"
-            f"Runs: {gs.runs:<14}Wickets: {gs.wickets_taken}\n"
-            f"50s: {gs.fifties:<15}3-Fers: {gs.three_fers}\n"
-            f"100s: {gs.hundreds:<14}5-Fers: {gs.five_fers}\n"
-            f"4/6: {gs.fours}/{gs.sixes:<12}Hattricks: {gs.hattricks}\n"
-            f"Avg: {gs.bat_avg:<14}Avg: {gs.bowl_avg}\n"
-            f"SR: {gs.bat_sr:<15}Economy: {gs.bowl_economy}\n"
-            f"Ducks: {gs.ducks:<13}SR: {gs.bowl_sr}\n"
-            f"HS: {gs.hs_str:<15}BBF: {gs.bbf_str}\n"
-            f"</code>"
-        )
+        text = career_record_text(player, flag, owner_name, buy_val, gs)
 
         # Lead with the player's card image (custom card if uploaded, else the
         # cached generated/template card). Send the image and stats as ONE
@@ -486,32 +515,138 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             logger.exception("Stats custom card load failed for %s", player.id)
 
-        photo_sent = False
+        # The sent photo is kept: when the record rides in its caption, the
+        # 🥇 ODI switch has to go on that message rather than a follow-up.
+        card_message = None
         if custom_bytes:
             try:
-                await update.message.reply_photo(
+                card_message = await update.message.reply_photo(
                     photo=io.BytesIO(custom_bytes), caption=photo_caption, parse_mode="HTML")
-                photo_sent = True
             except Exception:
                 # Don't let a failed image upload swallow the stats text below.
                 logger.exception("Stats custom card send failed; continuing with text")
         else:
             # Reuses a stored Telegram file_id when available (no re-render/upload).
             from services.card_generator import send_generated_card
-            sent = await send_generated_card(
+            card_message = await send_generated_card(
                 update.message.reply_photo, player,
                 caption=photo_caption, parse_mode="HTML")
-            photo_sent = sent is not None
+        photo_sent = card_message is not None
         # Send the stats as a follow-up only when they weren't already carried in
         # the photo caption (or when no card image could be sent at all).
+        flip = odi_flip_keyboard(tg_user.id, player.id, "short")
         if not (photo_sent and full_in_caption):
-            await R.reply_rich(update.message, career_blocks, text)
+            await R.reply_rich(update.message, career_blocks, text,
+                               reply_markup=flip)
+        else:
+            try:
+                await card_message.edit_reply_markup(reply_markup=flip)
+            except Exception:
+                logger.debug("stats: could not attach the ODI switch",
+                             exc_info=True)
 
     except Exception:
         logger.exception(f"Stats error for {tg_user.id}")
         await update.message.reply_text("⚠️ Error. Try again.")
     finally:
         session.close()
+
+
+# ── The 🥇 ODI flip ──────────────────────────────────────────────────
+# Any innings of 21 overs or more is recorded in ``odi_player_innings``, never
+# in ``player_game_stats`` (see services/odi_stats_service.py), so the record
+# above cannot show it. Rather than make a player learn another command, the
+# record carries a button that swaps it for the long-format one.
+
+def odi_flip_keyboard(owner_tg, player_id, showing="short"):
+    """The one-button switch under a career record.
+
+    ``showing`` is which record is on screen, so the button always offers the
+    other one.
+    """
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    if showing == "odi":
+        return InlineKeyboardMarkup([[InlineKeyboardButton(
+            "◀ Short formats", callback_data=f"stfmt_{owner_tg}_{player_id}_short")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton(
+        "🥇 ODI record", callback_data=f"stfmt_{owner_tg}_{player_id}_odi")]])
+
+
+def odi_record_text(session, user, player, owner_name):
+    """The long-format record for this owner's copy of ``player``."""
+    from services import odi_stats_service as odi_stats
+    flag = get_flag(player.country)
+    # Every edition of a re-released card is the same cricketer, exactly as
+    # /odistats and /gstats treat it.
+    base_id = player.parent_player_id or player.id
+    edition_ids = [row.id for row in session.query(Player.id).filter(
+        (Player.id == base_id) | (Player.parent_player_id == base_id)).all()]
+    record = odi_stats.careers(session, edition_ids or [player.id], user.id)
+    head = (f"🥇 <b>{player.name}</b> {flag}\n"
+            f"⭐ {player.rating} OVR | {player.category}\n"
+            f"<b>ODI record</b> · <i>{owner_name}</i>\n"
+            f"📋 Matches: {record['matches']}\n")
+    if not odi_stats.has_record(record):
+        return (head + "\n📭 <i>No ODI innings yet — every match of 21 overs or "
+                "more counts.</i>\n<i>Start one with</i> "
+                "<code>/lp 50 @username</code>.")
+    return f"{head}\n<code>{odi_stats.record_block(record)}</code>"
+
+
+async def stats_format_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """``stfmt_<owner_tg>_<player_id>_<short|odi>`` — flip a record's format."""
+    query = update.callback_query
+    parts = (query.data or "").split("_")
+    if len(parts) != 4:
+        await query.answer("Invalid.", show_alert=True)
+        return
+    _, owner_tg, player_id, want = parts
+    try:
+        owner_tg, player_id = int(owner_tg), int(player_id)
+    except ValueError:
+        await query.answer("Invalid.", show_alert=True)
+        return
+    if query.from_user.id != owner_tg:
+        await query.answer("Not your card — run /stats yourself!", show_alert=True)
+        return
+
+    session = get_session()
+    try:
+        user = (session.query(User)
+                .filter(User.telegram_id == owner_tg).first())
+        player = session.get(Player, player_id)
+        if not user or not player:
+            await query.answer("Card not found.", show_alert=True)
+            return
+        owner_name = f"@{user.username}" if user.username else user.first_name
+        if want == "odi":
+            text = odi_record_text(session, user, player, owner_name)
+        else:
+            gs = (session.query(PlayerGameStats)
+                  .filter(PlayerGameStats.user_id == user.id,
+                          PlayerGameStats.player_id == player.id).first())
+            text = career_record_text(player, get_flag(player.country), owner_name,
+                                      get_buy_value(player.rating),
+                                      gs or _blank_career_row(user.id, player.id))
+    except Exception:
+        logger.exception("stats format flip failed for %s", owner_tg)
+        await query.answer("Could not load that record.", show_alert=True)
+        return
+    finally:
+        session.close()
+
+    await query.answer("ODI record" if want == "odi" else "Short formats")
+    markup = odi_flip_keyboard(owner_tg, player_id,
+                               "odi" if want == "odi" else "short")
+    try:
+        if getattr(query.message, "photo", None):
+            await query.edit_message_caption(caption=text, parse_mode="HTML",
+                                             reply_markup=markup)
+        else:
+            await query.edit_message_text(text, parse_mode="HTML",
+                                          reply_markup=markup)
+    except Exception:
+        logger.debug("stats format flip edit failed", exc_info=True)
 
 
 def _cp_details(player):

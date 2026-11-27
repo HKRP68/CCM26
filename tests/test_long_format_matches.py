@@ -648,6 +648,124 @@ def test_odistats_renders_a_record():
     assert "Matches: 4" in text and "3/28" in text
 
 
+# ── The 🥇 ODI flip on the career cards ──────────────────────────────
+def test_the_stats_card_offers_the_other_format():
+    from handlers.team import odi_flip_keyboard
+    short = odi_flip_keyboard(777, 5, "short")
+    assert [b.text for r in short.inline_keyboard for b in r] == ["🥇 ODI record"]
+    assert short.inline_keyboard[0][0].callback_data == "stfmt_777_5_odi"
+    odi = odi_flip_keyboard(777, 5, "odi")
+    assert [b.text for r in odi.inline_keyboard for b in r] == ["◀ Short formats"]
+    assert odi.inline_keyboard[0][0].callback_data == "stfmt_777_5_short"
+
+
+def test_the_short_format_record_builder_is_shared():
+    """One layout, used by /stats and by the flip back to it."""
+    from handlers.team import _blank_career_row, career_record_text
+    player = NS(name="Tester", rating=84, category="All-rounder")
+    gs = _blank_career_row(1, 1)
+    gs.bat_inns, gs.runs, gs.fifties = 4, 200, 2
+    gs.fours, gs.sixes, gs.balls_faced, gs.times_out = 18, 6, 150, 3
+    gs.highest_score, gs.potm = 88, 1
+    text = career_record_text(player, "🇮🇳", "@owner", 1000, gs)
+    assert "BATTING" in text and "BOWLING" in text
+    assert "@owner" in text and "Tester" in text
+    assert "Runs: 200" in text
+
+
+def test_a_never_played_card_renders_rather_than_raising():
+    """An ORM row that was never inserted has None in every defaulted column,
+    and the record layout formats those with a width."""
+    from handlers.team import _blank_career_row, career_record_text
+    player = NS(name="Rookie", rating=60, category="Batsman")
+    text = career_record_text(player, "", "@owner", 500, _blank_career_row(1, 2))
+    assert "Inns: 0" in text and "Runs: 0" in text
+
+
+def test_the_stats_flip_renders_an_owners_odi_record():
+    from handlers.team import odi_record_text
+    from models import ODIPlayerInnings, Player, User
+    with _stats_session() as session:
+        session.add_all([
+            User(id=1, telegram_id=777, username="skip"),
+            Player(id=5, name="Tester", rating=89, category="Wicket Keeper",
+                   country="England", bat_hand="Right", bowl_hand="Right",
+                   bowl_style="Medium"),
+        ])
+        for match_id, figures in ((1, {"runs": 101, "balls": 92, "out": True}),
+                                  (2, {"runs": 55, "balls": 48, "out": False})):
+            session.add(ODIPlayerInnings(
+                match_id=match_id, innings=1, discipline="bat", user_id=1,
+                player_id=5, figures=json.dumps(figures)))
+        session.flush()
+        user = session.get(User, 1)
+        text = odi_record_text(session, user, session.get(Player, 5), "@skip")
+    assert "ODI record" in text and "@skip" in text
+    assert "Matches: 2" in text
+    assert "Runs: 156" in text and "HS: 101" in text
+
+
+def test_the_stats_flip_says_so_when_there_is_no_odi_record():
+    from handlers.team import odi_record_text
+    from models import Player, User
+    with _stats_session() as session:
+        session.add_all([
+            User(id=1, telegram_id=777, username="skip"),
+            Player(id=5, name="Tester", rating=70, category="Batsman",
+                   country="India", bat_hand="Right", bowl_hand="Right",
+                   bowl_style="Medium"),
+        ])
+        session.flush()
+        text = odi_record_text(session, session.get(User, 1),
+                               session.get(Player, 5), "@skip")
+    assert "No ODI innings yet" in text and "/lp 50" in text
+
+
+def test_the_gstats_card_offers_the_odi_view():
+    from handlers import gstats
+    markup = gstats._keyboard(777, 5, 0, 1, "stats")
+    labels = [b.text for row in markup.inline_keyboard for b in row]
+    assert "🥇 ODI" in labels and "👥 Owners" in labels
+    data = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert "gstodi_777_5_0" in data
+
+
+def test_the_gstats_odi_view_sums_every_owner():
+    from handlers import gstats
+    from models import ODIPlayerInnings, Player
+    with _stats_session() as session:
+        session.add(Player(id=5, name="Tester", rating=88, category="All-rounder",
+                           country="India", bat_hand="Right", bowl_hand="Right",
+                           bowl_style="Fast"))
+        for user_id, runs in ((1, 70), (2, 90)):
+            session.add(ODIPlayerInnings(
+                match_id=user_id, innings=1, discipline="bat", user_id=user_id,
+                player_id=5, figures=json.dumps({"runs": runs, "balls": runs,
+                                                 "out": True})))
+        session.flush()
+        player = session.get(Player, 5)
+        pages = gstats._build_pages([player])
+        text = gstats._render_odi(session, player, [player], pages, 0)
+    assert "ODI STATS" in text and "21 overs or more" in text
+    # Both owners' innings, summed — the long-format twin of /gstats.
+    assert "Runs: 160" in text
+    assert "/odirecords" in text
+
+
+def test_the_gstats_odi_view_is_honest_when_empty():
+    from handlers import gstats
+    from models import Player
+    with _stats_session() as session:
+        session.add(Player(id=5, name="Tester", rating=60, category="Batsman",
+                           country="India", bat_hand="Right", bowl_hand="Right",
+                           bowl_style="Medium"))
+        session.flush()
+        player = session.get(Player, 5)
+        text = gstats._render_odi(session, player, [player],
+                                  gstats._build_pages([player]), 0)
+    assert "No ODI has been played" in text
+
+
 # ── The difficulty prompt carries a shortened ODI's length ───────────
 @pytest.mark.parametrize("token,expected", [
     ("ODI", "🏏 ODI · 50 overs\n"), ("35", "🏏 ODI rules · 35 overs\n"),

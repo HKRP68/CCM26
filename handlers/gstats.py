@@ -199,6 +199,38 @@ def _render_stats(session, player, versions, pages, index):
     return "\n".join(head), card
 
 
+def _render_odi(session, player, versions, pages, index):
+    """The 🥇 ODI view — the long-format record for this page's edition(s).
+
+    ODI innings are kept out of ``player_game_stats`` on purpose (any innings
+    of 21 overs or more goes to ``odi_player_innings`` instead), so the stats
+    view above cannot show them. Rather than make players learn another
+    command, the same card flips between the two records.
+    """
+    from services import odi_stats_service as odi_stats
+
+    page = pages[index]
+    card = page["card"]
+    record = odi_stats.careers(session, page["ids"])
+    flag = get_flag(player.country)
+    scope = "all editions" if page["label"] == ALL_EDITIONS else escape(page["label"])
+    head = [
+        f"🥇 <b>ODI STATS — {escape(player.name)}</b> {flag}",
+        f"⭐ {card.rating} OVR · {escape(card.category or '')}",
+        f"<i>Every innings of 21 overs or more · {scope} · "
+        f"{record['matches']:,} match{'' if record['matches'] == 1 else 'es'}</i>",
+    ]
+    if len(pages) > 1:
+        head.append(f"<i>Edition {index + 1}/{len(pages)}</i>")
+    if not odi_stats.has_record(record):
+        head += ["", "📭 <i>No ODI has been played with this cricketer yet.</i>",
+                 "", "<i>Start one with</i> <code>/lp 50 @username</code>."]
+        return "\n".join(head)
+    head += ["", f"<code>{odi_stats.record_block(record)}</code>", "",
+             "🏅 <i>The boards:</i> <code>/odirecords</code>"]
+    return "\n".join(head)
+
+
 def _render_owners(session, user, player, versions, pages, index):
     """The 👥 Owners view — the /owners answer, in the same message."""
     from handlers.owners import render_owners_summary
@@ -227,8 +259,12 @@ def _keyboard(owner_tg, base_id, index, total_pages, view):
                     "Next ▶",
                     callback_data=f"gstpg_{owner_tg}_{base_id}_{next_index}"),
             ])
-        rows.append([InlineKeyboardButton(
-            "👥 Owners", callback_data=f"gstow_{owner_tg}_{base_id}_{index}")])
+        rows.append([
+            InlineKeyboardButton(
+                "👥 Owners", callback_data=f"gstow_{owner_tg}_{base_id}_{index}"),
+            InlineKeyboardButton(
+                "🥇 ODI", callback_data=f"gstodi_{owner_tg}_{base_id}_{index}"),
+        ])
     else:
         rows.append([InlineKeyboardButton(
             "◀ Back to stats",
@@ -402,6 +438,9 @@ async def _apply(q, session, user, player, versions, pages, index, view,
     """Edit the open card into the requested view/page, media included."""
     if view == "stats":
         text, card = _render_stats(session, player, versions, pages, index)
+    elif view == "odi":
+        text = _render_odi(session, player, versions, pages, index)
+        card = pages[index]["card"]
     else:
         text = _render_owners(session, user, player, versions, pages, index)
         card = pages[index]["card"]
@@ -517,6 +556,11 @@ async def gstats_page_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 async def gstats_owners_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """gstow_<owner_tg>_<base_id>_<index> — flip the card to the owners view."""
     await _navigate(update, "owners")
+
+
+async def gstats_odi_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """gstodi_<owner_tg>_<base_id>_<index> — flip the card to the ODI record."""
+    await _navigate(update, "odi")
 
 
 async def _navigate(update, view):

@@ -47,7 +47,8 @@ from handlers.myroster import myroster_handler, roster_page_callback
 from handlers.playerinfo import playerinfo_handler, player_version_callback
 from handlers.owners import owners_handler, owners_page_callback
 from handlers.gstats import (gstats_handler, gstats_page_callback,
-                             gstats_owners_callback, gstats_close_callback)
+                             gstats_owners_callback, gstats_odi_callback,
+                             gstats_close_callback)
 from handlers.odistats import odistats_handler
 from handlers.odirecords import odirecords_handler, odirecords_callback
 from services.dm_only import DM_ONLY_COMMANDS, dm_only
@@ -1659,6 +1660,12 @@ def main():
         # posts one deep-link notice that replays the command in the DM.
         app.add_handler(CommandHandler(
             ["stats", "st"], dm_only("stats", stats_handler)))
+        # 🥇 ODI / ◀ Short formats — the same record, the other format. Long
+        # innings live in their own table, so one card carries both rather
+        # than a player having to know a second command.
+        from handlers.team import stats_format_callback
+        app.add_handler(CallbackQueryHandler(stats_format_callback,
+                                             pattern=r"^stfmt_"))
         # /gstats — the same career record summed over every owner and match
         # type, paged edition by edition, with a 👥 Owners flip;
         # /owners — who is holding the card, group first (trade finder). That
@@ -1686,6 +1693,9 @@ def main():
                                              pattern=r"^gstpg_"))
         app.add_handler(CallbackQueryHandler(gstats_owners_callback,
                                              pattern=r"^gstow_"))
+        # 🥇 ODI — the same card, showing the long-format record instead.
+        app.add_handler(CallbackQueryHandler(gstats_odi_callback,
+                                             pattern=r"^gstodi_"))
         app.add_handler(CallbackQueryHandler(gstats_close_callback,
                                              pattern=r"^gstcl_"))
         app.add_handler(CommandHandler(
