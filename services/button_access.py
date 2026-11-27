@@ -130,6 +130,12 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # /cipl (Challenge League) over-by-over flow: coin call, toss decision, and
     # the per-over bowler/approach buttons. cipl_play.py validates each click
     # against bowl_user_tg / bat_user_tg, so these are shared prompts too.
+    # /odirecords — the ODI leaderboards. A leaderboard is for the group to
+    # read, like /leaderboard, so anyone may page between its boards; the
+    # callback only re-renders a public board and writes nothing. Without this
+    # the board was owner-locked to whoever typed the command, so everyone else
+    # tapping got "this button is not for you".
+    "odirec_",
     "cipl_coin_",
     "cipl_toss_",
     "cipl_bowler_",

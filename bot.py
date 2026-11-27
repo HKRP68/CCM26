@@ -2050,7 +2050,6 @@ def main():
         from handlers.cipl_play import (
             cipl_coin_callback, cipl_toss_callback, cipl_bowler_callback,
             cipl_bowlapp_callback, cipl_batapp_callback, cipl_newbat_callback,
-            cipl_drinksbowl_callback, cipl_drinksbat_callback,
             rcl_handler,
             cipl_impact_callback, cipl_impact_out_callback,
             cipl_impact_in_callback, cipl_impact_pos_callback,
@@ -2063,12 +2062,6 @@ def main():
         app.add_handler(CallbackQueryHandler(cipl_bowlapp_callback, pattern=r"^cipl_bowlapp_"))
         app.add_handler(CallbackQueryHandler(cipl_batapp_callback, pattern=r"^cipl_batapp_"))
         app.add_handler(CallbackQueryHandler(cipl_newbat_callback, pattern=r"^cipl_newbat_"))
-        # The drinks interval: one session plan from each captain, halfway
-        # through an ODI innings (services/drinks_break.py).
-        app.add_handler(CallbackQueryHandler(cipl_drinksbowl_callback,
-                                             pattern=r"^cipl_drinksbowl_"))
-        app.add_handler(CallbackQueryHandler(cipl_drinksbat_callback,
-                                             pattern=r"^cipl_drinksbat_"))
         # Impact Player — one swap per side, between overs or at the innings
         # break. Shared by /letsplay and every Challenge League mode, since both
         # run on the same over-by-over engine. Longer prefixes are registered

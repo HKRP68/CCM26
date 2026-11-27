@@ -325,13 +325,6 @@ Use commas to compare values within a filter and pipes to combine filters. Both 
   the ODI career table, never mixed into the short-format record, so a 50-over
   hundred never flatters a T20 strike rate. See `/odistats`, `/odirecords`, and
   the 🥇 ODI button on `/stats` and `/gstats`.
-* **Drinks, halfway through an ODI innings** — play stops and both captains call
-  a plan for the rest of it: the batting side picks Consolidate, Build or
-  Accelerate, the bowling side Squeeze, Rotate or Strike. The bowling captain
-  is asked first and their pick is hidden, so neither reads the other; both are
-  revealed together, and the match-up shapes every remaining delivery. Squeeze
-  beats acceleration, rotate beats building, strike beats blocking — and no plan
-  is the right answer to everything. Short formats take no interval.
 * **ODI tournaments** — a tournament now plays the length it was created at.
   The admin panel's **List A (50 overs)** option (and any custom 1–50) reaches
   the match at last: 21 overs or more plays under ODI rules, so a 50-over World

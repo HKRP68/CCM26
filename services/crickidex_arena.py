@@ -1143,21 +1143,6 @@ def _approach_payload(state, next_action, my_role):
             }
         payload["lastOver"] = _approach_last_over(state, my_role)
 
-        # The drinks-interval session plans, once both captains have called
-        # them. Read-only here: the interval itself is asked in the chat on
-        # both surfaces, but the Arena shows what is in force.
-        from services import drinks_break
-        entry = drinks_break.taken(state)
-        if entry:
-            runs, wicket = drinks_break.payoff(entry.get("bat"), entry.get("bowl"))
-            payload["sessionPlans"] = {
-                "over": entry.get("over"),
-                "batting": drinks_break.label_for(entry.get("bat")),
-                "bowling": drinks_break.label_for(entry.get("bowl")),
-                "runFactor": round(runs, 3),
-                "wicketFactor": round(wicket, 3),
-            }
-
         hints = {"phase": cm.approach_phase(state),
                  "repeatFrom": (cm.odi.settings(state)["repeat_grace"] + 1
                                 if cm.odi_approach.is_odi(state) else am.REPEAT_FROM)}
