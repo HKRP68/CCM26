@@ -9,6 +9,11 @@
 <script src="{{ url_for('static', filename='js/ad_reward_confirmation.js', v='4') }}"></script>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="{{ url_for('static', filename='js/miniapp_theme.js', v='elite-main-1') }}"></script>
+{# CMU Animation Engine — presentation-only motion layer. Core first: every
+   feature module below degrades to a no-op if it is missing, so a failed
+   download costs animation, never a reward. #}
+<script src="{{ url_for('static', filename='js/cmu_animation_engine.js', v='fx-1') }}"></script>
+<script src="{{ url_for('static', filename='js/cmu_pack_theatre.js', v='fx-1') }}"></script>
 <script>
   // Track third-party SDK load state so a DNS/network failure on these
   // hosts (e.g. net::ERR_NAME_NOT_RESOLVED where an ISP/region blocks the
@@ -2225,6 +2230,8 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_shell.css', v='6') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_tokens.css', v='elite-main-1') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/miniapp_blueprint.css', v='elite-market-1') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/cmu_animation_engine.css', v='fx-1') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/cmu_reveal_theatre.css', v='fx-1') }}">
 </head>
 <body>
 <header class="appbar">
@@ -3195,21 +3202,29 @@
 
 <!-- ════ Pack opening animation overlay ════ -->
 <div id="pack-open-overlay" class="pack-overlay" role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="pack-reveal-title" hidden>
+  <div class="cmu-fx-rays" aria-hidden="true"></div>
   <div class="pack-open-stage">
     <header>
       <h2 id="pack-reveal-title">Pack opening</h2>
       <p id="pack-open-status" role="status">Your pack is ready to reveal.</p>
     </header>
+    {# The CSS foil below is the no-JavaScript fallback. When the pack theatre
+       is available it replaces [data-cmu-pack-art] with original CMU foil SVG
+       whose crimp strip tears off the shell; the button's own click handler is
+       untouched either way, so there stays exactly one open path. #}
     <button type="button" id="pack-open-pack" class="pack-opening-button" onclick="revealPackCards()">
-      <span class="pack-foil" aria-hidden="true">
+      <span class="pack-foil" data-cmu-pack-art aria-hidden="true">
         <span class="pack-foil-seal"></span>
         {{ icon('cricket') }}
         <strong>CricMaster</strong>
       </span>
-      <span class="app-primary">Reveal players</span>
+      <span class="app-primary">Tap or swipe up to open</span>
     </button>
     <button type="button" class="hub-button" id="pack-open-skip" onclick="revealPackCards(true)">Skip animation</button>
     <div id="pack-open-cards" class="pack-anim-cards" hidden></div>
+    <div class="cmu-pack-stage-tools" id="pack-open-tools" hidden>
+      <button type="button" class="hub-button" id="pack-open-reveal-all" onclick="revealAllPackCards()">Reveal all</button>
+    </div>
     <p class="pack-receipt" id="pack-open-receipt" hidden></p>
     <div id="pack-open-overflow"></div>
     <button type="button" id="pack-open-done" class="app-primary" hidden onclick="closePackOpen()">Done</button>
@@ -3397,11 +3412,16 @@ function toast(msg, type = 'info') {
 }
 
 // ════════════════ Haptic ════════════════
+// Both honour the Animation Engine's haptics setting when it is loaded (one
+// switch for the whole app, shared with the match overlays) and fall back to
+// the Appearance preference when it is not.
 function haptic(style = 'light') {
+  if (window.CMUAnim) { window.CMUAnim.haptic(style); return; }
   if (!window.MiniappTheme.haptics) return;
   try { tg?.HapticFeedback?.impactOccurred(style); } catch (e) {}
 }
 function hapticNotif(type = 'success') {
+  if (window.CMUAnim) { window.CMUAnim.notify(type); return; }
   if (!window.MiniappTheme.haptics) return;
   try { tg?.HapticFeedback?.notificationOccurred(type); } catch (e) {}
 }
@@ -5840,7 +5860,11 @@ async function showAd() {
 }
 
 // Celebration confetti — bursts from top, falls down. count scales with tier.
+// Signature preserved for every existing caller; the Animation Engine owns the
+// implementation when it is loaded so the particle toggle and motion level
+// apply, and the inline version below remains the fallback.
 function launchConfetti(count = 60, tier = '', surface = document.body) {
+  if (window.CMUAnim) { window.CMUAnim.confetti(count, tier, surface); return; }
   if (reducedSpinMotion.matches) return;
   const colors = tier === 'legend'
     ? ['#ffd966', '#ff8c00', '#fff2b3', '#ffb347']
@@ -7981,6 +8005,15 @@ function setPackButtonsBusy(busy) {
     .forEach(b => { b.disabled = busy || b.dataset.locked === '1'; });
 }
 
+/** Foil artwork for a shop/inventory row, or '' when the theatre is absent
+ *  (the caller then falls back to the pack's emoji). Cosmetic only — the tier
+ *  is derived from the pack's own name and rating band. */
+function packEmblem(name, mainMaxRating) {
+  const theatre = packTheatre();
+  if (!theatre) return '';
+  return theatre.emblem(theatre.tierFor(name, { mainMaxRating }), { title: name || 'Pack' });
+}
+
 function switchPacksTab(tab) {
   currentPacksTab = tab;
   document.querySelectorAll('.packs-tab').forEach(el =>
@@ -8043,7 +8076,7 @@ function renderPacks() {
       return `
         <div class="pack-shop-card">
           <div class="pack-shop-head">
-            <div class="pack-shop-emoji">${escapeHtml(p.emoji)}</div>
+            <div class="pack-shop-emoji">${packEmblem(p.name, p.main_max_rating) || escapeHtml(p.emoji)}</div>
             <div style="flex:1;">
               <div class="pack-shop-name">${escapeHtml(p.name)}</div>
               ${p.description ? `<div class="pack-shop-desc">${escapeHtml(p.description)}</div>` : ''}
@@ -8068,7 +8101,7 @@ function renderPacks() {
     }
     el.innerHTML = packsData.inventory.map(inv => `
       <div class="pack-inv-card">
-        <div style="font-size:2rem;">${escapeHtml(inv.emoji)}</div>
+        <div class="pack-shop-emoji">${packEmblem(inv.name, inv.main_max_rating) || escapeHtml(inv.emoji)}</div>
         <div style="flex:1;">
           <div style="font-weight:800;font-size:0.95rem;">${escapeHtml(inv.name)}</div>
           <div style="font-size:0.72rem;color:var(--muted);">
@@ -8162,6 +8195,24 @@ async function openPack(inventoryId) {
 
 const packOverlay = document.getElementById('pack-open-overlay');
 let packReturnFocus = null;
+// Cosmetic tier of the pack being opened, and the controller for the flip deck
+// once it is on screen. Both are presentation state only — the opening record
+// in pendingRevealPlayers is what the server confirmed, and nothing here
+// touches it.
+let packTierKey = 'bronze';
+let packDeckController = null;
+let packUnmountTheatre = null;
+let packAutoRevealTimer = null;
+// A deck left face-down must not strand the cards behind it. The pack is
+// already consumed and the players are already in the squad and in Pack
+// History, so after this long the engine turns them over itself — the same
+// safety the Lucky Card deck uses (see PICK_AUTO_REVEAL_MS).
+const PACK_AUTO_REVEAL_MS = 12000;
+
+function packTheatre() {
+  const theatre = window.CMUPackTheatre;
+  return theatre && theatre.available ? theatre : null;
+}
 
 function startPackOpenAnimation() {
   const pack = document.getElementById('pack-open-pack');
@@ -8173,12 +8224,35 @@ function startPackOpenAnimation() {
   document.getElementById('pack-open-done').hidden = true;
   document.getElementById('pack-open-skip').hidden = false;
   document.getElementById('pack-open-receipt').hidden = true;
+  document.getElementById('pack-open-tools').hidden = true;
   pack.hidden = false;
   pack.disabled = false;
-  pack.classList.remove('bursting');
+  pack.classList.remove('bursting', 'is-shaking', 'is-tearing', 'is-torn', 'is-gripped');
+  packOverlay.querySelector('.cmu-fx-rays')?.classList.remove('is-lit');
   cards.hidden = true;
   cards.replaceChildren();
   packRevealing = false;
+  clearTimeout(packAutoRevealTimer);
+  packAutoRevealTimer = null;
+  packDeckController = null;
+
+  // Dress the pack in its own artwork. A second opening must not stack another
+  // set of gesture listeners on the same button, so the previous mount is
+  // released first.
+  const theatre = packTheatre();
+  if (packUnmountTheatre) { packUnmountTheatre(); packUnmountTheatre = null; }
+  if (theatre) {
+    const players = pendingRevealPlayers.players || [];
+    const mainMax = players.reduce((best, p) => Math.max(best, Number(p.rating) || 0), 0);
+    packTierKey = theatre.tierFor(pendingRevealPlayers.pack_name, {
+      source: pendingRevealPlayers.source,
+      mainMaxRating: mainMax,
+    });
+    packUnmountTheatre = theatre.mount(pack, packTierKey, {
+      onOpen: () => revealPackCards(),
+    });
+  }
+
   packOverlay.hidden = false;
   document.body.classList.add('pack-overlay-open');
   pack.focus();
@@ -8194,9 +8268,17 @@ function revealPackCards(skip = false) {
   pack.classList.add('bursting');
   packOverlay.focus();
 
+  const theatre = packTheatre();
+  // "Skip animation", a reduced-motion system preference and the Animations
+  // Off setting all mean the same thing here: show the end state now.
+  const instant = Boolean(skip) || reducedSpinMotion.matches
+    || Boolean(window.CMUAnim && window.CMUAnim.isOff());
+
   const render = () => {
     const cards = document.getElementById('pack-open-cards');
     const done = document.getElementById('pack-open-done');
+    const tools = document.getElementById('pack-open-tools');
+    const revealAllBtn = document.getElementById('pack-open-reveal-all');
     const players = [...(pendingRevealPlayers.players || [])].sort((a, b) => {
       const slotOrder = Number(b.slot === 'main') - Number(a.slot === 'main');
       return slotOrder || b.rating - a.rating;
@@ -8204,10 +8286,46 @@ function revealPackCards(skip = false) {
     const overflow = pendingRevealPlayers.overflow || [];
     const freePack = pendingRevealPlayers.source === 'freepack';
     const count = players.length + (freePack ? 0 : overflow.length);
-    document.getElementById('pack-open-status').textContent = count
-      ? `${count} player${count === 1 ? '' : 's'} revealed`
-      : 'Pack opened';
-    cards.innerHTML = players.map((player, index) => playerRevealCard(player, index)).join('');
+    const status = document.getElementById('pack-open-status');
+    const label = count ? `${count} player${count === 1 ? '' : 's'} revealed` : 'Pack opened';
+
+    if (theatre && players.length) {
+      // Face-down deck the player turns over, card by card.
+      cards.innerHTML = theatre.deck(players, {
+        packKey: packTierKey,
+        renderCard: (player, index) => playerRevealCard(player, index),
+        startFlipped: instant,
+      });
+      packDeckController = theatre.wireDeck(cards, {
+        players,
+        onComplete: () => {
+          status.textContent = label;
+          tools.hidden = true;
+          clearTimeout(packAutoRevealTimer);
+          packAutoRevealTimer = null;
+          const best = players.reduce((top, p) => Math.max(top, Number(p.rating) || 0), 0);
+          if (!instant && best >= 84) launchConfetti(best >= 91 ? 64 : 40, best >= 91 ? 'legend' : 'epic', packOverlay);
+        },
+      });
+      const open = packDeckController.complete;
+      tools.hidden = open;
+      if (revealAllBtn) revealAllBtn.hidden = open;
+      status.textContent = open ? label
+        : `Tap each card to reveal · ${players.length} to turn`;
+      if (!open) {
+        packAutoRevealTimer = setTimeout(() => {
+          packDeckController?.revealAll();
+        }, PACK_AUTO_REVEAL_MS);
+      }
+    } else {
+      // No theatre (engine unavailable) or an empty pack: the original flat
+      // list, which needs nothing beyond the blueprint stylesheet.
+      cards.innerHTML = players.map((player, index) => playerRevealCard(player, index)).join('');
+      tools.hidden = true;
+      status.textContent = label;
+      if (!instant && players.some(player => player.rating >= 84)) launchConfetti(32, 'epic', packOverlay);
+    }
+
     const receipt = document.getElementById('pack-open-receipt');
     receipt.hidden = !pendingRevealPlayers.history_id;
     receipt.textContent = pendingRevealPlayers.history_id ? 'Pack History reference P' + pendingRevealPlayers.history_id : '';
@@ -8217,26 +8335,56 @@ function revealPackCards(skip = false) {
       : renderOverflowLines(overflow, 'Squad full. Replace a player or release this pull.');
     pack.hidden = true;
     cards.hidden = players.length === 0;
+    // Done is live the moment the cards exist, never gated on finishing the
+    // animation: the reward is already granted and must stay reachable even if
+    // a flip, an image or the whole engine fails.
     done.hidden = false;
     done.focus();
     hapticNotif('success');
-    if (!skip && players.some(player => player.rating >= 84)) launchConfetti(32, 'epic', packOverlay);
   };
-  if (skip || reducedSpinMotion.matches) render();
-  else setTimeout(render, 310);
+
+  if (instant) {
+    if (theatre) theatre.open(pack, packOverlay, packTierKey, { skip: true });
+    render();
+  } else if (theatre) {
+    // Either outcome renders: a sequence that throws must not cost the player
+    // the cards it was announcing.
+    theatre.open(pack, packOverlay, packTierKey).then(render, render);
+  } else {
+    setTimeout(render, 310);
+  }
+}
+
+/** Reveal All — turns every remaining card over, staggered. */
+function revealAllPackCards() {
+  clearTimeout(packAutoRevealTimer);
+  packAutoRevealTimer = null;
+  haptic('medium');
+  const tools = document.getElementById('pack-open-tools');
+  if (tools) tools.hidden = true;
+  packDeckController?.revealAll();
 }
 
 function playerRevealCard(player, index = 0) {
   const rating = Number(player.rating) || 0;
+  // tier-* drives the existing blueprint styling; cmu-rarity-* drives the
+  // engine's accent colour. Both are cosmetic labels for the same rating.
   const tier = rating >= 84 ? 'elite' : rating >= 81 ? 'rare' : 'standard';
+  const rarity = window.CMUAnim ? window.CMUAnim.rarityOf(rating) : '';
   const url = player.card_url || (player.id ? playerCardUrl(player.id) : '');
   const slot = player.slot === 'main' ? 'Main player' : player.slot === 'bonus' ? 'Bonus player' : '';
   const version = player.version === 'Base' ? '' : player.version;
   const details = [player.category, player.country, version].filter(Boolean).map(escapeHtml).join(' · ');
-  return `<article class="player-reveal tier-${tier}" style="--reveal-delay:${Math.min(index, 4) * 70}ms">
+  // Artwork is 3:2 landscape and stays that way: the engine's <img> reserves
+  // the ratio and contains rather than crops, and a failed load collapses to a
+  // labelled placeholder instead of a broken-image icon.
+  const art = window.CMUAnim
+    ? window.CMUAnim.artwork(url, player.name || 'Player card')
+    : cardImg(url, player.name || 'Player card');
+  return `<article class="player-reveal tier-${tier}${rarity ? ' cmu-rarity-' + rarity : ''}" style="--reveal-delay:${Math.min(index, 4) * 70}ms">
     <div class="player-reveal-art">
       <span aria-hidden="true">${rating}<small>OVR</small></span>
-      ${cardImg(url, player.name || 'Player card')}
+      ${art}
     </div>
     <div class="player-reveal-copy">
       <h3>${escapeHtml(player.name || 'Player')}</h3>
@@ -8253,6 +8401,11 @@ function closePackOpen() {
   document.body.classList.remove('pack-overlay-open');
   pendingRevealPlayers = null;
   packRevealing = false;
+  clearTimeout(packAutoRevealTimer);
+  packAutoRevealTimer = null;
+  packDeckController = null;
+  if (packUnmountTheatre) { packUnmountTheatre(); packUnmountTheatre = null; }
+  packOverlay.querySelector('.cmu-fx-rays')?.classList.remove('is-lit');
   const heading = document.querySelector('.screen.active h2[tabindex="-1"]');
   if (heading) heading.focus();
   else if (packReturnFocus?.isConnected && !packReturnFocus.disabled) packReturnFocus.focus();

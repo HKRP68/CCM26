@@ -1,0 +1,410 @@
+/*
+ * CMU Animation Engine — core stylesheet
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Overlay shell, shared motion primitives and reusable reward components.
+ * Everything here is themed from static/css/miniapp_tokens.css, so the engine
+ * follows dark/light automatically and needs no per-theme JavaScript.
+ *
+ * Motion is gated twice: by `html[data-cmu-motion]` (the player's setting,
+ * already floored by prefers-reduced-motion in the engine) and by the OS
+ * media query, so an animation cannot run because one of the two was missed.
+ */
+
+:root {
+  /* Multiplier written by the engine; every duration below is expressed in
+     terms of it so one setting change retimes the whole layer. */
+  --cmu-motion-scale: 1;
+  --cmu-ease: cubic-bezier(.22, .78, .24, 1);
+  --cmu-ease-pop: cubic-bezier(.2, 1.3, .4, 1);
+  --cmu-overlay-ink: #F9F9F8;
+  --cmu-overlay-veil: rgb(6 7 10 / 76%);
+  --cmu-overlay-glow: var(--primary, #E7A443);
+  --cmu-stage-bg: var(--bg-card, #181821);
+  --cmu-stage-border: var(--border, #414348);
+  --cmu-rarity-standard: var(--text-muted, #999A9B);
+  --cmu-rarity-rare: #4A9EFF;
+  --cmu-rarity-epic: #A78BFA;
+  --cmu-rarity-legendary: #FFD966;
+  --cmu-rarity-mythic: #6CD9AE;
+}
+
+[data-theme="light"] {
+  --cmu-overlay-ink: #17171C;
+  --cmu-overlay-veil: rgb(28 22 14 / 58%);
+  --cmu-rarity-rare: #23507E;
+  --cmu-rarity-epic: #5D3C9D;
+  --cmu-rarity-legendary: #9A5A12;
+  --cmu-rarity-mythic: #146546;
+}
+
+/* ════════════════════════ Overlay shell ════════════════════════ */
+
+body.cmu-fx-locked { overflow: hidden; }
+
+.cmu-fx-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10050;
+  display: grid;
+  place-items: center;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  padding:
+    max(16px, var(--safe-top, env(safe-area-inset-top, 0px)))
+    max(12px, var(--safe-right, env(safe-area-inset-right, 0px)))
+    max(18px, var(--safe-bottom, env(safe-area-inset-bottom, 0px)))
+    max(12px, var(--safe-left, env(safe-area-inset-left, 0px)));
+  color: var(--cmu-overlay-ink);
+  opacity: 0;
+  transition: opacity calc(240ms * var(--cmu-motion-scale)) var(--cmu-ease);
+  -webkit-tap-highlight-color: transparent;
+  isolation: isolate;
+}
+.cmu-fx-overlay.is-open { opacity: 1; }
+.cmu-fx-overlay.is-leaving { opacity: 0; pointer-events: none; }
+.cmu-fx-overlay[hidden] { display: none; }
+
+.cmu-fx-backdrop {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 50% 34%,
+      color-mix(in srgb, var(--cmu-overlay-glow) 20%, transparent) 0%,
+      transparent 62%),
+    var(--cmu-overlay-veil);
+  backdrop-filter: blur(9px);
+}
+/* backdrop-filter is expensive on low-end Android; drop it when the player
+   has asked for less motion, which correlates with weaker hardware. */
+[data-cmu-motion="minimal"] .cmu-fx-backdrop,
+[data-cmu-motion="off"] .cmu-fx-backdrop { backdrop-filter: none; }
+
+.cmu-fx-stage {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 34rem);
+  margin: auto;
+  text-align: center;
+}
+
+.cmu-fx-stage-in {
+  animation: cmu-stage-in calc(360ms * var(--cmu-motion-scale)) var(--cmu-ease-pop) both;
+}
+@keyframes cmu-stage-in {
+  from { opacity: 0; transform: translateY(18px) scale(.95); }
+}
+
+.cmu-fx-panel {
+  padding: 20px 18px;
+  background: var(--cmu-stage-bg);
+  border: 1px solid var(--cmu-stage-border);
+  border-radius: 22px;
+  box-shadow: var(--card-shadow-hover, 0 10px 34px rgb(0 0 0 / 28%));
+}
+
+.cmu-fx-dismiss {
+  position: absolute;
+  z-index: 3;
+  inset: max(14px, var(--safe-top, 0px)) max(12px, var(--safe-right, 0px)) auto auto;
+  min-width: var(--touch-target, 44px);
+  min-height: 34px;
+  padding: 6px 13px;
+  border: 1px solid var(--cmu-stage-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cmu-stage-bg) 82%, transparent);
+  color: var(--cmu-overlay-ink);
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cmu-fx-eyebrow {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--primary, #E7A443);
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+
+.cmu-fx-caption {
+  margin: 14px 0 0;
+  color: var(--text-secondary, #D9DCDE);
+  font-size: .8rem;
+  line-height: 1.5;
+  min-height: 1.2em;
+}
+
+.cmu-fx-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  justify-content: center;
+  margin-top: 16px;
+}
+.cmu-fx-actions > * { flex: 1 1 9rem; min-height: var(--touch-target, 44px); }
+
+/* ════════════════════════ Shared decoration ════════════════════════ */
+
+.cmu-fx-confetti,
+.cmu-fx-particles {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 4;
+}
+/* A confetti layer appended to <body> needs fixed positioning to cover the
+   viewport rather than the document's first positioned ancestor. */
+body > .cmu-fx-confetti { position: fixed; }
+
+.cmu-fx-confetti > i {
+  position: absolute;
+  top: -8%;
+  width: 9px;
+  height: 9px;
+  animation: cmu-confetti-fall linear forwards;
+}
+@keyframes cmu-confetti-fall {
+  from { transform: translate3d(0, 0, 0) rotate(0); opacity: 1; }
+  to { transform: translate3d(var(--cmu-drift, 0), 112vh, 0) rotate(var(--cmu-spin, 360deg)); opacity: .15; }
+}
+
+.cmu-fx-particles > i {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border-radius: 50%;
+  animation: cmu-particle-out var(--cmu-ease) forwards;
+}
+@keyframes cmu-particle-out {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  to { opacity: 0; transform: translate(calc(-50% + var(--cmu-tx, 0)), calc(-50% + var(--cmu-ty, 0))) scale(.2); }
+}
+
+.cmu-fx-burst {
+  position: absolute;
+  inset: -20%;
+  pointer-events: none;
+  z-index: 3;
+  background: radial-gradient(circle at 50% 45%,
+    #fff 0%,
+    color-mix(in srgb, var(--cmu-burst, #ffd966) 72%, transparent) 20%,
+    transparent 58%);
+  opacity: 0;
+  animation: cmu-burst ease-out forwards;
+}
+@keyframes cmu-burst {
+  0% { opacity: 0; transform: scale(.7); }
+  26% { opacity: .92; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.14); }
+}
+
+/* Rotating light rays behind a reveal. One element, one transform. */
+.cmu-fx-rays {
+  position: absolute;
+  z-index: 0;
+  left: 50%;
+  top: 44%;
+  width: 150vmax;
+  height: 150vmax;
+  margin: -75vmax 0 0 -75vmax;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  background: repeating-conic-gradient(from 0deg,
+    color-mix(in srgb, var(--cmu-overlay-glow) 22%, transparent) 0 5deg,
+    transparent 5deg 17deg);
+  -webkit-mask: radial-gradient(circle, #000 0, transparent 60%);
+  mask: radial-gradient(circle, #000 0, transparent 60%);
+  transition: opacity calc(620ms * var(--cmu-motion-scale)) var(--cmu-ease);
+}
+.cmu-fx-rays.is-lit { opacity: .85; animation: cmu-rays-spin 16s linear infinite; }
+@keyframes cmu-rays-spin { to { transform: rotate(360deg); } }
+
+/* ════════════════════════ Artwork ════════════════════════ */
+/*
+ * Player cards are 3:2 landscape. `contain` plus the explicit ratio keeps them
+ * at their real proportions in every slot the engine renders — never cropped,
+ * never stretched — and the box reserves the space so nothing reflows when the
+ * image lands.
+ */
+.cmu-fx-art,
+.cmu-fx-art-missing {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  border-radius: 10px;
+  background: var(--bg-secondary, #2A2C33);
+}
+.cmu-fx-art { object-fit: contain; }
+.cmu-fx-art-missing {
+  display: grid;
+  place-items: center;
+  color: var(--text-muted, #999A9B);
+  border: 1px dashed var(--cmu-stage-border);
+}
+.cmu-fx-art-missing svg { width: 34%; max-width: 48px; height: auto; }
+
+/* ════════════════════════ Rarity accents ════════════════════════ */
+
+.cmu-rarity-standard { --cmu-rarity: var(--cmu-rarity-standard); }
+.cmu-rarity-rare { --cmu-rarity: var(--cmu-rarity-rare); }
+.cmu-rarity-epic { --cmu-rarity: var(--cmu-rarity-epic); }
+.cmu-rarity-legendary { --cmu-rarity: var(--cmu-rarity-legendary); }
+.cmu-rarity-mythic { --cmu-rarity: var(--cmu-rarity-mythic); }
+
+.cmu-fx-chip {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cmu-rarity, var(--primary)) 18%, transparent);
+  color: var(--cmu-rarity, var(--primary));
+  font-size: .66rem;
+  font-weight: 850;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+/* ════════════════════════ 3D flip card ════════════════════════ */
+
+.cmu-fx-flip {
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform calc(620ms * var(--cmu-motion-scale)) var(--cmu-ease-pop);
+}
+.cmu-fx-flip.is-flipped { transform: rotateY(180deg); }
+.cmu-fx-flip > .cmu-fx-face {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+.cmu-fx-flip > .cmu-fx-face-front { transform: rotateY(180deg); }
+
+/* ════════════════════════ Counters and meters ════════════════════════ */
+
+.cmu-fx-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 850;
+}
+
+.cmu-fx-meter {
+  position: relative;
+  overflow: hidden;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--bg-secondary, #2A2C33);
+}
+.cmu-fx-meter::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--cmu-fill, 0%);
+  border-radius: inherit;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--primary) 72%, transparent),
+    var(--primary));
+  transition: width var(--cmu-fill-ms, 680ms) var(--cmu-ease);
+}
+
+/* ════════════════════════ Reward chest ════════════════════════ */
+
+.cmu-fx-chest { position: relative; transform-origin: 50% 85%; }
+.cmu-fx-chest.is-opening {
+  animation: cmu-chest-shake calc(460ms * var(--cmu-motion-scale)) var(--cmu-ease) both;
+}
+.cmu-fx-chest.is-open { animation: cmu-chest-pop calc(420ms * var(--cmu-motion-scale)) var(--cmu-ease-pop) both; }
+@keyframes cmu-chest-shake {
+  0%, 100% { transform: rotate(0) scale(1); }
+  22% { transform: rotate(-4deg) scale(1.03); }
+  48% { transform: rotate(4deg) scale(1.05); }
+  74% { transform: rotate(-3deg) scale(1.03); }
+}
+@keyframes cmu-chest-pop { 45% { transform: scale(1.08); } to { transform: scale(1); } }
+
+/* ════════════════════════ Utility motion ════════════════════════ */
+
+.cmu-fx-float { animation: cmu-float 4.2s ease-in-out infinite; }
+@keyframes cmu-float {
+  0%, 100% { transform: translateY(0) rotate(-1deg); }
+  50% { transform: translateY(-6px) rotate(1deg); }
+}
+
+.cmu-fx-pulse { animation: cmu-pulse 1.4s ease-in-out infinite; }
+@keyframes cmu-pulse { 50% { opacity: .45; } }
+
+.cmu-fx-rise {
+  animation: cmu-rise calc(420ms * var(--cmu-motion-scale)) var(--cmu-ease-pop) var(--cmu-delay, 0ms) both;
+}
+@keyframes cmu-rise {
+  from { opacity: 0; transform: translateY(26px) scale(.92); }
+}
+
+/* Screen-reader-only live region text used by the sequences. */
+.cmu-fx-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ════════════════════════ Motion gates ════════════════════════ */
+/*
+ * "off" renders end states with no motion at all. These rules are the engine's
+ * safety net: even a sequence that forgets to check the setting cannot animate.
+ */
+[data-cmu-motion="off"] .cmu-fx-overlay,
+[data-cmu-motion="off"] .cmu-fx-overlay *,
+[data-cmu-motion="off"] .cmu-fx-float,
+[data-cmu-motion="off"] .cmu-fx-pulse,
+[data-cmu-motion="off"] .cmu-fx-rise {
+  animation: none !important;
+  transition: none !important;
+}
+[data-cmu-motion="off"] .cmu-fx-overlay { opacity: 1; }
+[data-cmu-motion="off"] .cmu-fx-rays { opacity: 0 !important; }
+
+/* Idle/looping decoration is the first thing to drop: it runs forever and buys
+   nothing once the player has asked for less. */
+[data-cmu-motion="minimal"] .cmu-fx-float,
+[data-cmu-motion="minimal"] .cmu-fx-pulse,
+[data-cmu-motion="minimal"] .cmu-fx-rays.is-lit {
+  animation: none !important;
+}
+
+[data-cmu-particles="off"] .cmu-fx-confetti,
+[data-cmu-particles="off"] .cmu-fx-particles { display: none !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cmu-fx-float,
+  .cmu-fx-pulse,
+  .cmu-fx-rays.is-lit,
+  .cmu-fx-chest.is-opening,
+  .cmu-fx-chest.is-open { animation: none !important; }
+  .cmu-fx-flip { transition-duration: .01ms !important; }
+  .cmu-fx-confetti { display: none; }
+}
+
+/* ════════════════════════ Small screens ════════════════════════ */
+
+@media (max-width: 380px) {
+  .cmu-fx-stage { width: 100%; }
+  .cmu-fx-panel { padding: 16px 13px; border-radius: 18px; }
+  .cmu-fx-actions > * { flex-basis: 100%; }
+}
+
+/* Landscape phones: the stage must stay scrollable rather than clip. */
+@media (max-height: 460px) {
+  .cmu-fx-overlay { place-items: start center; }
+  .cmu-fx-stage { margin: 0 auto; }
+}

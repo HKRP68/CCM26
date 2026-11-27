@@ -1,0 +1,292 @@
+/*
+ * CMU Reveal Theatre — pack opening (Phase 1), kit bag (Phase 2),
+ * legendary walkout (Phase 3).
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Depends on cmu_animation_engine.css for the overlay shell, flip primitive,
+ * particles and motion gates. Themed entirely from miniapp_tokens.css, so dark
+ * and light both work with no JavaScript branch.
+ */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * PHASE 1 · Pack opening
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ───────────── Foil artwork ───────────── */
+
+.cmu-pack-svg { display: block; width: 100%; height: 100%; overflow: visible; }
+
+.cmu-pack-emblem {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 76px;
+  flex: 0 0 54px;
+  filter: drop-shadow(0 6px 9px rgb(0 0 0 / 34%));
+}
+
+/* The hero pack on the opening stage. --cmu-pack-pull is written by the swipe
+   handler so the foil follows the finger before the gesture commits. */
+.cmu-pack-hero {
+  display: grid;
+  place-items: center;
+  width: clamp(138px, 44vw, 182px);
+  height: clamp(198px, 63vw, 262px);
+  transform: translateY(calc(var(--cmu-pack-pull, 0px) * -1));
+  transition: transform 120ms var(--cmu-ease);
+  filter: drop-shadow(0 0 22px color-mix(in srgb, var(--cmu-overlay-glow) 48%, transparent));
+}
+
+.cmu-pack-mounted { touch-action: pan-y; }
+.cmu-pack-mounted.is-gripped .cmu-pack-hero { filter: brightness(1.08) drop-shadow(0 0 26px color-mix(in srgb, var(--cmu-overlay-glow) 60%, transparent)); }
+
+/* Idle float + travelling sheen: the two cues that make a flat SVG read as
+   metallic foil rather than a printed rectangle. */
+.cmu-pack-hero,
+.cmu-pack-emblem { animation: cmu-float 4.4s ease-in-out infinite; }
+
+.cmu-pack-sheen { animation: cmu-pack-sheen 4.6s ease-in-out infinite; }
+@keyframes cmu-pack-sheen {
+  0%, 52% { transform: translateX(0); }
+  100% { transform: translateX(210px); }
+}
+
+/* ───────────── Opening sequence ───────────── */
+
+.cmu-pack-mounted.is-shaking .cmu-pack-hero {
+  animation: cmu-pack-shake calc(520ms * var(--cmu-motion-scale)) cubic-bezier(.36, .07, .19, .97) both;
+}
+@keyframes cmu-pack-shake {
+  0%, 100% { transform: translate(0, 0) rotate(0); }
+  14% { transform: translate(-6px, -1px) rotate(-4deg); }
+  30% { transform: translate(6px, -2px) rotate(4deg); }
+  48% { transform: translate(-5px, -1px) rotate(-3deg); }
+  66% { transform: translate(5px, -3px) rotate(3deg); }
+  84% { transform: translate(-3px, -1px) rotate(-2deg); }
+}
+
+/* The crimp strip lifts, twists and flies off; the shell brightens and swells
+   as the light inside it escapes. Two groups, two different motions. */
+.cmu-pack-mounted.is-tearing .cmu-pack-crimp {
+  animation: cmu-pack-crimp calc(420ms * var(--cmu-motion-scale)) var(--cmu-ease) forwards;
+  transform-box: fill-box;
+  transform-origin: 85% 100%;
+}
+@keyframes cmu-pack-crimp {
+  40% { transform: translate(6px, -12px) rotate(11deg); }
+  100% { transform: translate(26px, -54px) rotate(42deg); opacity: 0; }
+}
+
+.cmu-pack-mounted.is-tearing .cmu-pack-body {
+  animation: cmu-pack-split calc(420ms * var(--cmu-motion-scale)) var(--cmu-ease) forwards;
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+@keyframes cmu-pack-split {
+  45% { transform: scale(1.07) rotate(-2deg); filter: brightness(1.7); }
+  100% { transform: scale(1.3) translateY(-6px); filter: brightness(2.6); opacity: .1; }
+}
+
+.cmu-pack-mounted.is-torn { visibility: hidden; }
+
+/* ───────────── Card deck ───────────── */
+
+.cmu-pack-deck {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 11px;
+  perspective: 1100px;
+  margin-top: 4px;
+}
+/* A single-card pack (Free Pack, 1-main packs) centres instead of sitting in a
+   half-empty two-column grid. */
+.cmu-pack-deck[data-cards="1"] { grid-template-columns: minmax(0, 15rem); justify-content: center; }
+/* An odd last card spans and centres rather than leaving a hole. */
+.cmu-pack-deck > .cmu-pack-card:last-child:nth-child(odd):not(:only-child) {
+  grid-column: 1 / -1;
+  justify-self: center;
+  width: calc(50% - 6px);
+  min-width: 9.5rem;
+}
+
+.cmu-pack-card {
+  position: relative;
+  min-height: 15.5rem;
+  border-radius: 16px;
+  animation: cmu-pack-deal calc(520ms * var(--cmu-motion-scale)) var(--cmu-ease-pop) var(--cmu-delay, 0ms) backwards;
+}
+@keyframes cmu-pack-deal {
+  from { opacity: 0; transform: translateY(54px) scale(.62) rotate(-7deg); }
+}
+
+.cmu-pack-card-inner { position: absolute; inset: 0; border-radius: inherit; }
+
+.cmu-pack-back {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 6px;
+  padding: 12px 12px 10px;
+  background: linear-gradient(165deg, var(--bg-secondary), var(--bg-card));
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.cmu-pack-back:disabled { cursor: default; }
+.cmu-pack-back .cmu-pack-back-art {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  opacity: .92;
+}
+.cmu-pack-back .cmu-pack-svg { max-height: 100%; width: auto; }
+.cmu-pack-back-hint {
+  color: var(--primary);
+  font-size: .64rem;
+  font-weight: 850;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  animation: cmu-pulse 1.5s ease-in-out infinite;
+}
+.cmu-pack-back:active { transform: scale(.98); }
+
+.cmu-pack-front {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: start;
+  background: var(--bg-card);
+  border: 1px solid var(--cmu-rarity, var(--border));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--cmu-rarity, var(--border)) 36%, transparent),
+    0 0 22px color-mix(in srgb, var(--cmu-rarity, var(--border)) 32%, transparent);
+}
+.cmu-pack-ribbon {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--cmu-rarity, var(--primary)) 10%, transparent);
+}
+.cmu-pack-slot {
+  color: var(--text-secondary);
+  font-size: .62rem;
+  font-weight: 750;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.cmu-pack-front-body { overflow: hidden; padding: 8px; min-height: 0; }
+/* The deck reuses the app's own .player-reveal card, so it must sit flush
+   inside the flip face rather than carry its own frame. */
+.cmu-pack-front-body .player-reveal {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: center;
+  animation: none;
+}
+.cmu-pack-front-body .player-reveal-art { min-height: 0; aspect-ratio: 3 / 2; }
+.cmu-pack-front-body .player-reveal-art img { object-fit: contain; }
+.cmu-pack-front-body .player-reveal-copy h3 { font-size: .86rem; }
+.cmu-pack-front-body .player-reveal-copy p { font-size: .7rem; }
+.cmu-pack-front-body .player-reveal-slot { display: none; } /* the ribbon says it */
+
+/* A one-pass shine across a freshly turned card. */
+.cmu-pack-card.is-revealed .cmu-pack-front::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(112deg, transparent 32%, rgb(255 255 255 / 26%) 50%, transparent 68%);
+  transform: translateX(-120%);
+  animation: cmu-pack-shine calc(1000ms * var(--cmu-motion-scale)) calc(420ms * var(--cmu-motion-scale)) ease-out forwards;
+}
+@keyframes cmu-pack-shine { to { transform: translateX(120%); } }
+
+.cmu-pack-card.is-big-hit {
+  animation: cmu-pack-hit calc(700ms * var(--cmu-motion-scale)) var(--cmu-ease-pop);
+}
+@keyframes cmu-pack-hit { 38% { transform: scale(1.06); } }
+
+/* ───────────── Stage furniture ───────────── */
+
+#pack-open-cards.pack-anim-cards { gap: 11px; }
+
+.cmu-pack-stage-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin: 14px 0 0;
+}
+.cmu-pack-stage-tools > button { flex: 1 1 9rem; min-height: var(--touch-target, 44px); }
+
+.pack-receipt {
+  margin: 14px 0 0;
+  padding: 8px 11px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: .76rem;
+  overflow-wrap: anywhere;
+}
+.pack-receipt[hidden] { display: none; }
+
+/* Motion gates specific to the pack sequence. */
+[data-cmu-motion="minimal"] .cmu-pack-sheen,
+[data-cmu-motion="minimal"] .cmu-pack-hero,
+[data-cmu-motion="minimal"] .cmu-pack-emblem,
+[data-cmu-motion="minimal"] .cmu-pack-back-hint,
+[data-cmu-motion="off"] .cmu-pack-sheen,
+[data-cmu-motion="off"] .cmu-pack-hero,
+[data-cmu-motion="off"] .cmu-pack-emblem,
+[data-cmu-motion="off"] .cmu-pack-back-hint { animation: none !important; }
+[data-cmu-motion="off"] .cmu-pack-card,
+[data-cmu-motion="off"] .cmu-pack-card.is-revealed .cmu-pack-front::after { animation: none !important; }
+[data-cmu-motion="off"] .cmu-pack-mounted.is-torn { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cmu-pack-sheen,
+  .cmu-pack-hero,
+  .cmu-pack-emblem,
+  .cmu-pack-back-hint { animation: none !important; }
+  .cmu-pack-card { animation: none; }
+  .cmu-pack-card.is-revealed .cmu-pack-front::after { animation: none; }
+}
+
+@media (max-width: 380px) {
+  .cmu-pack-card { min-height: 14rem; }
+  .cmu-pack-deck { gap: 8px; }
+}
+
+/* ───────────── Ray layer inside the app's own pack overlay ─────────────
+ * .pack-overlay scrolls its content, so an absolutely positioned ray disc
+ * would scroll with the cards and clip against the scroll box. Pin it to the
+ * viewport behind the stage instead, and keep it well under the card art:
+ * these rays are atmosphere, not a thing to read through.
+ */
+.pack-overlay > .cmu-fx-rays { position: fixed; top: 46%; z-index: 0; }
+.pack-overlay > .cmu-fx-rays.is-lit { opacity: .4; }
+.pack-overlay .pack-open-stage { position: relative; z-index: 1; }
+
+/* A face turned away from the viewer must not be a hit target. backface-
+ * visibility hides it, but a hidden face still takes taps in some WebViews,
+ * which is how a tap on a revealed card could land on the button behind it. */
+.cmu-pack-card.is-revealed .cmu-pack-back { pointer-events: none; }
+.cmu-pack-card:not(.is-revealed) .cmu-pack-front { pointer-events: none; }
+
+/* Shop and inventory rows: the emoji tile becomes the pack's own foil when the
+ * theatre is loaded, and keeps the emoji's footprint so the row does not jump
+ * between the two. */
+.pack-shop-emoji:has(.cmu-pack-emblem),
+.pack-inv-card > .pack-shop-emoji:has(.cmu-pack-emblem) {
+  display: grid;
+  place-items: center;
+  font-size: 0;
+}
+.pack-inv-card .cmu-pack-emblem { width: 42px; height: 60px; flex-basis: 42px; }
