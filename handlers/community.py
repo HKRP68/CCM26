@@ -473,7 +473,8 @@ async def gcsettings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"{sched.get('active_end_hour')}:00\n"
         f"Max games/day: {sched.get('max_games_per_day')} · "
         f"Min gap: {sched.get('min_gap_minutes')}m · "
-        f"Inactivity: {sched.get('inactivity_minutes')}m\n"
+        f"Inactivity: {sched.get('inactivity_minutes')}m · "
+        f"Interval: {sched.get('interval_minutes') or 'off'}m\n"
         f"Enabled games: {', '.join(enabled_games) or 'none'}\n\n"
         "Toggle: /gcsettings on|off · /gcsettings auto on|off\n"
         "Full configuration: admin website → Community Engagement.")

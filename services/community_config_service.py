@@ -48,7 +48,7 @@ DEFAULTS = {
     # Per-game settings. ``reward`` is the winner's CXP; ``daily_win_limit`` 0
     # means unlimited rewarded wins of that type per IST day.
     "games": {
-        "mystery":        {"enabled": True, "duration": 60,  "reward": 30, "blur": 16,
+        "mystery":        {"enabled": True, "duration": 60,  "reward": 30, "blur": 30,
                            "daily_win_limit": 0, "progressive_clues": True},
         "oddoneout":      {"enabled": True, "duration": 30,  "reward": 20, "daily_win_limit": 0},
         "wordle":         {"enabled": True, "duration": 120, "reward": 40, "max_attempts": 6,
@@ -67,6 +67,10 @@ DEFAULTS = {
         "max_games_per_day": 8,
         "min_gap_minutes": 45,
         "inactivity_minutes": 30,
+        # Launch a random game every N minutes regardless of chat activity
+        # (still bounded by active hours, max/day, min gap and match protection).
+        # 0 disables the interval trigger and leaves only the inactivity one.
+        "interval_minutes": 60,
         "match_protection": True,    # don't launch while a protected match is live
         "recent_player_exclusion": 15,   # players to keep out of rotation
         "recent_type_exclusion": 1,      # game types to avoid repeating

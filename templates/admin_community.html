@@ -154,6 +154,7 @@
     <div>Max games / day {{ fld('sched_max', cfg.scheduler.max_games_per_day, '60px') }}</div>
     <div>Min gap (min) {{ fld('sched_gap', cfg.scheduler.min_gap_minutes, '60px') }}</div>
     <div>Inactivity trigger (min) {{ fld('sched_inactivity', cfg.scheduler.inactivity_minutes, '60px') }}</div>
+    <div>Interval — random game every (min, 0=off) {{ fld('sched_interval', cfg.scheduler.get('interval_minutes', 60), '60px') }}</div>
     <div>Recent-player exclusion {{ fld('sched_recent_players', cfg.scheduler.recent_player_exclusion, '60px') }}</div>
     <div><label><input type="checkbox" name="sched_match_protection" {{ 'checked' if cfg.scheduler.match_protection }}> Protect tournament matches</label></div>
   </div>

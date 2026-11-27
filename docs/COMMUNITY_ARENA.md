@@ -25,7 +25,7 @@ gameplay.
 | Community levels (15) + one-time milestone rewards | ✅ Complete |
 | Community achievements (13) | ✅ Complete |
 | Leaderboards (`/gctop`, 4 periods, many categories, user rank, tie-breaks) | ✅ Complete |
-| Automatic engagement scheduler (restart-safe, inactivity, weights, match protection) | ✅ Complete |
+| Automatic engagement scheduler (restart-safe; inactivity + interval triggers, weights, match protection) | ✅ Complete |
 | Telegram commands (user + admin) | ✅ Complete |
 | Admin dashboard (settings, analytics, event management, user management + audit) | ✅ Complete |
 | Mini App Community Arena page + JSON API (Telegram initData auth) | ✅ Complete |
