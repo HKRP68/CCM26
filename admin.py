@@ -27257,6 +27257,7 @@ def admin_conditions():
         overrides = conditions_io.live_modifier_overrides()
         return render_template(
             "admin_conditions.html", rows=rows, q=q, groups=_stadiums_by_country(rows),
+            modifier_channels=sorted(sim_stadium.MODIFIER_CHANNELS),
             stadiums_saved=sim_store.current("stadiums", db) is not None,
             overrides=conditions_io._flatten(overrides),
             history_stadiums=sim_store.history("stadiums", db, limit=10),
@@ -27344,6 +27345,81 @@ def admin_conditions_import():
     _cond_reload()
     flash(f"✅ Imported {' and '.join(done)} ({mode}). The previous version is in History "
           "if you need it back.", "info")
+    return redirect(url_for("admin_conditions"))
+
+
+@app.route("/conditions/stadium/json", methods=["POST"])
+@login_required
+def admin_conditions_stadium_json():
+    """Add or update grounds from pasted JSON, without the import page's preview step.
+
+    Merge only, stadiums only: the destructive paths (replace, modifiers, removing a
+    ground that is not in the paste) stay behind the import page and its preview.
+    """
+    from services import conditions_io
+    text = (request.form.get("stadiums_json") or "").strip()
+    if not text:
+        flash("Paste a stadium object or a list of them first.", "error")
+        return redirect(url_for("admin_conditions"))
+    if len(text) > _COND_MAX_UPLOAD:
+        flash("That paste is over 2 MB — use Import for a file that large.", "error")
+        return redirect(url_for("admin_conditions"))
+    try:
+        try:
+            data = json.loads(text)
+        except ValueError as exc:
+            raise ValueError(f"not valid JSON: {exc}") from exc
+        if isinstance(data, dict) and data.get("name") and not {"stadiums", "modifiers"} & set(data):
+            # One ground on its own. parse_upload wants boundaries or an outfield speed
+            # before it calls a bare object a stadium; this form only ever takes
+            # stadiums, so a name is enough and every other field can take its default.
+            parsed = {"stadiums": [data], "modifiers": None}
+        else:
+            parsed = conditions_io.parse_upload(text, "pasted.json")
+            parsed["modifiers"] = None
+        if parsed.get("stadiums") is None:
+            raise ValueError("that JSON holds no stadiums")
+        plan = conditions_io.plan_import(parsed, mode="merge")
+        if plan["errors"]:
+            raise ValueError("; ".join(plan["errors"]))
+    except ValueError as exc:
+        flash(f"Not added: {exc}", "error")
+        return redirect(url_for("admin_conditions"))
+
+    added, changed = plan["stadiums"]["added"], plan["stadiums"]["changed"]
+    db = get_session()
+    try:
+        conditions_io.apply_plan(plan, db, created_by="admin",
+                                 note=f"pasted JSON: +{len(added)} ~{len(changed)}")
+        log_admin(db, "conditions_stadium_json", "conditions", 0,
+                  ", ".join(added + [row["name"] for row in changed])[:200],
+                  f"added={len(added)} changed={len(changed)}")
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("pasted stadium JSON failed")
+        flash(f"Not added: {exc}", "error")
+        return redirect(url_for("admin_conditions"))
+    finally:
+        db.close()
+    _cond_reload()
+    # A field that simply took its default is the documented behaviour, not news; a
+    # value that was clamped or a key that was dropped changed what they wrote.
+    adjusted = [note for note in plan["warnings"] if "missing, using" not in note]
+    defaulted = len(plan["warnings"]) - len(adjusted)
+    for note in adjusted[:10]:
+        flash(note, "error")
+    if len(adjusted) > 10:
+        flash(f"…and {len(adjusted) - 10} more adjustments.", "error")
+    if defaulted:
+        flash(f"{defaulted} unset field{'' if defaulted == 1 else 's'} took the default value.", "info")
+    parts = []
+    if added:
+        parts.append(f"Added {', '.join(added)}")
+    if changed:
+        parts.append(f"{'updated' if added else 'Updated'} {', '.join(row['name'] for row in changed)}")
+    flash(f"✅ {'; '.join(parts) if parts else 'No change — those grounds already match'}."
+          " The previous version is in History.", "info")
     return redirect(url_for("admin_conditions"))
 
 

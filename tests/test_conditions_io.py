@@ -266,6 +266,60 @@ class ConditionsAdminTests(unittest.TestCase):
             "step": "apply", "mode": mode, "only": only, "payload": payload,
             "filename": filename, "note": "test"}, follow_redirects=False)
 
+    def _add_json(self, payload):
+        return self.client.post("/conditions/stadium/json", data={"stadiums_json": payload},
+                                follow_redirects=True)
+
+    def _ground(self, name):
+        from engine.sim import stadium as sim_stadium
+        return next((r for r in sim_stadium.live_rows() if r["name"] == name), None)
+
+    def test_pasted_json_adds_grounds_and_merges_onto_an_existing_one(self):
+        r = self._add_json(json.dumps({
+            "name": "Perth Stadium", "city": "Perth", "country": "Australia",
+            "boundaryM": {"squareLeg": 72, "fineLeg": 68, "longOn": 82, "longOff": 80},
+            "outfieldSpeed": 88, "dewFactor": 25, "modifiers": {"bounce": 1.15}}))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Added Perth Stadium", r.data.decode())   # not lowercased
+        self.assertEqual(self._ground("Perth Stadium")["dewFactor"], 25)
+
+        # A list adds several at once, and a new country becomes its own group.
+        import re
+        self._add_json(json.dumps([{"name": "Basin Reserve", "city": "Wellington",
+                                    "country": "New Zealand"},
+                                   {"name": "Gaddafi Stadium", "country": "Pakistan"}]))
+        self.assertIsNotNone(self._ground("Basin Reserve"))
+        body = self.client.get("/conditions").data.decode()
+        self.assertTrue(any(h.strip().endswith("New Zealand")
+                            for h in re.findall(r"<summary>([^<]*)", body)), body[:200])
+
+        # A name plus one field edits that field and leaves the rest of the ground alone,
+        # even though parse_upload alone would not recognise it as a stadium.
+        before = self._ground("Perth Stadium")
+        r = self._add_json('{"name": "Perth Stadium", "dewFactor": 70}')
+        self.assertIn("Updated Perth Stadium", r.data.decode())
+        after = self._ground("Perth Stadium")
+        self.assertEqual(after["dewFactor"], 70)
+        self.assertEqual(after["boundaryM"], before["boundaryM"])
+        self.assertEqual(after["modifiers"], before["modifiers"])
+        self.assertEqual(after["outfieldSpeed"], before["outfieldSpeed"])
+
+    def test_pasted_json_reports_what_it_could_not_use(self):
+        self.assertIn("not valid JSON", self._add_json("{nope").data.decode())
+        self.assertIn("holds no stadiums",
+                      self._add_json('{"modifiers": {"stadium": {"dew": {"threshold": 60}}}}').data.decode())
+        self.assertIn("Paste a stadium", self._add_json("   ").data.decode())
+        # A value out of range is clamped and said so; the untouched grounds stay.
+        before = len(self._all_rows())
+        r = self._add_json('{"name": "Clamp Test", "outfieldSpeed": 9999}')
+        self.assertIn("clamped to 100", r.data.decode())
+        self.assertEqual(self._ground("Clamp Test")["outfieldSpeed"], 100)
+        self.assertEqual(len(self._all_rows()), before + 1)
+
+    def _all_rows(self):
+        from engine.sim import stadium as sim_stadium
+        return sim_stadium.live_rows()
+
     def test_list_page_groups_the_grounds_by_country(self):
         import re
         from engine.sim import stadium as sim_stadium
@@ -278,7 +332,7 @@ class ConditionsAdminTests(unittest.TestCase):
         headings = re.findall(r"<summary>([^<]*)", body)
         self.assertTrue(any(head.strip().endswith("India") for head in headings), headings)
         self.assertTrue(any(head.strip().endswith("Australia") for head in headings), headings)
-        self.assertEqual(body.count('class="cond-fold"'),
+        self.assertEqual(body.count('class="cond-fold cond-country"'),
                          len({(row.get("country") or "").strip().lower() for row in rows}))
         self.assertIn("6 stadiums", body)          # the six Indian grounds that ship
         # Every ground still reaches the page.
@@ -288,7 +342,7 @@ class ConditionsAdminTests(unittest.TestCase):
             self.assertIn(row["name"], plain)
         # A search opens the groups it matched rather than hiding them behind a fold.
         found = self.client.get("/conditions?q=india").data.decode()
-        self.assertIn('<details class="cond-fold" open>', found)
+        self.assertIn('<details class="cond-fold cond-country" open>', found)
         self.assertNotIn("Melbourne Cricket Ground", found)
         # The edit form offers the spellings already in use.
         form = self.client.get("/conditions/stadium?name=Wankhede%20Stadium")

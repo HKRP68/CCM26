@@ -50,13 +50,60 @@
     <div style="font-size:.75rem; color:var(--muted);">per-stadium modifiers set</div></div>
 </div>
 
+<details class="cond-fold" style="margin-bottom:1rem;">
+  <summary>➕ Add stadiums from JSON
+    <span class="cond-count">paste one ground or a list</span>
+  </summary>
+  <div style="padding:0 1rem 1rem;">
+    <p style="color:var(--muted); font-size:.85rem; margin:.8rem 0 .6rem;">
+      Adds the grounds in the paste and updates any whose name already exists. Nothing else is
+      touched. Out-of-range values are clamped and unknown keys dropped — each is reported back.
+      For a CSV, a full export bundle, modifiers, or to replace the whole list, use
+      <a href="{{ url_for('admin_conditions_import') }}">Import</a>, which previews first.
+    </p>
+    <form method="POST" action="{{ url_for('admin_conditions_stadium_json') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <textarea name="stadiums_json" rows="9" spellcheck="false" required
+                style="width:100%; padding:.7rem; background:var(--input-bg); border:1px solid var(--border);
+                       border-radius:10px; color:var(--text); font-family:monospace; font-size:.82rem; resize:vertical;"
+                placeholder='{"name": "Perth Stadium", "city": "Perth", "country": "Australia", ...}'></textarea>
+      <button class="btn btn-primary" type="submit" style="margin-top:.6rem;">Add stadiums</button>
+    </form>
+    <details style="margin-top:.8rem;">
+      <summary style="font-weight:500; font-size:.85rem; color:var(--muted);">Example JSON</summary>
+      <pre style="overflow-x:auto; font-size:.8rem;">{
+  "name": "Perth Stadium",
+  "aliases": ["Optus Stadium", "Perth"],
+  "city": "Perth",
+  "country": "Australia",
+  "altitudeMeters": 5,
+  "boundaryM": { "squareLeg": 72, "fineLeg": 68, "longOn": 82, "longOff": 80 },
+  "outfieldSpeed": 88,
+  "dewFactor": 25,
+  "avgFirstInningsScore": 175,
+  "slope": false,
+  "climate": { "cloudCover": 20, "humidity": 45, "rainChance": 10, "temperatureC": 28, "windKPH": 22 },
+  "modifiers": { "bounce": 1.15, "pace": 1.05 }
+}</pre>
+      <p style="color:var(--muted); font-size:.82rem;">
+        Only <code>name</code> is required; anything left out takes its default. Several grounds at
+        once go in a list — <code>[{…}, {…}]</code> — or under a <code>"stadiums"</code> key.
+        <code>country</code> is what groups the ground below. Boundaries are metres (40–100),
+        <code>outfieldSpeed</code> and <code>dewFactor</code> are 0–100, and each
+        <code>modifiers</code> value is 0.5–2.0, where 1.0 means no effect.
+        Channels: {{ modifier_channels|join(', ') }}.
+      </p>
+    </details>
+  </div>
+</details>
+
 <form method="GET" style="display:flex; gap:.5rem; max-width:420px; margin-bottom:1rem;">
   <input name="q" value="{{ q }}" placeholder="Search name, alias or country">
   <button class="btn btn-ghost btn-sm" type="submit">Search</button>
 </form>
 
 {% for group in groups %}
-<details class="cond-fold" {% if q or groups|length == 1 %}open{% endif %}>
+<details class="cond-fold cond-country" {% if q or groups|length == 1 %}open{% endif %}>
   <summary>{{ group.flag }} {{ group.name }}
     <span class="cond-count">{{ group.rows|length }} stadium{{ '' if group.rows|length == 1 else 's' }}</span>
   </summary>
