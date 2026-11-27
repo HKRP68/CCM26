@@ -62,6 +62,7 @@ from services.match_state_store import (
 )
 from services import cipl_match
 from services import drinks_break
+from services import rain_interruption as rain
 from services import score_projection
 from services import impact_player
 from services import concussion_substitute as medical
@@ -2988,6 +2989,42 @@ async def _settle_drinks(context, mid, state, bat_plan):
     await _prompt_bowler(context, mid, state)
 
 
+async def _maybe_rain(context, mid, state):
+    """Roll for a stoppage after the over just bowled, and apply it.
+
+    Returns the record (so the caller can say what happened) or None. The
+    stream is derived from the match seed, so a replayed match rains in the
+    same places; the innings length is the only thing written, and every
+    surface — the chase, the phases, the quota, the par curve — follows from
+    it. See services/rain_interruption.py.
+    """
+    if not rain.due(state):
+        return None
+    try:
+        from engine.sim.rng import SimRng
+        stream = SimRng(f"{state.get('rng_seed')}/rain/{state.get('innings')}"
+                        f"/{state.get('current_over')}")
+        lost = rain.roll(state, stream)
+        if not lost:
+            return None
+        record = rain.apply(state, lost)
+        if record is None:
+            return None
+        await _ss(context, mid, state)
+        try:
+            await _post_tracked(context, state,
+                                "\n".join(rain.announcement(state, record)),
+                                legacy=True)
+        except Exception:
+            logger.exception("cipl rain announcement failed for match %s", mid)
+        return record
+    except Exception:
+        # A failed weather check must never cost the match an over. The
+        # innings carries on at whatever length it already had.
+        logger.exception("cipl rain check failed for match %s", mid)
+        return None
+
+
 async def _maybe_drinks_break(context, mid, state):
     """Take drinks if they are due. True when the interval now owns the flow."""
     if not drinks_break.due(state):
@@ -4745,8 +4782,15 @@ async def _run_over(context, mid, state):
 
     if innings_over:
         await _finish_innings(context, mid, state)
-    elif not await _maybe_drinks_break(context, mid, state):
-        await _prompt_bowler(context, mid, state)
+    else:
+        # Rain first: a stoppage can shorten the innings enough to end it, and
+        # it changes the length the drinks interval is judged against.
+        await _maybe_rain(context, mid, state)
+        if cipl_match.is_innings_over(state):
+            await _ss(context, mid, state)
+            await _finish_innings(context, mid, state)
+        elif not await _maybe_drinks_break(context, mid, state):
+            await _prompt_bowler(context, mid, state)
 
 
 def _predictability_lines(state, summary):
@@ -5762,6 +5806,15 @@ async def _innings_break(context, mid, state):
 
     summary_text = _innings_scorecard(state, innings_label="1st Innings")
     cipl_match.end_first_innings(state)
+    # A first innings that lost overs to rain is not chased down by one run
+    # more: the target is the resource-scaled par, which end_first_innings
+    # cannot know because the score was not final when the rain came.
+    dls_lines = []
+    revised = rain.first_innings_target(state)
+    if revised is not None:
+        state["target"] = revised
+        state["dls_target"] = revised
+        dls_lines = rain.break_lines(state, revised)
     await _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
     from services.innings_break_messages import build
     progress = state["inn1_overs"] + ("" if cipl_match.is_hundred(state) else " overs")
@@ -5772,6 +5825,11 @@ async def _innings_break(context, mid, state):
         next_action=("📱 Continue the chase in the Mini App." if _app_mode(state) else
                      "🎳 Second innings next — follow the bowler and approach prompts."),
         scorecard=summary_text)
+    if dls_lines:
+        text = f"{text}\n\n" + "\n".join(dls_lines)
+        if blocks:
+            for line in dls_lines:
+                blocks.append(R.paragraph(line))
     kb = _between_overs_row(state, mid)
     blocks, text = _with_match_controls(state, text, blocks, rows=kb or [])
     # The break card is cosmetic. A failed send must not stop the chase from
@@ -5803,6 +5861,9 @@ def _completion_text(state, result, result_line, prize_info=None, injury_news=""
             f"+{prize_info['w_gems']} 💎\n"
             f"🤝 {html.escape(str(result['loser']))}: +{prize_info['l_coins']:,} coins, "
             f"+{prize_info['l_gems']} 💎")
+    weather = rain.summary_line(state)
+    if weather:
+        body += f"\n{weather}"
     format_line = (" · " + cipl_match.format_label(state)) if cipl_match.odi_approach.is_odi(state) else ""
     text = (f"🏁 <b>Match Over{format_line}</b>\n{result_line}\n"
             f"<blockquote expandable>{body}</blockquote>")

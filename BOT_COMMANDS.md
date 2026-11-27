@@ -323,7 +323,20 @@ Use commas to compare values within a filter and pipes to combine filters. Both 
   and count for rivalries, but are not ranked.
 * **ODI stats are separate** — every innings of 21 overs or more is recorded in
   the ODI career table, never mixed into the short-format record, so a 50-over
-  hundred never flatters a T20 strike rate. See `/odistats`.
+  hundred never flatters a T20 strike rate. See `/odistats`, `/odirecords`, and
+  the 🥇 ODI button on `/stats` and `/gstats`.
+* **Drinks, halfway through an ODI innings** — play stops and both captains call
+  a plan for the rest of it: the batting side picks Consolidate, Build or
+  Accelerate, the bowling side Squeeze, Rotate or Strike. The bowling captain
+  is asked first and their pick is hidden, so neither reads the other; both are
+  revealed together, and the match-up shapes every remaining delivery. Squeeze
+  beats acceleration, rotate beats building, strike beats blocking — and no plan
+  is the right answer to everything. Short formats take no interval.
+* **Rain and DLS** — an ODI-rules match (21+ overs) can now be interrupted.
+  Rain in the first innings shortens both and the target is set by DLS at the
+  break; rain in the chase shortens it and revises the target. Each side always
+  keeps at least 20 overs, so rain never washes a match out — and it only falls
+  under a damp sky, roughly one ODI in thirty.
 
 ## 9. Challenge Leagues
 
