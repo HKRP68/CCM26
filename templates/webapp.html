@@ -14,6 +14,7 @@
    download costs animation, never a reward. #}
 <script src="{{ url_for('static', filename='js/cmu_animation_engine.js', v='fx-1') }}"></script>
 <script src="{{ url_for('static', filename='js/cmu_pack_theatre.js', v='fx-1') }}"></script>
+<script src="{{ url_for('static', filename='js/cmu_kitbag.js', v='fx-1') }}"></script>
 <script>
   // Track third-party SDK load state so a DNS/network failure on these
   // hosts (e.g. net::ERR_NAME_NOT_RESOLVED where an ISP/region blocks the
@@ -8214,6 +8215,16 @@ function packTheatre() {
   return theatre && theatre.available ? theatre : null;
 }
 
+/** The Free Pack opens a CMU kit bag rather than a foil pouch. */
+function kitBag() {
+  const bag = window.CMUKitBag;
+  return bag && bag.available ? bag : null;
+}
+
+function packIsKitBag() {
+  return pendingRevealPlayers?.source === 'freepack' && Boolean(kitBag());
+}
+
 function startPackOpenAnimation() {
   const pack = document.getElementById('pack-open-pack');
   const cards = document.getElementById('pack-open-cards');
@@ -8238,10 +8249,17 @@ function startPackOpenAnimation() {
 
   // Dress the pack in its own artwork. A second opening must not stack another
   // set of gesture listeners on the same button, so the previous mount is
-  // released first.
+  // released first. The Free Pack gets the kit bag; every other pack gets its
+  // foil pouch. Both wire the same single open path.
   const theatre = packTheatre();
+  const bag = kitBag();
   if (packUnmountTheatre) { packUnmountTheatre(); packUnmountTheatre = null; }
-  if (theatre) {
+  if (pendingRevealPlayers.source === 'freepack' && bag) {
+    packTierKey = 'free';
+    bag.reset(pack);
+    packUnmountTheatre = bag.mount(pack, { onOpen: () => revealPackCards() });
+    pack.querySelector('.app-primary').textContent = 'Tap or swipe up to unzip';
+  } else if (theatre) {
     const players = pendingRevealPlayers.players || [];
     const mainMax = players.reduce((best, p) => Math.max(best, Number(p.rating) || 0), 0);
     packTierKey = theatre.tierFor(pendingRevealPlayers.pack_name, {
@@ -8251,6 +8269,7 @@ function startPackOpenAnimation() {
     packUnmountTheatre = theatre.mount(pack, packTierKey, {
       onOpen: () => revealPackCards(),
     });
+    pack.querySelector('.app-primary').textContent = 'Tap or swipe up to open';
   }
 
   packOverlay.hidden = false;
@@ -8269,10 +8288,12 @@ function revealPackCards(skip = false) {
   packOverlay.focus();
 
   const theatre = packTheatre();
+  const bag = packIsKitBag() ? kitBag() : null;
   // "Skip animation", a reduced-motion system preference and the Animations
   // Off setting all mean the same thing here: show the end state now.
   const instant = Boolean(skip) || reducedSpinMotion.matches
     || Boolean(window.CMUAnim && window.CMUAnim.isOff());
+  const viaKitBag = Boolean(bag);
 
   const render = () => {
     const cards = document.getElementById('pack-open-cards');
@@ -8294,7 +8315,10 @@ function revealPackCards(skip = false) {
       cards.innerHTML = theatre.deck(players, {
         packKey: packTierKey,
         renderCard: (player, index) => playerRevealCard(player, index),
-        startFlipped: instant,
+        // The kit bag has already lifted the card into view, so the deck
+        // arrives face up rather than asking for a second reveal of the same
+        // player.
+        startFlipped: instant || viaKitBag,
       });
       packDeckController = theatre.wireDeck(cards, {
         players,
@@ -8343,12 +8367,23 @@ function revealPackCards(skip = false) {
     hapticNotif('success');
   };
 
-  if (instant) {
+  // Whichever sequence runs, both settlement paths call render(): an animation
+  // that throws must not cost the player the cards it was announcing.
+  if (bag) {
+    const first = (pendingRevealPlayers.players || [])[0] || {};
+    const status = document.getElementById('pack-open-status');
+    bag.open(pack, packOverlay, {
+      rating: first.rating,
+      // The bag lifts the app's own reveal card — the same renderer the deck
+      // below uses, so what rises out is what lands.
+      cardMarkup: playerRevealCard(first, 0),
+      status: (text) => { status.textContent = text; },
+      skip: instant,
+    }).then(render, render);
+  } else if (instant) {
     if (theatre) theatre.open(pack, packOverlay, packTierKey, { skip: true });
     render();
   } else if (theatre) {
-    // Either outcome renders: a sequence that throws must not cost the player
-    // the cards it was announcing.
     theatre.open(pack, packOverlay, packTierKey).then(render, render);
   } else {
     setTimeout(render, 310);
@@ -8404,6 +8439,7 @@ function closePackOpen() {
   clearTimeout(packAutoRevealTimer);
   packAutoRevealTimer = null;
   packDeckController = null;
+  kitBag()?.reset(document.getElementById('pack-open-pack'));
   if (packUnmountTheatre) { packUnmountTheatre(); packUnmountTheatre = null; }
   packOverlay.querySelector('.cmu-fx-rays')?.classList.remove('is-lit');
   const heading = document.querySelector('.screen.active h2[tabindex="-1"]');
