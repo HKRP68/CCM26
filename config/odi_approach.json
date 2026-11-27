@@ -1,0 +1,34 @@
+{
+  "version": "odi-approach-1",
+  "reference_version": "odi_wc_experiment",
+  "batting": {
+    "defensive": [0.81, 0.66, 0.74],
+    "rotate": [0.94, 0.77, 0.88],
+    "balanced": [1.00, 1.00, 1.00],
+    "aggressive": [1.10, 1.12, 1.21],
+    "ultra": [1.22, 1.26, 1.49]
+  },
+  "bowling": {
+    "defensive": [0.93, 0.85, 0.85],
+    "balanced": [1.00, 1.00, 1.00],
+    "mixed": [1.01, 0.96, 1.05],
+    "variation": [1.025, 0.94, 1.10],
+    "aggressive": [1.07, 1.11, 1.24]
+  },
+  "pitch": {
+    "Hard": [1.00, 1.00],
+    "Green": [0.91, 1.10],
+    "Dry": [0.94, 1.08],
+    "Flat": [1.09, 0.94],
+    "Dead": [1.15, 0.90]
+  },
+  "phase_rates": {"powerplay": 4.9, "middle": 5.4, "death": 7.5},
+  "phase_gains": {"powerplay": [0.985, 1.00], "middle": [0.945, 0.94], "death": [1.040, 0.83]},
+  "innings_gains": {"inn1": [1.0, 1.0], "inn2": [1.025, 0.89]},
+  "boundary_bias": {"powerplay": 1.00, "middle": 0.99, "death": 1.08},
+  "rating": {"gap_anchor": -6, "scale": 23, "runs": 0.18, "wickets": 0.55, "level": 0.10},
+  "fatigue": {"pace": [1.0, 0.20, 2.0], "spin": [0.65, 0.30, 3.0]},
+  "counter_strength": 0.33,
+  "repeat_grace": 5,
+  "run_out_completed_runs": [55, 40, 5]
+}

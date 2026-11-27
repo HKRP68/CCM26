@@ -256,6 +256,8 @@ def cipl_batting_slots(state, out_roster_id=None):
 def cipl_bench_for(state, side, usage=None):
     """``side``'s remaining substitutes: the snapshotted bench, minus anyone
     already spent by a swap and anyone who has since joined the XI."""
+    if state.get("ball_format") == "ODI":
+        return []
     if usage is None:
         usage = (state.get("impact_players") or {}).get("usage") or {}
     xi = active_players(state.get(f"{side}_xi") or [])

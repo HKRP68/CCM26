@@ -48,6 +48,8 @@ from engine import pitch_state
 from engine import batter_confidence
 from services import impact_player
 from services import match_drama
+from services import odi_approach
+from engine.realism import odi
 from services import sledging
 from services import highlights as highlights_log
 from services import weather_drift
@@ -74,13 +76,15 @@ except Exception:  # pragma: no cover - defensive import guard
 WICKET_LIMIT = 10  # all out after 10 wickets (11-man side)
 
 # ── Match-format spec ────────────────────────────────────────────────
-# Both supported formats are an innings of **20 units**, one captain turn per
-# unit, with a strike end-change at unit boundaries. T20 = 20 overs x 6 balls
-# (120). The Hundred = 20 sets x 5 balls (100), where the strike changes ends
-# only every 2nd set (10 balls) and a bowler may bowl two consecutive sets
-# (a 10-ball spell) but not a third. ``state["overs"]`` stays 20 (the unit
-# count) for both; only the per-unit ball count and rotation rules differ.
+# T20 and ODI change ends after each six-ball over. The Hundred changes
+# ends after every two five-ball sets and allows two consecutive sets.
+# state["overs"] always stores the number of captain turns per innings.
 FORMAT_SPECS = {
+    "ODI": {
+        "balls_per_unit": 6, "swap_balls": 6, "powerplay_units": 10,
+        "death_units": 10, "units": 50, "max_consecutive_units": 1,
+        "unit_word": "over", "label": "ODI · 50 overs",
+    },
     "T20": {
         "balls_per_unit": 6, "swap_balls": 6, "powerplay_units": 6,
         "max_consecutive_units": 1, "unit_word": "over", "label": "20 Overs",
@@ -95,6 +99,29 @@ FORMAT_SPECS = {
 def _spec(state):
     """Return the FORMAT_SPECS entry for a state (defaults to the T20/over rules)."""
     return FORMAT_SPECS.get((state or {}).get("ball_format"), FORMAT_SPECS["T20"])
+
+
+def approach_engine_format(state):
+    """Select mechanics independently of the match's reference identity."""
+    overs = int((state or {}).get("overs") or 20)
+    if odi_approach.is_odi(state):
+        if overs != FORMAT_SPECS["ODI"]["units"]:
+            raise odi.ODIUnavailable("An ODI Approach innings must be scheduled for 50 overs.")
+        from engine.format_config import get_format
+        return get_format("ListA")
+    if is_hundred(state):
+        engine_overs = max(1, round(total_balls(state) / 6))
+        return _fmt_to_engine_fmt(
+            {"label": "The100", "overs": engine_overs, "max_bowler_overs": 4,
+             "powerplay_end": 4, "death_start": max(2, engine_overs - 3)}, overs)
+    return _fmt_to_engine_fmt(None, overs)
+
+
+def format_label(state):
+    if odi_approach.is_odi(state) or is_hundred(state):
+        return _spec(state)["label"]
+    overs = int(state.get("overs") or 20)
+    return f"{overs} Over{'s' if overs != 1 else ''}"
 
 
 def balls_per_unit(state):
@@ -128,6 +155,9 @@ def approach_phase(state):
     """
     total = max(1, int((state or {}).get("overs") or 20))
     over = max(1, int((state or {}).get("current_over") or 1))
+    if odi_approach.is_odi(state):
+        from engine.realism.phases import phase_for_ball
+        return phase_for_ball((over - 1) * 6, 300, "ODI")
     if total >= 20:
         pp, death = _spec(state)["powerplay_units"], DEATH_UNITS
     else:
@@ -702,11 +732,16 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
                      pitch_type="Hard", is_private=False, stadium=None,
                      bat_team_code="", bowl_team_code="",
                      bat_team_emoji="🏏", bowl_team_emoji="🏏", conditions=None,
-                     ball_format="T20", bat_bench=None, bowl_bench=None):
+                     ball_format="T20", bat_bench=None, bowl_bench=None, odi_settings=None):
     """Build the initial state dict for a Challenge League approach match."""
+    if ball_format == "ODI":
+        if overs != 50 or not (odi_approach.valid_xi(bat_xi) and odi_approach.valid_xi(bowl_xi)):
+            raise odi.ODIUnavailable("ODI requires two XIs with at least 50 overs of legal bowling capacity.")
+        odi_settings = odi_settings if odi_settings is not None else odi.new_settings()
     bat_stats = {str(p["roster_id"]): _new_bat_stat() for p in bat_xi}
     bowl_stats = {str(p["roster_id"]): _new_bowl_stat() for p in bowl_xi}
     return {
+        **({"odi_settings": odi_settings} if ball_format == "ODI" else {}),
         "mode": "cipl_approach",
         "match_id": match_id, "overs": overs,
         # Match format: "T20" (20 overs x 6 balls) or "The100" (20 sets x 5).
@@ -752,8 +787,8 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         "momentum_history": [], "pressure_history": [],
         # Section 9: the live chasing chance after each over of the 2nd innings.
         "chase_history": [],
-        # What each captain actually picked, over by over (the analysis report's
-        # approach duel). Never read by the simulation.
+        # Completed over picks and bowling history. ODI derives workload from
+        # these completed records, so a parked delivery adds no extra work.
         "approach_log": [],
         # How many overs in a row each side has now picked the same thing, and
         # what that thing was. Drives the predictability layer — see
@@ -787,14 +822,14 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         # match's global random state. ``engine_version`` pins the engine that
         # produced them, for debugging a saved match.
         "rng_seed": random.SystemRandom().randrange(1 << 62),
-        "engine_version": ENGINE_VERSION,
+        "engine_version": odi_settings["version"] if ball_format == "ODI" else ENGINE_VERSION,
         # Balanced Drama preset recorded at match creation (Codex Prompt 05,
         # §19/§20), so a competition records the engine version and preset used
         # and a later global change cannot alter this match. The per-ball drama
         # OVERLAY is wired into the /sim path; CIPL records the preset here and
         # keeps its existing (single) momentum mechanism. See
         # docs/balanced_drama_engine.md for the integration status per mode.
-        "drama_preset": _drama_preset_at_creation(),
+        "drama_preset": None if ball_format == "ODI" else _drama_preset_at_creation(),
         "drama_engine_version": _DRAMA_VERSION,
     }
 
@@ -812,13 +847,17 @@ def max_bowler_overs(state):
     return max(1, -(-state["overs"] // 5))
 
 
-def _overs_bowled(state, rid):
-    """Units (overs / sets) a bowler has completed so far."""
+def _bowler_legal_balls(state, rid):
     balls = state["bowl_stats"].get(str(rid), {}).get("balls", 0)
     player = find_player(state.get("bowl_xi") or [], rid) or {}
     if player.get("concussion_quota_innings") == state.get("innings"):
         balls += int(player.get("concussion_bowling_offset") or 0)
-    return balls // balls_per_unit(state)
+    return balls
+
+
+def _overs_bowled(state, rid):
+    """Units (overs / sets) a bowler has completed so far."""
+    return _bowler_legal_balls(state, rid) // balls_per_unit(state)
 
 
 # Emergency part-time bowlers (batsmen) are capped well below the regular quota
@@ -845,6 +884,9 @@ def quota_for(state, p):
 
 def overs_left(state, p):
     """Overs this player may still bowl under their (part-time-aware) quota."""
+    if odi_approach.is_odi(state):
+        cap = quota_for(state, p) * 6
+        return max(0, (cap - _bowler_legal_balls(state, p["roster_id"])) // 6)
     return max(0, quota_for(state, p) - _overs_bowled(state, p["roster_id"]))
 
 
@@ -868,6 +910,8 @@ def eligible_bowlers(state):
     # ball again.
     xi = impact_player.active_players(state.get("bowl_xi") or [])
     xi = [p for p in xi if not p.get("concussion_replacement") or overs_left(state, p) > 0]
+    if odi_approach.is_odi(state):
+        return odi_approach.candidates(state, xi)
     # Which bowler is blocked from taking the next unit. In T20 it is simply the
     # previous over's bowler (no back-to-back overs). In The Hundred a bowler may
     # bowl two consecutive sets (a 10-ball spell), so only block them once that
@@ -1787,7 +1831,7 @@ def chase_model_active(state):
     rain-shortened innings, a Hundred set (5 balls) and an over that starts with
     fewer balls left than a full unit all land in the right place by themselves.
     """
-    if not CHASE_MODEL_CONTROL:
+    if odi_approach.is_odi(state) or not CHASE_MODEL_CONTROL:
         return False
     if int(state.get("total_wickets", 0)) >= state.get("wicket_limit", WICKET_LIMIT):
         return False
@@ -1850,6 +1894,11 @@ def chase_chance_now(state):
     runs_needed = int(state["target"]) - int(state["total_runs"])
     if balls_left <= 0 or runs_needed <= 0:
         return None
+    if odi_approach.is_odi(state):
+        wickets = state["total_wickets"]
+        return {"runs_needed": runs_needed, "wickets_lost": wickets,
+                "wickets_remaining": 10 - wickets,
+                "chasing_chance": round(100 * odi_approach.forecast(state))}
     # Same dict shape as final_chase_chance, so chase_history, the analysis
     # report and the arena win bar are all unchanged.
     if chase_model_display(state):
@@ -2016,6 +2065,23 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
     """
     if state.get("concussion_pending"):
         raise ValueError("Play is paused for a concussion substitute.")
+    is_odi = odi_approach.is_odi(state)
+    if is_odi:
+        odi.validate_reference(odi.settings(state))
+    if is_odi and is_innings_over(state):
+        raise odi.ODIUnavailable("This ODI innings has already ended.")
+    if is_odi and state.get("over_in_progress"):
+        pending = (state.get("current_bowler") or {}).get("roster_id")
+        if pending != state["over_in_progress"].get("odi_bowler_rid") or pending == state.get("prev_bowler_rid"):
+            raise odi.ODIUnavailable("The ODI over is paused with an invalid bowler.")
+        p = state["current_bowler"]
+        bowled = _bowler_legal_balls(state, pending)
+        if bowled - state["current_ball"] + 6 > quota_for(state, p) * 6:
+            raise odi.ODIUnavailable("The ODI over would exceed the bowler's quota.")
+    if is_odi and not state.get("over_in_progress"):
+        pending = (state.get("current_bowler") or {}).get("roster_id")
+        if pending not in {p["roster_id"] for p in eligible_bowlers(state)}:
+            raise odi.ODIUnavailable("Choose a legal ODI bowler before continuing.")
     bat_app = state.get("batting_approach")
     bowl_app = state.get("bowling_approach")
     bowler = state["current_bowler"]
@@ -2035,21 +2101,16 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
     # pressure / momentum / par-score curves operate over the right ball count.
     # The per-ball engine calls below feed it a divmod-by-6 view of the absolute
     # ball count, which is identical to the over view for T20.
-    if hundred:
-        engine_overs = max(1, round(innings_balls / 6))  # 100 → 17
-        engine_fmt = _fmt_to_engine_fmt(
-            {"label": "The100", "overs": engine_overs, "max_bowler_overs": 4,
-             "powerplay_end": 4, "death_start": max(2, engine_overs - 3)}, overs_total)
-    else:
-        engine_overs = overs_total
-        engine_fmt = _fmt_to_engine_fmt(None, overs_total)
+    engine_fmt = approach_engine_format(state)
+    engine_overs = max(1, round(innings_balls / 6)) if hundred else overs_total
+    odi_workload = odi_approach.bowler_workload(state, bowler) if is_odi else None
     pressure_eng = PressureEngine(format_config=engine_fmt)
     # Does the realism ball model decide this match's deliveries? Resolved
     # once per over and used below to gate the result-steering hooks, so the
     # gameplay layers always agree with whichever ball model is running: a
     # missing reference file must not leave a match on the legacy ball model
     # with the realism engine's gameplay changes applied anyway.
-    _realism_live = realism_integration.live_for(engine_fmt)
+    _realism_live = not is_odi and realism_integration.live_for(engine_fmt)
     # Over-to-over variation (Feature 2 — realism layer). One zero-mean scoring
     # tendency per over, drawn from a child RNG keyed on (innings, over) so it is
     # reproducible and identical on a pause/resume of the same over, and never
@@ -2068,7 +2129,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                 _overvol.new_over()
     # Dramatic-finish steering: live for the 2nd innings of an armed 20-over
     # chase, else None (and the per-ball logic below is a no-op).
-    scenario_eng = _load_scenario_engine(state)
+    scenario_eng = None if is_odi else _load_scenario_engine(state)
 
     bowl_adapted = _adapt_player(bowler)
     # Fielding side quality — activates dropped catches / misfields in the
@@ -2099,10 +2160,10 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
         # combination carried in. Built once, from the state as it stands
         # BEFORE the first ball. The picks and bowling context hold over the
         # whole over, while chemistry follows the active partnership.
-        approach_ctx = approach_context(state, bowler)
+        approach_ctx = {} if is_odi else approach_context(state, bowler)
     else:
         bowl_wkts_before = resume.get("bowl_wkts_before", bws["wickets"])
-        approach_ctx = resume.get("approach_ctx") or approach_context(state, bowler)
+        approach_ctx = {} if is_odi else resume.get("approach_ctx") or approach_context(state, bowler)
     # The name of the special combination these two picks make (None for most
     # pairs) and the line that describes the over they tend to produce.
     combo_name, combo_flavour = approach_modifiers.over_flavour(bat_app, bowl_app)
@@ -2124,6 +2185,8 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
         balls_this_over = 0
         deliveries = 0
         cmt_start = len(state.get("commentary_log", []))
+        if is_odi:
+            state["_odi_over_commentary"] = []
         # Traits that fire this over (populated by the per-ball trait hook).
         # Stays empty for Challenge League players, who carry no traits.
         over_traits = {"bat": set(), "bowl": set()}
@@ -2171,22 +2234,24 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
     if state["overs"] != overs_total:
         overs_total = state["overs"]
         innings_balls = total_balls(state)
-        if hundred:
-            engine_overs = max(1, round(innings_balls / 6))
-            engine_fmt = _fmt_to_engine_fmt(
-                {"label": "The100", "overs": engine_overs, "max_bowler_overs": 4,
-                 "powerplay_end": 4, "death_start": max(2, engine_overs - 3)}, overs_total)
-        else:
-            engine_overs = overs_total
-            engine_fmt = _fmt_to_engine_fmt(None, overs_total)
+        engine_fmt = approach_engine_format(state)
+        engine_overs = max(1, round(innings_balls / 6)) if hundred else overs_total
         pressure_eng = PressureEngine(format_config=engine_fmt)
         _realism_live = realism_integration.live_for(engine_fmt)
 
+    legal_extra_types = ("Byes", "LegByes", "LegBye", "Leg Byes")
+    if is_odi:
+        legal_extra_types += ("Leg Bye", "Penalty")
+    odi_outcomes = dict((resume or {}).get("odi_outcomes") or {})
+    chunk_start = deliveries
     while balls_this_over < bpu and not chased:
         if state["total_wickets"] >= state.get("wicket_limit", WICKET_LIMIT):
             break
+        if is_odi and deliveries - chunk_start >= 30:
+            delivery_pause = True
+            break
         deliveries += 1
-        if deliveries > 30:  # safety against pathological extra loops
+        if not is_odi and deliveries > 30:  # legacy safety guard
             break
 
         striker = state["batting_order"][state["striker_idx"]]
@@ -2206,82 +2271,103 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
         required_rr = 0.0
         if target is not None and balls_left > 0:
             required_rr = max(0, target - state["total_runs"]) / balls_left * 6.0
-        match_state = {
-            "innings": innings, "current_over": eng_over_idx,
-            "score": state["total_runs"], "wickets": state["total_wickets"],
-            "required_run_rate": required_rr,
-            "overs_remaining": engine_overs - eng_over_idx,
-        }
-        risk = pressure_eng.calculate_unified_risk_factor(match_state)
-        pressure_score = min(100.0, max(0.0, (risk - 1.0) * 50.0))
-        pressure_effects = pressure_eng.get_pressure_effects(
-            pressure_score, batter_adapted.get("batting_rating", 50),
-            bowl_adapted.get("bowling_rating", 50), pitch)
-
-        # Scenario phase for THIS delivery (free_play / convergence / finale, or
-        # "inactive" when no scenario is armed). get_phase() also runs the
-        # per-over feasibility gate that self-disables unrealistic steering.
-        scenario_phase = scenario_eng.get_phase() if scenario_eng else "inactive"
-
-        # Game state / momentum. Passing scenario_phase lets GSME dampen its
-        # collapse layers during convergence so the scenario can steer the
-        # wicket count instead of being overwhelmed by a cascade.
-        game_state = compute_game_state_vector(
-            ball_history=ball_history[-BALL_HISTORY_WINDOW:],
-            score=state["total_runs"], current_over=eng_over_idx,
-            current_ball=eng_ball, wickets=state["total_wickets"],
-            innings=innings, target=target or 0, pitch=pitch,
-            partnership_balls=state.get("partnership_balls", 0),
-            partnership_runs=state.get("partnership_runs", 0),
-            scenario_phase=scenario_phase,
-            format_config=engine_fmt)
-
         streak = streaks.get(srid, {"boundaries": 0})
+        runs_needed = max(0, (target or 0) - state["total_runs"])
+        if not is_odi:
+            match_state = {
+                "innings": innings, "current_over": eng_over_idx,
+                "score": state["total_runs"], "wickets": state["total_wickets"],
+                "required_run_rate": required_rr,
+                "overs_remaining": engine_overs - eng_over_idx,
+            }
+            risk = pressure_eng.calculate_unified_risk_factor(match_state)
+            pressure_score = min(100.0, max(0.0, (risk - 1.0) * 50.0))
+            pressure_effects = pressure_eng.get_pressure_effects(
+                pressure_score, batter_adapted.get("batting_rating", 50),
+                bowl_adapted.get("bowling_rating", 50), pitch)
 
-        # ── LetsPlay clutch finale ──
-        # In a live LetsPlay chase, the death overs (scenario finale phase, or the
-        # last CLUTCH_WINDOW_BALLS legal balls) are resolved through the NORMAL
-        # engine path with a clutch intent amplifier — so ratings + traits decide
-        # the six/wicket, instead of the scenario engine's fixed scripted value.
-        # CIPL never sets ``clutch_finale`` so its scripted finale is untouched.
-        runs_needed = (target - state["total_runs"]) if target is not None else 0
-        letsplay_finale = (
-            bool(state.get("clutch_finale"))
-            and innings == 2 and target is not None
-            and runs_needed > 0 and balls_left > 0
-            and (scenario_phase == "finale" or balls_left <= CLUTCH_WINDOW_BALLS)
-        )
+            # Scenario phase for THIS delivery (free_play / convergence / finale, or
+            # "inactive" when no scenario is armed). get_phase() also runs the
+            # per-over feasibility gate that self-disables unrealistic steering.
+            scenario_phase = scenario_eng.get_phase() if scenario_eng else "inactive"
 
-        # ── Calibrated last over ──
-        # ── Calibrated chase ──
-        # For the last CHASE_MODEL_BALLS of a live chase the model
-        # (engine.chase_model) owns the delivery in BOTH modes. Everything that
-        # used to steer this window stands down below, so exactly one model
-        # decides how often a chase of this size against these players comes
-        # off. The layers that stand down are gated rather than deleted, so
-        # CC_CHASE_MODEL=0 degrades to the old behaviour instead of to nothing.
-        chase_active = chase_model_active(state)
+            # Game state / momentum. Passing scenario_phase lets GSME dampen its
+            # collapse layers during convergence so the scenario can steer the
+            # wicket count instead of being overwhelmed by a cascade.
+            game_state = compute_game_state_vector(
+                ball_history=ball_history[-BALL_HISTORY_WINDOW:],
+                score=state["total_runs"], current_over=eng_over_idx,
+                current_ball=eng_ball, wickets=state["total_wickets"],
+                innings=innings, target=target or 0, pitch=pitch,
+                partnership_balls=state.get("partnership_balls", 0),
+                partnership_runs=state.get("partnership_runs", 0),
+                scenario_phase=scenario_phase,
+                format_config=engine_fmt)
 
-        # ── Pressure (services.match_drama) ──
-        # How much each side is feeling it on this ball. A fielding side under
-        # the pump drops catches and sprays extras; a batting side freezes and
-        # runs itself out. Both are 0 through most of an innings.
-        bowl_p = match_drama.bowl_pressure(
-            phase, innings, target, state["total_runs"], state["total_wickets"],
-            balls_left, state["total_runs"] - runs_before, wicket_limit)
-        bat_p = match_drama.bat_pressure(
-            phase, innings, target, state["total_runs"], state["total_wickets"],
-            balls_left, _recent_wickets(state), wicket_limit)
-        pitch_strength = 0.0
+            streak = streaks.get(srid, {"boundaries": 0})
 
-        # ── Scenario engine hook ──
-        # Finale phase scripts the delivery outright; free-play/convergence
-        # phases instead nudge the pressure effects toward the target corridor.
-        # Skipped entirely for a LetsPlay clutch finale (no scripted override).
-        scenario_override = (scenario_eng.get_override_outcome(striker, bowler)
-                             if (scenario_eng and not letsplay_finale
-                                 and not chase_active) else None)
-        if scenario_override:
+            # ── LetsPlay clutch finale ──
+            # In a live LetsPlay chase, the death overs (scenario finale phase, or the
+            # last CLUTCH_WINDOW_BALLS legal balls) are resolved through the NORMAL
+            # engine path with a clutch intent amplifier — so ratings + traits decide
+            # the six/wicket, instead of the scenario engine's fixed scripted value.
+            # CIPL never sets ``clutch_finale`` so its scripted finale is untouched.
+            runs_needed = (target - state["total_runs"]) if target is not None else 0
+            letsplay_finale = (
+                bool(state.get("clutch_finale"))
+                and innings == 2 and target is not None
+                and runs_needed > 0 and balls_left > 0
+                and (scenario_phase == "finale" or balls_left <= CLUTCH_WINDOW_BALLS)
+            )
+
+            # ── Calibrated last over ──
+            # ── Calibrated chase ──
+            # For the last CHASE_MODEL_BALLS of a live chase the model
+            # (engine.chase_model) owns the delivery in BOTH modes. Everything that
+            # used to steer this window stands down below, so exactly one model
+            # decides how often a chase of this size against these players comes
+            # off. The layers that stand down are gated rather than deleted, so
+            # CC_CHASE_MODEL=0 degrades to the old behaviour instead of to nothing.
+            chase_active = chase_model_active(state)
+
+            # ── Pressure (services.match_drama) ──
+            # How much each side is feeling it on this ball. A fielding side under
+            # the pump drops catches and sprays extras; a batting side freezes and
+            # runs itself out. Both are 0 through most of an innings.
+            bowl_p = match_drama.bowl_pressure(
+                phase, innings, target, state["total_runs"], state["total_wickets"],
+                balls_left, state["total_runs"] - runs_before, wicket_limit)
+            bat_p = match_drama.bat_pressure(
+                phase, innings, target, state["total_runs"], state["total_wickets"],
+                balls_left, _recent_wickets(state), wicket_limit)
+            pitch_strength = 0.0
+
+            # ── Scenario engine hook ──
+            # Finale phase scripts the delivery outright; free-play/convergence
+            # phases instead nudge the pressure effects toward the target corridor.
+            # Skipped entirely for a LetsPlay clutch finale (no scripted override).
+            scenario_override = (scenario_eng.get_override_outcome(striker, bowler)
+                                 if (scenario_eng and not letsplay_finale
+                                     and not chase_active) else None)
+        if is_odi:
+            bowl_p = bat_p = pitch_strength = 0.0
+            _tick = state.get("_rng_tick", 0)
+            _ball_rng = SimRng(f"{state['rng_seed']}/odi/{innings}/{_tick}")
+            state["batter_streaks"] = streaks
+            oc = odi_approach.bowl_delivery(
+                state, bowler, bat_app, bowl_app, _ball_rng, free_hit=free_hit,
+                workload=odi_workload, collector=over_traits)
+            state["_rng_tick"] = _tick + 1
+            primary = oc.get("odi_outcome")
+            if primary:
+                odi_outcomes[primary] = odi_outcomes.get(primary, 0) + 1
+            scored = oc.get("odi_extras", 0) + oc.get("odi_bat_runs", oc.get("runs", 0))
+            if oc.get("batter_out") and 0 < runs_needed <= scored:
+                if oc.get("is_extra"):
+                    oc["batter_out"], oc["wicket_type"] = False, None
+                else:
+                    oc.update(type="run", runs=runs_needed, batter_out=False, wicket_type=None)
+        elif scenario_override:
             oc = _normalize_outcome(scenario_override)
         else:
             if scenario_eng and not letsplay_finale and not chase_active:
@@ -2508,10 +2594,10 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             if not (state.get('_planned_super_overs') or state.get('_planned_winner_user_id')):
                 oc = _resolve_running_wicket(oc, runs_needed)
 
-        if state.get('_planned_super_overs') and innings == 1:
+        if not is_odi and state.get('_planned_super_overs') and innings == 1:
             from services.tournament_match_settings import cap_first_innings
             oc = cap_first_innings(oc, state['total_runs'], 6 * total_balls(state))
-        if state.get('_planned_super_overs') and innings == 2:
+        if not is_odi and state.get('_planned_super_overs') and innings == 2:
             from services.tournament_match_settings import constrain_tie_outcome
             oc = constrain_tie_outcome(oc, runs=state['total_runs'], par=int(target) - 1,
                 remaining=total_balls(state) - balls_bowled(state),
@@ -2554,25 +2640,33 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                 is_maiden=is_maiden)
 
         # --- Wides / No-balls: not a legal ball ---
-        if is_extra and extra_type in ("Wide", "No Ball"):
-            state["total_runs"] += 1 + runs
-            state["extras_total"] += (1 + runs) if extra_type == "Wide" else 1
-            state["partnership_runs"] = partnership_before + 1 + runs
-            bws["runs"] += 1 + runs
-            bws["this_over_runs"] += 1 + runs
+        illegal = is_extra and extra_type in ("Wide", "No Ball")
+        joint_wicket = is_odi and is_extra and batter_out
+        extra_runs = oc.get("odi_extras", 0)
+        crossed_runs = (extra_runs - 1 if extra_type == "Wide"
+                        else runs + oc.get("odi_byes", 0)) if is_odi else runs
+        if illegal:
+            scored = extra_runs + oc.get("odi_bat_runs", 0) if is_odi else 1 + runs
+            charged = scored - oc.get("odi_byes", 0) if is_odi else scored
+            state["total_runs"] += scored
+            state["extras_total"] += (extra_runs if is_odi else
+                                      scored if extra_type == "Wide" else 1)
+            state["partnership_runs"] = partnership_before + scored
+            bws["runs"] += charged
+            bws["this_over_runs"] += charged
             # Under pressure the extra is a mistake worth calling out.
             _pressed = bowl_p >= PRESSURE_CALLOUT
             if _pressed:
                 drama["pressure"]["wides" if extra_type == "Wide" else "noballs"] += 1
             if extra_type == "Wide":
                 over_timeline.append("WD")
-                over_events.append({"sym": "WD", "text": f"Wide +{1 + runs} ({striker_name})"})
+                over_events.append({"sym": "WD", "text": f"Wide +{scored} ({striker_name})"})
                 _wd_text = (match_drama.line("pressure", "wide", bowler=bowler["name"])
                             if _pressed else None)
                 _push_commentary(state, "extra", striker_name,
                                  _wd_text or _ec()
                                  or f"Wide. {bowler['name']} strays down leg.",
-                                 runs=1 + runs, event_key="wide")
+                                 runs=scored, event_key="wide")
             else:
                 # A faced no-ball counts in the batter's balls, but never in
                 # the over's legal deliveries (consistent with /wpm scoring).
@@ -2593,37 +2687,40 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                 _push_commentary(state, "extra", striker_name,
                                  f"{_nb_text} 🆓 FREE HIT next ball — only a run out "
                                  f"can dismiss.",
-                                 runs=1 + runs, event_key="no_ball")
+                                 runs=scored, event_key="no_ball")
                 free_hit = True
-            if runs % 2 == 1:
+            if not joint_wicket and crossed_runs % 2 == 1:
                 _swap_strike(state)
-            from services.batting_milestones import capture
-            capture(bs, bs_runs_before)
-            record_telemetry.capture(state, record_before, oc)
-            ball_history.append(make_ball_event(oc))
-            if target is not None and state["total_runs"] >= target:
-                chased = True
-            if pause_after_delivery and not chased:
-                delivery_pause = True
-                break
-            continue
+            if not joint_wicket:
+                from services.batting_milestones import capture
+                capture(bs, bs_runs_before)
+                record_telemetry.capture(state, record_before, oc)
+                ball_history.append(make_ball_event(oc))
+                if target is not None and state["total_runs"] >= target:
+                    chased = True
+                if pause_after_delivery and not chased:
+                    delivery_pause = True
+                    break
+                continue
 
-        # --- Legal ball ---
-        free_hit = False
-        # Hat-trick streak baseline — compared once the outcome is applied.
-        wkts_before_ball = bws["wickets"]
-        balls_this_over += 1
-        state["current_ball"] += 1
-        bws["balls"] += 1
-        bws["this_over_balls"] += 1
-        bs["balls"] += 1
-        # Legal ball faced by the current pair → counts toward the partnership.
-        state["partnership_balls"] = state.get("partnership_balls", 0) + 1
+        # Only legal balls advance the over. An illegal dismissal falls
+        # through to the same dismissal/partnership handling as a legal one.
         dismissed = None
-        bs["dot_streak"] = (min(DOT_PRESSURE_MAX, bs.get("dot_streak", 0) + 1)
-                           if not (runs or is_extra or otype == "wicket" or batter_out) else 0)
+        wkts_before_ball = bws["wickets"]
+        if not illegal:
+            free_hit = False
+            # Hat-trick streak baseline — compared once the outcome is applied.
+            balls_this_over += 1
+            state["current_ball"] += 1
+            bws["balls"] += 1
+            bws["this_over_balls"] += 1
+            bs["balls"] += 1
+            # Legal ball faced by the current pair → counts toward the partnership.
+            state["partnership_balls"] = state.get("partnership_balls", 0) + 1
+            bs["dot_streak"] = (min(DOT_PRESSURE_MAX, bs.get("dot_streak", 0) + 1)
+                               if not (runs or is_extra or otype == "wicket" or batter_out) else 0)
 
-        if is_extra and extra_type in ("Byes", "LegByes", "LegBye", "Leg Byes"):
+        if is_extra and not joint_wicket and extra_type in legal_extra_types:
             state["total_runs"] += runs
             state["extras_total"] += runs
             state["partnership_runs"] = partnership_before + runs
@@ -2632,7 +2729,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             _push_commentary(state, "extra", striker_name,
                              fh_prefix + (_ec() or f"Leg byes, {runs} run(s)."),
                              runs=runs, event_key="legbye")
-            if runs % 2 == 1:
+            if extra_type != "Penalty" and runs % 2 == 1:
                 _swap_strike(state)
 
         elif otype == "wicket" or batter_out:
@@ -2643,6 +2740,12 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             out_rid = str(dismissed["roster_id"])
             out_stat = state["bat_stats"].setdefault(out_rid, _new_bat_stat())
             out_name = dismissed["name"]
+            if joint_wicket:
+                if not illegal:
+                    state["total_runs"] += extra_runs
+                    state["extras_total"] += extra_runs
+                    state["partnership_runs"] = partnership_before + extra_runs
+                runs = 0
             if runs:  # completed runs on a run-out
                 state["total_runs"] += runs
                 bs["runs"] += runs
@@ -2654,7 +2757,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             # and the batter who faced it — the same rule handlers.match and
             # services.match_webapp_service apply, so a dot-ball quest counts
             # the same wherever the match was played.
-            if not runs:
+            if not runs and not joint_wicket:
                 bws["dots"] = bws.get("dots", 0) + 1
                 bs["dots"] = bs.get("dots", 0) + 1
             out_stat["out"] = True
@@ -2664,17 +2767,24 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             # (c <fielder> b <bowler> / run out (<fielder>) / st <keeper> ...).
             needs_fielder = wtype.lower() in ("caught", "run out", "stumped")
             fielder = _pick_fielder(state, bowler,
-                                    allow_bowler=(wtype.lower() == "run out")) if needs_fielder else ""
+                                    allow_bowler=(wtype.lower() == "run out"),
+                                    rng=_ball_rng if is_odi else random) if needs_fielder else ""
             if wtype.lower() == "stumped":
                 keeper = next((p for p in impact_player.active_players(state.get("bowl_xi") or [])
                                if str(p.get("category") or "").lower().replace(" ", "") == "wicketkeeper"), None)
                 fielder = keeper.get("name") if keeper else ""
             out_stat["fielder"] = fielder
             out_stat["dismissal"] = _dismissal_text(wtype, bowler["name"], fielder)
-            if wtype != "Run Out":
+            if wtype != "Run Out" and (not is_odi or wtype not in ("Obstructing The Field", "Hit The Ball Twice")):
                 bws["wickets"] += 1
-            over_timeline.append("W")
-            over_events.append({"sym": "W", "text": f"WICKET! {out_name} {wtype}"})
+            event = {"sym": "W", "text": f"WICKET! {out_name} {wtype}"}
+            if joint_wicket and illegal:
+                mark = f"{over_timeline[-1]}+W"
+                over_timeline[-1] = mark
+                over_events[-1] = {"sym": mark, "text": f"{extra_type} · {event['text']}"}
+            else:
+                over_timeline.append("W")
+                over_events.append(event)
             state["fow"].append([state["total_runs"], state["total_wickets"],
                                  out_name, format_overs(state)])
             # Ball row (paints the W badge in the over column) + the red OUT card.
@@ -2707,7 +2817,8 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             state["partnership_balls"] = 0
             state.setdefault("wkt_marks", []).append(balls_bowled(state))
             streaks.pop(out_rid, None)
-            if wtype == "Run Out" and (runs + bool(oc.get("run_out_crossed"))) % 2:
+            running = crossed_runs if joint_wicket and illegal else extra_runs if joint_wicket else runs
+            if wtype == "Run Out" and (running + bool(oc.get("run_out_crossed"))) % 2:
                 _swap_strike(state)
             # The batting captain picks who walks in: stop the over after this
             # ball (the rest of its bookkeeping still runs below) and hand the
@@ -2803,9 +2914,9 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             _append_to_last_ball_row(state, _flavour)
         sledge_batter = dismissed or striker
         sledge_adapted = batter_adapted if sledge_batter is striker else _adapt_player(sledge_batter)
-        _after_ball_sledge(state, drama, oc, sledge_batter, bowler, sledge_adapted,
-                           bowl_adapted, over_timeline, bowl_p, innings,
-                           is_out=_ball_out)
+        if not is_odi:
+            _after_ball_sledge(state, drama, oc, sledge_batter, bowler, sledge_adapted,
+                               bowl_adapted, over_timeline, bowl_p, innings, is_out=_ball_out)
 
         state["timeline"].append(over_timeline[-1] if over_timeline else "0")
         state["timeline"] = state["timeline"][-18:]
@@ -2837,6 +2948,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                 "highlights_before": highlights_before,
                 "bowl_wkts_before": bowl_wkts_before,
                 "approach_ctx": approach_ctx,
+                **({"odi_outcomes": odi_outcomes, "odi_bowler_rid": bowler["roster_id"]} if is_odi else {}),
             })
         if delivery_pause:
             summary.pop("paused", None)
@@ -2859,7 +2971,8 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
     state.setdefault("over_wkts", []).append(over_wkts)
     # Snapshot this over for the approach-prompt scorecard card.
     state["last_over_timeline"] = list(over_timeline)
-    state["last_over_commentary"] = list(state.get("commentary_log", [])[cmt_start:])
+    state["last_over_commentary"] = (list(state.get("_odi_over_commentary", [])) if is_odi
+                                     else list(state.get("commentary_log", [])[cmt_start:]))
     # The over's drama for the approach card's commentary section.
     state["last_over_drama"] = {
         "drops": list(drama.get("drops") or []),
@@ -2919,7 +3032,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
     # explain. A part-over only ever happens at an innings end (the ball loop
     # breaks on all out, overs done or target reached), so there is no way for
     # the same over to be logged twice.
-    if balls_this_over:
+    if balls_this_over or (is_odi and deliveries):
         _cc_now = chase_chance_now(state)
         if _cc_now:
             state.setdefault("chase_history", []).append({
@@ -2958,6 +3071,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             # lists the duel over by over; ``last_over_timeline`` above holds the
             # most recent over for the live card and is overwritten every over.
             "timeline": list(over_timeline),
+            **({"odi_outcomes": odi_outcomes, "deliveries": deliveries} if is_odi else {}),
         })
         if state.get("innings") == 2:
             _dps = pitch_state.innings2_trace(pitch, state["current_over"],
@@ -2982,6 +3096,9 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
         bowler_name=bowler.get("name"), over_runs=over_runs,
         over_wkts=over_wkts, timeline=over_timeline,
         legal_balls=balls_this_over, bpu=bpu)
+
+    if is_odi:
+        state.pop("_odi_over_commentary", None)
 
     summary = {
         "over_no": state["current_over"],
@@ -3257,6 +3374,10 @@ def _push_commentary(state, ctype, name, text, *, runs=None,
     # Keep the log bounded so the JSON state stays small.
     if len(log) > 240:
         del log[:len(log) - 240]
+    if "_odi_over_commentary" in state:
+        over_log = state["_odi_over_commentary"]
+        over_log.append(entry)
+        del over_log[:-80]
 
 
 def _push_card(state, entry):
@@ -3270,6 +3391,10 @@ def _push_card(state, entry):
     log.append(entry)
     if len(log) > 240:
         del log[:len(log) - 240]
+    if "_odi_over_commentary" in state:
+        over_log = state["_odi_over_commentary"]
+        over_log.append(entry)
+        del over_log[:-80]
 
 
 def _bat_card_for(state, player):
@@ -3335,7 +3460,7 @@ def _emit_end_of_over_card(state, bowler, over_no, over_runs):
         "text": f"{bowler['name']} completes the {unit} ({_bowler_figures(bws, bpu)})."})
 
 
-def _pick_fielder(state, bowler, allow_bowler=False):
+def _pick_fielder(state, bowler, allow_bowler=False, rng=None):
     """Pick a plausible fielder name from the bowling XI for the scorecard
     dismissal line. The engine only emits a wicket *type*, not a fielder, so
     we attribute the catch/run-out to a random fieldsman."""
@@ -3349,7 +3474,7 @@ def _pick_fielder(state, bowler, allow_bowler=False):
         pool = list(xi)
     if not pool:
         return ""
-    return random.choice(pool).get("name", "")
+    return (rng or random).choice(pool).get("name", "")
 
 
 def _dismissal_text(how_out, bowler_name, fielder=""):
@@ -3391,6 +3516,8 @@ def end_first_innings(state):
         raise ValueError("Resolve the concussion substitute before the innings break.")
     state["inn1_runs"] = state["total_runs"]
     state["inn1_wickets"] = state["total_wickets"]
+    if odi_approach.is_odi(state):
+        state["inn1_extras"] = state["extras_total"]
     state["inn1_overs"] = format_overs(state)
     # The same figure as a ball count. ``inn1_overs`` is a display string
     # ("19.4") and The Hundred's is a ball count, so neither is arithmetic.
@@ -3518,7 +3645,8 @@ def end_first_innings(state):
 
     # Optionally arm a dramatic-finish scenario for the chase now that the
     # target is known (20-over matches only; self-disables if unrealistic).
-    _maybe_enable_scenario(state)
+    if not odi_approach.is_odi(state):
+        _maybe_enable_scenario(state)
 
 
 def compute_result(state):

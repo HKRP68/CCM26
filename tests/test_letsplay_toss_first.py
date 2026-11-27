@@ -9,6 +9,8 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from telegram.error import NetworkError
+
 from handlers import letsplay
 
 HOST_TG, GUEST_TG = 111, 222
@@ -62,6 +64,30 @@ class TossFirstTests(unittest.TestCase):
         self.assertEqual(draft["status"], "toss")
         toss.assert_awaited_once()
         xi.assert_not_awaited()
+
+    def test_pitch_can_be_picked_again_if_sending_the_toss_fails(self):
+        draft = self._put(_draft("pitch", ball_format="ODI", overs=50))
+        q = _query("lp_pitch_9_Hard", HOST_TG)
+        self.ctx.bot.send_message = AsyncMock(side_effect=[
+            NetworkError("Telegram unavailable"), MagicMock(message_id=8), MagicMock(message_id=9),
+        ])
+        with patch.object(letsplay.R.config, "RICH_TEXT_ENABLED", False), \
+             patch.object(letsplay.R, "edit_rich", new=AsyncMock()) as edit:
+            _run(letsplay.letsplay_pitch_callback(MagicMock(callback_query=q), self.ctx))
+            self.assertEqual(draft["status"], "pitch")
+            self.assertIsNone(draft["pitch_type"])
+            edit.assert_not_awaited()
+            self.assertIn("Tap your pitch again", self.ctx.bot.send_message.await_args.args[1])
+
+            _run(letsplay.letsplay_pitch_callback(MagicMock(callback_query=q), self.ctx))
+            edit.assert_awaited_once()
+
+        self.assertEqual(draft["status"], "toss")
+        self.assertEqual(draft["toss_msg_id"], 9)
+        sent = self.ctx.bot.send_message.await_args
+        self.assertIn("ODI · 50 overs", sent.args[1])
+        self.assertEqual([button.callback_data for button in sent.kwargs["reply_markup"].inline_keyboard[0]],
+                         ["lp_coin_heads_9", "lp_coin_tails_9"])
 
     def test_electing_shows_the_xis_instead_of_launching(self):
         draft = self._put(_draft("toss", toss_winner_side="host"))

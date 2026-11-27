@@ -391,7 +391,7 @@ def _tilts(weights, **factors):
             weights[key] *= factor
 
 
-def _sample(weights, noise=0.0):
+def _sample(weights, noise=0.0, rng=None):
     """Pick one key at random, in proportion to its weight.
 
     ``noise`` jitters each weight multiplicatively (log-normal) so even a
@@ -405,9 +405,9 @@ def _sample(weights, noise=0.0):
     for key in keys:
         weight = max(0.01, float(weights[key]))
         if noise > 0:
-            weight *= math.exp(random.gauss(0.0, noise))
+            weight *= math.exp((rng or random).gauss(0.0, noise))
         vals.append(weight)
-    return random.choices(keys, weights=vals, k=1)[0]
+    return (rng or random).choices(keys, weights=vals, k=1)[0]
 
 
 def _apply_learning(weights, record, *, bowling):
@@ -550,6 +550,10 @@ def _blend_with_solver(state, prior, *, bot_batting):
 
     trust = _difficulty(state)["solver"]
     total = sum(max(0.0, v) for v in prior.values()) or 1.0
+    if cipl_match.odi_approach.is_odi(state):
+        trust = min(0.65, 0.42 * trust)
+        return {key: (1 - trust) * weight / total + trust * solved.get(key, 0.0)
+                for key, weight in prior.items()}
     blended = {}
     for key, weight in prior.items():
         share = max(1e-6, weight / total)
@@ -673,6 +677,11 @@ def _matchup_bonuses(state, candidates):
     return [swing * (2.0 * (high - v) / span - 1.0) for v in values]
 
 
+def _odi_rng(state, action):
+    from engine.sim.rng import SimRng
+    return SimRng(f"{state['rng_seed']}/captain/{state['innings']}/{state['current_over']}/{action}")
+
+
 def pick_bowler(state):
     """Choose the bot's bowler for the upcoming over.
 
@@ -691,6 +700,13 @@ def pick_bowler(state):
         return None
     if len(candidates) == 1:
         return candidates[0]
+
+    if cipl_match.odi_approach.is_odi(state):
+        scores = cipl_match.odi_approach.bowling_scores(state, candidates)
+        best = max(scores)
+        temperature = max(0.35, 2.1 * _difficulty(state)["temperature"])
+        return _odi_rng(state, "bowler").choices(
+            candidates, [math.exp((score - best) / temperature) for score in scores])[0]
 
     persona = _persona(state)
     ph = phase(state)
@@ -801,6 +817,21 @@ def pick_bowling_approach(state):
     sampled so the plan is never a foregone conclusion. Occasionally the bot
     bluffs with something completely off-script.
     """
+    if cipl_match.odi_approach.is_odi(state):
+        ph = phase(state)
+        prior = {"defensive": 0.8, "balanced": 1.4, "mixed": 1.1,
+                 "aggressive": 1.0, "variation": 1.1}
+        if ph == "powerplay":
+            prior["aggressive"] = 1.8
+        elif ph == "death":
+            prior["variation"] = 1.8
+            prior["mixed"] = 1.5
+        if _wickets_lost(state) >= 7:
+            prior["aggressive"] *= 1.3
+        weights = _blend_with_solver(state, prior, bot_batting=False)
+        return _sample(weights, noise=_persona(state)["noise"],
+                       rng=_odi_rng(state, "bowl")) or DEFAULT_BOWLING
+
     persona = _persona(state)
     take_read_note(state)          # last over's note, if the chat never used it
     if random.random() < persona["bluff"] + _difficulty(state)["blunder"]:
@@ -930,6 +961,23 @@ def pick_batting_approach(state):
     on the win probability it leaves behind, which is what makes the bot's death
     overs add up instead of just looking busy.
     """
+    if cipl_match.odi_approach.is_odi(state):
+        ph = phase(state)
+        cfg = cipl_match.odi.settings(state)
+        situation = cipl_match.chase(state)
+        hand = _wickets_in_hand(state)
+        rung = {"powerplay": 1.65, "middle": 1.80, "death": 2.35}[ph]
+        if situation:
+            rung += 0.36 * min(6, situation["rrr"] - cfg["phase_rates"][ph])
+        if hand < 6:
+            rung -= 0.18 * (6 - hand) * min(1, _units_left(state) / 10)
+        rung += min(0.35, _striker_form(state)[0] / 140)
+        rung = max(0.2, min(4.15, rung + 0.35 * _persona(state)["aggression"]))
+        prior = {key: math.exp(-((i - rung) ** 2) / 1.6) for i, key in enumerate(BAT_LADDER)}
+        weights = _blend_with_solver(state, prior, bot_batting=True)
+        return _sample(weights, noise=_persona(state)["noise"] * 0.5,
+                       rng=_odi_rng(state, "bat")) or DEFAULT_BATTING
+
     persona = _persona(state)
     take_read_note(state)          # last over's note, if the chat never used it
     idx, desperate = _bat_situation_index(state)

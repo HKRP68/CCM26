@@ -145,13 +145,14 @@ def _rows(mode, league, current, owner_id, play_mode=DEFAULT_PLAY_MODE):
     return InlineKeyboardMarkup([buttons, where])
 
 
-def _prompt_text(play_mode):
+def _prompt_text(play_mode, odi=False):
     lines = "\n".join(
         f"{DIFFICULTIES[k]['label']} — <i>{BLURBS[k]}</i>" for k in DIFFICULTY_ORDER)
     where = ("📱 <b>Play in:</b> Mini App — every pick in the app, the chat "
              "just follows the score." if play_mode == PLAY_APP else
              "💬 <b>Play in:</b> Chat — every pick with the buttons here.")
     return (
+        ("🏏 ODI · 50 overs\n" if odi else "") +
         "🤖 <b>How hard should the bot play?</b>\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         f"{lines}\n"
@@ -175,7 +176,7 @@ async def prompt_difficulty(update, context, mode, league=""):
     current = remembered_level(context.bot_data, user.id)
     play_mode = play_mode_for(context.bot_data, user.id)
     await message.reply_text(
-        _prompt_text(play_mode), parse_mode="HTML",
+        _prompt_text(play_mode, mode == "lp" and league == "ODI"), parse_mode="HTML",
         reply_markup=_rows(mode, league, current, user.id, play_mode))
 
 
@@ -197,7 +198,7 @@ async def play_mode_callback(update, context):
     await query.answer(f"Playing in: {PLAY_LABELS[pm]}")
     try:
         await query.edit_message_text(
-            _prompt_text(pm), parse_mode="HTML",
+            _prompt_text(pm, mode == "lp" and league == "ODI"), parse_mode="HTML",
             reply_markup=_rows(mode, league,
                                remembered_level(context.bot_data, user.id),
                                user.id, pm))
@@ -263,4 +264,5 @@ async def difficulty_callback(update, context):
         await ciplbot_handler(update, context)
     else:
         from handlers.lpbot import lpbot_handler
+        context.args = [league] if league else []
         await lpbot_handler(update, context)

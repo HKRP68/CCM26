@@ -114,3 +114,37 @@ def extract_overs_arg(args, lo=CUSTOM_OVERS_MIN, hi=CUSTOM_OVERS_MAX):
                 continue
         rest.append(tok)
     return overs, rest, error
+
+
+def extract_approach_format(args):
+    """Parse one explicit Approach format and leave opponent/mode tokens intact."""
+    import re
+
+    from engine.realism import odi
+
+    format_name, overs, remaining = "T20", None, []
+    for token in args or ():
+        word = str(token).strip().lower()
+        match = re.fullmatch(r"(?:t(\d{1,3})|(\d{1,3})\s*(?:ov|ovs|over|overs)?)", word)
+        if word == "odi":
+            length = 50
+        elif match:
+            length = int(match[1] or match[2])
+        elif (re.fullmatch(r"odi[+-]?\d.*", word) or re.fullmatch(r"t[+-]?\d.*", word)
+              or re.fullmatch(r"[+-]?\d{1,3}\.\d+", word) or re.fullmatch(r"-\d{1,3}", word)):
+            return None, None, remaining, "Use ODI, 50, or a custom length between 1 and 20 overs."
+        else:
+            remaining.append(token)
+            continue
+        if overs is not None:
+            return None, None, remaining, "Choose one match format or over limit."
+        if length == 50 and not word.startswith("t"):
+            if not odi.enabled():
+                return None, None, remaining, "ODI Approach is currently unavailable."
+            format_name, overs = "ODI", 50
+        elif CUSTOM_OVERS_MIN <= length <= CUSTOM_OVERS_MAX:
+            overs = length
+        else:
+            return (None, None, remaining,
+                    f"Custom matches must be between {CUSTOM_OVERS_MIN} and {CUSTOM_OVERS_MAX} overs.")
+    return format_name, overs, remaining, None

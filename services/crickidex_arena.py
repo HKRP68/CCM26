@@ -560,7 +560,10 @@ def _serialize_match_state_impl(session, match, viewer_user):
     total_balls = (state.get("overs", 0) or 0) * bpu
     balls_bowled = cur_overs * bpu + cur_balls
     projected = None
-    if innings_no == 1 and balls_bowled:
+    if innings_no == 1 and balls_bowled and state.get("ball_format") == "ODI":
+        from services.score_projection import project_first_innings
+        projected = (project_first_innings(state) or {}).get("expected")
+    elif innings_no == 1 and balls_bowled:
         projected = round(cur_runs + (cur_runs / balls_bowled) * max(0, total_balls - balls_bowled))
 
     score = {
@@ -592,10 +595,10 @@ def _serialize_match_state_impl(session, match, viewer_user):
             # otherwise the bar and the match disagree in front of everybody.
             from services import cipl_match as _cm
             info = (_cm.chase_chance_now(state)
-                    if _cm.chase_model_display(state) else None)
+                    if state.get("ball_format") == "ODI" or _cm.chase_model_display(state) else None)
             if info:
                 pass
-            elif runs_needed > 0 and balls_left > 0:
+            elif state.get("ball_format") != "ODI" and runs_needed > 0 and balls_left > 0:
                 order = state.get("batting_order") or []
                 striker_p = _by_idx(order, state.get("striker_idx", 0)) or {}
                 non_striker_p = _by_idx(order, state.get("non_striker_idx", 1)) or {}
@@ -875,7 +878,7 @@ def _serialize_match_state_impl(session, match, viewer_user):
         # "T20" (6-ball overs) or "The100" (5-ball sets, 100 balls/innings) so
         # the client can label progress correctly; absent/"T20" keeps the
         # standard over-based UI.
-        "ballFormat": state.get("ball_format", "T20"),
+        "ballFormat": state.get("ball_format") or getattr(match, "ball_format", None) or "T20",
         "isHundred": is_hundred_match,
         "totalBalls": total_balls,
         "status": status,
@@ -1096,6 +1099,8 @@ def _approach_payload(state, next_action, my_role):
                     **_p(p),
                     "displayRating": cm.display_rating(p, "bowl_rating"),
                     "oversLeft": cm.overs_left(state, p),
+                    **({"fatigue": cm.odi_approach.bowler_workload(state, p).label}
+                       if cm.odi_approach.is_odi(state) else {}),
                     "partTime": bool(cm.is_part_time_bowler(p)),
                     # Figures so far ("2-0-14-1"), None before their first ball.
                     "figures": (cm._bowler_figures(bws, cm.balls_per_unit(state))
@@ -1104,9 +1109,11 @@ def _approach_payload(state, next_action, my_role):
         progress = state.get("over_in_progress")
         if isinstance(progress, dict):
             cut = progress.get("cmt_start") or 0
+            live_rows = (state.get("_odi_over_commentary") or []) if cm.odi_approach.is_odi(state) else (
+                state.get("commentary_log") or [])[cut:]
             payload["overInProgress"] = {
                 "timeline": list(progress.get("over_timeline") or []),
-                "balls": _ball_rows((state.get("commentary_log") or [])[cut:]),
+                "balls": _ball_rows(live_rows),
             }
         if next_action == A_PICK_CIPL_NEW_BATSMAN and cm.needs_new_batsman(state):
             for p in cm.available_batsmen(state):
@@ -1137,7 +1144,8 @@ def _approach_payload(state, next_action, my_role):
         payload["lastOver"] = _approach_last_over(state, my_role)
 
         hints = {"phase": cm.approach_phase(state),
-                 "repeatFrom": am.REPEAT_FROM}
+                 "repeatFrom": (cm.odi.settings(state)["repeat_grace"] + 1
+                                if cm.odi_approach.is_odi(state) else am.REPEAT_FROM)}
         if my_role == "batting":
             hints["lastPick"] = state.get("last_bat_approach")
             hints["repeat"] = int(state.get("bat_repeat") or 0)

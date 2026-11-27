@@ -72,6 +72,11 @@ def draft_overs(draft):
     except (TypeError, ValueError):
         return LETSPLAY_OVERS
 
+def draft_format_label(draft):
+    return cipl_match.format_label({"ball_format": draft.get("ball_format"),
+                                    "overs": draft_overs(draft)})
+
+
 def _fixed_guest(draft):
     """True when the guest side fields an XI held on the draft, not a roster.
 
@@ -520,10 +525,13 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     # Custom length: /letsplay 5 @user (or reply with /lp 5). A tournament
     # fixture is always the full LETSPLAY_OVERS, whatever was typed.
-    overs = LETSPLAY_OVERS
+    overs, ball_format, odi_settings = LETSPLAY_OVERS, "T20", None
     if not tour_ctx:
-        from services.match_formats import extract_overs_arg
-        custom, rest, overs_error = extract_overs_arg(getattr(context, "args", None))
+        from services.match_formats import extract_approach_format, extract_overs_arg
+        if multi:
+            custom, rest, overs_error = extract_overs_arg(getattr(context, "args", None))
+        else:
+            ball_format, custom, rest, overs_error = extract_approach_format(getattr(context, "args", None))
         if overs_error:
             await msg.reply_text(
                 f"❌ {overs_error}\nExample: <code>/letsplay 5 @username</code>",
@@ -532,6 +540,13 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if custom:
             overs = custom
             context.args = rest
+        if ball_format == "ODI":
+            from engine.realism import odi
+            try:
+                odi_settings = odi.new_settings()
+            except odi.ODIUnavailable as exc:
+                await msg.reply_text(str(exc))
+                return
 
     session = get_session()
     try:
@@ -574,6 +589,13 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
             await msg.reply_text(USAGE_HTML, parse_mode="HTML")
             return
         if not guest_user:
+            if ball_format == "ODI":
+                await msg.reply_text(
+                    "🏏 <b>ODI · 50 overs</b>\n\n"
+                    "Reply to your opponent's message with <code>/lp 50</code> "
+                    "or use <code>/lp 50 @username</code>.",
+                    parse_mode="HTML")
+                return
             await msg.reply_text(
                 "🏏 <b>Lets Play</b> — challenge another player with your own roster.\n\n"
                 "• Reply to their message with <code>/letsplay</code>, or\n"
@@ -674,7 +696,8 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
         "created_at": datetime.utcnow().isoformat(),
         # Official Lets Play Tournament fixture, or None for a friendly.
         "lpt": dict(tour_ctx) if tour_ctx else None,
-        "overs": overs,
+        "overs": overs, "ball_format": ball_format,
+        **({"odi_settings": odi_settings} if odi_settings is not None else {}),
         # /lpmulti: the guest picks a league team after accepting.
         "lpmulti": bool(multi) and not tour_ctx,
     }
@@ -698,7 +721,7 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
         + ("🎮 <b>Match type:</b> Tournament (official)\n" if lpt
            else "🎮 <b>Match type:</b> Lets Play Multi (unranked)\n" if lpm
            else "🎮 <b>Match type:</b> Lets Play\n")
-        + f"⏱️ <b>Format:</b> {overs} Over{'s' if overs != 1 else ''}\n"
+        + f"⏱️ <b>Format:</b> {draft_format_label(draft)}\n"
         + ("📋 <b>Host:</b> Own Roster • <b>Guest:</b> a league team "
            "(you pick League → Team)\n" if lpm else "📋 <b>Roster:</b> Own Roster\n")
         + (f"📊 <b>Host XI:</b> {host_preview['ovr']} OVR "
@@ -1131,16 +1154,32 @@ async def letsplay_pitch_callback(update: Update, context: ContextTypes.DEFAULT_
     if pitch not in PITCH_TYPES:
         await q.answer("Unknown pitch.", show_alert=True)
         return
-    await q.answer()
+    previous_pitch = draft.get("pitch_type")
     draft["pitch_type"] = pitch
     # The toss comes BEFORE the Playing XIs, so each captain knows whether they
     # bat or bowl first while they settle their line-up.
     draft["status"] = "toss"
     _rearm_setup_timeout(context, invite_id)
+    try:
+        await q.answer()
+    except TelegramError:
+        logger.debug("letsplay pitch acknowledgement failed for invite %s", invite_id, exc_info=True)
+    # Keep the pitch buttons usable until the toss buttons have been sent.
+    try:
+        await _start_toss(context, draft)
+    except Exception:
+        logger.exception("letsplay toss prompt failed for invite %s", invite_id)
+        draft.update(status="pitch", pitch_type=previous_pitch)
+        _rearm_setup_timeout(context, invite_id)
+        try:
+            await context.bot.send_message(
+                draft["chat_id"], "The toss prompt couldn't be sent. Tap your pitch again to retry.")
+        except TelegramError:
+            logger.debug("letsplay pitch retry notice failed for invite %s", invite_id, exc_info=True)
+        return
     await R.edit_rich(
         q, lpr.pitch_locked_blocks(pitch),
         f"🌱 Pitch locked: <b>{_PITCH_EMOJI.get(pitch, '🏏')} {pitch}</b>")
-    await _start_toss(context, draft)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1306,7 +1345,8 @@ def _show_xi_text(draft, host_pairs, guest_pairs,
         title,
         "━━━━━━━━━━━━━━━━━━━",
         f"🌱 <b>Pitch:</b> {_PITCH_EMOJI.get(pitch, '🏏')} {pitch} • "
-        f"{draft_overs(draft)} overs",
+        + (draft_format_label(draft) if draft.get("ball_format") == "ODI"
+           else f"{draft_overs(draft)} overs"),
         (f"<b>{html.escape(toss_line)}</b>" if toss_line else ""),
         # Only when the captains actually answered the question — a match that
         # never held a vote reads exactly as it did before the vote existed.
@@ -1946,12 +1986,17 @@ async def _start_toss(context, draft):
         InlineKeyboardButton("⬆️ Heads", callback_data=f"lp_coin_heads_{draft['invite_id']}"),
         InlineKeyboardButton("⬇️ Tails", callback_data=f"lp_coin_tails_{draft['invite_id']}"),
     ]])
+    blocks = lpr.toss_call_blocks(caller, vs_bot=bool(draft.get("vs_bot")))
+    if draft.get("ball_format") == "ODI":
+        label = draft_format_label(draft)
+        text += "\n" + label
+        if blocks:
+            blocks.append(R.paragraph(label))
     sent = await R.send_rich_message(
-        context.bot, draft["chat_id"],
-        lpr.toss_call_blocks(caller, vs_bot=bool(draft.get("vs_bot"))),
-        text, reply_markup=kb)
-    if sent and getattr(sent, "message_id", None):
-        draft["toss_msg_id"] = sent.message_id
+        context.bot, draft["chat_id"], blocks, text, reply_markup=kb)
+    if not sent or not getattr(sent, "message_id", None):
+        raise TelegramError("The toss prompt returned no message ID.")
+    draft["toss_msg_id"] = sent.message_id
 
 
 async def letsplay_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2173,6 +2218,18 @@ def _release_lpt_fixture(draft):
 # ════════════════════════════════════════════════════════════════════
 
 async def _launch_match(context, draft, decision, winner_side):
+    from engine.realism import odi
+    from services import odi_approach
+    is_odi = draft.get("ball_format") == "ODI"
+    if is_odi:
+        if not odi.enabled():
+            await _abandon_launch(context, draft, "ODI Approach is currently unavailable.")
+            return
+        try:
+            odi.validate_reference(odi.settings(draft))
+        except odi.ODIUnavailable as exc:
+            await _abandon_launch(context, draft, str(exc))
+            return
     host_info, guest_info = draft["host"], draft["guest"]
     winner = host_info if winner_side == "host" else guest_info
     loser = guest_info if winner_side == "host" else host_info
@@ -2285,6 +2342,9 @@ async def _launch_match(context, draft, decision, winner_side):
                 session,
                 _bench_pairs_for_launch(session, guest.id, guest_xi_pairs),
                 with_traits=traits_on)
+        if is_odi and not (odi_approach.valid_xi(host_xi) and odi_approach.valid_xi(guest_xi)):
+            await _abandon_launch(context, draft, "Each ODI XI needs 50 overs of legal bowling capacity.")
+            return
         session.commit()
 
         bat_is_host = (bat_info["user_id"] == host_info["user_id"])
@@ -2352,6 +2412,7 @@ async def _launch_match(context, draft, decision, winner_side):
         match = Match(
             user1_id=host.id, user2_id=guest.id, status="active",
             match_type=TYPE_LETSPLAY, overs=draft_overs(draft),
+            **({"ball_format": "ODI"} if is_odi else {}),
             toss_winner_id=(host.id if winner_side == "host" else guest.id),
             toss_decision=decision,
             batting_first_id=bat_info["user_id"], bowling_first_id=bowl_info["user_id"],
@@ -2405,7 +2466,8 @@ async def _launch_match(context, draft, decision, winner_side):
         is_private=draft["chat_id"] > 0, stadium=stadium,
         bat_team_code=_team_code(bat_team_name), bowl_team_code=_team_code(bowl_team_name),
         bat_team_emoji="🏏", bowl_team_emoji="🏏", conditions=conditions,
-        bat_bench=bat_bench, bowl_bench=bowl_bench)
+        bat_bench=bat_bench, bowl_bench=bowl_bench,
+        **({"ball_format": "ODI", "odi_settings": draft["odi_settings"]} if is_odi else {}))
     state["user_names"] = {
         str(bat_info["tg_id"]): bat_team_name,
         str(bowl_info["tg_id"]): bowl_team_name,
@@ -2489,7 +2551,7 @@ async def _launch_match(context, draft, decision, winner_side):
     # Rating/trait-aware death-overs resolution (see cipl_match._make_clutch_hook):
     # the last over of a live LetsPlay chase is decided by ratings + clutch traits,
     # not a pre-scripted scenario value.
-    state["clutch_finale"] = True
+    state["clutch_finale"] = not is_odi
     save_state(context, match_id, state, next_action=A_PICK_CIPL_BOWLER)
 
     await _announce(context, state, pitch_type)
@@ -2568,7 +2630,9 @@ async def _announce(context, state, pitch_type):
         f"{rule}\n"
         + tour_line
         + f"⚔️ <b>{bat}</b>  🆚  <b>{bowl}</b>\n"
-        f"🏟️ {stadium} • {state.get('overs', LETSPLAY_OVERS)} overs\n"
+        f"🏟️ {stadium} • "
+        + (cipl_match.format_label(state) if cipl_match.odi_approach.is_odi(state)
+           else f"{state.get('overs', LETSPLAY_OVERS)} overs") + "\n"
         f"🌱 <b>Pitch:</b> {pitch}\n"
         + cond_line
         + f"🏏 {bat} batting first\n"

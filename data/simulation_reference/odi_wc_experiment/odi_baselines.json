@@ -1,0 +1,1012 @@
+{
+  "default_competition": "intl_odi_modern",
+  "extras_variants": {
+    "all": [
+      [
+        "byes",
+        1,
+        0,
+        1,
+        "",
+        0,
+        18
+      ],
+      [
+        "byes",
+        2,
+        0,
+        2,
+        "",
+        0,
+        4
+      ],
+      [
+        "byes",
+        4,
+        0,
+        4,
+        "",
+        0,
+        10
+      ],
+      [
+        "legbyes",
+        1,
+        0,
+        1,
+        "",
+        0,
+        155
+      ],
+      [
+        "legbyes",
+        2,
+        0,
+        2,
+        "",
+        0,
+        16
+      ],
+      [
+        "legbyes",
+        4,
+        0,
+        4,
+        "",
+        0,
+        14
+      ],
+      [
+        "noballs",
+        1,
+        0,
+        0,
+        "",
+        0,
+        15
+      ],
+      [
+        "noballs",
+        1,
+        1,
+        0,
+        "",
+        0,
+        11
+      ],
+      [
+        "noballs",
+        1,
+        2,
+        0,
+        "",
+        0,
+        1
+      ],
+      [
+        "noballs",
+        1,
+        4,
+        0,
+        "",
+        0,
+        4
+      ],
+      [
+        "wides",
+        1,
+        0,
+        0,
+        "",
+        0,
+        427
+      ],
+      [
+        "wides",
+        1,
+        0,
+        0,
+        "run out",
+        0,
+        1
+      ],
+      [
+        "wides",
+        2,
+        0,
+        0,
+        "",
+        0,
+        10
+      ],
+      [
+        "wides",
+        3,
+        0,
+        0,
+        "",
+        0,
+        1
+      ],
+      [
+        "wides",
+        5,
+        0,
+        0,
+        "",
+        0,
+        22
+      ]
+    ],
+    "death": [
+      [
+        "byes",
+        1,
+        0,
+        1,
+        "",
+        0,
+        4
+      ],
+      [
+        "byes",
+        2,
+        0,
+        2,
+        "",
+        0,
+        2
+      ],
+      [
+        "byes",
+        4,
+        0,
+        4,
+        "",
+        0,
+        2
+      ],
+      [
+        "legbyes",
+        1,
+        0,
+        1,
+        "",
+        0,
+        38
+      ],
+      [
+        "legbyes",
+        4,
+        0,
+        4,
+        "",
+        0,
+        5
+      ],
+      [
+        "noballs",
+        1,
+        0,
+        0,
+        "",
+        0,
+        4
+      ],
+      [
+        "noballs",
+        1,
+        1,
+        0,
+        "",
+        0,
+        3
+      ],
+      [
+        "noballs",
+        1,
+        2,
+        0,
+        "",
+        0,
+        1
+      ],
+      [
+        "wides",
+        1,
+        0,
+        0,
+        "",
+        0,
+        112
+      ],
+      [
+        "wides",
+        1,
+        0,
+        0,
+        "run out",
+        0,
+        1
+      ],
+      [
+        "wides",
+        2,
+        0,
+        0,
+        "",
+        0,
+        2
+      ],
+      [
+        "wides",
+        5,
+        0,
+        0,
+        "",
+        0,
+        2
+      ]
+    ],
+    "middle": [
+      [
+        "byes",
+        1,
+        0,
+        1,
+        "",
+        0,
+        8
+      ],
+      [
+        "byes",
+        2,
+        0,
+        2,
+        "",
+        0,
+        2
+      ],
+      [
+        "byes",
+        4,
+        0,
+        4,
+        "",
+        0,
+        4
+      ],
+      [
+        "legbyes",
+        1,
+        0,
+        1,
+        "",
+        0,
+        87
+      ],
+      [
+        "legbyes",
+        2,
+        0,
+        2,
+        "",
+        0,
+        12
+      ],
+      [
+        "legbyes",
+        4,
+        0,
+        4,
+        "",
+        0,
+        4
+      ],
+      [
+        "noballs",
+        1,
+        0,
+        0,
+        "",
+        0,
+        8
+      ],
+      [
+        "noballs",
+        1,
+        1,
+        0,
+        "",
+        0,
+        8
+      ],
+      [
+        "noballs",
+        1,
+        4,
+        0,
+        "",
+        0,
+        3
+      ],
+      [
+        "wides",
+        1,
+        0,
+        0,
+        "",
+        0,
+        239
+      ],
+      [
+        "wides",
+        2,
+        0,
+        0,
+        "",
+        0,
+        6
+      ],
+      [
+        "wides",
+        3,
+        0,
+        0,
+        "",
+        0,
+        1
+      ],
+      [
+        "wides",
+        5,
+        0,
+        0,
+        "",
+        0,
+        15
+      ]
+    ],
+    "powerplay": [
+      [
+        "byes",
+        1,
+        0,
+        1,
+        "",
+        0,
+        6
+      ],
+      [
+        "byes",
+        4,
+        0,
+        4,
+        "",
+        0,
+        4
+      ],
+      [
+        "legbyes",
+        1,
+        0,
+        1,
+        "",
+        0,
+        30
+      ],
+      [
+        "legbyes",
+        2,
+        0,
+        2,
+        "",
+        0,
+        4
+      ],
+      [
+        "legbyes",
+        4,
+        0,
+        4,
+        "",
+        0,
+        5
+      ],
+      [
+        "noballs",
+        1,
+        0,
+        0,
+        "",
+        0,
+        3
+      ],
+      [
+        "noballs",
+        1,
+        4,
+        0,
+        "",
+        0,
+        1
+      ],
+      [
+        "wides",
+        1,
+        0,
+        0,
+        "",
+        0,
+        76
+      ],
+      [
+        "wides",
+        2,
+        0,
+        0,
+        "",
+        0,
+        2
+      ],
+      [
+        "wides",
+        5,
+        0,
+        0,
+        "",
+        0,
+        5
+      ]
+    ]
+  },
+  "format": "ODI",
+  "model_version": "odi-wc-2019-v1",
+  "nodes": {
+    "ODI": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 8378,
+        "Double": 1074,
+        "Extras": 709,
+        "Four": 1560,
+        "Single": 6116,
+        "Six": 268,
+        "Three": 108,
+        "Wicket": 509
+      },
+      "parent": "root"
+    },
+    "ODI/intl_odi_modern": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 8378,
+        "Double": 1074,
+        "Extras": 709,
+        "Four": 1560,
+        "Single": 6116,
+        "Six": 268,
+        "Three": 108,
+        "Wicket": 509
+      },
+      "parent": "ODI"
+    },
+    "ODI/intl_odi_modern/death": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 882,
+        "Double": 264,
+        "Extras": 176,
+        "Four": 298,
+        "Single": 1212,
+        "Six": 90,
+        "Three": 15,
+        "Wicket": 192
+      },
+      "parent": "ODI/intl_odi_modern"
+    },
+    "ODI/intl_odi_modern/death/inn1": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 468,
+        "Double": 180,
+        "Extras": 122,
+        "Four": 178,
+        "Single": 756,
+        "Six": 57,
+        "Three": 12,
+        "Wicket": 112
+      },
+      "parent": "ODI/intl_odi_modern/death"
+    },
+    "ODI/intl_odi_modern/death/inn1/w3_5": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 241,
+        "Double": 95,
+        "Extras": 64,
+        "Four": 92,
+        "Single": 432,
+        "Six": 26,
+        "Three": 10,
+        "Wicket": 53
+      },
+      "parent": "ODI/intl_odi_modern/death/inn1"
+    },
+    "ODI/intl_odi_modern/death/inn1/w6_plus": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 210,
+        "Double": 73,
+        "Extras": 52,
+        "Four": 61,
+        "Single": 279,
+        "Six": 21,
+        "Three": 1,
+        "Wicket": 53
+      },
+      "parent": "ODI/intl_odi_modern/death/inn1"
+    },
+    "ODI/intl_odi_modern/death/inn2": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 414,
+        "Double": 84,
+        "Extras": 54,
+        "Four": 120,
+        "Single": 456,
+        "Six": 33,
+        "Three": 3,
+        "Wicket": 80
+      },
+      "parent": "ODI/intl_odi_modern/death"
+    },
+    "ODI/intl_odi_modern/death/inn2/w3_5": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 101,
+        "Double": 29,
+        "Extras": 18,
+        "Four": 45,
+        "Single": 168,
+        "Six": 5,
+        "Three": 2,
+        "Wicket": 14
+      },
+      "parent": "ODI/intl_odi_modern/death/inn2"
+    },
+    "ODI/intl_odi_modern/death/inn2/w6_plus": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 310,
+        "Double": 55,
+        "Extras": 36,
+        "Four": 71,
+        "Single": 285,
+        "Six": 28,
+        "Three": 1,
+        "Wicket": 64
+      },
+      "parent": "ODI/intl_odi_modern/death/inn2"
+    },
+    "ODI/intl_odi_modern/death/inn2/w6_plus/rrr_10_plus": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 185,
+        "Double": 41,
+        "Extras": 23,
+        "Four": 47,
+        "Single": 196,
+        "Six": 16,
+        "Three": 1,
+        "Wicket": 47
+      },
+      "parent": "ODI/intl_odi_modern/death/inn2/w6_plus"
+    },
+    "ODI/intl_odi_modern/middle": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 5054,
+        "Double": 626,
+        "Extras": 397,
+        "Four": 852,
+        "Single": 4175,
+        "Six": 146,
+        "Three": 59,
+        "Wicket": 237
+      },
+      "parent": "ODI/intl_odi_modern"
+    },
+    "ODI/intl_odi_modern/middle/inn1": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 2595,
+        "Double": 338,
+        "Extras": 190,
+        "Four": 408,
+        "Single": 2138,
+        "Six": 78,
+        "Three": 38,
+        "Wicket": 113
+      },
+      "parent": "ODI/intl_odi_modern/middle"
+    },
+    "ODI/intl_odi_modern/middle/inn1/w0_2": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 1341,
+        "Double": 202,
+        "Extras": 105,
+        "Four": 246,
+        "Single": 1250,
+        "Six": 47,
+        "Three": 23,
+        "Wicket": 57
+      },
+      "parent": "ODI/intl_odi_modern/middle/inn1"
+    },
+    "ODI/intl_odi_modern/middle/inn1/w3_5": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 1126,
+        "Double": 120,
+        "Extras": 66,
+        "Four": 150,
+        "Single": 800,
+        "Six": 24,
+        "Three": 10,
+        "Wicket": 43
+      },
+      "parent": "ODI/intl_odi_modern/middle/inn1"
+    },
+    "ODI/intl_odi_modern/middle/inn1/w6_plus": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 128,
+        "Double": 16,
+        "Extras": 19,
+        "Four": 12,
+        "Single": 88,
+        "Six": 7,
+        "Three": 5,
+        "Wicket": 13
+      },
+      "parent": "ODI/intl_odi_modern/middle/inn1"
+    },
+    "ODI/intl_odi_modern/middle/inn2": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 2459,
+        "Double": 288,
+        "Extras": 207,
+        "Four": 444,
+        "Single": 2037,
+        "Six": 68,
+        "Three": 21,
+        "Wicket": 124
+      },
+      "parent": "ODI/intl_odi_modern/middle"
+    },
+    "ODI/intl_odi_modern/middle/inn2/w0_2": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 1166,
+        "Double": 148,
+        "Extras": 97,
+        "Four": 222,
+        "Single": 1051,
+        "Six": 31,
+        "Three": 9,
+        "Wicket": 48
+      },
+      "parent": "ODI/intl_odi_modern/middle/inn2"
+    },
+    "ODI/intl_odi_modern/middle/inn2/w0_2/rrr_4_6": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 378,
+        "Double": 35,
+        "Extras": 19,
+        "Four": 59,
+        "Single": 229,
+        "Six": 9,
+        "Three": 4,
+        "Wicket": 10
+      },
+      "parent": "ODI/intl_odi_modern/middle/inn2/w0_2"
+    },
+    "ODI/intl_odi_modern/middle/inn2/w0_2/rrr_6_8": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 406,
+        "Double": 47,
+        "Extras": 29,
+        "Four": 69,
+        "Single": 386,
+        "Six": 11,
+        "Three": 1,
+        "Wicket": 23
+      },
+      "parent": "ODI/intl_odi_modern/middle/inn2/w0_2"
+    },
+    "ODI/intl_odi_modern/middle/inn2/w0_2/rrr_8_10": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 138,
+        "Double": 25,
+        "Extras": 18,
+        "Four": 34,
+        "Single": 211,
+        "Six": 4,
+        "Three": 2,
+        "Wicket": 6
+      },
+      "parent": "ODI/intl_odi_modern/middle/inn2/w0_2"
+    },
+    "ODI/intl_odi_modern/middle/inn2/w0_2/rrr_lt4": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 226,
+        "Double": 37,
+        "Extras": 30,
+        "Four": 52,
+        "Single": 201,
+        "Six": 6,
+        "Three": 2,
+        "Wicket": 6
+      },
+      "parent": "ODI/intl_odi_modern/middle/inn2/w0_2"
+    },
+    "ODI/intl_odi_modern/middle/inn2/w3_5": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 1026,
+        "Double": 126,
+        "Extras": 82,
+        "Four": 181,
+        "Single": 829,
+        "Six": 27,
+        "Three": 8,
+        "Wicket": 58
+      },
+      "parent": "ODI/intl_odi_modern/middle/inn2"
+    },
+    "ODI/intl_odi_modern/middle/inn2/w3_5/rrr_10_plus": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 90,
+        "Double": 17,
+        "Extras": 9,
+        "Four": 27,
+        "Single": 80,
+        "Six": 2,
+        "Three": 2,
+        "Wicket": 7
+      },
+      "parent": "ODI/intl_odi_modern/middle/inn2/w3_5"
+    },
+    "ODI/intl_odi_modern/middle/inn2/w3_5/rrr_4_6": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 257,
+        "Double": 25,
+        "Extras": 22,
+        "Four": 29,
+        "Single": 157,
+        "Six": 8,
+        "Three": 0,
+        "Wicket": 9
+      },
+      "meta": {
+        "zero_cells": [
+          "Three"
+        ]
+      },
+      "parent": "ODI/intl_odi_modern/middle/inn2/w3_5"
+    },
+    "ODI/intl_odi_modern/middle/inn2/w3_5/rrr_6_8": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 453,
+        "Double": 49,
+        "Extras": 27,
+        "Four": 59,
+        "Single": 327,
+        "Six": 5,
+        "Three": 3,
+        "Wicket": 24
+      },
+      "parent": "ODI/intl_odi_modern/middle/inn2/w3_5"
+    },
+    "ODI/intl_odi_modern/middle/inn2/w3_5/rrr_8_10": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 214,
+        "Double": 31,
+        "Extras": 23,
+        "Four": 62,
+        "Single": 254,
+        "Six": 8,
+        "Three": 3,
+        "Wicket": 18
+      },
+      "parent": "ODI/intl_odi_modern/middle/inn2/w3_5"
+    },
+    "ODI/intl_odi_modern/middle/inn2/w6_plus": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 267,
+        "Double": 14,
+        "Extras": 28,
+        "Four": 41,
+        "Single": 157,
+        "Six": 10,
+        "Three": 4,
+        "Wicket": 18
+      },
+      "parent": "ODI/intl_odi_modern/middle/inn2"
+    },
+    "ODI/intl_odi_modern/middle/inn2/w6_plus/rrr_8_10": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 111,
+        "Double": 8,
+        "Extras": 15,
+        "Four": 22,
+        "Single": 76,
+        "Six": 2,
+        "Three": 2,
+        "Wicket": 6
+      },
+      "parent": "ODI/intl_odi_modern/middle/inn2/w6_plus"
+    },
+    "ODI/intl_odi_modern/powerplay": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 2442,
+        "Double": 184,
+        "Extras": 136,
+        "Four": 410,
+        "Single": 729,
+        "Six": 32,
+        "Three": 34,
+        "Wicket": 80
+      },
+      "parent": "ODI/intl_odi_modern"
+    },
+    "ODI/intl_odi_modern/powerplay/inn1": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 1220,
+        "Double": 92,
+        "Extras": 77,
+        "Four": 205,
+        "Single": 364,
+        "Six": 14,
+        "Three": 20,
+        "Wicket": 37
+      },
+      "parent": "ODI/intl_odi_modern/powerplay"
+    },
+    "ODI/intl_odi_modern/powerplay/inn1/w0_2": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 1179,
+        "Double": 92,
+        "Extras": 72,
+        "Four": 201,
+        "Single": 355,
+        "Six": 14,
+        "Three": 18,
+        "Wicket": 36
+      },
+      "parent": "ODI/intl_odi_modern/powerplay/inn1"
+    },
+    "ODI/intl_odi_modern/powerplay/inn2": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 1222,
+        "Double": 92,
+        "Extras": 59,
+        "Four": 205,
+        "Single": 365,
+        "Six": 18,
+        "Three": 14,
+        "Wicket": 43
+      },
+      "parent": "ODI/intl_odi_modern/powerplay"
+    },
+    "ODI/intl_odi_modern/powerplay/inn2/w0_2": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 1168,
+        "Double": 90,
+        "Extras": 58,
+        "Four": 199,
+        "Single": 362,
+        "Six": 18,
+        "Three": 14,
+        "Wicket": 42
+      },
+      "parent": "ODI/intl_odi_modern/powerplay/inn2"
+    },
+    "ODI/intl_odi_modern/powerplay/inn2/w0_2/rrr_4_6": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 472,
+        "Double": 30,
+        "Extras": 21,
+        "Four": 75,
+        "Single": 109,
+        "Six": 4,
+        "Three": 3,
+        "Wicket": 18
+      },
+      "parent": "ODI/intl_odi_modern/powerplay/inn2/w0_2"
+    },
+    "ODI/intl_odi_modern/powerplay/inn2/w0_2/rrr_6_8": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 558,
+        "Double": 41,
+        "Extras": 21,
+        "Four": 95,
+        "Single": 196,
+        "Six": 9,
+        "Three": 7,
+        "Wicket": 20
+      },
+      "parent": "ODI/intl_odi_modern/powerplay/inn2/w0_2"
+    },
+    "ODI/intl_odi_modern/powerplay/inn2/w0_2/rrr_lt4": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 106,
+        "Double": 14,
+        "Extras": 13,
+        "Four": 25,
+        "Single": 38,
+        "Six": 4,
+        "Three": 2,
+        "Wicket": 3
+      },
+      "parent": "ODI/intl_odi_modern/powerplay/inn2/w0_2"
+    },
+    "root": {
+      "count_kind": "observed",
+      "counts": {
+        "Dot": 8378,
+        "Double": 1074,
+        "Extras": 709,
+        "Four": 1560,
+        "Single": 6116,
+        "Six": 268,
+        "Three": 108,
+        "Wicket": 509
+      },
+      "parent": null
+    }
+  },
+  "outcomes": [
+    "Dot",
+    "Single",
+    "Double",
+    "Three",
+    "Four",
+    "Six",
+    "Wicket",
+    "Extras"
+  ],
+  "provenance": {
+    "all_nodes_observed": true,
+    "attribution": "Contains information from Cricsheet, made available under ODC-By 1.0.",
+    "data_licence": "Open Data Commons Attribution License (ODC-By) 1.0",
+    "level_measured": true,
+    "license_file": "CRICSHEET-LICENSE.txt",
+    "mode": "cricsheet",
+    "shape_measured": true,
+    "training_year": 2019,
+    "url": "https://cricsheet.org/"
+  },
+  "schema_version": 1
+}

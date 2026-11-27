@@ -506,6 +506,7 @@ class Match(Base):
     # the column existed; the admin views infer a coarse label for those.
     match_type = Column(String(30), nullable=True)
     overs = Column(Integer, default=20)
+    ball_format = Column(String(10), nullable=True)
     toss_winner_id = Column(Integer, nullable=True)
     toss_decision = Column(String(10), nullable=True)
     batting_first_id = Column(Integer, nullable=True)
@@ -2633,6 +2634,18 @@ class ClubSeasonResult(Base):
     member_count = Column(Integer, default=0)
     prize_coins_each = Column(Integer, default=0)
     recorded_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ODIPlayerInnings(Base):
+    """Competitive ODI Approach records, separate from short-format careers."""
+    __tablename__ = "odi_player_innings"
+
+    match_id = Column(Integer, ForeignKey("matches.id", ondelete="CASCADE"), primary_key=True)
+    innings = Column(Integer, primary_key=True)
+    discipline = Column(String(8), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.id"), primary_key=True)
+    figures = Column(Text, nullable=False)
 
 
 class MatchScorecard(Base):

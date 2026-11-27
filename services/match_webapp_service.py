@@ -110,7 +110,10 @@ def strip_hidden_plans(state):
     """
     if not is_approach_match(state):
         return state
-    return {k: v for k, v in state.items() if k not in HIDDEN_PLAN_KEYS}
+    private = HIDDEN_PLAN_KEYS
+    if state.get("ball_format") == "ODI":
+        private += ("rng_seed", "_rng_tick", "odi_settings", "bot_memory")
+    return {k: v for k, v in state.items() if k not in private}
 
 
 def is_app_played_match(state):
@@ -2588,6 +2591,8 @@ def build_scorecard(match_id, user_id):
     innings.append({
         "number": 1, "bat_team": inn1_bat_team, "bowl_team": inn1_bowl_team,
         "runs": inn1_runs, "wickets": inn1_wkts, "overs": inn1_overs,
+        **({"extras": state.get("inn1_extras", 0) if cur_inn == 2 else state.get("extras_total", 0)}
+           if state.get("ball_format") == "ODI" else {}),
         "batting": _batting(inn1_bat_xi, inn1_bat_stats),
         "bowling": _bowling(inn1_bowl_xi, inn1_bowl_stats),
     })
@@ -2598,6 +2603,7 @@ def build_scorecard(match_id, user_id):
             "number": 2, "bat_team": state.get("bat_team_name", ""),
             "bowl_team": state.get("bowl_team_name", ""),
             "runs": state.get("total_runs", 0), "wickets": state.get("total_wickets", 0),
+            **({"extras": state.get("extras_total", 0)} if state.get("ball_format") == "ODI" else {}),
             "overs": _overs_display(state),
             "batting": _batting(state.get("bat_xi", []), state.get("bat_stats", {})),
             "bowling": _bowling(state.get("bowl_xi", []), state.get("bowl_stats", {})),
@@ -2647,6 +2653,7 @@ def save_final_scorecard(session, match_id, result_text=None, extra_innings=None
         scorecard_json=_json.dumps({"innings": all_innings,
                                     "current_innings": sc.get("current_innings"),
                                     "target": sc.get("target"),
+                                    "ball_format": sc.get("ball_format"),
                                     "impact_players": sc.get("impact_players", []),
                                     "super_over": super_over,
                                     # Keep the completed Arena board queryable

@@ -202,6 +202,7 @@ def parse_settings_form(form):
             "max_games_per_day": gi("sched_max", 8),
             "min_gap_minutes": gi("sched_gap", 45),
             "inactivity_minutes": gi("sched_inactivity", 30),
+            "interval_minutes": gi("sched_interval", 60),
             "match_protection": bool(form.get("sched_match_protection")),
             "recent_player_exclusion": gi("sched_recent_players", 15),
             "weights": {t: gi(f"weight_{t}", 10) for t in G.GAME_TYPES},

@@ -1,0 +1,2994 @@
+{
+  "chases": {
+    "all": {
+      "lost": 22,
+      "n": 33,
+      "tie": 1,
+      "won": 10
+    },
+    "rrr_10_plus": {
+      "lost": 19,
+      "n": 20,
+      "tie": 1
+    },
+    "rrr_4_6": {
+      "lost": 7,
+      "n": 16,
+      "tie": 1,
+      "won": 8
+    },
+    "rrr_6_8": {
+      "lost": 22,
+      "n": 26,
+      "tie": 1,
+      "won": 3
+    },
+    "rrr_8_10": {
+      "lost": 22,
+      "n": 23,
+      "tie": 1
+    },
+    "rrr_lt4": {
+      "n": 10,
+      "won": 10
+    }
+  },
+  "completed_over_runs": {
+    "all": {
+      "0": 90,
+      "1": 200,
+      "2": 302,
+      "3": 327,
+      "4": 375,
+      "5": 339,
+      "6": 294,
+      "7": 267,
+      "8": 232,
+      "9": 156,
+      "10": 131,
+      "11": 95,
+      "12": 59,
+      "13": 51,
+      "14": 43,
+      "15": 21,
+      "16": 14,
+      "17": 11,
+      "18": 7,
+      "19": 5,
+      "20": 1,
+      "21": 1,
+      "22": 1,
+      "24": 1,
+      "25": 2
+    },
+    "death": {
+      "0": 3,
+      "1": 21,
+      "2": 19,
+      "3": 44,
+      "4": 38,
+      "5": 49,
+      "6": 43,
+      "7": 53,
+      "8": 37,
+      "9": 47,
+      "10": 31,
+      "11": 32,
+      "12": 15,
+      "13": 22,
+      "14": 14,
+      "15": 7,
+      "16": 6,
+      "17": 4,
+      "18": 4,
+      "19": 1,
+      "22": 1,
+      "25": 2
+    },
+    "middle": {
+      "0": 35,
+      "1": 103,
+      "2": 200,
+      "3": 225,
+      "4": 263,
+      "5": 225,
+      "6": 187,
+      "7": 179,
+      "8": 152,
+      "9": 77,
+      "10": 70,
+      "11": 50,
+      "12": 31,
+      "13": 23,
+      "14": 23,
+      "15": 11,
+      "16": 6,
+      "17": 6,
+      "19": 3,
+      "20": 1,
+      "21": 1,
+      "24": 1
+    },
+    "powerplay": {
+      "0": 52,
+      "1": 76,
+      "2": 83,
+      "3": 58,
+      "4": 74,
+      "5": 65,
+      "6": 64,
+      "7": 35,
+      "8": 43,
+      "9": 32,
+      "10": 30,
+      "11": 13,
+      "12": 13,
+      "13": 6,
+      "14": 6,
+      "15": 3,
+      "16": 2,
+      "17": 1,
+      "18": 3,
+      "19": 1
+    }
+  },
+  "dates": [
+    "2019-05-30",
+    "2019-07-14"
+  ],
+  "innings": {
+    "inn1": {
+      "350_plus": 3,
+      "400_plus": 0,
+      "centuries": 14,
+      "double_centuries": 0,
+      "early_end": 8,
+      "innings": [
+        {
+          "balls": 300,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144483",
+          "runs": 311,
+          "wickets": 8
+        },
+        {
+          "balls": 130,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144484",
+          "runs": 105,
+          "wickets": 10
+        },
+        {
+          "balls": 176,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144485",
+          "runs": 136,
+          "wickets": 10
+        },
+        {
+          "balls": 300,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144487",
+          "runs": 330,
+          "wickets": 6
+        },
+        {
+          "balls": 300,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144488",
+          "runs": 348,
+          "wickets": 8
+        },
+        {
+          "balls": 300,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144490",
+          "runs": 227,
+          "wickets": 9
+        },
+        {
+          "balls": 296,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144491",
+          "runs": 244,
+          "wickets": 10
+        },
+        {
+          "balls": 294,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144492",
+          "runs": 288,
+          "wickets": 10
+        },
+        {
+          "balls": 300,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144494",
+          "runs": 386,
+          "wickets": 6
+        },
+        {
+          "balls": 300,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144496",
+          "runs": 352,
+          "wickets": 5
+        },
+        {
+          "balls": 294,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144499",
+          "runs": 307,
+          "wickets": 10
+        },
+        {
+          "balls": 268,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144501",
+          "runs": 212,
+          "wickets": 10
+        },
+        {
+          "balls": 300,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144502",
+          "runs": 334,
+          "wickets": 7
+        },
+        {
+          "balls": 300,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144505",
+          "runs": 321,
+          "wickets": 8
+        },
+        {
+          "balls": 300,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144508",
+          "runs": 381,
+          "wickets": 5
+        },
+        {
+          "balls": 300,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144509",
+          "runs": 232,
+          "wickets": 9
+        },
+        {
+          "balls": 300,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144511",
+          "runs": 291,
+          "wickets": 8
+        },
+        {
+          "balls": 301,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144512",
+          "runs": 308,
+          "wickets": 7
+        },
+        {
+          "balls": 300,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144514",
+          "runs": 285,
+          "wickets": 7
+        },
+        {
+          "balls": 300,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144515",
+          "runs": 237,
+          "wickets": 6
+        },
+        {
+          "balls": 300,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144516",
+          "runs": 268,
+          "wickets": 7
+        },
+        {
+          "balls": 297,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144517",
+          "runs": 203,
+          "wickets": 10
+        },
+        {
+          "balls": 300,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144519",
+          "runs": 243,
+          "wickets": 9
+        },
+        {
+          "balls": 300,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144520",
+          "runs": 337,
+          "wickets": 7
+        },
+        {
+          "balls": 300,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144521",
+          "runs": 338,
+          "wickets": 6
+        },
+        {
+          "balls": 300,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144522",
+          "runs": 314,
+          "wickets": 9
+        },
+        {
+          "balls": 300,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144523",
+          "runs": 305,
+          "wickets": 8
+        },
+        {
+          "balls": 300,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144525",
+          "runs": 315,
+          "wickets": 9
+        },
+        {
+          "balls": 300,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144526",
+          "runs": 264,
+          "wickets": 7
+        },
+        {
+          "balls": 300,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144527",
+          "runs": 325,
+          "wickets": 6
+        },
+        {
+          "balls": 300,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144528",
+          "runs": 239,
+          "wickets": 8
+        },
+        {
+          "balls": 294,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144529",
+          "runs": 223,
+          "wickets": 10
+        },
+        {
+          "balls": 300,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144530",
+          "runs": 241,
+          "wickets": 8
+        }
+      ],
+      "mean": 280.3030303030303,
+      "n": 33,
+      "quantiles": {
+        "p10": 214.2,
+        "p25": 239.0,
+        "p5": 176.2,
+        "p50": 291.0,
+        "p75": 325.0,
+        "p90": 346.0,
+        "p95": 363.6
+      },
+      "sd": 63.01971064842493,
+      "wickets_mean": 7.96969696969697
+    },
+    "inn2": {
+      "350_plus": 0,
+      "400_plus": 0,
+      "centuries": 14,
+      "double_centuries": 0,
+      "early_end": 24,
+      "innings": [
+        {
+          "balls": 239,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144483",
+          "runs": 207,
+          "wickets": 10
+        },
+        {
+          "balls": 82,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144484",
+          "runs": 108,
+          "wickets": 3
+        },
+        {
+          "balls": 97,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144485",
+          "runs": 137,
+          "wickets": 0
+        },
+        {
+          "balls": 300,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144487",
+          "runs": 309,
+          "wickets": 8
+        },
+        {
+          "balls": 300,
+          "centuries": 2,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144488",
+          "runs": 334,
+          "wickets": 9
+        },
+        {
+          "balls": 285,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144490",
+          "runs": 230,
+          "wickets": 4
+        },
+        {
+          "balls": 283,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144491",
+          "runs": 248,
+          "wickets": 8
+        },
+        {
+          "balls": 300,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144492",
+          "runs": 273,
+          "wickets": 9
+        },
+        {
+          "balls": 293,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144494",
+          "runs": 280,
+          "wickets": 10
+        },
+        {
+          "balls": 300,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144496",
+          "runs": 316,
+          "wickets": 10
+        },
+        {
+          "balls": 274,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144499",
+          "runs": 266,
+          "wickets": 10
+        },
+        {
+          "balls": 199,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144501",
+          "runs": 213,
+          "wickets": 2
+        },
+        {
+          "balls": 275,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144502",
+          "runs": 247,
+          "wickets": 10
+        },
+        {
+          "balls": 249,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144505",
+          "runs": 322,
+          "wickets": 3
+        },
+        {
+          "balls": 300,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144508",
+          "runs": 333,
+          "wickets": 8
+        },
+        {
+          "balls": 282,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144509",
+          "runs": 212,
+          "wickets": 10
+        },
+        {
+          "balls": 294,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144511",
+          "runs": 286,
+          "wickets": 10
+        },
+        {
+          "balls": 300,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144512",
+          "runs": 259,
+          "wickets": 9
+        },
+        {
+          "balls": 268,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144514",
+          "runs": 221,
+          "wickets": 10
+        },
+        {
+          "balls": 295,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144515",
+          "runs": 241,
+          "wickets": 4
+        },
+        {
+          "balls": 206,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144516",
+          "runs": 143,
+          "wickets": 10
+        },
+        {
+          "balls": 224,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144517",
+          "runs": 206,
+          "wickets": 1
+        },
+        {
+          "balls": 262,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144519",
+          "runs": 157,
+          "wickets": 10
+        },
+        {
+          "balls": 300,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144520",
+          "runs": 306,
+          "wickets": 5
+        },
+        {
+          "balls": 300,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144521",
+          "runs": 315,
+          "wickets": 9
+        },
+        {
+          "balls": 288,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144522",
+          "runs": 286,
+          "wickets": 10
+        },
+        {
+          "balls": 270,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144523",
+          "runs": 186,
+          "wickets": 10
+        },
+        {
+          "balls": 265,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144525",
+          "runs": 221,
+          "wickets": 10
+        },
+        {
+          "balls": 261,
+          "centuries": 2,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144526",
+          "runs": 265,
+          "wickets": 3
+        },
+        {
+          "balls": 299,
+          "centuries": 1,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144527",
+          "runs": 315,
+          "wickets": 10
+        },
+        {
+          "balls": 297,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144528",
+          "runs": 221,
+          "wickets": 10
+        },
+        {
+          "balls": 193,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": true,
+          "match_id": "1144529",
+          "runs": 226,
+          "wickets": 2
+        },
+        {
+          "balls": 300,
+          "centuries": 0,
+          "double_centuries": 0,
+          "early_end": false,
+          "match_id": "1144530",
+          "runs": 241,
+          "wickets": 10
+        }
+      ],
+      "mean": 246.36363636363637,
+      "n": 33,
+      "quantiles": {
+        "p10": 162.8,
+        "p25": 213.0,
+        "p5": 140.6,
+        "p50": 247.0,
+        "p75": 286.0,
+        "p90": 315.8,
+        "p95": 326.4
+      },
+      "sd": 57.76064413611818,
+      "wickets_mean": 7.484848484848484
+    }
+  },
+  "match_ids": [
+    "1144483",
+    "1144484",
+    "1144485",
+    "1144487",
+    "1144488",
+    "1144490",
+    "1144491",
+    "1144492",
+    "1144494",
+    "1144496",
+    "1144499",
+    "1144501",
+    "1144502",
+    "1144505",
+    "1144508",
+    "1144509",
+    "1144511",
+    "1144512",
+    "1144514",
+    "1144515",
+    "1144516",
+    "1144517",
+    "1144519",
+    "1144520",
+    "1144521",
+    "1144522",
+    "1144523",
+    "1144525",
+    "1144526",
+    "1144527",
+    "1144528",
+    "1144529",
+    "1144530"
+  ],
+  "metrics": {
+    "all": {
+      "Dot": 8378,
+      "Double": 1074,
+      "Extras": 709,
+      "Four": 1560,
+      "Single": 6116,
+      "Six": 268,
+      "Three": 108,
+      "Wicket": 509,
+      "balls_faced": 18261,
+      "batting_runs": 16479,
+      "batting_runs_per_ball": 0.9024149827501232,
+      "boundaries": 1824,
+      "boundary_share": 0.09742548872983656,
+      "deliveries": 18722,
+      "dot_share": 0.4474949257557953,
+      "extras": 901,
+      "extras_per_delivery": 0.048125200299113345,
+      "free_hits": 31,
+      "illegal_wickets": 1,
+      "legal_balls": 18230,
+      "runs": 17380,
+      "runs_per_legal_ball": 0.9533735600658255,
+      "runs_per_over": 5.720241360394954,
+      "wicket_rate": 0.027240679414592458,
+      "wickets": 510
+    },
+    "death": {
+      "Dot": 882,
+      "Double": 264,
+      "Extras": 176,
+      "Four": 298,
+      "Single": 1212,
+      "Six": 90,
+      "Three": 15,
+      "Wicket": 192,
+      "balls_faced": 3012,
+      "batting_runs": 3530,
+      "batting_runs_per_ball": 1.1719787516600266,
+      "boundaries": 385,
+      "boundary_share": 0.12304250559284116,
+      "deliveries": 3129,
+      "dot_share": 0.28187919463087246,
+      "extras": 209,
+      "extras_per_delivery": 0.06679450303611377,
+      "free_hits": 8,
+      "illegal_wickets": 1,
+      "legal_balls": 3004,
+      "runs": 3739,
+      "runs_per_legal_ball": 1.2446737683089215,
+      "runs_per_over": 7.468042609853528,
+      "wicket_rate": 0.06168104825822947,
+      "wickets": 193
+    },
+    "death/inn1": {
+      "Dot": 468,
+      "Double": 180,
+      "Extras": 122,
+      "Four": 178,
+      "Single": 756,
+      "Six": 57,
+      "Three": 12,
+      "Wicket": 112,
+      "balls_faced": 1811,
+      "batting_runs": 2214,
+      "batting_runs_per_ball": 1.2225289895085587,
+      "boundaries": 234,
+      "boundary_share": 0.12413793103448276,
+      "deliveries": 1885,
+      "dot_share": 0.2482758620689655,
+      "extras": 145,
+      "extras_per_delivery": 0.07692307692307693,
+      "free_hits": 7,
+      "illegal_wickets": 1,
+      "legal_balls": 1804,
+      "runs": 2359,
+      "runs_per_legal_ball": 1.307649667405765,
+      "runs_per_over": 7.84589800443459,
+      "wicket_rate": 0.05994694960212202,
+      "wickets": 113
+    },
+    "death/inn2": {
+      "Dot": 414,
+      "Double": 84,
+      "Extras": 54,
+      "Four": 120,
+      "Single": 456,
+      "Six": 33,
+      "Three": 3,
+      "Wicket": 80,
+      "balls_faced": 1201,
+      "batting_runs": 1316,
+      "batting_runs_per_ball": 1.0957535387177353,
+      "boundaries": 151,
+      "boundary_share": 0.12138263665594855,
+      "deliveries": 1244,
+      "dot_share": 0.3327974276527331,
+      "extras": 64,
+      "extras_per_delivery": 0.05144694533762058,
+      "free_hits": 1,
+      "illegal_wickets": 0,
+      "legal_balls": 1200,
+      "runs": 1380,
+      "runs_per_legal_ball": 1.15,
+      "runs_per_over": 6.9,
+      "wicket_rate": 0.06430868167202572,
+      "wickets": 80
+    },
+    "faced_0": {
+      "Dot": 3590,
+      "Double": 333,
+      "Extras": 264,
+      "Four": 553,
+      "Single": 1778,
+      "Six": 73,
+      "Three": 51,
+      "Wicket": 210,
+      "balls_faced": 6683,
+      "batting_runs": 5259,
+      "batting_runs_per_ball": 0.7869220409995511,
+      "boundaries": 624,
+      "boundary_share": 0.09106830122591944,
+      "deliveries": 6852,
+      "dot_share": 0.5239346176298891,
+      "extras": 344,
+      "extras_per_delivery": 0.050204319906596614,
+      "free_hits": 16,
+      "illegal_wickets": 1,
+      "legal_balls": 6667,
+      "runs": 5603,
+      "runs_per_legal_ball": 0.84040797960102,
+      "runs_per_over": 5.0424478776061195,
+      "wicket_rate": 0.03079392877991827,
+      "wickets": 211
+    },
+    "faced_105": {
+      "Dot": 78,
+      "Double": 18,
+      "Extras": 8,
+      "Four": 23,
+      "Single": 104,
+      "Six": 6,
+      "Three": 1,
+      "Wicket": 11,
+      "balls_faced": 247,
+      "batting_runs": 271,
+      "batting_runs_per_ball": 1.097165991902834,
+      "boundaries": 29,
+      "boundary_share": 0.11646586345381527,
+      "deliveries": 249,
+      "dot_share": 0.3132530120481928,
+      "extras": 15,
+      "extras_per_delivery": 0.060240963855421686,
+      "free_hits": 1,
+      "illegal_wickets": 0,
+      "legal_balls": 246,
+      "runs": 286,
+      "runs_per_legal_ball": 1.1626016260162602,
+      "runs_per_over": 6.975609756097561,
+      "wicket_rate": 0.04417670682730924,
+      "wickets": 11
+    },
+    "faced_120": {
+      "Dot": 25,
+      "Double": 3,
+      "Extras": 3,
+      "Four": 14,
+      "Single": 30,
+      "Six": 2,
+      "Three": 1,
+      "Wicket": 6,
+      "balls_faced": 83,
+      "batting_runs": 107,
+      "batting_runs_per_ball": 1.2891566265060241,
+      "boundaries": 16,
+      "boundary_share": 0.19047619047619047,
+      "deliveries": 84,
+      "dot_share": 0.2976190476190476,
+      "extras": 3,
+      "extras_per_delivery": 0.03571428571428571,
+      "free_hits": 0,
+      "illegal_wickets": 0,
+      "legal_balls": 83,
+      "runs": 110,
+      "runs_per_legal_ball": 1.3253012048192772,
+      "runs_per_over": 7.951807228915663,
+      "wicket_rate": 0.07142857142857142,
+      "wickets": 6
+    },
+    "faced_135": {
+      "Dot": 6,
+      "Double": 4,
+      "Extras": 1,
+      "Four": 8,
+      "Single": 13,
+      "Six": 3,
+      "Wicket": 1,
+      "balls_faced": 36,
+      "batting_runs": 71,
+      "batting_runs_per_ball": 1.9722222222222223,
+      "boundaries": 11,
+      "boundary_share": 0.3055555555555556,
+      "deliveries": 36,
+      "dot_share": 0.16666666666666666,
+      "extras": 1,
+      "extras_per_delivery": 0.027777777777777776,
+      "free_hits": 0,
+      "illegal_wickets": 0,
+      "legal_balls": 36,
+      "runs": 72,
+      "runs_per_legal_ball": 2.0,
+      "runs_per_over": 12.0,
+      "wicket_rate": 0.027777777777777776,
+      "wickets": 1
+    },
+    "faced_15": {
+      "Dot": 1895,
+      "Double": 251,
+      "Extras": 173,
+      "Four": 382,
+      "Single": 1372,
+      "Six": 66,
+      "Three": 25,
+      "Wicket": 98,
+      "balls_faced": 4149,
+      "batting_runs": 3880,
+      "batting_runs_per_ball": 0.9351651000241022,
+      "boundaries": 447,
+      "boundary_share": 0.10488033786954482,
+      "deliveries": 4262,
+      "dot_share": 0.4446269357109338,
+      "extras": 229,
+      "extras_per_delivery": 0.053730642890661665,
+      "free_hits": 5,
+      "illegal_wickets": 0,
+      "legal_balls": 4145,
+      "runs": 4109,
+      "runs_per_legal_ball": 0.9913148371531966,
+      "runs_per_over": 5.947889022919179,
+      "wicket_rate": 0.02299389957766307,
+      "wickets": 98
+    },
+    "faced_150": {
+      "Dot": 2,
+      "Single": 1,
+      "Wicket": 1,
+      "balls_faced": 4,
+      "batting_runs": 1,
+      "batting_runs_per_ball": 0.25,
+      "boundaries": 0,
+      "boundary_share": 0.0,
+      "deliveries": 4,
+      "dot_share": 0.5,
+      "extras": 0,
+      "extras_per_delivery": 0.0,
+      "free_hits": 0,
+      "illegal_wickets": 0,
+      "legal_balls": 4,
+      "runs": 1,
+      "runs_per_legal_ball": 0.25,
+      "runs_per_over": 1.5,
+      "wicket_rate": 0.25,
+      "wickets": 1
+    },
+    "faced_30": {
+      "Dot": 1144,
+      "Double": 174,
+      "Extras": 106,
+      "Four": 216,
+      "Single": 1051,
+      "Six": 32,
+      "Three": 8,
+      "Wicket": 67,
+      "balls_faced": 2726,
+      "batting_runs": 2485,
+      "batting_runs_per_ball": 0.9115920763022743,
+      "boundaries": 247,
+      "boundary_share": 0.08827734095782702,
+      "deliveries": 2798,
+      "dot_share": 0.40886347390993566,
+      "extras": 130,
+      "extras_per_delivery": 0.04646175839885633,
+      "free_hits": 2,
+      "illegal_wickets": 0,
+      "legal_balls": 2723,
+      "runs": 2615,
+      "runs_per_legal_ball": 0.9603378626514874,
+      "runs_per_over": 5.762027175908924,
+      "wicket_rate": 0.02394567548248749,
+      "wickets": 67
+    },
+    "faced_45": {
+      "Dot": 721,
+      "Double": 117,
+      "Extras": 58,
+      "Four": 146,
+      "Single": 729,
+      "Six": 33,
+      "Three": 10,
+      "Wicket": 48,
+      "balls_faced": 1822,
+      "batting_runs": 1785,
+      "batting_runs_per_ball": 0.9796926454445664,
+      "boundaries": 181,
+      "boundary_share": 0.09720730397422127,
+      "deliveries": 1862,
+      "dot_share": 0.38721804511278196,
+      "extras": 73,
+      "extras_per_delivery": 0.03920515574650913,
+      "free_hits": 2,
+      "illegal_wickets": 0,
+      "legal_balls": 1819,
+      "runs": 1858,
+      "runs_per_legal_ball": 1.0214403518416713,
+      "runs_per_over": 6.128642111050027,
+      "wicket_rate": 0.02577873254564984,
+      "wickets": 48
+    },
+    "faced_60": {
+      "Dot": 455,
+      "Double": 79,
+      "Extras": 39,
+      "Four": 110,
+      "Single": 487,
+      "Six": 29,
+      "Three": 5,
+      "Wicket": 30,
+      "balls_faced": 1208,
+      "batting_runs": 1279,
+      "batting_runs_per_ball": 1.0587748344370862,
+      "boundaries": 138,
+      "boundary_share": 0.11183144246353323,
+      "deliveries": 1234,
+      "dot_share": 0.3687196110210697,
+      "extras": 40,
+      "extras_per_delivery": 0.03241491085899514,
+      "free_hits": 1,
+      "illegal_wickets": 0,
+      "legal_balls": 1205,
+      "runs": 1319,
+      "runs_per_legal_ball": 1.0946058091286308,
+      "runs_per_over": 6.567634854771784,
+      "wicket_rate": 0.024311183144246355,
+      "wickets": 30
+    },
+    "faced_75": {
+      "Dot": 282,
+      "Double": 57,
+      "Extras": 38,
+      "Four": 52,
+      "Single": 353,
+      "Six": 15,
+      "Three": 5,
+      "Wicket": 19,
+      "balls_faced": 792,
+      "batting_runs": 781,
+      "batting_runs_per_ball": 0.9861111111111112,
+      "boundaries": 67,
+      "boundary_share": 0.08160779537149818,
+      "deliveries": 821,
+      "dot_share": 0.34348355663824603,
+      "extras": 47,
+      "extras_per_delivery": 0.057247259439707675,
+      "free_hits": 3,
+      "illegal_wickets": 0,
+      "legal_balls": 792,
+      "runs": 828,
+      "runs_per_legal_ball": 1.0454545454545454,
+      "runs_per_over": 6.2727272727272725,
+      "wicket_rate": 0.023142509135200974,
+      "wickets": 19
+    },
+    "faced_90": {
+      "Dot": 180,
+      "Double": 38,
+      "Extras": 19,
+      "Four": 56,
+      "Single": 198,
+      "Six": 9,
+      "Three": 2,
+      "Wicket": 18,
+      "balls_faced": 511,
+      "batting_runs": 560,
+      "batting_runs_per_ball": 1.095890410958904,
+      "boundaries": 64,
+      "boundary_share": 0.12307692307692308,
+      "deliveries": 520,
+      "dot_share": 0.34615384615384615,
+      "extras": 19,
+      "extras_per_delivery": 0.03653846153846154,
+      "free_hits": 1,
+      "illegal_wickets": 0,
+      "legal_balls": 510,
+      "runs": 579,
+      "runs_per_legal_ball": 1.1352941176470588,
+      "runs_per_over": 6.811764705882353,
+      "wicket_rate": 0.03461538461538462,
+      "wickets": 18
+    },
+    "inn1": {
+      "Dot": 4283,
+      "Double": 610,
+      "Extras": 389,
+      "Four": 791,
+      "Single": 3258,
+      "Six": 149,
+      "Three": 70,
+      "Wicket": 262,
+      "balls_faced": 9572,
+      "batting_runs": 8766,
+      "batting_runs_per_ball": 0.9157960718763059,
+      "boundaries": 937,
+      "boundary_share": 0.09549531186302487,
+      "deliveries": 9812,
+      "dot_share": 0.4365063187933143,
+      "extras": 484,
+      "extras_per_delivery": 0.04932735426008968,
+      "free_hits": 22,
+      "illegal_wickets": 1,
+      "legal_balls": 9550,
+      "runs": 9250,
+      "runs_per_legal_ball": 0.9685863874345549,
+      "runs_per_over": 5.81151832460733,
+      "wicket_rate": 0.026803913575214024,
+      "wickets": 263
+    },
+    "inn2": {
+      "Dot": 4095,
+      "Double": 464,
+      "Extras": 320,
+      "Four": 769,
+      "Single": 2858,
+      "Six": 119,
+      "Three": 38,
+      "Wicket": 247,
+      "balls_faced": 8689,
+      "batting_runs": 7713,
+      "batting_runs_per_ball": 0.887674070664058,
+      "boundaries": 887,
+      "boundary_share": 0.09955106621773288,
+      "deliveries": 8910,
+      "dot_share": 0.4595959595959596,
+      "extras": 417,
+      "extras_per_delivery": 0.0468013468013468,
+      "free_hits": 9,
+      "illegal_wickets": 0,
+      "legal_balls": 8680,
+      "runs": 8130,
+      "runs_per_legal_ball": 0.9366359447004609,
+      "runs_per_over": 5.619815668202765,
+      "wicket_rate": 0.02772166105499439,
+      "wickets": 247
+    },
+    "middle": {
+      "Dot": 5054,
+      "Double": 626,
+      "Extras": 397,
+      "Four": 852,
+      "Single": 4175,
+      "Six": 146,
+      "Three": 59,
+      "Wicket": 237,
+      "balls_faced": 11285,
+      "batting_runs": 9912,
+      "batting_runs_per_ball": 0.8783340717766948,
+      "boundaries": 1000,
+      "boundary_share": 0.08661008141347652,
+      "deliveries": 11546,
+      "dot_share": 0.4377273514637104,
+      "extras": 503,
+      "extras_per_delivery": 0.0435648709509787,
+      "free_hits": 19,
+      "illegal_wickets": 0,
+      "legal_balls": 11266,
+      "runs": 10415,
+      "runs_per_legal_ball": 0.9244629859755015,
+      "runs_per_over": 5.546777915853009,
+      "wicket_rate": 0.020526589294993937,
+      "wickets": 237
+    },
+    "middle/inn1": {
+      "Dot": 2595,
+      "Double": 338,
+      "Extras": 190,
+      "Four": 408,
+      "Single": 2138,
+      "Six": 78,
+      "Three": 38,
+      "Wicket": 113,
+      "balls_faced": 5779,
+      "batting_runs": 5036,
+      "batting_runs_per_ball": 0.87143104343312,
+      "boundaries": 485,
+      "boundary_share": 0.08223126483553747,
+      "deliveries": 5898,
+      "dot_share": 0.4399796541200407,
+      "extras": 231,
+      "extras_per_delivery": 0.039165818921668365,
+      "free_hits": 13,
+      "illegal_wickets": 0,
+      "legal_balls": 5766,
+      "runs": 5267,
+      "runs_per_legal_ball": 0.9134582032604925,
+      "runs_per_over": 5.480749219562956,
+      "wicket_rate": 0.019159036961681926,
+      "wickets": 113
+    },
+    "middle/inn2": {
+      "Dot": 2459,
+      "Double": 288,
+      "Extras": 207,
+      "Four": 444,
+      "Single": 2037,
+      "Six": 68,
+      "Three": 21,
+      "Wicket": 124,
+      "balls_faced": 5506,
+      "batting_runs": 4876,
+      "batting_runs_per_ball": 0.885579367962223,
+      "boundaries": 515,
+      "boundary_share": 0.09118271954674222,
+      "deliveries": 5648,
+      "dot_share": 0.4353753541076487,
+      "extras": 272,
+      "extras_per_delivery": 0.04815864022662889,
+      "free_hits": 6,
+      "illegal_wickets": 0,
+      "legal_balls": 5500,
+      "runs": 5148,
+      "runs_per_legal_ball": 0.936,
+      "runs_per_over": 5.616,
+      "wicket_rate": 0.021954674220963172,
+      "wickets": 124
+    },
+    "overs_11_15": {
+      "Dot": 957,
+      "Double": 96,
+      "Extras": 81,
+      "Four": 151,
+      "Single": 693,
+      "Six": 13,
+      "Three": 10,
+      "Wicket": 26,
+      "balls_faced": 1975,
+      "batting_runs": 1599,
+      "batting_runs_per_ball": 0.809620253164557,
+      "boundaries": 164,
+      "boundary_share": 0.08090774543660582,
+      "deliveries": 2027,
+      "dot_share": 0.4721262950172669,
+      "extras": 100,
+      "extras_per_delivery": 0.0493339911198816,
+      "free_hits": 3,
+      "illegal_wickets": 0,
+      "legal_balls": 1972,
+      "runs": 1699,
+      "runs_per_legal_ball": 0.8615618661257607,
+      "runs_per_over": 5.169371196754564,
+      "wicket_rate": 0.012826837691169216,
+      "wickets": 26
+    },
+    "overs_16_20": {
+      "Dot": 910,
+      "Double": 111,
+      "Extras": 64,
+      "Four": 134,
+      "Single": 681,
+      "Six": 25,
+      "Three": 11,
+      "Wicket": 40,
+      "balls_faced": 1932,
+      "batting_runs": 1633,
+      "batting_runs_per_ball": 0.8452380952380952,
+      "boundaries": 161,
+      "boundary_share": 0.08147773279352227,
+      "deliveries": 1976,
+      "dot_share": 0.4605263157894737,
+      "extras": 77,
+      "extras_per_delivery": 0.03896761133603239,
+      "free_hits": 5,
+      "illegal_wickets": 0,
+      "legal_balls": 1927,
+      "runs": 1710,
+      "runs_per_legal_ball": 0.8873897249610794,
+      "runs_per_over": 5.324338349766476,
+      "wicket_rate": 0.020242914979757085,
+      "wickets": 40
+    },
+    "overs_1_5": {
+      "Dot": 1283,
+      "Double": 85,
+      "Extras": 71,
+      "Four": 200,
+      "Single": 311,
+      "Six": 11,
+      "Three": 21,
+      "Wicket": 42,
+      "balls_faced": 1983,
+      "batting_runs": 1410,
+      "batting_runs_per_ball": 0.7110438729198184,
+      "boundaries": 210,
+      "boundary_share": 0.10375494071146245,
+      "deliveries": 2024,
+      "dot_share": 0.633893280632411,
+      "extras": 105,
+      "extras_per_delivery": 0.051877470355731224,
+      "free_hits": 3,
+      "illegal_wickets": 0,
+      "legal_balls": 1980,
+      "runs": 1515,
+      "runs_per_legal_ball": 0.7651515151515151,
+      "runs_per_over": 4.590909090909091,
+      "wicket_rate": 0.020750988142292492,
+      "wickets": 42
+    },
+    "overs_21_25": {
+      "Dot": 849,
+      "Double": 102,
+      "Extras": 65,
+      "Four": 127,
+      "Single": 729,
+      "Six": 26,
+      "Three": 9,
+      "Wicket": 34,
+      "balls_faced": 1903,
+      "batting_runs": 1625,
+      "batting_runs_per_ball": 0.8539148712559117,
+      "boundaries": 153,
+      "boundary_share": 0.07882534775888717,
+      "deliveries": 1941,
+      "dot_share": 0.437403400309119,
+      "extras": 95,
+      "extras_per_delivery": 0.04894384337970119,
+      "free_hits": 3,
+      "illegal_wickets": 0,
+      "legal_balls": 1900,
+      "runs": 1720,
+      "runs_per_legal_ball": 0.9052631578947369,
+      "runs_per_over": 5.431578947368421,
+      "wicket_rate": 0.01751674394641937,
+      "wickets": 34
+    },
+    "overs_26_30": {
+      "Dot": 824,
+      "Double": 116,
+      "Extras": 55,
+      "Four": 140,
+      "Single": 731,
+      "Six": 14,
+      "Three": 10,
+      "Wicket": 40,
+      "balls_faced": 1889,
+      "batting_runs": 1640,
+      "batting_runs_per_ball": 0.8681842244573849,
+      "boundaries": 154,
+      "boundary_share": 0.07979274611398963,
+      "deliveries": 1930,
+      "dot_share": 0.42694300518134715,
+      "extras": 63,
+      "extras_per_delivery": 0.032642487046632127,
+      "free_hits": 3,
+      "illegal_wickets": 0,
+      "legal_balls": 1886,
+      "runs": 1703,
+      "runs_per_legal_ball": 0.9029692470837752,
+      "runs_per_over": 5.417815482502651,
+      "wicket_rate": 0.02072538860103627,
+      "wickets": 40
+    },
+    "overs_31_35": {
+      "Dot": 797,
+      "Double": 87,
+      "Extras": 65,
+      "Four": 137,
+      "Single": 704,
+      "Six": 33,
+      "Three": 9,
+      "Wicket": 41,
+      "balls_faced": 1830,
+      "batting_runs": 1655,
+      "batting_runs_per_ball": 0.9043715846994536,
+      "boundaries": 170,
+      "boundary_share": 0.09076348104644955,
+      "deliveries": 1873,
+      "dot_share": 0.4255205552589429,
+      "extras": 83,
+      "extras_per_delivery": 0.04431393486385478,
+      "free_hits": 2,
+      "illegal_wickets": 0,
+      "legal_balls": 1828,
+      "runs": 1738,
+      "runs_per_legal_ball": 0.9507658643326039,
+      "runs_per_over": 5.704595185995624,
+      "wicket_rate": 0.02189001601708489,
+      "wickets": 41
+    },
+    "overs_36_40": {
+      "Dot": 717,
+      "Double": 114,
+      "Extras": 67,
+      "Four": 163,
+      "Single": 637,
+      "Six": 35,
+      "Three": 10,
+      "Wicket": 56,
+      "balls_faced": 1756,
+      "batting_runs": 1760,
+      "batting_runs_per_ball": 1.0022779043280183,
+      "boundaries": 198,
+      "boundary_share": 0.11006114508060033,
+      "deliveries": 1799,
+      "dot_share": 0.3985547526403558,
+      "extras": 85,
+      "extras_per_delivery": 0.04724847137298499,
+      "free_hits": 3,
+      "illegal_wickets": 0,
+      "legal_balls": 1753,
+      "runs": 1845,
+      "runs_per_legal_ball": 1.0524814603536794,
+      "runs_per_over": 6.314888762122076,
+      "wicket_rate": 0.0311284046692607,
+      "wickets": 56
+    },
+    "overs_41_45": {
+      "Dot": 564,
+      "Double": 115,
+      "Extras": 95,
+      "Four": 152,
+      "Single": 687,
+      "Six": 46,
+      "Three": 9,
+      "Wicket": 65,
+      "balls_faced": 1668,
+      "batting_runs": 1832,
+      "batting_runs_per_ball": 1.0983213429256595,
+      "boundaries": 197,
+      "boundary_share": 0.11367570686670514,
+      "deliveries": 1733,
+      "dot_share": 0.3254472013848817,
+      "extras": 119,
+      "extras_per_delivery": 0.06866705135603,
+      "free_hits": 5,
+      "illegal_wickets": 0,
+      "legal_balls": 1663,
+      "runs": 1951,
+      "runs_per_legal_ball": 1.1731809981960313,
+      "runs_per_over": 7.039085989176187,
+      "wicket_rate": 0.03750721292556261,
+      "wickets": 65
+    },
+    "overs_46_50": {
+      "Dot": 318,
+      "Double": 149,
+      "Extras": 81,
+      "Four": 146,
+      "Single": 524,
+      "Six": 44,
+      "Three": 6,
+      "Wicket": 127,
+      "balls_faced": 1343,
+      "batting_runs": 1697,
+      "batting_runs_per_ball": 1.2635889798957558,
+      "boundaries": 188,
+      "boundary_share": 0.13476702508960572,
+      "deliveries": 1395,
+      "dot_share": 0.22795698924731184,
+      "extras": 90,
+      "extras_per_delivery": 0.06451612903225806,
+      "free_hits": 3,
+      "illegal_wickets": 1,
+      "legal_balls": 1340,
+      "runs": 1787,
+      "runs_per_legal_ball": 1.3335820895522388,
+      "runs_per_over": 8.001492537313434,
+      "wicket_rate": 0.09175627240143369,
+      "wickets": 128
+    },
+    "overs_51_55": {
+      "Single": 1,
+      "balls_faced": 1,
+      "batting_runs": 1,
+      "batting_runs_per_ball": 1.0,
+      "boundaries": 0,
+      "boundary_share": 0.0,
+      "deliveries": 1,
+      "dot_share": 0.0,
+      "extras": 0,
+      "extras_per_delivery": 0.0,
+      "free_hits": 0,
+      "illegal_wickets": 0,
+      "legal_balls": 1,
+      "runs": 1,
+      "runs_per_legal_ball": 1.0,
+      "runs_per_over": 6.0,
+      "wicket_rate": 0.0,
+      "wickets": 0
+    },
+    "overs_6_10": {
+      "Dot": 1159,
+      "Double": 99,
+      "Extras": 65,
+      "Four": 210,
+      "Single": 418,
+      "Six": 21,
+      "Three": 13,
+      "Wicket": 38,
+      "balls_faced": 1981,
+      "batting_runs": 1627,
+      "batting_runs_per_ball": 0.8213023725391216,
+      "boundaries": 229,
+      "boundary_share": 0.11319822046465645,
+      "deliveries": 2023,
+      "dot_share": 0.5729115175481958,
+      "extras": 84,
+      "extras_per_delivery": 0.04152249134948097,
+      "free_hits": 1,
+      "illegal_wickets": 0,
+      "legal_balls": 1980,
+      "runs": 1711,
+      "runs_per_legal_ball": 0.8641414141414141,
+      "runs_per_over": 5.184848484848485,
+      "wicket_rate": 0.018783984181908058,
+      "wickets": 38
+    },
+    "powerplay": {
+      "Dot": 2442,
+      "Double": 184,
+      "Extras": 136,
+      "Four": 410,
+      "Single": 729,
+      "Six": 32,
+      "Three": 34,
+      "Wicket": 80,
+      "balls_faced": 3964,
+      "batting_runs": 3037,
+      "batting_runs_per_ball": 0.7661453077699294,
+      "boundaries": 439,
+      "boundary_share": 0.10847541388682976,
+      "deliveries": 4047,
+      "dot_share": 0.603409933283914,
+      "extras": 189,
+      "extras_per_delivery": 0.04670126019273536,
+      "free_hits": 4,
+      "illegal_wickets": 0,
+      "legal_balls": 3960,
+      "runs": 3226,
+      "runs_per_legal_ball": 0.8146464646464646,
+      "runs_per_over": 4.887878787878788,
+      "wicket_rate": 0.019767729182110207,
+      "wickets": 80
+    },
+    "powerplay/inn1": {
+      "Dot": 1220,
+      "Double": 92,
+      "Extras": 77,
+      "Four": 205,
+      "Single": 364,
+      "Six": 14,
+      "Three": 20,
+      "Wicket": 37,
+      "balls_faced": 1982,
+      "batting_runs": 1516,
+      "batting_runs_per_ball": 0.7648839556004037,
+      "boundaries": 218,
+      "boundary_share": 0.1074420896993593,
+      "deliveries": 2029,
+      "dot_share": 0.6012814194184327,
+      "extras": 108,
+      "extras_per_delivery": 0.05322819122720552,
+      "free_hits": 2,
+      "illegal_wickets": 0,
+      "legal_balls": 1980,
+      "runs": 1624,
+      "runs_per_legal_ball": 0.8202020202020202,
+      "runs_per_over": 4.921212121212121,
+      "wicket_rate": 0.018235584031542632,
+      "wickets": 37
+    },
+    "powerplay/inn2": {
+      "Dot": 1222,
+      "Double": 92,
+      "Extras": 59,
+      "Four": 205,
+      "Single": 365,
+      "Six": 18,
+      "Three": 14,
+      "Wicket": 43,
+      "balls_faced": 1982,
+      "batting_runs": 1521,
+      "batting_runs_per_ball": 0.7674066599394551,
+      "boundaries": 221,
+      "boundary_share": 0.10951437066402378,
+      "deliveries": 2018,
+      "dot_share": 0.6055500495540139,
+      "extras": 81,
+      "extras_per_delivery": 0.04013875123885035,
+      "free_hits": 2,
+      "illegal_wickets": 0,
+      "legal_balls": 1980,
+      "runs": 1602,
+      "runs_per_legal_ball": 0.8090909090909091,
+      "runs_per_over": 4.8545454545454545,
+      "wicket_rate": 0.02130822596630327,
+      "wickets": 43
+    }
+  },
+  "nodes": {
+    "ODI": {
+      "counts": {
+        "Dot": 8378,
+        "Double": 1074,
+        "Extras": 709,
+        "Four": 1560,
+        "Single": 6116,
+        "Six": 268,
+        "Three": 108,
+        "Wicket": 509
+      },
+      "n": 18722,
+      "probabilities": {
+        "Dot": 0.4474949257557953,
+        "Double": 0.05736566606131824,
+        "Extras": 0.037869885695972653,
+        "Four": 0.0833244311505181,
+        "Single": 0.32667450058754405,
+        "Six": 0.01431470996688388,
+        "Three": 0.005768614464266638,
+        "Wicket": 0.0271872663177011
+      }
+    },
+    "ODI/intl_odi_modern": {
+      "counts": {
+        "Dot": 8378,
+        "Double": 1074,
+        "Extras": 709,
+        "Four": 1560,
+        "Single": 6116,
+        "Six": 268,
+        "Three": 108,
+        "Wicket": 509
+      },
+      "n": 18722,
+      "probabilities": {
+        "Dot": 0.4474949257557953,
+        "Double": 0.05736566606131824,
+        "Extras": 0.037869885695972653,
+        "Four": 0.0833244311505181,
+        "Single": 0.32667450058754405,
+        "Six": 0.01431470996688388,
+        "Three": 0.005768614464266638,
+        "Wicket": 0.0271872663177011
+      }
+    },
+    "ODI/intl_odi_modern/death": {
+      "counts": {
+        "Dot": 882,
+        "Double": 264,
+        "Extras": 176,
+        "Four": 298,
+        "Single": 1212,
+        "Six": 90,
+        "Three": 15,
+        "Wicket": 192
+      },
+      "n": 3129,
+      "probabilities": {
+        "Dot": 0.28187919463087246,
+        "Double": 0.08437200383509108,
+        "Extras": 0.05624800255672739,
+        "Four": 0.09523809523809523,
+        "Single": 0.38734419942473636,
+        "Six": 0.028763183125599234,
+        "Three": 0.004793863854266539,
+        "Wicket": 0.061361457334611694
+      }
+    },
+    "ODI/intl_odi_modern/death/inn1": {
+      "counts": {
+        "Dot": 468,
+        "Double": 180,
+        "Extras": 122,
+        "Four": 178,
+        "Single": 756,
+        "Six": 57,
+        "Three": 12,
+        "Wicket": 112
+      },
+      "n": 1885,
+      "probabilities": {
+        "Dot": 0.2482758620689655,
+        "Double": 0.09549071618037135,
+        "Extras": 0.06472148541114059,
+        "Four": 0.09442970822281167,
+        "Single": 0.40106100795755967,
+        "Six": 0.030238726790450927,
+        "Three": 0.00636604774535809,
+        "Wicket": 0.059416445623342175
+      }
+    },
+    "ODI/intl_odi_modern/death/inn1/w0_2": {
+      "counts": {
+        "Dot": 17,
+        "Double": 12,
+        "Extras": 6,
+        "Four": 25,
+        "Single": 45,
+        "Six": 10,
+        "Three": 1,
+        "Wicket": 6
+      },
+      "n": 122,
+      "probabilities": {
+        "Dot": 0.13934426229508196,
+        "Double": 0.09836065573770492,
+        "Extras": 0.04918032786885246,
+        "Four": 0.20491803278688525,
+        "Single": 0.36885245901639346,
+        "Six": 0.08196721311475409,
+        "Three": 0.00819672131147541,
+        "Wicket": 0.04918032786885246
+      }
+    },
+    "ODI/intl_odi_modern/death/inn1/w3_5": {
+      "counts": {
+        "Dot": 241,
+        "Double": 95,
+        "Extras": 64,
+        "Four": 92,
+        "Single": 432,
+        "Six": 26,
+        "Three": 10,
+        "Wicket": 53
+      },
+      "n": 1013,
+      "probabilities": {
+        "Dot": 0.23790720631786771,
+        "Double": 0.09378084896347483,
+        "Extras": 0.0631786771964462,
+        "Four": 0.09081934846989141,
+        "Single": 0.42645607107601186,
+        "Six": 0.02566633761105627,
+        "Three": 0.009871668311944718,
+        "Wicket": 0.05231984205330701
+      }
+    },
+    "ODI/intl_odi_modern/death/inn1/w6_plus": {
+      "counts": {
+        "Dot": 210,
+        "Double": 73,
+        "Extras": 52,
+        "Four": 61,
+        "Single": 279,
+        "Six": 21,
+        "Three": 1,
+        "Wicket": 53
+      },
+      "n": 750,
+      "probabilities": {
+        "Dot": 0.28,
+        "Double": 0.09733333333333333,
+        "Extras": 0.06933333333333333,
+        "Four": 0.08133333333333333,
+        "Single": 0.372,
+        "Six": 0.028,
+        "Three": 0.0013333333333333333,
+        "Wicket": 0.07066666666666667
+      }
+    },
+    "ODI/intl_odi_modern/death/inn2": {
+      "counts": {
+        "Dot": 414,
+        "Double": 84,
+        "Extras": 54,
+        "Four": 120,
+        "Single": 456,
+        "Six": 33,
+        "Three": 3,
+        "Wicket": 80
+      },
+      "n": 1244,
+      "probabilities": {
+        "Dot": 0.3327974276527331,
+        "Double": 0.06752411575562701,
+        "Extras": 0.04340836012861737,
+        "Four": 0.09646302250803858,
+        "Single": 0.3665594855305466,
+        "Six": 0.02652733118971061,
+        "Three": 0.002411575562700965,
+        "Wicket": 0.06430868167202572
+      }
+    },
+    "ODI/intl_odi_modern/death/inn2/w0_2": {
+      "counts": {
+        "Dot": 3,
+        "Four": 4,
+        "Single": 3,
+        "Wicket": 2
+      },
+      "n": 12,
+      "probabilities": {
+        "Dot": 0.25,
+        "Four": 0.3333333333333333,
+        "Single": 0.25,
+        "Wicket": 0.16666666666666666
+      }
+    },
+    "ODI/intl_odi_modern/death/inn2/w0_2/rrr_lt4": {
+      "counts": {
+        "Dot": 3,
+        "Four": 4,
+        "Single": 3,
+        "Wicket": 2
+      },
+      "n": 12,
+      "probabilities": {
+        "Dot": 0.25,
+        "Four": 0.3333333333333333,
+        "Single": 0.25,
+        "Wicket": 0.16666666666666666
+      }
+    },
+    "ODI/intl_odi_modern/death/inn2/w3_5": {
+      "counts": {
+        "Dot": 101,
+        "Double": 29,
+        "Extras": 18,
+        "Four": 45,
+        "Single": 168,
+        "Six": 5,
+        "Three": 2,
+        "Wicket": 14
+      },
+      "n": 382,
+      "probabilities": {
+        "Dot": 0.2643979057591623,
+        "Double": 0.07591623036649214,
+        "Extras": 0.04712041884816754,
+        "Four": 0.11780104712041885,
+        "Single": 0.4397905759162304,
+        "Six": 0.013089005235602094,
+        "Three": 0.005235602094240838,
+        "Wicket": 0.03664921465968586
+      }
+    },
+    "ODI/intl_odi_modern/death/inn2/w3_5/rrr_10_plus": {
+      "counts": {
+        "Dot": 31,
+        "Double": 10,
+        "Extras": 9,
+        "Four": 21,
+        "Single": 95,
+        "Six": 5,
+        "Three": 1,
+        "Wicket": 8
+      },
+      "n": 180,
+      "probabilities": {
+        "Dot": 0.17222222222222222,
+        "Double": 0.05555555555555555,
+        "Extras": 0.05,
+        "Four": 0.11666666666666667,
+        "Single": 0.5277777777777778,
+        "Six": 0.027777777777777776,
+        "Three": 0.005555555555555556,
+        "Wicket": 0.044444444444444446
+      }
+    },
+    "ODI/intl_odi_modern/death/inn2/w3_5/rrr_4_6": {
+      "counts": {
+        "Dot": 32,
+        "Double": 10,
+        "Extras": 3,
+        "Four": 12,
+        "Single": 25,
+        "Three": 1
+      },
+      "n": 83,
+      "probabilities": {
+        "Dot": 0.3855421686746988,
+        "Double": 0.12048192771084337,
+        "Extras": 0.03614457831325301,
+        "Four": 0.14457831325301204,
+        "Single": 0.30120481927710846,
+        "Three": 0.012048192771084338
+      }
+    },
+    "ODI/intl_odi_modern/death/inn2/w3_5/rrr_6_8": {
+      "counts": {
+        "Dot": 9,
+        "Double": 1,
+        "Extras": 2,
+        "Four": 1,
+        "Single": 3
+      },
+      "n": 16,
+      "probabilities": {
+        "Dot": 0.5625,
+        "Double": 0.0625,
+        "Extras": 0.125,
+        "Four": 0.0625,
+        "Single": 0.1875
+      }
+    },
+    "ODI/intl_odi_modern/death/inn2/w3_5/rrr_8_10": {
+      "counts": {
+        "Dot": 14,
+        "Double": 5,
+        "Extras": 1,
+        "Four": 4,
+        "Single": 22,
+        "Wicket": 3
+      },
+      "n": 49,
+      "probabilities": {
+        "Dot": 0.2857142857142857,
+        "Double": 0.10204081632653061,
+        "Extras": 0.02040816326530612,
+        "Four": 0.08163265306122448,
+        "Single": 0.4489795918367347,
+        "Wicket": 0.061224489795918366
+      }
+    },
+    "ODI/intl_odi_modern/death/inn2/w3_5/rrr_lt4": {
+      "counts": {
+        "Dot": 15,
+        "Double": 3,
+        "Extras": 3,
+        "Four": 7,
+        "Single": 23,
+        "Wicket": 3
+      },
+      "n": 54,
+      "probabilities": {
+        "Dot": 0.2777777777777778,
+        "Double": 0.05555555555555555,
+        "Extras": 0.05555555555555555,
+        "Four": 0.12962962962962962,
+        "Single": 0.42592592592592593,
+        "Wicket": 0.05555555555555555
+      }
+    },
+    "ODI/intl_odi_modern/death/inn2/w6_plus": {
+      "counts": {
+        "Dot": 310,
+        "Double": 55,
+        "Extras": 36,
+        "Four": 71,
+        "Single": 285,
+        "Six": 28,
+        "Three": 1,
+        "Wicket": 64
+      },
+      "n": 850,
+      "probabilities": {
+        "Dot": 0.36470588235294116,
+        "Double": 0.06470588235294118,
+        "Extras": 0.042352941176470586,
+        "Four": 0.08352941176470588,
+        "Single": 0.3352941176470588,
+        "Six": 0.03294117647058824,
+        "Three": 0.001176470588235294,
+        "Wicket": 0.07529411764705882
+      }
+    },
+    "ODI/intl_odi_modern/death/inn2/w6_plus/rrr_10_plus": {
+      "counts": {
+        "Dot": 185,
+        "Double": 41,
+        "Extras": 23,
+        "Four": 47,
+        "Single": 196,
+        "Six": 16,
+        "Three": 1,
+        "Wicket": 47
+      },
+      "n": 556,
+      "probabilities": {
+        "Dot": 0.3327338129496403,
+        "Double": 0.0737410071942446,
+        "Extras": 0.04136690647482014,
+        "Four": 0.08453237410071943,
+        "Single": 0.35251798561151076,
+        "Six": 0.02877697841726619,
+        "Three": 0.0017985611510791368,
+        "Wicket": 0.08453237410071943
+      }
+    },
+    "ODI/intl_odi_modern/death/inn2/w6_plus/rrr_4_6": {
+      "counts": {
+        "Dot": 7,
+        "Double": 1,
+        "Four": 2,
+        "Single": 7,
+        "Wicket": 4
+      },
+      "n": 21,
+      "probabilities": {
+        "Dot": 0.3333333333333333,
+        "Double": 0.047619047619047616,
+        "Four": 0.09523809523809523,
+        "Single": 0.3333333333333333,
+        "Wicket": 0.19047619047619047
+      }
+    },
+    "ODI/intl_odi_modern/death/inn2/w6_plus/rrr_6_8": {
+      "counts": {
+        "Dot": 50,
+        "Double": 5,
+        "Extras": 3,
+        "Four": 9,
+        "Single": 38,
+        "Six": 3,
+        "Wicket": 5
+      },
+      "n": 113,
+      "probabilities": {
+        "Dot": 0.4424778761061947,
+        "Double": 0.04424778761061947,
+        "Extras": 0.02654867256637168,
+        "Four": 0.07964601769911504,
+        "Single": 0.336283185840708,
+        "Six": 0.02654867256637168,
+        "Wicket": 0.04424778761061947
+      }
+    },
+    "ODI/intl_odi_modern/death/inn2/w6_plus/rrr_8_10": {
+      "counts": {
+        "Dot": 59,
+        "Double": 6,
+        "Extras": 7,
+        "Four": 10,
+        "Single": 41,
+        "Six": 9,
+        "Wicket": 7
+      },
+      "n": 139,
+      "probabilities": {
+        "Dot": 0.4244604316546763,
+        "Double": 0.04316546762589928,
+        "Extras": 0.050359712230215826,
+        "Four": 0.07194244604316546,
+        "Single": 0.2949640287769784,
+        "Six": 0.06474820143884892,
+        "Wicket": 0.050359712230215826
+      }
+    },
+    "ODI/intl_odi_modern/death/inn2/w6_plus/rrr_lt4": {
+      "counts": {
+        "Dot": 9,
+        "Double": 2,
+        "Extras": 3,
+        "Four": 3,
+        "Single": 3,
+        "Wicket": 1
+      },
+      "n": 21,
+      "probabilities": {
+        "Dot": 0.42857142857142855,
+        "Double": 0.09523809523809523,
+        "Extras": 0.14285714285714285,
+        "Four": 0.14285714285714285,
+        "Single": 0.14285714285714285,
+        "Wicket": 0.047619047619047616
+      }
+    },
+    "ODI/intl_odi_modern/middle": {
+      "counts": {
+        "Dot": 5054,
+        "Double": 626,
+        "Extras": 397,
+        "Four": 852,
+        "Single": 4175,
+        "Six": 146,
+        "Three": 59,
+        "Wicket": 237
+      },
+      "n": 11546,
+      "probabilities": {
+        "Dot": 0.4377273514637104,
+        "Double": 0.05421791096483631,
+        "Extras": 0.03438420232115018,
+        "Four": 0.073791789364282,
+        "Single": 0.3615970899012645,
+        "Six": 0.012645071886367574,
+        "Three": 0.005109994803395115,
+        "Wicket": 0.020526589294993937
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn1": {
+      "counts": {
+        "Dot": 2595,
+        "Double": 338,
+        "Extras": 190,
+        "Four": 408,
+        "Single": 2138,
+        "Six": 78,
+        "Three": 38,
+        "Wicket": 113
+      },
+      "n": 5898,
+      "probabilities": {
+        "Dot": 0.4399796541200407,
+        "Double": 0.057307561885384876,
+        "Extras": 0.03221430993557138,
+        "Four": 0.06917599186164802,
+        "Single": 0.3624957612750085,
+        "Six": 0.013224821973550356,
+        "Three": 0.006442861987114276,
+        "Wicket": 0.019159036961681926
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn1/w0_2": {
+      "counts": {
+        "Dot": 1341,
+        "Double": 202,
+        "Extras": 105,
+        "Four": 246,
+        "Single": 1250,
+        "Six": 47,
+        "Three": 23,
+        "Wicket": 57
+      },
+      "n": 3271,
+      "probabilities": {
+        "Dot": 0.4099663711403241,
+        "Double": 0.06175481504127178,
+        "Extras": 0.03210027514521553,
+        "Four": 0.07520635891164781,
+        "Single": 0.3821461326811373,
+        "Six": 0.014368694588810762,
+        "Three": 0.007031488841332926,
+        "Wicket": 0.01742586365025986
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn1/w3_5": {
+      "counts": {
+        "Dot": 1126,
+        "Double": 120,
+        "Extras": 66,
+        "Four": 150,
+        "Single": 800,
+        "Six": 24,
+        "Three": 10,
+        "Wicket": 43
+      },
+      "n": 2339,
+      "probabilities": {
+        "Dot": 0.48140230867892264,
+        "Double": 0.051303976058144504,
+        "Extras": 0.02821718683197948,
+        "Four": 0.06412997007268063,
+        "Single": 0.3420265070542967,
+        "Six": 0.010260795211628902,
+        "Three": 0.004275331338178709,
+        "Wicket": 0.01838392475416845
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn1/w6_plus": {
+      "counts": {
+        "Dot": 128,
+        "Double": 16,
+        "Extras": 19,
+        "Four": 12,
+        "Single": 88,
+        "Six": 7,
+        "Three": 5,
+        "Wicket": 13
+      },
+      "n": 288,
+      "probabilities": {
+        "Dot": 0.4444444444444444,
+        "Double": 0.05555555555555555,
+        "Extras": 0.06597222222222222,
+        "Four": 0.041666666666666664,
+        "Single": 0.3055555555555556,
+        "Six": 0.024305555555555556,
+        "Three": 0.017361111111111112,
+        "Wicket": 0.04513888888888889
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2": {
+      "counts": {
+        "Dot": 2459,
+        "Double": 288,
+        "Extras": 207,
+        "Four": 444,
+        "Single": 2037,
+        "Six": 68,
+        "Three": 21,
+        "Wicket": 124
+      },
+      "n": 5648,
+      "probabilities": {
+        "Dot": 0.4353753541076487,
+        "Double": 0.05099150141643059,
+        "Extras": 0.03665014164305949,
+        "Four": 0.07861189801699717,
+        "Single": 0.3606586402266289,
+        "Six": 0.012039660056657223,
+        "Three": 0.003718130311614731,
+        "Wicket": 0.021954674220963172
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2/w0_2": {
+      "counts": {
+        "Dot": 1166,
+        "Double": 148,
+        "Extras": 97,
+        "Four": 222,
+        "Single": 1051,
+        "Six": 31,
+        "Three": 9,
+        "Wicket": 48
+      },
+      "n": 2772,
+      "probabilities": {
+        "Dot": 0.42063492063492064,
+        "Double": 0.05339105339105339,
+        "Extras": 0.03499278499278499,
+        "Four": 0.08008658008658008,
+        "Single": 0.3791486291486291,
+        "Six": 0.011183261183261184,
+        "Three": 0.003246753246753247,
+        "Wicket": 0.017316017316017316
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2/w0_2/rrr_10_plus": {
+      "counts": {
+        "Dot": 18,
+        "Double": 4,
+        "Extras": 1,
+        "Four": 8,
+        "Single": 24,
+        "Six": 1,
+        "Wicket": 3
+      },
+      "n": 59,
+      "probabilities": {
+        "Dot": 0.3050847457627119,
+        "Double": 0.06779661016949153,
+        "Extras": 0.01694915254237288,
+        "Four": 0.13559322033898305,
+        "Single": 0.4067796610169492,
+        "Six": 0.01694915254237288,
+        "Wicket": 0.05084745762711865
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2/w0_2/rrr_4_6": {
+      "counts": {
+        "Dot": 378,
+        "Double": 35,
+        "Extras": 19,
+        "Four": 59,
+        "Single": 229,
+        "Six": 9,
+        "Three": 4,
+        "Wicket": 10
+      },
+      "n": 743,
+      "probabilities": {
+        "Dot": 0.5087483176312247,
+        "Double": 0.047106325706594884,
+        "Extras": 0.02557200538358008,
+        "Four": 0.07940780619111709,
+        "Single": 0.3082099596231494,
+        "Six": 0.012113055181695828,
+        "Three": 0.005383580080753701,
+        "Wicket": 0.013458950201884253
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2/w0_2/rrr_6_8": {
+      "counts": {
+        "Dot": 406,
+        "Double": 47,
+        "Extras": 29,
+        "Four": 69,
+        "Single": 386,
+        "Six": 11,
+        "Three": 1,
+        "Wicket": 23
+      },
+      "n": 972,
+      "probabilities": {
+        "Dot": 0.4176954732510288,
+        "Double": 0.04835390946502058,
+        "Extras": 0.029835390946502057,
+        "Four": 0.07098765432098765,
+        "Single": 0.39711934156378603,
+        "Six": 0.01131687242798354,
+        "Three": 0.00102880658436214,
+        "Wicket": 0.023662551440329218
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2/w0_2/rrr_8_10": {
+      "counts": {
+        "Dot": 138,
+        "Double": 25,
+        "Extras": 18,
+        "Four": 34,
+        "Single": 211,
+        "Six": 4,
+        "Three": 2,
+        "Wicket": 6
+      },
+      "n": 438,
+      "probabilities": {
+        "Dot": 0.3150684931506849,
+        "Double": 0.05707762557077625,
+        "Extras": 0.0410958904109589,
+        "Four": 0.0776255707762557,
+        "Single": 0.4817351598173516,
+        "Six": 0.0091324200913242,
+        "Three": 0.0045662100456621,
+        "Wicket": 0.0136986301369863
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2/w0_2/rrr_lt4": {
+      "counts": {
+        "Dot": 226,
+        "Double": 37,
+        "Extras": 30,
+        "Four": 52,
+        "Single": 201,
+        "Six": 6,
+        "Three": 2,
+        "Wicket": 6
+      },
+      "n": 560,
+      "probabilities": {
+        "Dot": 0.4035714285714286,
+        "Double": 0.06607142857142857,
+        "Extras": 0.05357142857142857,
+        "Four": 0.09285714285714286,
+        "Single": 0.35892857142857143,
+        "Six": 0.010714285714285714,
+        "Three": 0.0035714285714285713,
+        "Wicket": 0.010714285714285714
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2/w3_5": {
+      "counts": {
+        "Dot": 1026,
+        "Double": 126,
+        "Extras": 82,
+        "Four": 181,
+        "Single": 829,
+        "Six": 27,
+        "Three": 8,
+        "Wicket": 58
+      },
+      "n": 2337,
+      "probabilities": {
+        "Dot": 0.43902439024390244,
+        "Double": 0.05391527599486521,
+        "Extras": 0.03508771929824561,
+        "Four": 0.07744972186563971,
+        "Single": 0.3547282841249465,
+        "Six": 0.011553273427471117,
+        "Three": 0.0034231921266581087,
+        "Wicket": 0.024818142918271287
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2/w3_5/rrr_10_plus": {
+      "counts": {
+        "Dot": 90,
+        "Double": 17,
+        "Extras": 9,
+        "Four": 27,
+        "Single": 80,
+        "Six": 2,
+        "Three": 2,
+        "Wicket": 7
+      },
+      "n": 234,
+      "probabilities": {
+        "Dot": 0.38461538461538464,
+        "Double": 0.07264957264957266,
+        "Extras": 0.038461538461538464,
+        "Four": 0.11538461538461539,
+        "Single": 0.3418803418803419,
+        "Six": 0.008547008547008548,
+        "Three": 0.008547008547008548,
+        "Wicket": 0.029914529914529916
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2/w3_5/rrr_4_6": {
+      "counts": {
+        "Dot": 257,
+        "Double": 25,
+        "Extras": 22,
+        "Four": 29,
+        "Single": 157,
+        "Six": 8,
+        "Wicket": 9
+      },
+      "n": 507,
+      "probabilities": {
+        "Dot": 0.5069033530571992,
+        "Double": 0.04930966469428008,
+        "Extras": 0.04339250493096647,
+        "Four": 0.05719921104536489,
+        "Single": 0.3096646942800789,
+        "Six": 0.015779092702169626,
+        "Wicket": 0.01775147928994083
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2/w3_5/rrr_6_8": {
+      "counts": {
+        "Dot": 453,
+        "Double": 49,
+        "Extras": 27,
+        "Four": 59,
+        "Single": 327,
+        "Six": 5,
+        "Three": 3,
+        "Wicket": 24
+      },
+      "n": 947,
+      "probabilities": {
+        "Dot": 0.4783526927138332,
+        "Double": 0.05174234424498416,
+        "Extras": 0.028511087645195353,
+        "Four": 0.06230200633579725,
+        "Single": 0.3453009503695882,
+        "Six": 0.005279831045406547,
+        "Three": 0.0031678986272439284,
+        "Wicket": 0.025343189017951427
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2/w3_5/rrr_8_10": {
+      "counts": {
+        "Dot": 214,
+        "Double": 31,
+        "Extras": 23,
+        "Four": 62,
+        "Single": 254,
+        "Six": 8,
+        "Three": 3,
+        "Wicket": 18
+      },
+      "n": 613,
+      "probabilities": {
+        "Dot": 0.34910277324632955,
+        "Double": 0.05057096247960848,
+        "Extras": 0.037520391517128875,
+        "Four": 0.10114192495921696,
+        "Single": 0.41435562805872755,
+        "Six": 0.013050570962479609,
+        "Three": 0.004893964110929853,
+        "Wicket": 0.02936378466557912
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2/w3_5/rrr_lt4": {
+      "counts": {
+        "Dot": 12,
+        "Double": 4,
+        "Extras": 1,
+        "Four": 4,
+        "Single": 11,
+        "Six": 4
+      },
+      "n": 36,
+      "probabilities": {
+        "Dot": 0.3333333333333333,
+        "Double": 0.1111111111111111,
+        "Extras": 0.027777777777777776,
+        "Four": 0.1111111111111111,
+        "Single": 0.3055555555555556,
+        "Six": 0.1111111111111111
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2/w6_plus": {
+      "counts": {
+        "Dot": 267,
+        "Double": 14,
+        "Extras": 28,
+        "Four": 41,
+        "Single": 157,
+        "Six": 10,
+        "Three": 4,
+        "Wicket": 18
+      },
+      "n": 539,
+      "probabilities": {
+        "Dot": 0.49536178107606677,
+        "Double": 0.025974025974025976,
+        "Extras": 0.05194805194805195,
+        "Four": 0.07606679035250463,
+        "Single": 0.2912801484230056,
+        "Six": 0.01855287569573284,
+        "Three": 0.0074211502782931356,
+        "Wicket": 0.03339517625231911
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2/w6_plus/rrr_10_plus": {
+      "counts": {
+        "Dot": 29,
+        "Double": 1,
+        "Extras": 4,
+        "Four": 5,
+        "Single": 10,
+        "Six": 1,
+        "Three": 2,
+        "Wicket": 5
+      },
+      "n": 57,
+      "probabilities": {
+        "Dot": 0.5087719298245614,
+        "Double": 0.017543859649122806,
+        "Extras": 0.07017543859649122,
+        "Four": 0.08771929824561403,
+        "Single": 0.17543859649122806,
+        "Six": 0.017543859649122806,
+        "Three": 0.03508771929824561,
+        "Wicket": 0.08771929824561403
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2/w6_plus/rrr_4_6": {
+      "counts": {
+        "Dot": 28,
+        "Extras": 1,
+        "Four": 2,
+        "Single": 12,
+        "Wicket": 1
+      },
+      "n": 44,
+      "probabilities": {
+        "Dot": 0.6363636363636364,
+        "Extras": 0.022727272727272728,
+        "Four": 0.045454545454545456,
+        "Single": 0.2727272727272727,
+        "Wicket": 0.022727272727272728
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2/w6_plus/rrr_6_8": {
+      "counts": {
+        "Dot": 99,
+        "Double": 5,
+        "Extras": 8,
+        "Four": 12,
+        "Single": 59,
+        "Six": 7,
+        "Wicket": 6
+      },
+      "n": 196,
+      "probabilities": {
+        "Dot": 0.5051020408163265,
+        "Double": 0.025510204081632654,
+        "Extras": 0.04081632653061224,
+        "Four": 0.061224489795918366,
+        "Single": 0.3010204081632653,
+        "Six": 0.03571428571428571,
+        "Wicket": 0.030612244897959183
+      }
+    },
+    "ODI/intl_odi_modern/middle/inn2/w6_plus/rrr_8_10": {
+      "counts": {
+        "Dot": 111,
+        "Double": 8,
+        "Extras": 15,
+        "Four": 22,
+        "Single": 76,
+        "Six": 2,
+        "Three": 2,
+        "Wicket": 6
+      },
+      "n": 242,
+      "probabilities": {
+        "Dot": 0.45867768595041325,
+        "Double": 0.03305785123966942,
+        "Extras": 0.06198347107438017,
+        "Four": 0.09090909090909091,
+        "Single": 0.3140495867768595,
+        "Six": 0.008264462809917356,
+        "Three": 0.008264462809917356,
+        "Wicket": 0.024793388429752067
+      }
+    },
+    "ODI/intl_odi_modern/powerplay": {
+      "counts": {
+        "Dot": 2442,
+        "Double": 184,
+        "Extras": 136,
+        "Four": 410,
+        "Single": 729,
+        "Six": 32,
+        "Three": 34,
+        "Wicket": 80
+      },
+      "n": 4047,
+      "probabilities": {
+        "Dot": 0.603409933283914,
+        "Double": 0.045465777118853475,
+        "Extras": 0.03360513960958735,
+        "Four": 0.1013096120583148,
+        "Single": 0.18013343217197925,
+        "Six": 0.007907091672844082,
+        "Three": 0.008401284902396838,
+        "Wicket": 0.019767729182110207
+      }
+    },
+    "ODI/intl_odi_modern/powerplay/inn1": {
+      "counts": {
+        "Dot": 1220,
+        "Double": 92,
+        "Extras": 77,
+        "Four": 205,
+        "Single": 364,
+        "Six": 14,
+        "Three": 20,
+        "Wicket": 37
+      },
+      "n": 2029,
+      "probabilities": {
+        "Dot": 0.6012814194184327,
+        "Double": 0.045342533267619514,
+        "Extras": 0.03794972893050764,
+        "Four": 0.10103499260719566,
+        "Single": 0.17939871858058157,
+        "Six": 0.006899950714637753,
+        "Three": 0.009857072449482503,
+        "Wicket": 0.018235584031542632
+      }
+    },
+    "ODI/intl_odi_modern/powerplay/inn1/w0_2": {
+      "counts": {
+        "Dot": 1179,
+        "Double": 92,
+        "Extras": 72,
+        "Four": 201,
+        "Single": 355,
+        "Six": 14,
+        "Three": 18,
+        "Wicket": 36
+      },
+      "n": 1967,
+      "probabilities": {
+        "Dot": 0.5993899339095069,
+        "Double": 0.04677173360447382,
+        "Extras": 0.03660396542958821,
+        "Four": 0.10218607015760041,
+        "Single": 0.18047788510421964,
+        "Six": 0.0071174377224199285,
+        "Three": 0.009150991357397052,
+        "Wicket": 0.018301982714794104
+      }
+    },
+    "ODI/intl_odi_modern/powerplay/inn1/w3_5": {
+      "counts": {
+        "Dot": 41,
+        "Extras": 5,
+        "Four": 4,
+        "Single": 9,
+        "Three": 2,
+        "Wicket": 1
+      },
+      "n": 62,
+      "probabilities": {
+        "Dot": 0.6612903225806451,
+        "Extras": 0.08064516129032258,
+        "Four": 0.06451612903225806,
+        "Single": 0.14516129032258066,
+        "Three": 0.03225806451612903,
+        "Wicket": 0.016129032258064516
+      }
+    },
+    "ODI/intl_odi_modern/powerplay/inn2": {
+      "counts": {
+        "Dot": 1222,
+        "Double": 92,
+        "Extras": 59,
+        "Four": 205,
+        "Single": 365,
+        "Six": 18,
+        "Three": 14,
+        "Wicket": 43
+      },
+      "n": 2018,
+      "probabilities": {
+        "Dot": 0.6055500495540139,
+        "Double": 0.04558969276511397,
+        "Extras": 0.02923686818632309,
+        "Four": 0.10158572844400396,
+        "Single": 0.18087215064420217,
+        "Six": 0.008919722497522299,
+        "Three": 0.006937561942517344,
+        "Wicket": 0.02130822596630327
+      }
+    },
+    "ODI/intl_odi_modern/powerplay/inn2/w0_2": {
+      "counts": {
+        "Dot": 1168,
+        "Double": 90,
+        "Extras": 58,
+        "Four": 199,
+        "Single": 362,
+        "Six": 18,
+        "Three": 14,
+        "Wicket": 42
+      },
+      "n": 1951,
+      "probabilities": {
+        "Dot": 0.5986673500768837,
+        "Double": 0.04613018964633521,
+        "Extras": 0.02972834443874936,
+        "Four": 0.10199897488467452,
+        "Single": 0.18554587391081498,
+        "Six": 0.009226037929267043,
+        "Three": 0.007175807278318811,
+        "Wicket": 0.021527421834956432
+      }
+    },
+    "ODI/intl_odi_modern/powerplay/inn2/w0_2/rrr_4_6": {
+      "counts": {
+        "Dot": 472,
+        "Double": 30,
+        "Extras": 21,
+        "Four": 75,
+        "Single": 109,
+        "Six": 4,
+        "Three": 3,
+        "Wicket": 18
+      },
+      "n": 732,
+      "probabilities": {
+        "Dot": 0.644808743169399,
+        "Double": 0.040983606557377046,
+        "Extras": 0.028688524590163935,
+        "Four": 0.10245901639344263,
+        "Single": 0.1489071038251366,
+        "Six": 0.00546448087431694,
+        "Three": 0.004098360655737705,
+        "Wicket": 0.02459016393442623
+      }
+    },
+    "ODI/intl_odi_modern/powerplay/inn2/w0_2/rrr_6_8": {
+      "counts": {
+        "Dot": 558,
+        "Double": 41,
+        "Extras": 21,
+        "Four": 95,
+        "Single": 196,
+        "Six": 9,
+        "Three": 7,
+        "Wicket": 20
+      },
+      "n": 947,
+      "probabilities": {
+        "Dot": 0.5892291446673706,
+        "Double": 0.04329461457233368,
+        "Extras": 0.022175290390707498,
+        "Four": 0.1003167898627244,
+        "Single": 0.20696937697993664,
+        "Six": 0.009503695881731784,
+        "Three": 0.007391763463569166,
+        "Wicket": 0.021119324181626188
+      }
+    },
+    "ODI/intl_odi_modern/powerplay/inn2/w0_2/rrr_8_10": {
+      "counts": {
+        "Dot": 32,
+        "Double": 5,
+        "Extras": 3,
+        "Four": 4,
+        "Single": 19,
+        "Six": 1,
+        "Three": 2,
+        "Wicket": 1
+      },
+      "n": 67,
+      "probabilities": {
+        "Dot": 0.47761194029850745,
+        "Double": 0.07462686567164178,
+        "Extras": 0.04477611940298507,
+        "Four": 0.05970149253731343,
+        "Single": 0.2835820895522388,
+        "Six": 0.014925373134328358,
+        "Three": 0.029850746268656716,
+        "Wicket": 0.014925373134328358
+      }
+    },
+    "ODI/intl_odi_modern/powerplay/inn2/w0_2/rrr_lt4": {
+      "counts": {
+        "Dot": 106,
+        "Double": 14,
+        "Extras": 13,
+        "Four": 25,
+        "Single": 38,
+        "Six": 4,
+        "Three": 2,
+        "Wicket": 3
+      },
+      "n": 205,
+      "probabilities": {
+        "Dot": 0.5170731707317073,
+        "Double": 0.06829268292682927,
+        "Extras": 0.06341463414634146,
+        "Four": 0.12195121951219512,
+        "Single": 0.18536585365853658,
+        "Six": 0.01951219512195122,
+        "Three": 0.00975609756097561,
+        "Wicket": 0.014634146341463415
+      }
+    },
+    "ODI/intl_odi_modern/powerplay/inn2/w3_5": {
+      "counts": {
+        "Dot": 54,
+        "Double": 2,
+        "Extras": 1,
+        "Four": 6,
+        "Single": 3,
+        "Wicket": 1
+      },
+      "n": 67,
+      "probabilities": {
+        "Dot": 0.8059701492537313,
+        "Double": 0.029850746268656716,
+        "Extras": 0.014925373134328358,
+        "Four": 0.08955223880597014,
+        "Single": 0.04477611940298507,
+        "Wicket": 0.014925373134328358
+      }
+    },
+    "ODI/intl_odi_modern/powerplay/inn2/w3_5/rrr_4_6": {
+      "counts": {
+        "Dot": 41,
+        "Double": 2,
+        "Extras": 1,
+        "Four": 3,
+        "Single": 2,
+        "Wicket": 1
+      },
+      "n": 50,
+      "probabilities": {
+        "Dot": 0.82,
+        "Double": 0.04,
+        "Extras": 0.02,
+        "Four": 0.06,
+        "Single": 0.04,
+        "Wicket": 0.02
+      }
+    },
+    "ODI/intl_odi_modern/powerplay/inn2/w3_5/rrr_6_8": {
+      "counts": {
+        "Dot": 13,
+        "Four": 3,
+        "Single": 1
+      },
+      "n": 17,
+      "probabilities": {
+        "Dot": 0.7647058823529411,
+        "Four": 0.17647058823529413,
+        "Single": 0.058823529411764705
+      }
+    },
+    "root": {
+      "counts": {
+        "Dot": 8378,
+        "Double": 1074,
+        "Extras": 709,
+        "Four": 1560,
+        "Single": 6116,
+        "Six": 268,
+        "Three": 108,
+        "Wicket": 509
+      },
+      "n": 18722,
+      "probabilities": {
+        "Dot": 0.4474949257557953,
+        "Double": 0.05736566606131824,
+        "Extras": 0.037869885695972653,
+        "Four": 0.0833244311505181,
+        "Single": 0.32667450058754405,
+        "Six": 0.01431470996688388,
+        "Three": 0.005768614464266638,
+        "Wicket": 0.0271872663177011
+      }
+    }
+  }
+}

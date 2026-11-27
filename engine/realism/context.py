@@ -37,11 +37,14 @@ def wickets_bucket(wickets: int) -> str:
     return "w6_plus"
 
 
-def chase_bucket(required_rate: Optional[float]) -> Optional[str]:
+def chase_bucket(required_rate: Optional[float], format_name=None) -> Optional[str]:
     """Hierarchy level-6 node name, or None when not chasing."""
     if required_rate is None:
         return None
     r = float(required_rate)
+    if format_name == "ODI":
+        return ("rrr_lt4" if r < 4 else "rrr_4_6" if r < 6 else
+                "rrr_6_8" if r < 8 else "rrr_8_10" if r < 10 else "rrr_10_plus")
     if r < 6.0:
         return "rrr_lt6"
     if r < 9.0:
@@ -108,7 +111,7 @@ class BallContext:
         single source of truth shared with the reference builder so a
         delivery is always looked up under the node it was filed under.
         """
-        return phases.phase_for_ball(self.balls_bowled, self.innings_balls)
+        return phases.phase_for_ball(self.balls_bowled, self.innings_balls, self.format_name)
 
     @property
     def innings_key(self) -> str:
@@ -158,7 +161,7 @@ class BallContext:
         """The hierarchy path this delivery looks up, most general first."""
         path = [self.format_name, competition, self.phase, self.innings_key,
                 wickets_bucket(self.wickets)]
-        chase = chase_bucket(self.required_rate)
+        chase = chase_bucket(self.required_rate, self.format_name)
         if chase:
             path.append(chase)
         return path

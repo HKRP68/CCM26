@@ -1,0 +1,101 @@
+{
+  "limits": "One seeded human-v-human match per surface. The real turn loop and local SQLite checkpointing ran with a mock Telegram transport. Setup, milestones, end-of-innings announcements and result posts are excluded from message counts.",
+  "tactics": {
+    "batting_best_responses": {
+      "aggressive": 4,
+      "balanced": 8,
+      "rotate": 5,
+      "ultra": 118
+    },
+    "bowling_best_responses": {
+      "aggressive": 13,
+      "balanced": 15,
+      "defensive": 38,
+      "mixed": 25,
+      "variation": 44
+    },
+    "contexts": 27,
+    "dominant_bowling_plan": false,
+    "fatigue": {
+      "after_rest": {
+        "expected_runs_per_legal_ball": 0.9482590354709199,
+        "wickets_per_legal_ball": 0.01569300271149995,
+        "workload": {
+          "fatigue": 3.1999999999999993,
+          "last_over": 17,
+          "legal_balls": 42,
+          "penalty": 0.19999999999999987,
+          "rest_overs": 9,
+          "spell_overs": 0
+        }
+      },
+      "extended_spell": {
+        "expected_runs_per_legal_ball": 0.9615888550510757,
+        "wickets_per_legal_ball": 0.015196517674005533,
+        "workload": {
+          "fatigue": 4.6,
+          "last_over": 25,
+          "legal_balls": 42,
+          "penalty": 0.4333333333333333,
+          "rest_overs": 1,
+          "spell_overs": 7
+        }
+      },
+      "fresh": {
+        "expected_runs_per_legal_ball": 0.9367686916386047,
+        "wickets_per_legal_ball": 0.01612097427961508,
+        "workload": {
+          "fatigue": 0,
+          "last_over": 0,
+          "legal_balls": 0,
+          "penalty": 0,
+          "rest_overs": 26,
+          "spell_overs": 0
+        }
+      }
+    },
+    "responses_per_side": 135
+  },
+  "turn_loop": {
+    "app": {
+      "checkpoint_latency_ms": {
+        "p10": 6.3,
+        "p25": 8.232,
+        "p5": 2.659,
+        "p50": 14.379,
+        "p75": 21.799,
+        "p90": 50.123,
+        "p95": 55.316
+      },
+      "final_checkpoint_bytes": 409289,
+      "overs_started": 100,
+      "sqlite_checkpoints": 700,
+      "telegram_operations": {
+        "delete": 198,
+        "edit": 300,
+        "send": 199
+      },
+      "terminal": true
+    },
+    "chat": {
+      "checkpoint_latency_ms": {
+        "p10": 6.202,
+        "p25": 8.375,
+        "p5": 2.831,
+        "p50": 15.547,
+        "p75": 24.128,
+        "p90": 53.677,
+        "p95": 57.983
+      },
+      "final_checkpoint_bytes": 409488,
+      "overs_started": 100,
+      "sqlite_checkpoints": 700,
+      "telegram_operations": {
+        "delete": 198,
+        "edit": 300,
+        "send": 199
+      },
+      "terminal": true
+    }
+  }
+}

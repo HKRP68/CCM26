@@ -55,6 +55,8 @@ from engine import pitch_registry
 from engine import batter_confidence
 from engine.realism import integration as realism_integration
 from engine.realism import win_probability
+from engine.realism import odi
+from services import odi_approach
 from services import cipl_match
 
 logger = logging.getLogger(__name__)
@@ -329,6 +331,8 @@ def _realism_context(state, bowler=None):
     over the SAME distribution the engine samples (Fairness fix 9), rather than
     a rating-gap fit that was tuned to the legacy engine.
     """
+    if odi_approach.is_odi(state):
+        return odi_approach.context(state, bowler)
     try:
         fmt = cipl_match._fmt_to_engine_fmt(None, total_units(state))
         if not realism_integration.live_for(fmt):
@@ -372,6 +376,8 @@ def ball_probabilities(state, bowler=None):
     rating gap, the phase effects the engine produces, and how set the
     striker is — close enough that the match-ups rank the way they play out.
     """
+    if odi_approach.is_odi(state):
+        return odi_approach.probabilities(odi_approach.delivery_model(state, bowler))
     _rctx = _realism_context(state, bowler)
     if _rctx is not None:
         try:
@@ -676,6 +682,16 @@ def _context_fingerprint(ctx):
 
 def _fingerprint(state, bowler):
     """Everything the payoff matrix depends on, and nothing that it doesn't."""
+    if odi_approach.is_odi(state):
+        ctx = odi_approach.context(state, bowler)
+        cfg = odi.settings(state)
+        picked_bowler = bowler if bowler is not None else state.get("current_bowler") or {}
+        return ("ODI", state.get("match_id"), cfg["version"], cfg["reference_sha256"],
+                ctx.innings, ctx.balls_bowled, ctx.wickets, ctx.target, ctx.runs,
+                ctx.pitch, ctx.dew, ctx.bat_rating, ctx.bowl_rating, ctx.balls_faced,
+                ctx.batter_runs, ctx.batting_position, ctx.bat_style, ctx.bowl_style,
+                ctx.bowl_hand, ctx.free_hit, tuple(ctx.extra.items()),
+                picked_bowler.get("roster_id"), striker(state).get("roster_id"))
     bat = striker(state)
     bowl = bowler if bowler is not None else ((state or {}).get("current_bowler") or {})
     balls_faced, sr = striker_form(state)
@@ -704,6 +720,45 @@ def _chase(state):
         return None
 
 
+def _odi_payoff_matrix(state, bowler):
+    model = odi_approach.delivery_model(state, bowler)
+    ctx, cfg, _, _, _, _ = model
+    hand = wickets_in_hand(state)
+    balls = min(6, ctx.balls_remaining)
+    edge = math.tanh((ctx.bat_rating - ctx.bowl_rating + 6) / 23)
+    remaining = ctx.balls_remaining - balls
+    overs_to_bat = ctx.balls_remaining / 6
+    depth = state.get("batting_order", [])[min(len(state.get("batting_order", [])), 11 - hand):]
+    tail = 1.35 if depth and sum(rating(p, "bat_rating") for p in depth) / len(depth) < 54 else 1.0
+    settled_value = 2 * min(1, ctx.balls_faced / 45)
+    price = (3.1 + 0.22 * overs_to_bat + settled_value) * tail
+    price *= 1.0 + max(0, 5 - hand) * 0.13
+    projected = ctx.runs + odi_approach.mean_remaining(ctx.balls_remaining, hand, ctx, cfg, edge=edge)
+    par = odi_approach.mean_remaining(300, 10, ctx, cfg)
+    if projected > par:
+        price *= 1 + min(0.12, (projected - par) * 0.002)
+    def value(bat, bowl):
+        p = odi_approach.probabilities(model, bat, bowl)
+        runs, wickets = odi.expectations(p, ctx, cfg)
+        if ctx.target is not None and remaining > 0:
+            # Approximate the probability change one over ahead by averaging
+            # the no-wicket and wicket continuations under the same ODI curve.
+            lost = min(1, wickets * balls)
+            need = ctx.target - ctx.runs - runs * balls
+            chase = odi_approach.win_chance
+            win = ((1 - lost) * chase(need, remaining, hand, ctx, cfg, edge)
+                   + lost * chase(need, remaining, hand - 1, ctx, cfg, edge))
+            return win * 27 + (0.17 + 0.004 * overs_to_bat) * (runs - wickets * price) * balls
+        if ctx.target is not None:
+            # Actual finish is discrete. This short convolution keeps its
+            # scoring tail, rather than treating expected runs as guaranteed.
+            distribution = over_distribution(p, balls, hand)
+            need = ctx.target - ctx.runs
+            return 35 * sum(prob for (r, _), prob in distribution.items() if r >= need)
+        return balls * (runs - wickets * price)
+    return [[value(bat, bowl) for bowl in BOWL_KEYS] for bat in BAT_KEYS]
+
+
 def payoff_matrix(state, bowler=None):
     """The 5×5 over payoffs, ``matrix[bat_index][bowl_index]``, batting side's view.
 
@@ -712,6 +767,8 @@ def payoff_matrix(state, bowler=None):
     reasons over — and it is rebuilt from the live match situation each time, so
     the same approach is a good idea in one over and a terrible one in the next.
     """
+    if odi_approach.is_odi(state):
+        return _odi_payoff_matrix(state, bowler)
     base = ball_probabilities(state, bowler)
     bowl = bowler if bowler is not None else ((state or {}).get("current_bowler") or {})
     bowl_rating = rating(bowl, "bowl_rating", default=60.0) if bowl else 60.0
@@ -746,6 +803,8 @@ def solved_over(state, bowler=None, iters=RM_ITERS):
     is what keeps sampling the same position repeatedly — a re-render, or a test
     drawing a thousand decisions from one scoreline — effectively free.
     """
+    if odi_approach.is_odi(state) and iters == RM_ITERS:
+        iters = 48
     key = _fingerprint(state, bowler) + (iters,)
     hit = _SOLVE_CACHE.get(key)
     if hit is not None:

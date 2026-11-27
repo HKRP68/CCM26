@@ -748,6 +748,7 @@ def _migrate_add_columns():
         # Mode the match was started in, and how it finished — see
         # services/match_outcome.py.
         "match_type": "VARCHAR(30)",
+        "ball_format": "VARCHAR(10)",
         "end_reason": "VARCHAR(30)",
         "ended_by_id": "INTEGER",
     }

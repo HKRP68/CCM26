@@ -1221,7 +1221,8 @@ function renderGameplayScreen() {
   tossBadge.textContent = tossText;
   tossBadge.classList.toggle('hidden', tossText === 'Unavailable');
   document.getElementById('arena-toss').textContent = tossText;
-  document.getElementById('arena-format').textContent = isHundredFormat() ? 'The Hundred'
+  document.getElementById('arena-format').textContent = matchState.ballFormat === 'ODI' ? 'ODI · 50 overs per innings'
+    : isHundredFormat() ? 'The Hundred'
     : matchState.totalOvers ? matchState.totalOvers + ' overs per innings' : 'Unavailable';
   document.getElementById('arena-pitch').textContent = matchState.pitch || 'Unavailable';
   document.getElementById('arena-venue-row').classList.toggle('hidden', !matchState.venue);
