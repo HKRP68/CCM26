@@ -165,6 +165,13 @@ def apply_reward(session, user, reward, hold_overflow=False):
         "player_id": None,
         "player_name": None,
         "player_rating": None,
+        # Display-only detail for the reveal surfaces (the Mini App's player
+        # card and the legendary walkout already read these for pack pulls).
+        # They describe the player that was rolled; they take no part in
+        # choosing one, and nothing downstream reads them back.
+        "player_country": None,
+        "player_category": None,
+        "player_version": None,
         "squad_full": False,
         "overflow_claim": None,
         "pack_id": None,
@@ -225,6 +232,9 @@ def apply_reward(session, user, reward, hold_overflow=False):
         out["player_id"] = player.id
         out["player_name"] = player.name
         out["player_rating"] = player.rating
+        out["player_country"] = player.country
+        out["player_category"] = player.category
+        out["player_version"] = player.version
 
         from config import MAX_ROSTER
         if (user.roster_count or 0) < MAX_ROSTER:

@@ -288,6 +288,13 @@
         ['pointermove', onMove], ['pointerup', onEnd], ['pointercancel', onEnd]]) {
         button.removeEventListener(type, fn);
       }
+      // Drop the marker class too. A Free Pack opened straight after a foil
+      // pack reuses the same button, and a stale .cmu-pack-mounted would keep
+      // the foil's rules (including the torn state's visibility: hidden)
+      // applying to artwork that is no longer there.
+      button.classList.remove('cmu-pack-mounted', 'is-shaking', 'is-tearing',
+        'is-torn', 'is-gripped');
+      delete button.dataset.cmuTier;
     };
   }
 
