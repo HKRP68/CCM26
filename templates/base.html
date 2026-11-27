@@ -525,7 +525,8 @@ hr.pitch-line { border: none; height: 1px; background: linear-gradient(90deg, tr
     <a href="{{ url_for('admin_storage') }}" class="{{ 'active' if request.endpoint == 'admin_storage' }}">📦 Storage</a>
     <a href="{{ url_for('admin_competitions') }}" class="{{ 'active' if 'competition' in (request.endpoint or '') }}">🏆 Competitions</a>
     <a href="{{ url_for('admin_branding') }}" class="{{ 'active' if 'branding' in (request.endpoint or '') }}">📣 Branding</a>
-    <a href="{{ url_for('admin_events') }}" class="{{ 'active' if 'events' in (request.endpoint or '') }}">🎉 Events</a>
+    <a href="{{ url_for('admin_event_studio') }}" class="{{ 'active' if 'event_studio' in (request.endpoint or '') }}">Event Studio</a>
+    <a href="{{ url_for('admin_events') }}" class="{{ 'active' if (request.endpoint or '').startswith('admin_events') }}">🎉 Events</a>
     <a href="{{ url_for('admin_news') }}" class="{{ 'active' if (request.endpoint or '').startswith('admin_news') }}">📰 CMU News{% if pending_news and pending_news > 0 %}<span class="nav-badge">{{ pending_news }}</span>{% endif %}</a>
     <a href="{{ url_for('admin_polls') }}" class="{{ 'active' if (request.endpoint or '').startswith('admin_polls') }}">🗳 Polls</a>
     <a href="{{ url_for('admin_seasons') }}" class="{{ 'active' if request.endpoint == 'admin_seasons' }}">🏆 Seasons</a>

@@ -66,6 +66,12 @@ COMMAND_CATEGORIES = (
         '/rcl - Resume a stuck Challenge League (/cipl) match',
         '/handover /transfermatch @manager - Offer live tournament control to your team’s owner/co-owner; receiver accepts within 60 seconds',
     )),
+    ('Events', (
+        '/events - Browse, join and resume official Live Events',
+        '/eventplay [event-match ID] - Open or resume an official CIPL match',
+        '/moments - Open Cricket Moments',
+        '/bossbattles - Open Boss Battles',
+    )),
     ('🏆 Ranked & records', (
         '/pitchstats /ps [pitch] - What each pitch actually does in Lets Play & League matches: runs/over, wickets/over, bat-first vs chasing win %, and which approaches earn',
         '/rank [@user] - Your ranked rating, division and ladder position 📈',

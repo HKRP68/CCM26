@@ -1491,3 +1491,12 @@ new-team draft minimums are unchanged.
 
 Rows can be on separate lines or separated by semicolons; existing pipe syntax
 still works. Both admin range editors support pasting and editing these rows.
+
+### Events Hub
+
+- `/events` opens official events and provides join, resume and claim controls in a private chat.
+- `/eventplay event-<id>` opens an official CIPL match. Use the same ID with `/pause`, `/continue`, `/playapp`, `/playchat` or `/clear`. Clearing a started official fixture requires confirmation and forfeits the fixture.
+- `/liveevents` filters to Live Events. `/myevents` opens joined campaigns and attempt history.
+- `/moments` opens Cricket Moments. `/bossbattles` and `/bossbattle` open Boss Battles.
+
+The Events Hub tile in the MiniApp opens the same campaigns and opens the existing CIPL Arena for official batting, bowling, playback and scorecards.

@@ -142,3 +142,15 @@ def on_claim_success(user_id, chat_id, *, claim_seq=None):
             session.close()
     except Exception:
         logger.debug("on_claim_success outer failed (non-fatal)", exc_info=True)
+
+
+def on_event_match_completed(session, user_id, *, amount, limit, source, now):
+    """Settle an explicitly configured official Events Studio XP source."""
+    from services import community_config_service as config
+    from services import community_xp_service as xp
+
+    if not config.is_enabled(session):
+        return {"reason": "community_disabled"}
+    return xp.award_xp(
+        user_id, "event_match", amount, event_key=source, now=now,
+        detail="Official Events Studio play", session=session, activity_daily_limit=limit)

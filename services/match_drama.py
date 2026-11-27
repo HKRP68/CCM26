@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-import random
+from engine import match_random as random
 
 from engine import ground_config
 

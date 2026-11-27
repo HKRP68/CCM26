@@ -97,6 +97,9 @@ def _cricket_webapp_url(match_id, chat_id):
     host = _webapp_host()
     if not host:
         return None
+    match_key = str(match_id)
+    if match_key.startswith("event-") and match_key[6:].isdigit():
+        return f"{host}/cricket?event_match_id={match_key[6:]}"
     return f"{host}/cricket?match_id={match_id}&chat_id={chat_id}"
 
 
@@ -179,6 +182,11 @@ def coin_call_keyboard(heads_cb, tails_cb, prompt_owner=None):
     ]])
 
 
+def flip_coin(call_side):
+    coin = random.choice(("heads", "tails"))
+    return coin, coin == call_side
+
+
 async def run_coin_toss(edit_fn, call_side):
     """Animate a coin toss and return (coin_side, won).
 
@@ -199,8 +207,7 @@ async def run_coin_toss(edit_fn, call_side):
         except Exception:
             pass
         await asyncio.sleep(COIN_TOSS_FRAME_DELAY)
-    coin = random.choice(["heads", "tails"])
-    return coin, (coin == call_side)
+    return flip_coin(call_side)
 
 
 async def reveal_toss_result(edit_fn, attempts=4):

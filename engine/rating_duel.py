@@ -48,7 +48,7 @@ cards — no hidden per-player attributes:
 """
 
 import math
-import random
+from engine import match_random as random
 
 # ── 1) Gap curve ─────────────────────────────────────────────────────
 # tanh(diff / GAP_SCALE): diff 10 → 0.53, 17 → 0.76, 25 → 0.90, 40 → 0.98.

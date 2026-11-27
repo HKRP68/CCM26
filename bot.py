@@ -1608,6 +1608,9 @@ def main():
         # ── Command handlers ─────────────────────────────────────────
         # ── Core commands + short aliases ────────────────────────────
         from handlers.botstatus import botstatus_handler
+        from handlers.event_studio import command as event_command, callback as event_callback
+        app.add_handler(CommandHandler(["events", "eventplay", "liveevents", "myevents", "moments", "bossbattles", "bossbattle"], event_command))
+        app.add_handler(CallbackQueryHandler(event_callback, pattern=r"^ev:"))
         app.add_handler(CommandHandler(["botstatus", "bstatus", "ping"], botstatus_handler))
         app.add_handler(CommandHandler(["start", "s"], start_handler))
         app.add_handler(CommandHandler(["debut", "d"], debut_handler))
@@ -2779,6 +2782,9 @@ def main():
             start_draft_scheduler(app)
         except Exception:
             logger.exception("Failed to start the draft clock")
+
+        from services.event_studio_worker import register as register_event_worker
+        register_event_worker(app)
 
         # Durable record recaps and scorecard-correction edits.
         try:

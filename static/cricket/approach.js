@@ -392,7 +392,7 @@ async function submitApproach(type, action, header, label) {
   approachPending = { sig: approachTurnSig(), at: Date.now(), header, label };
   renderControlsSection();
   try {
-    const res = await fetch('/api/match/action', {
+    const res = eventMatchId ? await eventPick(type, action) : await fetch('/api/match/action', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, matchId, type, action }),
@@ -401,7 +401,7 @@ async function submitApproach(type, action, header, label) {
     if (!res.ok || data.ok === false) {
       throw new Error(data.message || data.error || 'That pick did not go through.');
     }
-    if (data.matchState) applyMatchState(data.matchState, { force: true });
+    if (eventMatchId || data.matchState) applyMatchState(eventMatchId ? data : data.matchState, { force: true });
   } catch (err) {
     approachPending = null;
     alert(err.message);

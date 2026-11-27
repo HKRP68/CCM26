@@ -41,7 +41,7 @@ memorise without becoming a random one.
 
 import logging
 import math
-import random
+from engine import match_random as random
 
 from engine.approach_modifiers import (
     BATTING_APPROACHES, BATTING_KEYS, BOWLING_APPROACHES, BOWLING_KEYS,
@@ -171,6 +171,9 @@ def assign_difficulty(state, key=None):
 
 def _difficulty(state):
     """This match's difficulty settings — Normal for a state that has none."""
+    if state and state.get("official_event") and state.get("event_ai_policy") == "hard-plus-v1":
+        return {"label": "Hard++", "solver": 1.45, "explore": 0.14, "exploit": 0.60,
+                "temperature": 0.45, "matchup": 1.0, "blunder": 0.0}
     return DIFFICULTIES[normalize_difficulty((state or {}).get("bot_difficulty"))]
 
 
@@ -682,6 +685,57 @@ def _odi_rng(state, action):
     return SimRng(f"{state['rng_seed']}/captain/{state['innings']}/{state['current_over']}/{action}")
 
 
+def _event_bowling_lookahead(state, candidates, scores):
+    """Price the next two overs while preserving legal capacity to finish."""
+    from functools import lru_cache
+
+    pool = state["bowl_xi"]
+    positions = {player["roster_id"]: index for index, player in enumerate(pool)}
+    quotas = tuple(cipl_match.overs_left(state, p) for p in pool)
+    start = state["current_over"]
+    overs = state["overs"]
+
+    def quality(player, over):
+        score = _rating(player, "bowl_rating", default=0)
+        if cipl_match.is_part_time_bowler(player):
+            score -= 25
+        traits = _traits_of(player)
+        if over <= 6 and traits & _POWERPLAY_TRAITS:
+            score += 12
+        if over > overs - 4:
+            score += (score - 55) * 0.2
+            if traits & _DEATH_TRAITS:
+                score += 15
+        return score
+
+    def allocate(remaining, index, after):
+        rest = tuple(value - (pos == index) for pos, value in enumerate(remaining))
+        if sum(min(value, (after + (pos != index)) // 2)
+               for pos, value in enumerate(rest)) >= after:
+            return rest
+        return None
+
+    @lru_cache(maxsize=256)
+    def plan(remaining, previous, over):
+        if over > min(overs, start + 2):
+            return 0
+        options = []
+        for idx, count in enumerate(remaining):
+            if count and idx != previous:
+                rest = allocate(remaining, idx, overs - over)
+                if rest is not None:
+                    options.append((quality(pool[idx], over), idx, rest))
+        return max((value + 0.75 * plan(rest, idx, over + 1)
+                    for value, idx, rest in sorted(options, reverse=True)[:6]), default=0)
+
+    projected = []
+    for player, immediate in zip(candidates, scores):
+        idx = positions[player["roster_id"]]
+        rest = allocate(quotas, idx, overs - start)
+        projected.append(immediate + 0.65 * plan(rest, idx, start + 1) if rest is not None else immediate)
+    return projected
+
+
 def pick_bowler(state):
     """Choose the bot's bowler for the upcoming over.
 
@@ -712,8 +766,11 @@ def pick_bowler(state):
     ph = phase(state)
     hold_back = _hold_back_for_death(state, candidates)
     matchup = _matchup_bonuses(state, candidates)
-    scored = [(p, _bowler_score(state, p, ph, hold_back) + bonus)
+    scores = [_bowler_score(state, p, ph, hold_back) + bonus
               for p, bonus in zip(candidates, matchup)]
+    if state.get("official_event") and state.get("event_ai_policy") == "hard-plus-v1":
+        scores = _event_bowling_lookahead(state, candidates, scores)
+    scored = list(zip(candidates, scores))
     best = max(score for _p, score in scored)
     # Floor only guards against a zero/negative temperature blowing up the
     # softmax below. It used to be 1.0, which would silently cancel Hard's 0.55

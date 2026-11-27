@@ -208,6 +208,7 @@ def _create_missing_tables():
 
 
 def init_db():
+    import models_events  # noqa: F401 — register additive Events Studio tables
     from models import (  # noqa: F401
         User, UserWarning, Player, UserRoster, UserStats, Trade, ActivityLog,
         PlayerGameStats, Match, AdminLog,
@@ -771,6 +772,12 @@ def _migrate_add_columns():
             except Exception:
                 continue  # try next form, or just give up
 
+    _try_add("studio_event_enrollments", "match_setup", "JSON")
+    _try_add("studio_event_games", "next_pick_at", "TIMESTAMP")
+    if existing is None or "studio_event_games" in existing:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_studio_event_games_next_pick_at "
+                              "ON studio_event_games (next_pick_at)"))
     _try_add("game_config", "ai_match_reward_daily_cap", "INTEGER DEFAULT 10 NOT NULL")
     _try_add("activity_log", "operation_id", "VARCHAR(64)")
     _try_add("activity_log", "quest_points_change", "INTEGER DEFAULT 0 NOT NULL")

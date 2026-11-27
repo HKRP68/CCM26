@@ -58,7 +58,7 @@ _EFF_LABEL = {0: "Minimal", 1: "Low", 2: "Moderate", 3: "Good",
 
 # ───────────────────────── condition generation ─────────────────────────
 
-def generate_conditions(pitch_type, rng=None, *, day_night=None):
+def generate_conditions(pitch_type, rng=None, *, day_night=None, weather=None):
     """Generate a consistent set of match conditions for ``pitch_type``.
 
     Returns a dict with every field shown in the Pitch Report. Pass an
@@ -75,7 +75,7 @@ def generate_conditions(pitch_type, rng=None, *, day_night=None):
         match_time = r.choice(["Morning (10:00 AM)", "Afternoon (1:30 PM)",
                                "Late Afternoon (3:30 PM)"])
 
-    weather = r.choice(WEATHERS)
+    weather = weather if weather in WEATHERS else r.choice(WEATHERS)
 
     # Temperature band shaped by weather.
     if weather == "Hot and Dry":

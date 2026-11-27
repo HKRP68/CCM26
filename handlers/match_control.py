@@ -152,6 +152,9 @@ async def clear_handler(update, context):
     chat, user, msg = update.effective_chat, update.effective_user, update.effective_message
     if chat is None or user is None or msg is None:
         return
+    from handlers.event_studio import handle_match_command
+    if await handle_match_command(update, context, "clear"):
+        return
     mh = _match()
     # Private-chat owners are not group admins. Bot admins may operate anywhere.
     from handlers.cipl_pause import _is_admin

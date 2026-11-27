@@ -2524,6 +2524,11 @@ def build_scorecard(match_id, user_id):
     if not state:
         return {"ok": False, "message": "Match not found."}
 
+    return approach_scorecard(state)
+
+
+def approach_scorecard(state):
+    """Render verified innings from a shared Approach state snapshot."""
     def _batting(xi, stats):
         rows = []
         for p in xi:

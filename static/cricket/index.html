@@ -16,7 +16,7 @@
   <!-- Telegram Web App SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Custom Styling -->
-  <link rel="stylesheet" href="style.css?v=elite-main-1">
+  <link rel="stylesheet" href="style.css?v=official-events-1">
   <!-- CMU Animation Engine: broadcast overlays for confirmed match events.
        Presentation only — the arena renders every score, wicket and result
        exactly as before if these fail to load. -->
@@ -76,6 +76,16 @@
       </button>
       </div>
     </header>
+
+    <section id="official-event" class="official-event" aria-label="Official event" hidden>
+      <strong></strong>
+      <p data-event-details></p>
+      <p data-event-progress></p>
+      <div data-event-controls>
+        <button type="button" class="btn btn-secondary">Pause</button>
+        <button type="button" class="btn btn-secondary" data-event-abandon>Abandon…</button>
+      </div>
+    </section>
 
     <!-- LOADING SCREEN -->
     <section id="loading-screen" class="screen active">
@@ -715,8 +725,8 @@
     <ol id="live-batting-order"></ol>
     <button type="button" id="save-live-order-btn" class="btn btn-primary btn-block btn-green" disabled>Save batting order</button>
   </dialog>
-  <script src="app.js?v=elite-main-1"></script>
-  <script src="live-batting.js?v=20261111-1"></script>
-  <script src="approach.js?v=20261111-live-batting"></script>
+  <script src="app.js?v=official-events-1"></script>
+  <script src="live-batting.js?v=official-events-1"></script>
+  <script src="approach.js?v=official-events-1"></script>
 </body>
 </html>

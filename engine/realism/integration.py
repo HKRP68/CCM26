@@ -88,7 +88,7 @@ def try_build(mode, *, batter, bowler, pitch, over_number, innings,
               game_state, pitch_wear, is_day_night, batting_approach,
               bowling_approach, approach_context, free_hit,
               bat_rating_effective=None, bowl_rating_effective=None,
-              match_context=None, apply_tactics=True):
+              match_context=None, apply_tactics=True, profile=None):
     """Build the realism distribution, or return ``None`` to use legacy.
 
     Never raises. A missing reference, a malformed context or a bug in the
@@ -99,7 +99,7 @@ def try_build(mode, *, batter, bowler, pitch, over_number, innings,
     """
     if mode == OFF:
         return None
-    cfg = rcfg.get_config()
+    cfg = profile["tuning"] if profile else rcfg.get_config()
     try:
         ctx = from_engine_call(
             batter, bowler, pitch=pitch, over_number=over_number,
@@ -112,14 +112,20 @@ def try_build(mode, *, batter, bowler, pitch, over_number, innings,
             bat_rating_effective=bat_rating_effective,
             bowl_rating_effective=bowl_rating_effective,
             match_context=match_context)
-        explained = build(ctx, cfg, apply_tactics=apply_tactics, explain=True)
+        if profile:
+            from dataclasses import replace
+            ctx = replace(ctx, competition=profile["competition"])
+        explained = build(ctx, cfg, reference=profile["reference"] if profile else None,
+                          apply_tactics=apply_tactics, explain=True)
     except RealismUnavailable as exc:
-        if not cfg["fallback"].get("legacy_on_missing_reference", True):
+        if profile or not cfg["fallback"].get("legacy_on_missing_reference", True):
             raise
         _log_once("unavailable:%s" % exc, "warning",
                   "realism: unavailable (%s); using the legacy engine", exc)
         return None
     except Exception:
+        if profile:
+            raise
         _log_once("build-error", "exception",
                   "realism: distribution build failed; using the legacy engine")
         return None

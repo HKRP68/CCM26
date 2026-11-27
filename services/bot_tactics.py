@@ -51,9 +51,8 @@ from engine.approach_modifiers import (
 from engine.ball_outcome import (DEFAULT_SCORING_MATRIX, PITCH_SCORING_MATRIX,
                                  get_pitch_run_multiplier,
                                  get_pitch_wicket_multiplier)
-from engine import pitch_registry
+from engine import ground_config, pitch_registry
 from engine import batter_confidence
-from engine.realism import integration as realism_integration
 from engine.realism import win_probability
 from engine.realism import odi
 from services import odi_approach
@@ -262,7 +261,7 @@ def _realism_objective(state):
     """
     try:
         fmt = cipl_match._fmt_to_engine_fmt(None, total_units(state))
-        return realism_integration.live_for(fmt)
+        return cipl_match.uses_t20_realism(state or {}, fmt)
     except Exception:
         return False
 
@@ -302,7 +301,7 @@ def _bowling_type(bowler):
     return cipl_match.approach_bowling_type(bowler)
 
 
-def _pitch_matrix(pitch, bowler=None):
+def _pitch_matrix(pitch, bowler=None, reference=None):
     """The surface's per-ball odds as this bowler will find them.
 
     The scoring matrix alone is only a third of the pitch model. ``ball_outcome``
@@ -314,9 +313,10 @@ def _pitch_matrix(pitch, bowler=None):
     on a green top is a different proposition from a spinner on the same pitch,
     and priced a wicket-buying plan identically on a green top and on a road.
     """
-    base = dict(PITCH_SCORING_MATRIX.get(pitch) or DEFAULT_SCORING_MATRIX)
-    run_factor = get_pitch_run_multiplier(pitch) or 1.0
-    wicket_factor = get_pitch_wicket_multiplier(pitch, _bowling_type(bowler)) or 1.0
+    pinned = ground_config.get_scoring_matrix(pitch, config=reference) if reference else None
+    base = dict(pinned or PITCH_SCORING_MATRIX.get(pitch) or DEFAULT_SCORING_MATRIX)
+    run_factor = get_pitch_run_multiplier(pitch, config=reference) or 1.0
+    wicket_factor = get_pitch_wicket_multiplier(pitch, _bowling_type(bowler), config=reference) or 1.0
     scaled = {k: (v * wicket_factor if k == "Wicket" else v * run_factor)
               for k, v in base.items()}
     total = sum(scaled.values()) or 1.0
@@ -335,7 +335,7 @@ def _realism_context(state, bowler=None):
         return odi_approach.context(state, bowler)
     try:
         fmt = cipl_match._fmt_to_engine_fmt(None, total_units(state))
-        if not realism_integration.live_for(fmt):
+        if not cipl_match.uses_t20_realism(state or {}, fmt):
             return None
         from engine.realism.context import BallContext
         from services.cipl_match import approach_bowling_type
@@ -361,7 +361,8 @@ def _realism_context(state, bowler=None):
             bowl_hand=str(bowl.get("bowl_hand") or "Right"),
             bowling_type=approach_bowling_type(bowl),
             balls_faced=int(balls_faced or 0),
-            pitch=str(state.get("pitch_type") or "Even"))
+            pitch=str(state.get("pitch_type") or "Even"),
+            competition=(state.get("event_realism_profile") or {}).get("competition"))
     except Exception:
         return None
 
@@ -384,13 +385,15 @@ def ball_probabilities(state, bowler=None):
             from engine.realism.outcome_distribution import build as _rbuild
             # No approach here — approach_probabilities adds it, mirroring the
             # live split between the baseline/conditions and the approach layer.
-            return _normalized(_rbuild(_rctx, apply_tactics=False))
+            profile = (state or {}).get("event_realism_profile")
+            return _normalized(_rbuild(_rctx, cfg=profile["tuning"] if profile else None,
+                                       reference=profile["reference"] if profile else None, apply_tactics=False))
         except Exception:
             pass  # fall through to the legacy estimate
 
     pitch = pitch_registry.normalise((state or {}).get("pitch_type"))
     bowl = bowler if bowler is not None else ((state or {}).get("current_bowler") or {})
-    base = _pitch_matrix(pitch, bowl)
+    base = _pitch_matrix(pitch, bowl, (state or {}).get("ground_reference"))
 
     edge = match_up_edge(state, bowler)
     mult = {
@@ -447,7 +450,7 @@ def _normalized(probs):
 
 
 def approach_probabilities(base_probs, bat_approach, bowl_approach, bowler_rating,
-                           context=None, realism_baseline=None):
+                           context=None, realism_baseline=None, realism_tuning=None):
     """``base_probs`` with both captains' approaches applied, renormalised.
 
     In realism mode the approach shaping comes from
@@ -461,7 +464,7 @@ def approach_probabilities(base_probs, bat_approach, bowl_approach, bowler_ratin
         try:
             from engine.realism import approaches as _ra
             mult = _ra.multipliers(bat_approach, bowl_approach, realism_baseline,
-                                   bowler_rating=bowler_rating)
+                                   bowler_rating=bowler_rating, cfg=realism_tuning)
             return _normalized({k: max(0.0, base_probs.get(k, 0.0) * mult.get(k, 1.0))
                                 for k in base_probs})
         except Exception:
@@ -697,7 +700,8 @@ def _fingerprint(state, bowler):
     balls_faced, sr = striker_form(state)
     ch = _chase(state)
     return (
-        (state or {}).get("match_id"), (state or {}).get("innings"),
+        (state or {}).get("match_id"), (state or {}).get("innings"), (state or {}).get("reference_hash"),
+        (state or {}).get("event_realism_profile_hash"),
         (state or {}).get("pitch_type"), total_units(state), current_unit(state),
         (state or {}).get("current_ball"), (state or {}).get("ball_format"),
         int((state or {}).get("total_runs") or 0), wickets_lost(state),
@@ -778,6 +782,7 @@ def payoff_matrix(state, bowler=None):
     # `base` already is; passing it switches approach_probabilities onto the
     # realism approach model so the solver and the engine agree.
     _rbase = base if _realism_context(state, bowler) is not None else None
+    realism_tuning = (state.get("event_realism_profile") or {}).get("tuning")
 
     ch = _chase(state)
     hand = wickets_in_hand(state)
@@ -788,7 +793,7 @@ def payoff_matrix(state, bowler=None):
         row = []
         for bowl_key in BOWL_KEYS:
             probs = approach_probabilities(base, bat_key, bowl_key, bowl_rating,
-                                           context=ctx, realism_baseline=_rbase)
+                                           context=ctx, realism_baseline=_rbase, realism_tuning=realism_tuning)
             dist = over_distribution(probs, balls, hand)
             row.append(over_value(state, dist, chase=ch, edge=edge))
         matrix.append(row)

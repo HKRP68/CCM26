@@ -107,7 +107,8 @@ async function submitLiveBatting(type, action) {
   liveBattingBusy = true;
   updateLiveBattingButtons();
   try {
-    const res = await matchFetch('/api/match/action', {
+    const res = eventMatchId ? await eventPick(type, { ...action, token: liveBattingDraft.token })
+      : await matchFetch('/api/match/action', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, matchId, type,
         action: { ...action, token: liveBattingDraft.token } }),
@@ -115,7 +116,7 @@ async function submitLiveBatting(type, action) {
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.message || data.error || 'Could not update batting.');
     document.getElementById('live-batting-dialog').close();
-    if (data.matchState) applyMatchState(data.matchState, { force: true });
+    if (eventMatchId || data.matchState) applyMatchState(eventMatchId ? data : data.matchState, { force: true });
   } catch (err) {
     document.getElementById('live-batting-message').textContent = err.message;
   } finally {

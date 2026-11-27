@@ -11,7 +11,7 @@ The upgrade was integrated on top of `57fcf50`. Main had already added the Mini 
 | Play | Quick Match restores the current phase after browser reload and checks the authoritative state when a submission response is uncertain. Existing AI caps, toss, tactics, rewards and limits continue to apply. |
 | Match Centre | Sticky score and chase equation, read-only spectator view, separate Scorecard, Analysis and Info tabs, and recorded progression and overs. The stored result supplies the winner. The existing dark scorecard and detailed archived Super Over innings, turning points and delivery commentary remain available. |
 | Squad | Market, catalog and captain tools remain reachable from Squad. The catalog supports variant filters, rating sort, pagination, list/card views and comparison. XI keeps explicit Save and captain and vice-captain markers, with named keyboard move controls. |
-| Compete | Existing tournament registration, fixtures, standings and archives, plus an eligible fixture preview and ranked and season access. Franchise Auction and Draft open the configured standalone franchise site or the existing Telegram bot. |
+| Compete | Events Hub for official Live Events, Cricket Moments and Boss Battles. Existing tournament registration, fixtures, standings and archives, plus an eligible fixture preview and ranked and season access. Franchise Auction and Draft open the configured standalone franchise site or the existing Telegram bot. |
 | Rewards and Community | The Rewards hub links to the existing claims, pack history and shop. Pack confirms and reveals use the durable quote workflow on main. The separate Community Arena and XP page is linked from Explore. |
 
 ## Implementation and compatibility
@@ -28,7 +28,7 @@ The upgrade was integrated on top of `57fcf50`. Main had already added the Mini 
 | Home | `home`, `profile`, `wallet`, `explore`, `appearance`, notifications, `news_<id>`, `poll_<id>` and `/webapp/community` |
 | Squad | `roster`, `xi`, `browse`, `market`, `captains`, `traits`, `playerdetail` and existing aliases |
 | Play | `matchcentre`, `match`, `career`, match and scorecard deep links, and `/cricket?match_id=…` |
-| Compete | `compete`, `tournament`, `leaderboard`, `season`, franchise website/Telegram handoff and legacy auction launch hints |
+| Compete | `compete`, `events`, `events_<id>`, `tournament`, `leaderboard`, `season`, franchise website/Telegram handoff and legacy auction launch hints |
 | Rewards | `rewards`, `daily`, `spin`, `freepack`, `packs`, `quests`, `achievements` and `invite` |
 
 ## Verification and rollout

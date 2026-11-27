@@ -64,6 +64,10 @@ from services import score_projection
 from services import impact_player
 from services import concussion_substitute as medical
 from services import milestones
+from services.cipl_picks import (
+    PICK_ACTION as _PICK_ACTION, PICK_BAT_APPROACH, PICK_BOWL_APPROACH,
+    PICK_BOWLER, PICK_NEW_BATSMAN, validate as validate_cipl_pick,
+)
 from services import rich_message as R
 from engine.approach_modifiers import (
     BATTING_APPROACHES, BOWLING_APPROACHES, partnership_scoring_factor,
@@ -3437,23 +3441,7 @@ async def _find_cipl_match_in_chat(context, cid):
 # Every pick in the over flow goes through submit_pick, whichever surface it
 # came from — a chat button or the Mini App (services.bot_bridge) — so both
 # enforce exactly the same rules and drive exactly the same continuation.
-PICK_BOWLER = "bowler"
-PICK_BOWL_APPROACH = "bowl_approach"
-PICK_BAT_APPROACH = "bat_approach"
-PICK_NEW_BATSMAN = "new_batsman"
 PICK_CONCUSSION = "concussion"
-_PICK_ACTION = {
-    PICK_BOWLER: A_PICK_CIPL_BOWLER,
-    PICK_BOWL_APPROACH: A_PICK_BOWL_APPROACH,
-    PICK_BAT_APPROACH: A_PICK_BAT_APPROACH,
-    PICK_NEW_BATSMAN: A_PICK_CIPL_NEW_BATSMAN,
-}
-_PICK_ALREADY = {
-    PICK_BOWLER: "Bowler already chosen.",
-    PICK_BOWL_APPROACH: "Already chosen.",
-    PICK_BAT_APPROACH: "Already chosen.",
-    PICK_NEW_BATSMAN: "The new batsman is already in.",
-}
 
 
 def _pick_surface_error(state, source):
@@ -3523,31 +3511,10 @@ async def submit_pick(context, mid, actor_tg, kind, value, on_accept=None,
         if _innings_quota_used(state):
             return False, ("This innings is already over — the full quota of "
                            "overs has been bowled.")
-        if await _get_next_action(context, mid) != _PICK_ACTION[kind]:
-            return False, _PICK_ALREADY[kind]
-
-        # Enforce eligibility server-side too: a stale button (or tampered
-        # callback data / Mini App request) must not bypass the quota /
-        # no-back-to-back / part-time rules the picker applies.
-        if kind == PICK_BOWLER:
-            allowed = {p["roster_id"] for p in cipl_match.eligible_bowlers(state)}
-            if value not in allowed:
-                return False, "That bowler isn't eligible for this over."
-            bowler = cipl_match.find_player(state["bowl_xi"], value)
-            if not bowler:
-                return False, "Bowler not available."
-        elif kind == PICK_BOWL_APPROACH:
-            if not (0 <= value < len(BOWLING_APPROACHES)):
-                return False, "Invalid approach."
-        elif kind == PICK_BAT_APPROACH:
-            if not (0 <= value < len(BATTING_APPROACHES)):
-                return False, "Invalid approach."
-        else:
-            if not cipl_match.needs_new_batsman(state):
-                return False, _PICK_ALREADY[kind]
-            if value not in {p.get("roster_id")
-                             for p in cipl_match.available_batsmen(state)}:
-                return False, "That batsman isn't available."
+        try:
+            selected = validate_cipl_pick(state, await _get_next_action(context, mid), kind, value)
+        except ValueError as exc:
+            return False, str(exc)
 
         if on_accept is not None:
             try:
@@ -3557,21 +3524,21 @@ async def submit_pick(context, mid, actor_tg, kind, value, on_accept=None,
         _cancel_timer(context, mid)
 
         if kind == PICK_BOWLER:
-            state["current_bowler"] = bowler
+            state["current_bowler"] = selected
             try:
                 await _ss(context, mid, state)
                 await _prompt_bowl_approach(context, mid, state)
             except Exception:
                 await _recover_from_error(context, mid, "bowling-approach prompt")
         elif kind == PICK_BOWL_APPROACH:
-            state["bowling_approach"] = BOWLING_APPROACHES[value][0]
+            state["bowling_approach"] = selected
             try:
                 await _ss(context, mid, state)
                 await _prompt_bat_approach(context, mid, state)
             except Exception:
                 await _recover_from_error(context, mid, "batting-approach prompt")
         elif kind == PICK_BAT_APPROACH:
-            state["batting_approach"] = BATTING_APPROACHES[value][0]
+            state["batting_approach"] = selected
             try:
                 await _ss(context, mid, state)
                 await _run_over(context, mid, state)

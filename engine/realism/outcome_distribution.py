@@ -78,6 +78,9 @@ def build(ctx, cfg: dict = None, reference=None,
         format_name=_reference_format(ctx.format_name))
     if not doc:
         raise RealismUnavailable("no reference for format %r" % ctx.format_name)
+    if "_smoothed" not in doc:
+        # Official revisions serialize the reference without this runtime cache.
+        doc = {**doc, "_smoothed": {}}
 
     comp = baselines.competition_key(doc, ctx.competition)
     path = ctx.node_path(comp)

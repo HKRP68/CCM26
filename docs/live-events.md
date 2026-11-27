@@ -1,0 +1,11 @@
+# Live Events
+
+Use `/events`, `/eventplay` or **Compete → Events Hub** to join and choose a fixture. Each enrollment has its own official results, batting records and standings. Tournament Team uses the published squad and defaults to Hard AI. Own Roster uses an enrollment snapshot of eligible owned cards and equipped traits and defaults to Hard++. Cards sold, traded or disabled before launch are unavailable. The opponent is the fixture's published squad.
+
+Call the toss, set your playing XI and batting order, and choose a captain. Quick XI provides a legal selection. The fixture becomes active when you start play. Telegram and CIPL Arena share the bowler, Approach and incoming-batter picks. When you bat, the AI bowler is visible and the AI plan is private. Arena plays back the deliveries with the existing commentary, scorecard and enabled media.
+
+Open the same match in the other client to switch play locations. In Telegram, `/eventplay event-<id>` opens an official match. Add the same match ID to `/pause`, `/continue`, `/playapp` or `/playchat` to control it. Every accepted pick advances the fixture version. If an incoming-batter pick times out, the next player in the batting order comes in. Player pause and connectivity loss preserve the checkpoint through the configured cutoff. Use **Abandon** or `/clear event-<id>` to confirm a permanent forfeit.
+
+The formats registry enables T20 and 50-over ODI independently. ODI uses the saved Approach tuning and measured reference. Ties count as ties. Personal tables use aggregate runs and legal deliveries. On all-out innings, NRR uses 120 balls in T20 or 300 balls in ODI. Forfeits award the opponent configured win points and give the player zero points. They have no innings, player stats, objectives or reward. The order is points, wins, NRR and original seed order. Tied bracket fixtures use the higher seed for advancement. Survival requires winning every round and ends on a loss, tie or forfeit.
+
+Campaign trophies and personal batting and bowling statistics derive from official results. The track leaderboard shows anonymous campaigns and ranks by wins and stars, with a shared rank for ties. It is scoped to the published revision and participation track.

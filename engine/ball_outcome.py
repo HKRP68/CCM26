@@ -1,4 +1,4 @@
-import random
+from engine import match_random as random
 import logging
 from typing import Optional
 from engine.ground_config import (
@@ -1206,6 +1206,8 @@ def calculate_outcome(
     extras_split=None,
     match_context=None,
     rng=None,
+    official_play=False,
+    realism_profile=None,
 ) -> dict:
     """
     Determines the outcome of a single delivery.
@@ -1288,8 +1290,9 @@ def calculate_outcome(
         # realism mode and broke the mirrored neutral control in
         # tools/trait_balance (two identical XIs stopped splitting their
         # mirror 50/50).
-        _allow_identity = (True if not realism_integration.live_for(format_config)
-                           else realism_integration.allow_identity_ability())
+        _allow_identity = not official_play and (
+            not realism_integration.live_for(format_config)
+            or realism_integration.allow_identity_ability())
         batting = max(1.0, min(100.0, batting + batting_matchup_delta(
             batter, bowling_type, allow_identity=_allow_identity)))
         # Retain the initial settling bonus and taper the extra rating driven
@@ -1352,7 +1355,11 @@ def calculate_outcome(
     # distribution is only recorded — and because the realism model draws no
     # random numbers, the match is bit-identical to a realism-off run from the
     # same seed.
-    _realism_mode = realism_integration.mode_for(format_config)
+    if official_play:
+        _realism_mode = realism_integration.LIVE if realism_profile else realism_integration.OFF
+    else:
+        _realism_mode = realism_integration.mode_for(format_config)
+    _realism_tuning = realism_profile["tuning"] if realism_profile else None
     _realism = None
     if _realism_mode != realism_integration.OFF:
         _realism = realism_integration.try_build(
@@ -1386,7 +1393,7 @@ def calculate_outcome(
             # realism approach model OFF for every over that had explicit
             # picks — i.e. every real /cipl over — leaving no approach effect
             # at all. The per-delivery diagnostics (fix 8) surfaced it.
-            apply_tactics=True)
+            apply_tactics=True, **({"profile": realism_profile} if realism_profile else {}))
     _realism_live = (_realism is not None
                      and _realism_mode == realism_integration.LIVE)
 
@@ -1641,7 +1648,7 @@ def calculate_outcome(
     # seed in its own right. Set integration.keep_legacy_rating_duel in
     # config/realism.json to study the difference.
     duel_state = None
-    _skip_duel = _realism_live and realism_integration.bypass("rating_duel")
+    _skip_duel = _realism_live and realism_integration.bypass("rating_duel", _realism_tuning)
     if not _is_lista and not _skip_duel:
         try:
             from engine.rating_duel import resolve_duel, approach_risk_class
@@ -1749,7 +1756,7 @@ def calculate_outcome(
             # modelled upstream now (engine/realism/approaches.py and the
             # baseline itself). Only the allowlisted layers run here.
             _ap_ctx = dict(_ap_ctx or {},
-                           **realism_integration.approach_context_overrides())
+                           **realism_integration.approach_context_overrides(_realism_tuning))
         raw_weights = apply_approach_modifiers(
             raw_weights, batting_approach, bowling_approach,
             bowler_rating=bowling, context=_ap_ctx)

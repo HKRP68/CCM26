@@ -273,6 +273,9 @@ async def pause_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if msg is None or user is None:
         return
+    from handlers.event_studio import handle_match_command
+    if await handle_match_command(update, context, "pause"):
+        return
     cp = _cp()
     mid, state = await _find_live(context, update)
     if mid is None:
@@ -397,6 +400,9 @@ async def continue_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
     if msg is None or user is None or chat is None:
+        return
+    from handlers.event_studio import handle_match_command
+    if await handle_match_command(update, context, "resume"):
         return
     cp = _cp()
     args = list(getattr(context, "args", None) or [])
@@ -784,6 +790,9 @@ async def _switch_mode(update, context, mode):
     msg = update.effective_message
     user = update.effective_user
     if msg is None or user is None:
+        return
+    from handlers.event_studio import handle_match_command
+    if await handle_match_command(update, context, mode):
         return
     cp = _cp()
     mid, state = await _find_live(context, update)

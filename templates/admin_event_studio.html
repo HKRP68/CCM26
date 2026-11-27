@@ -1,0 +1,329 @@
+{% extends "base.html" %}
+{% block title %}Event Studio{% endblock %}
+{% block content %}
+<style>
+.studio {max-width: 74rem; margin-inline: auto; --studio-muted: #535d68; --studio-control-border: #808a95; --studio-error: #922126}
+[data-theme="dark"] .studio {--studio-muted: #bac5d2; --studio-control-border: #778697; --studio-error: #ffacb0}
+.studio [hidden] {display: none !important}
+:root:not([data-theme="dark"]) .studio .btn-primary {background: var(--brand-dark)}
+.studio .btn-ghost, .studio label.inline {color: var(--studio-muted)}
+.studio .btn-ghost:hover {color: var(--text)}
+.studio [role="alert"] {white-space: pre-line}
+.studio p {max-width: 72ch; color: var(--studio-muted)}
+.studio label:not(.inline) {color: var(--studio-muted)}
+.studio .studio-field-error {color: var(--studio-error); font-size: .9rem}
+.studio-grid {display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: 1rem}
+.studio-panel {padding: 1.15rem; margin-block: 1rem; background: var(--card); border: 1px solid var(--border); border-radius: 12px}
+.studio-toolbar {display: flex; flex-wrap: wrap; gap: .55rem; align-items: center; margin-block: .85rem}
+.studio label.inline {display: inline-flex; align-items: center; gap: .5rem}
+.studio label.inline input {width: auto; padding: 0}
+.studio label:not(.inline) {display: grid; gap: .25rem; min-width: 0}
+.studio textarea {width: 100%; min-height: 12rem; resize: vertical; font: .9rem/1.45 ui-monospace, monospace; tab-size: 2}
+.studio .short {min-height: 5rem; font: inherit}
+.studio input, .studio select, .studio textarea {max-width: 100%; padding: .55rem; border: 1px solid var(--studio-control-border); border-radius: 6px; background: var(--input-bg); color: var(--text)}
+.studio details {margin-block: .75rem}
+.studio summary {cursor: pointer; font-weight: 700; padding-block: .45rem}
+.studio table {width: 100%; border-collapse: collapse; text-align: left; font-variant-numeric: tabular-nums}
+.studio th, .studio td {padding: .6rem; border-bottom: 1px solid var(--border); white-space: nowrap}
+.studio-scroll {overflow: auto; max-height: 22rem}
+.studio :focus-visible {outline: 2px solid var(--accent, #d9ae59); outline-offset: 2px}
+</style>
+<div class="studio">
+  {% if event %}<a href="{{ url_for('admin_event_studio') }}">All events</a>{% endif %}
+  <h2>{{ event.name if event else 'CMU Event Studio' }}</h2>
+  {% if error %}<p class="studio-panel" role="alert">{{ error }}</p>{% endif %}
+  {% if not event %}
+    <form class="studio-panel" method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <h3>Create an event draft</h3>
+      <div class="studio-grid">
+        <label>Event name <input name="name" required maxlength="120"></label>
+        <label>Slug <input name="slug" required maxlength="40" pattern="[a-z0-9][a-z0-9_-]*"></label>
+      </div>
+      <details><summary>Use an existing configuration</summary>
+        <label>Duplicate an event <select name="copy_event"><option value="">Choose an event</option>
+          {% for item in events %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}
+        </select></label>
+        <label>Or paste a versioned JSON export <textarea name="import_config" spellcheck="false"></textarea></label>
+      </details>
+      <div class="studio-toolbar"><button class="btn btn-primary">Create draft</button></div>
+    </form>
+    <section class="studio-panel"><h3>Events</h3>
+      {% if events %}
+      <div class="studio-scroll"><table><thead><tr><th scope="col">Name</th><th scope="col">Status</th><th scope="col">Revision</th></tr></thead>
+      <tbody>{% for item in events %}<tr><td><a href="{{ url_for('admin_event_studio_detail', event_id=item.id) }}">{{ item.name }}</a></td><td>{{ item.status }}</td><td>{{ item.draft_number }}</td></tr>{% endfor %}</tbody></table></div>
+      {% else %}<p>There are no event drafts yet.</p>{% endif %}
+    </section>
+  {% else %}
+    <div class="studio-toolbar"><span>{{ event.status|capitalize }} · Revision {{ event.draft_number }}</span>
+      {% if event.status == 'draft' and not preview %}
+      <button form="studio-draft" class="btn btn-primary" name="action" value="save">Save draft</button>
+      <button form="studio-draft" class="btn btn-ghost" name="action" value="all">Auto Build Event</button>
+      {% endif %}
+      <a href="{{ url_for('admin_event_studio_export', event_id=event.id) }}" class="btn btn-ghost">Export configuration</a>
+    </div>
+    {% if stale %}<p role="status">Configuration changed. Review and regenerate {{ stale|join(', ') }} before publishing.</p>{% endif %}
+    {% if preview %}
+      <section class="studio-panel" aria-labelledby="studio-preview">
+        <h3 id="studio-preview">{{ 'Publish checks passed' if preview.key == 'validate' else 'Import preview' if preview.key == 'import' else 'Generation preview' }}</h3>
+        {% if preview.key != 'validate' %}<p>Review the fixture rows, objective thresholds and both reward tracks before saving a new revision.</p>
+          <p>Fixtures {{ preview.old_fixtures }} → {{ config.fixtures|length }}. Maximum liability {{ preview.old_max.coins }} → {{ maximum.coins }} coins, {{ preview.old_max.gems }} → {{ maximum.gems }} gems and {{ preview.old_max.quest_points }} → {{ maximum.quest_points }} Quest Points.</p>
+          <div class="studio-toolbar">
+            <button form="studio-draft" class="btn btn-primary" name="action" value="apply">Apply preview</button>
+            <a href="{{ url_for('admin_event_studio_detail', event_id=event.id) }}" class="btn btn-ghost">Return to saved draft</a>
+          </div>
+        {% else %}
+          <p>The working configuration passed validation. Save it as a revision before publishing.</p>
+          {% if preview.editions|length > 1 %}
+          <ul>{% for opens, closes in preview.editions %}<li>{{ opens }} to {{ closes }}</li>{% endfor %}</ul>
+          {% endif %}
+          <div class="studio-toolbar"><button form="studio-draft" class="btn btn-primary" name="action" value="save">Save validated draft</button></div>
+        {% endif %}
+      </section>
+    {% endif %}
+    {% if event.status == 'draft' %}
+    <form method="post" id="studio-draft">
+      <noscript><div class="studio-toolbar">
+        <button class="btn btn-primary" name="action" value="save">Save configuration</button>
+        <button class="btn btn-ghost" name="action" value="all">Auto Build Event</button>
+      </div></noscript>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="revision" value="{{ event.draft_number }}">
+      <section class="studio-panel">
+        <h3>Draft configuration</h3>
+        <div data-studio-fields hidden>
+          <details open><summary>Overview</summary>
+            <p>Use YYYY-MM-DDThh:mm. Times use your selected timezone unless you enter an offset.</p>
+            <div class="studio-grid">
+              <label>Event type<select data-config-path="kind">
+                <option value="live">Live Event</option><option value="moment">Cricket Moment</option><option value="boss">Boss Battle</option>
+              </select></label>
+              <label data-kind-boss>Boss challenge style<select data-config-path="challenge_style">
+                <option value="full">Full match</option><option value="moment">Moment</option>
+              </select></label>
+              <label>Format<select data-config-path="format"><option>T20</option><option>ODI</option></select></label>
+              <label>Timezone <input data-config-path="timezone" placeholder="Asia/Kolkata"></label>
+              <label>Opens <input data-config-path="opens_at" placeholder="2026-12-01T09:00"></label>
+              <label>Enrollment cutoff <input data-config-path="enrollment_cutoff" placeholder="2026-12-01T20:00"></label>
+              <label>Closes <input data-config-path="closes_at" placeholder="2026-12-25T23:00"></label>
+              <label>Banner URL <input data-config-path="banner_url" maxlength="500"></label>
+              <label class="inline"><input type="checkbox" data-config-path="featured"> Feature in the Events Hub</label>
+            </div>
+            <label>Player description<textarea class="short" data-config-path="description" maxlength="2000"></textarea></label>
+          </details>
+          <details><summary>Teams and squads</summary>
+            <label>Teams JSON<textarea data-config-path="teams" data-value-type="json" spellcheck="false"></textarea></label>
+          </details>
+          <details><summary>Participation and gameplay</summary>
+            <div class="studio-grid">
+              <label>Maximum enrollments <input type="number" min="1" max="5000" data-config-path="max_users"></label>
+              <label>Pitch <select data-config-path="pitch">{% for pitch in ('Hard', 'Flat', 'Dead', 'Green', 'Dry', 'Wicket') %}<option>{{ pitch }}</option>{% endfor %}</select></label>
+              <label>Venue <input maxlength="80" data-config-path="venue"></label>
+              <label>Fixed weather <select data-config-path="weather">
+                <option value="">Format default</option>{% for weather in ('Clear and Sunny', 'Partly Cloudy', 'Overcast', 'Humid', 'Hot and Dry', 'Light Rain Earlier', 'Windy') %}<option>{{ weather }}</option>{% endfor %}
+              </select></label>
+              <label>AI difficulty override <select data-config-path="difficulty" data-value-type="nullable">
+                <option value="">Track default</option><option value="easy">Easy</option><option value="normal">Normal</option><option value="hard">Hard</option><option value="hard_plus">Hard++</option>
+              </select></label>
+              <label><input type="checkbox" data-config-path="impact_player"> Allow Impact Player in full T20 matches</label>
+              <label>Official attempts for a standalone challenge <input type="number" min="1" max="10" data-config-path="attempts"></label>
+            </div>
+            <label>Participation track keys<textarea data-config-path="mode" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+          </details>
+          <details><summary>Schedule</summary>
+            <div class="studio-grid">
+              <label>Preset<select data-config-path="schedule.preset">
+                <option value="round_robin">Round robin</option><option value="series">Bilateral series</option>
+                <option value="knockout">Knockout</option><option value="groups">Groups and knockout</option><option value="survival">Survival ladder</option><option value="manual">Manual fixtures</option>
+              </select></label>
+              <label>Round-robin legs <input type="number" min="1" max="5" data-config-path="schedule.legs"></label>
+              <label>Round-robin playoffs<select data-config-path="schedule.playoffs">
+                <option value="none">None</option><option value="top2">Top two</option><option value="top4">Top four</option>
+              </select></label>
+              <label>Fixture window in hours <input type="number" min="1" max="168" data-config-path="schedule.window_hours"></label>
+              <label>Grace in minutes <input type="number" min="0" max="240" data-config-path="schedule.grace"></label>
+            </div>
+            <label>Groups by team key<textarea data-config-path="schedule.groups" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+            <label>Fixture rows<textarea data-config-path="fixtures" data-value-type="json" spellcheck="false"></textarea></label>
+          </details>
+          <details><summary>Fixture reminders</summary>
+            <label class="inline"><input type="checkbox" data-config-path="notifications.enabled"> Send reminders to eligible enrolled players</label>
+            <label>Hours before the deadline<textarea data-config-path="notifications.reminders_hours" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+          </details>
+          <details><summary>Objectives</summary>
+            <label>Objective assignments<textarea data-config-path="objectives" data-value-type="json" spellcheck="false"></textarea></label>
+            <label class="inline"><input type="checkbox" data-config-path="objectives_locked"> Keep these assignments during generation</label>
+          </details>
+          <details><summary>Rewards</summary>
+            <div class="studio-grid">
+              {% for asset in ('coins', 'gems', 'quest_points') %}
+              <label>{{ asset|replace('_', ' ')|capitalize }} budget <input type="number" min="0" max="2000000000" data-config-path="budget.{{ asset }}"></label>
+              {% endfor %}
+            </div>
+            <div class="studio-grid">
+              <label>Community XP for eligible completion <input type="number" min="0" max="100" data-config-path="community.completion_xp"></label>
+              <label>Distinct-winner goal for a Boss Battle <input type="number" min="0" max="5000" data-config-path="community.boss_goal"></label>
+              <label>Daily limits for Event XP <input type="number" min="1" max="10" data-config-path="community.daily_limit"></label>
+            </div>
+            <label>Star milestones<textarea data-config-path="milestones" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+            <label>Fixture conditions, difficulty, objective and reward overrides<textarea data-config-path="fixture_overrides" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+            <label>Free and Diamond bundles<textarea data-config-path="rewards" data-value-type="json" spellcheck="false"></textarea></label>
+          </details>
+          <details data-kind-moment><summary>Cricket Moment checkpoint and rotation</summary>
+            <div class="studio-grid">
+              <label>Goal style<select data-config-path="moment.goal_type">
+                <option value="segment">Runs or wickets</option><option value="chase">Simulated chase or defense</option>
+              </select></label>
+              <label>Play as<select data-config-path="moment.side"><option value="bat">Batting side</option><option value="bowl">Bowling side</option></select></label>
+              <label>Overs completed before the challenge <input type="number" min="0" max="49" data-config-path="moment.start_over"></label>
+              <label>Overs to play <input type="number" min="1" max="50" data-config-path="moment.overs"></label>
+              <label>Runs or wickets needed <input type="number" min="1" data-config-path="moment.goal"></label>
+              <label>Prefix seed <input type="number" min="0" max="4294967295" data-config-path="moment.seed"></label>
+              <label>Rotation<select data-config-path="rotation.cadence">
+                <option value="none">Single edition</option><option value="daily">Daily</option><option value="weekly">Weekly</option>
+              </select></label>
+              <label>Number of editions <input type="number" min="1" max="12" data-config-path="rotation.periods"></label>
+              <label>Combined rotation budget<textarea data-config-path="rotation.series_budget" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+              <label>Chapter name <input data-config-path="chapter.name" maxlength="80"></label>
+              <label>Moment position <input type="number" min="1" max="100" data-config-path="chapter.position"></label>
+              <label>Prerequisite Moment slug <input data-config-path="chapter.prerequisite_slug"></label>
+              <label>Minimum prerequisite stars <input type="number" min="1" max="5" data-config-path="chapter.min_stars"></label>
+              <label>Objective baseline<select data-config-path="moment.objective_baseline">
+                <option value="earned">From the first live delivery</option><option value="inclusive">Include preset figures</option>
+              </select></label>
+            </div>
+            <label>Recorded scorecard checkpoint <textarea data-config-path="moment.checkpoint" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+
+          </details>
+        </div>
+        <details><summary>Teams, fixture locks and budgets</summary>
+          <p>Each team needs a lowercase key, a name and a list of master card IDs in <code>players</code>. An optional <code>xi</code> is an ordered list of 11 IDs. Copying Challenge Data replaces the draft team list.</p>
+          <p>Use <code>source: "manual"</code> for a manually authored fixture or use <code>locks</code> to keep specific fields. Reward locks use <code>tier.result.asset</code>. Set <code>objectives_locked</code> to keep the objective list during regeneration.</p>
+          <p>Dates without an offset use the event timezone. For a Live Event, set the enrollment cutoff at or before the first fixture deadline. Enter budgets before generating rewards.</p>
+        </details>
+        <details data-studio-source open><summary>Full configuration and advanced fields</summary>
+          <label>Event configuration (JSON)<textarea name="config" spellcheck="false" required rows="14">{{ config_json }}</textarea></label>
+        </details>
+        <div class="studio-toolbar">
+          <label>Challenge League<select name="league_id"><option value="">Choose a league</option>
+            {% for league in leagues %}<option value="{{ league.id }}">{{ league.name }}</option>{% endfor %}
+          </select></label>
+          <button class="btn btn-ghost" name="action" value="copy">Copy teams and squads</button>
+        </div>
+        <details><summary>Import team JSON or squad CSV</summary>
+          <label>Paste import data<textarea name="import_data" spellcheck="false" class="short"></textarea></label>
+          <div class="studio-toolbar">
+            <button class="btn btn-ghost" name="action" value="import_teams">Preview team JSON</button>
+            <button class="btn btn-ghost" name="action" value="import_squads">Preview squad CSV</button>
+          </div>
+        </details>
+        <div class="studio-toolbar">
+          <button class="btn btn-ghost" name="action" value="schedule">Auto Schedule</button>
+          <button class="btn btn-ghost" name="action" value="objectives">Auto Objectives</button>
+          <button class="btn btn-ghost" name="action" value="rewards">Auto Rewards</button>
+        </div>
+        <label class="inline"><input type="checkbox" name="overwrite" value="yes"> Replace unlocked manual edits</label>
+      </section>
+      <section class="studio-panel">
+        <h3>Validation and publication</h3>
+        <p>Maximum liability is {{ maximum.coins }} coins, {{ maximum.gems }} gems and {{ maximum.quest_points }} Quest Points. Publish freezes the saved revision, squads and rules.</p>
+        <div class="studio-toolbar">
+          <button class="btn btn-ghost" name="action" value="validate">Validate draft</button>
+          {% if publish_enabled and not preview %}
+            <button class="btn btn-primary" name="action" value="publish" onclick="return confirm('Publish the last saved revision of this event?');">Publish saved revision</button>
+          {% elif not publish_enabled %}<span>Publishing is disabled for this mode or format.</span>{% endif %}
+        </div>
+      </section>
+    </form>
+    {% else %}
+    <section class="studio-panel"><h3>Operations</h3>
+      {% if event.status in ('scheduled', 'live', 'paused', 'closing', 'completed') %}
+      <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>Reason <input name="reason" maxlength="500" required></label>
+        <div class="studio-toolbar">
+          {% if event.status == 'paused' %}<button class="btn btn-primary" name="action" value="resume">Resume and shift unresolved deadlines</button>
+          {% elif event.status == 'completed' %}<button class="btn btn-ghost" name="action" value="archive">Archive event</button>
+          {% elif event.status != 'closing' %}<button class="btn btn-ghost" name="action" value="pause">Pause official play</button>{% endif %}
+          {% if event.status in ('scheduled', 'live', 'closing') %}<button class="btn btn-ghost" name="action" value="retry">Retry failed jobs</button>{% endif %}
+        </div>
+      </form>
+      {% endif %}
+      {% if config.kind == 'live' and event.status in ('scheduled', 'live', 'paused') %}
+      <details><summary>Extend a personal fixture</summary>
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="studio-grid">
+            <label>Fixture ID <input type="number" name="game_id" min="1" required></label>
+            <label>New start deadline ({{ config.timezone }}) <input name="deadline" placeholder="2026-12-01T18:00" required></label>
+            <label>Reason <input name="reason" maxlength="500" required></label>
+          </div>
+          <div class="studio-toolbar"><button class="btn btn-ghost" name="action" value="extend">Extend deadline</button></div>
+        </form>
+      </details>
+      {% endif %}
+      {% if event.status in ('scheduled', 'live', 'paused', 'closing') %}
+      <details><summary>Resolve a verified engine failure</summary>
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="studio-grid">
+            <label>Official game ID <input type="number" name="game_id" min="1" required></label>
+            <label>Verified incident reason <input name="reason" maxlength="500" required></label>
+          </div>
+          <p>Records a no-result for a Live Event or restores one standalone attempt through an audited technical void.</p>
+          <button class="btn btn-ghost" name="action" value="resolve_failure">Resolve technical failure</button>
+        </form>
+      </details>
+      <details><summary>Cancel event</summary>
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <label>Reason <input name="reason" maxlength="500" required></label>
+          <p>Cancels unresolved games. Completed results and earned claims remain available.</p>
+          <label class="inline"><input type="checkbox" name="confirm" value="yes" required> Confirm permanent cancellation</label>
+          <button class="btn btn-ghost" name="action" value="cancel">Cancel event</button>
+        </form>
+      </details>
+      {% endif %}
+      {% for entry in audit %}<p>{{ entry.created_at.strftime('%Y-%m-%d %H:%M') }} UTC · {{ entry.actor }} · {{ entry.action }} · {{ entry.detail.reason }}</p>{% endfor %}
+    </section>
+    <section class="studio-panel"><h3>Activity</h3>
+      <p>{{ activity.enrolled }} enrolled · {{ config.fixtures|length }} fixtures per campaign</p>
+      {% for status, count in activity.results %}<p>{{ status|replace('_', ' ')|capitalize }} · {{ count }}</p>{% endfor %}
+      {% for claimed, count in activity.claims %}<p>{{ 'Claimed' if claimed else 'Unclaimed' }} rewards · {{ count }}</p>{% endfor %}
+      {% if activity.recent_fixtures %}
+      <details><summary>Recent personal fixture records</summary>
+        <div class="studio-scroll" tabindex="0" role="region" aria-label="Recent fixtures">
+          <table><thead><tr><th scope="col">ID</th><th scope="col">Fixture</th><th scope="col">Status</th><th scope="col">Deadline UTC</th><th scope="col">Last engine failure</th></tr></thead>
+          <tbody>{% for id, key, status, cutoff, failure in activity.recent_fixtures %}
+          <tr><td>{{ id }}</td><td>{{ key }}</td><td>{{ status|replace('_', ' ') }}</td><td>{{ cutoff.isoformat() }}</td><td>{{ failure or "—" }}</td></tr>
+          {% endfor %}</tbody></table>
+        </div>
+      </details>
+      {% endif %}
+    </section>
+    {% endif %}
+    {% if config.fixtures %}
+    <section class="studio-panel"><h3>Fixture schedule</h3>
+      <div class="studio-scroll" tabindex="0" role="region" aria-label="Fixture schedule">
+        <table><thead><tr><th scope="col">Fixture</th><th scope="col">Round</th><th scope="col">Home</th><th scope="col">Away</th><th scope="col">Opens</th><th scope="col">Deadline</th></tr></thead>
+        <tbody>{% for row in config.fixtures %}<tr><td>{{ row.key }}</td><td>{{ row.round }}</td><td>{{ row.home }}</td><td>{{ row.away }}</td><td>{{ row.opens_at }}</td><td>{{ row.deadline }}</td></tr>{% endfor %}</tbody></table>
+      </div>
+    </section>
+    {% endif %}
+    <section class="studio-panel"><h3>Revision history</h3>
+      <div class="studio-scroll" tabindex="0" role="region" aria-label="Revision history">
+        <table><thead><tr><th scope="col">Revision</th><th scope="col">Action</th><th scope="col">Actor</th><th scope="col">UTC</th>{% if event.status == 'draft' %}<th scope="col">Restore</th>{% endif %}</tr></thead>
+        <tbody>{% for row in history %}<tr><td>{{ row.number }}</td><td>{{ row.action }}</td><td>{{ row.actor }}</td><td>{{ row.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          {% if event.status == 'draft' %}<td>{% if row.number != event.draft_number %}<form method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="revision" value="{{ event.draft_number }}">
+            <input type="hidden" name="restore_number" value="{{ row.number }}">
+            <button class="btn btn-ghost btn-sm" name="action" value="restore">Restore {{ row.number }}</button>
+          </form>{% endif %}</td>{% endif %}
+        </tr>{% endfor %}</tbody></table>
+      </div>
+    </section>
+  {% endif %}
+</div>
+<script src="{{ url_for('static', filename='js/event_studio_admin.js', v='1') }}"></script>
+{% endblock %}

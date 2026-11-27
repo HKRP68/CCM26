@@ -147,6 +147,8 @@ def test_no_scope_has_duplicates():
 # This is an allowlist, not an amnesty: a command added without a menu entry
 # and without a line here still fails the test below.
 UNPUBLISHED_ON_PURPOSE = {
+    # The player menus are at capacity. Events is discoverable in /commands and the MiniApp.
+    "events",
     # Existing tournament/medical commands are on /tourhelp; pause/clear and
     # website shortcuts are in /commands or BOT_COMMANDS.md. Player menus are
     # still at their 100-entry limit after moving auction-only admin entries.

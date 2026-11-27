@@ -1,0 +1,9 @@
+# Event rewards
+
+Set a maximum enrollment count and currency caps before generating. The forecast is a conservative upper bound. For each asset, it sums the highest payout for each fixture on every conservatively possible campaign path, uses the largest path, and adds all authored star milestones. It multiplies that amount by the maximum enrollment count. Challenge retries reserve one success bundle. The maximum uses the larger amount across both tiers. This makes every place reserved by the enrollment cap affordable.
+
+Auto Rewards prepares Free and Diamond wallet bundles for actual wins, losses, ties or standalone successes. Set an explicit field lock such as `diamond.win.gems` to keep a value through regeneration. The Studio scales generated amounts to the available wallet budget and blocks configurations that exceed it. Star milestones may be authored as `{"stars":6,"free":{"coins":500},"diamond":{"coins":1000}}`. An earned threshold pays once. A later improvement pays only newly reached thresholds.
+
+The account's active tier is sampled at official launch. Each source settles through a unique entitlement. **Claim reward** and **Claim all** use the existing transactional wallet lock and the shared activity log. Coins, gems and Quest Points settle with the receipt in one commit. The eligibility window is measured from event close. Already issued claims retain their recorded expiry through an event pause. Practice, forfeits, abandoned attempts and AI-only matches earn no wallet rewards. Packs, card pools, automated wallet grants and global leaderboard payouts are pending.
+
+The Studio can optionally award Community XP for eligible official play while Community Arena is enabled. The existing daily and account limits apply. A durable job writes to the shared Community ledger using one unique source per fixture or first successful standalone challenge.

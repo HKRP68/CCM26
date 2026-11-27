@@ -373,7 +373,22 @@ def cipl_swap_error(state, side, out_roster_id, incoming):
     # Overseas is settled above; the keeper / bowling / rating rules are not.
     ok, error = validate_challenge_xi_dicts(
         after, 0, 11, rules.get("rating_rules") or None)
-    return "" if ok else error
+    if not ok:
+        return error
+    if state.get("event_impact"):
+        base_ids = {p.get("base_id") for p in after}
+        if len(base_ids) != len(after):
+            return "Only one version of each cricketer may play."
+        if sum(p.get("category") in ("Bowler", "All-rounder") for p in after) < 5:
+            return "At least five players must have a specialist bowling quota."
+        if side == "bowl":
+            from services.cipl_match import eligible_bowlers
+            candidate_state = {**state, "bowl_xi": after}
+            eligible = {p["roster_id"] for p in eligible_bowlers(candidate_state)}
+            current = (state.get("current_bowler") or {}).get("roster_id")
+            if not eligible or (current is not None and current not in eligible):
+                return "The remaining bowlers must cover the innings within their quotas."
+    return ""
 
 
 def overseas_swap_error(before, after, incoming, min_overseas, max_overseas):

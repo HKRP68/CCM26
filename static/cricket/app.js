@@ -7,6 +7,7 @@ if (tg) {
 
 // Global UI State
 let matchId = null;
+let eventMatchId = null;
 let chatId = null;
 let userId = null;
 let matchState = null;
@@ -300,6 +301,7 @@ async function init() {
 
   // 1. Fallback / direct URL parsing
   const urlParams = new URLSearchParams(window.location.search);
+  eventMatchId = /^\d+$/.test(urlParams.get("event_match_id") || "") ? urlParams.get("event_match_id") : null;
   matchId = cleanParam(urlParams.get('matchId') || urlParams.get('match_id'));
   chatId = cleanParam(urlParams.get('chatId') || urlParams.get('chat_id'));
   userId = cleanParam(urlParams.get('userId') || urlParams.get('user_id'));
@@ -324,6 +326,10 @@ async function init() {
     }
   }
 
+  const linkedEvent = /^event-(\d+)$/.exec(matchId || '');
+  eventMatchId ||= linkedEvent?.[1] || null;
+  if (eventMatchId) matchId = `event-${eventMatchId}`;
+
   // 3. Direct/browser launches do not receive Telegram identity. Reuse an
   // explicitly chosen local identity when possible; otherwise poll once as a
   // spectator so the identity picker can render the current room participants.
@@ -338,7 +344,9 @@ async function init() {
   // Bind exit handlers
   const handleExit = () => {
     stopAllGameAudio();
-    if (window.opener || document.referrer.startsWith(location.origin + '/webapp')) {
+    if (eventMatchId && matchState?.officialEvent?.id) {
+      location.assign('/webapp#events_' + matchState.officialEvent.id);
+    } else if (window.opener || document.referrer.startsWith(location.origin + '/webapp')) {
       if (history.length > 1) history.back();
       else location.assign('/webapp' + location.hash);
     } else if (tg?.initData) {
@@ -709,7 +717,7 @@ async function fetchStateForced() {
     const params = new URLSearchParams();
     if (userId) params.append('userId', userId);
     if (matchId) params.append('matchId', matchId);
-    const response = await fetchWithTimeout(`/api/match?${params.toString()}`);
+    const response = await fetchArenaState(params);
     if (!response.ok) return;
     const data = await response.json();
     applyMatchState(data, { force: true });
@@ -757,6 +765,68 @@ async function fetchWithTimeout(url, options = {}) {
   }
 }
 
+function fetchArenaState(params) {
+  return eventMatchId
+    ? fetchWithTimeout(`/api/webapp/events-hub/arena/${eventMatchId}`, { method: 'POST' })
+    : fetchWithTimeout(`/api/match?${params.toString()}`);
+}
+
+function eventPick(type, action = {}, confirmed = false) {
+  return matchFetch(`/api/webapp/events-hub/arena/${eventMatchId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, action, confirmed, version: matchState?.officialEvent?.version }),
+  });
+}
+
+function renderOfficialEvent() {
+  const panel = document.getElementById('official-event');
+  const event = matchState.officialEvent;
+  if (!panel || !event) return;
+  panel.hidden = false;
+  panel.querySelector('strong').textContent = event.name;
+  const round = event.round ? `Round ${event.round}` : `Attempt ${event.attempt}`;
+  const time = new Date(event.cutoff).toLocaleString();
+  const difficulty = {easy: 'Easy', normal: 'Normal', hard: 'Hard', hard_plus: 'Hard++'}[event.difficulty];
+  const status = {grace: 'Grace ends', paused: 'Paused · cutoff', under_review: 'Under review · cutoff'}[event.status];
+  const deadline = `${status || 'Play until'} ${time}`;
+  panel.querySelector('[data-event-details]').textContent = [
+    round, difficulty, event.venue, event.weather, event.result ? null : deadline,
+  ].filter(Boolean).join(' · ');
+  const progress = panel.querySelector('[data-event-progress]');
+  const objectives = event.objectives.map(o => `${o.title} ${o.measured}/${o.threshold}`);
+  if (event.moment) objectives.unshift(`Goal ${event.moment.progress}/${event.moment.goal} · ${event.moment.balls_left} balls left`);
+  if (event.result) {
+    if (event.result.stars !== undefined) objectives.push(`${event.result.stars} stars`);
+    if (event.points !== undefined) objectives.push(`${event.points} points`);
+    if (event.next_fixture) objectives.push(`Next fixture vs ${event.next_fixture.opponent}`);
+    if (event.reward_eligible) objectives.push('Reward earned. View your rewards in Events Hub.');
+  }
+  progress.textContent = objectives.join(' · ');
+  const controls = panel.querySelector('[data-event-controls]');
+  controls.hidden = !!event.result || event.event_paused || event.status === 'under_review';
+  const locationButton = controls.querySelector('button');
+  locationButton.textContent = event.player_paused ? 'Resume here' : event.play_mode === 'chat' ? 'Play here' : 'Pause';
+  locationButton.onclick = () => officialControl(event.player_paused ? 'resume' : event.play_mode === 'chat' ? 'switch' : 'pause');
+  controls.querySelector('[data-event-abandon]').onclick = () => {
+    if (window.confirm('Abandon this official match? The result is permanent and no reward will be earned.')) {
+      officialControl('abandon', true);
+    }
+  };
+}
+
+async function officialControl(type, confirmed = false) {
+  try {
+    const response = await eventPick(type, {}, confirmed);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'The match could not be updated.');
+    applyMatchState(data, { force: true });
+  } catch (error) {
+    alert(error.message);
+    fetchState();
+  }
+}
+
 async function fetchState() {
   if (fetchInFlight || flowActionInFlight || document.hidden || arenaLoadBlocked) return;
   fetchInFlight = true;
@@ -766,7 +836,7 @@ async function fetchState() {
     if (userId) params.append('userId', userId);
     if (matchId) params.append('matchId', matchId);
 
-    const response = await fetchWithTimeout(`/api/match?${params.toString()}`);
+    const response = await fetchArenaState(params);
     if (!response.ok) {
       if (response.status === 404 || response.status === 401 || response.status === 403) {
         showError(response.status === 404
@@ -804,6 +874,7 @@ function applyMatchState(nextState, { force = false } = {}) {
       Number(nextState.liveBatting?.revision ?? 0) < Number(matchState.liveBatting?.revision ?? 0)) return;
 
   matchState = nextState;
+  renderOfficialEvent();
   preloadEventGifs(matchState.eventGifs || {});
   preloadEventSounds(matchState.eventSounds || {});
   pollFailureCount = 0;
@@ -1736,7 +1807,11 @@ async function submitImpactPlayer() {
   const btn = document.getElementById('confirm-impact-player-btn');
   try {
     if (btn) btn.disabled = true;
-    const res = await matchFetch('/api/match/impact-player', {
+    const res = eventMatchId ? await eventPick('impact', {
+      inRosterId: impactSelection.incoming.id,
+      outRosterId: impactSelection.outgoing.id,
+      batPosition: impactSelection.batPosition ?? null,
+    }) : await matchFetch('/api/match/impact-player', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1750,7 +1825,7 @@ async function submitImpactPlayer() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.message || data.error || 'Failed to use Impact Player');
     closeImpactPlayerPicker({ silent: true });
-    if (data.matchState) applyMatchState(data.matchState);
+    if (eventMatchId || data.matchState) applyMatchState(eventMatchId ? data : data.matchState);
     else fetchState();
   } catch (err) {
     alert(err.message);
@@ -2726,8 +2801,8 @@ function renderInningsBreakScreen() {
   const remaining = matchState.inningsBreak?.secondsRemaining;
   document.getElementById('ib-countdown-text').innerText =
     (remaining !== undefined && remaining !== null)
-      ? `Heading to team selection in ${remaining}s…`
-      : 'Heading to team selection shortly…';
+      ? (eventMatchId ? `Play resumes in ${remaining}s…` : `Heading to team selection in ${remaining}s…`)
+      : (eventMatchId ? 'Play resumes shortly…' : 'Heading to team selection shortly…');
 }
 
 let _ibContinueInFlight = false;
@@ -2737,7 +2812,7 @@ async function continuePastInningsBreak() {
   const btn = document.getElementById('ib-continue-btn');
   if (btn) btn.disabled = true;
   try {
-    const res = await matchFetch('/api/match/innings-break/continue', {
+    const res = eventMatchId ? await eventPick('continue') : await matchFetch('/api/match/innings-break/continue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, matchId })
@@ -2922,8 +2997,11 @@ function renderResultScreen() {
   renderPostMatchCoaching(result?.coaching);
 
   const winner = result?.winner?.teamName || result?.winner?.username || result?.winnerName;
-  document.getElementById('result-winner-title').textContent = winner ? winner + ' wins'
-    : result?.outcome === 'tie' ? 'Match tied' : result?.outcome === 'cancelled' ? 'Match cancelled' : 'Match completed';
+  const eventHeadline = {success: 'Moment completed', failed: 'Moment ended', forfeited: 'Fixture forfeited',
+    abandoned: 'Attempt abandoned', expired: 'Attempt expired', technical_void: 'Attempt voided',
+    no_result: 'No result'}[matchState.officialEvent?.result?.kind];
+  document.getElementById('result-winner-title').textContent = eventHeadline || (winner ? winner + ' wins'
+    : result?.outcome === 'tie' ? 'Match tied' : result?.outcome === 'cancelled' ? 'Match cancelled' : 'Match completed');
   const myCoins = result?.viewerReward;
   document.getElementById('result-reward-amount').closest('.reward-section').classList.toggle('hidden', myCoins == null || myCoins <= 0);
   if (myCoins > 0) document.getElementById('result-reward-amount').textContent = '+' + myCoins.toLocaleString();

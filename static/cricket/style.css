@@ -3407,3 +3407,8 @@ body { background-image: none; }
   .header-teams { display: none; }
   .header-match-id { font-size: 12px; }
 }
+
+.official-event { padding: .65rem 1rem; border-bottom: 1px solid var(--border); }
+.official-event p { margin: .25rem 0; font-size: .8rem; }
+.official-event p:empty { display: none; }
+.official-event button { min-height: 44px; margin: .25rem .35rem 0 0; }

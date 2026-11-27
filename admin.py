@@ -4502,6 +4502,7 @@ _PACED_MINIAPP_ACTIONS = {
     "webapp_upgrade_apply", "webapp_trait_upgrade", "webapp_career_upgrade",
     "webapp_gift_claim", "webapp_giveaway_join", "webapp_set_captain", "webapp_economy_quote", "webapp_roster_lock", "webapp_roster_leadership",
     "webapp_tournament_join",
+    "webapp_event_action",
 }
 
 
@@ -24149,6 +24150,10 @@ def admin_card_template_preview(player_id):
                          download_name=f"template-card-{player_id}.png")
     finally:
         db.close()
+
+
+from services.event_studio_admin import install as install_event_studio
+install_event_studio(app, login_required, csrf_exempt, _webapp_auth)
 
 
 # ─── Events (time-limited) ───────────────────────────────────────────

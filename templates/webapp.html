@@ -2239,6 +2239,7 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/cmu_animation_engine.css', v='fx-1') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/cmu_reveal_theatre.css', v='fx-1') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/cmu_rewards_fx.css', v='fx-1') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/events_hub.css', v='1') }}">
 </head>
 <body>
 <header class="appbar">
@@ -2951,6 +2952,12 @@
 </div>
 
 <!-- ════ TOURNAMENT (live competition) ════ -->
+<section class="screen hub-screen events-hub" id="screen-events" aria-labelledby="events-hub-title">
+  <h1 id="events-hub-title">Events Hub</h1>
+  <div id="events-hub-status" role="status" aria-live="polite"></div>
+  <div id="events-hub-content"></div>
+</section>
+
 <div class="screen hub-screen" id="screen-tournament">
   <div class="hub-between hub-tournament-head">
     <h2 class="hub-title">Tournament centre</h2>
@@ -3018,6 +3025,7 @@
 <section class="screen" id="screen-compete" aria-labelledby="elite-compete-title">
   <header class="cmu-page-heading"><h2 id="elite-compete-title">Compete</h2><p id="elite-competition-summary">Check fixtures, standings and tournament registration.</p></header>
   <div class="cmu-list">
+    <button type="button" onclick="navigate('events')">{{ icon('calendar') }}<span>Events Hub</span>{{ icon('chevron') }}</button>
     <button type="button" onclick="openTournamentDirectory()">{{ icon('cup') }}<span>Tournament Centre</span>{{ icon('chevron') }}</button>
     <button type="button" onclick="navigate('leaderboard')">{{ icon('ranks') }}<span>Leaderboards</span>{{ icon('chevron') }}</button>
     <button type="button" onclick="navigate('season')">{{ icon('calendar') }}<span>Season</span>{{ icon('chevron') }}</button>
@@ -3266,6 +3274,7 @@
   </div>
 </div>
 
+<script src="{{ url_for('static', filename='js/events_hub.js', v='2') }}"></script>
 <script>
 const tg = window.Telegram?.WebApp;
 if (tg) {
@@ -3555,6 +3564,7 @@ function navigate(screen, back = null) {
   if (currentScreen === 'appearance' && changed) window.CmuTheme.restore();
   haptic('light');
   if (currentScreen === 'tournament' && screen !== 'tournament') stopTournamentPolling();
+  if (currentScreen === 'events' && screen !== 'events') EventHub.stop();
   // Stop live-match polling whenever we leave that screen
   if (currentScreen === 'livematch' && screen !== 'livematch') {
     stopMatchPolling();
@@ -3611,6 +3621,7 @@ function navigate(screen, back = null) {
     if (tnDirectoryOpen || (!tnId && !tnLive.length)) showTournamentDirectory();
     else loadTournament();
   }
+  if (screen === 'events') EventHub.open();
   if (screen === 'clubs') loadClubs();
   if (screen === 'browse') {
     loadCountries().then(() => {
@@ -10591,7 +10602,7 @@ function maybeFantasyRedirect() {
 
 // (2) Telegram start_param (?startapp=spin) used by group t.me deep links.
 function handleHashDeepLink() {
-  const validScreens = ['home', 'compete', 'explore', 'notifications', 'appearance', 'traits', 'career', 'matchcentre', 'wallet', 'rewards', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'profile', 'season', 'clubs', 'playerdetail', 'livematch', 'tournament'];
+  const validScreens = ['home', 'compete', 'explore', 'notifications', 'appearance', 'traits', 'career', 'matchcentre', 'wallet', 'rewards', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'profile', 'season', 'clubs', 'playerdetail', 'livematch', 'tournament', 'events'];
   const alias = {
     // 'wheel' and 'gspin' stay mapped: deep links to the old prize wheel are
     // already out there in group chats and still belong on this screen.
@@ -10636,6 +10647,10 @@ function handleHashDeepLink() {
     card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     return;
   }
+  const eventMatchLink = target.match(/^cricket_event-(\d+)_0$/);
+  if (eventMatchLink) { location.assign('/cricket?event_match_id=' + eventMatchLink[1]); return; }
+  const eventLink = target.match(/^events_(\d+)$/);
+  if (eventLink) { navigate('events'); EventHub.open(Number(eventLink[1])); return; }
   if (target === 'tournament') openTournamentDirectory();
   else if (validScreens.includes(target) && target !== 'home') navigate(target);
 }

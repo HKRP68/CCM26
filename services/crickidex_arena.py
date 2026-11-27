@@ -429,28 +429,75 @@ def serialize_match_state(session, match, viewer_user):
         return _serialize_match_state_impl(session, match, viewer_user)
 
 
-def _serialize_match_state_impl(session, match, viewer_user):
+def serialize_event_match(session, game, entry, event, viewer, result, event_overlay, *, state):
+    """Render the official checkpoint with the Arena's normal CIPL viewer."""
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from services.match_state_store import A_COMPLETED, A_INNINGS_BREAK
+
+    state = deepcopy(state)
+    human = entry.team_key
+    opponent = game.away if game.home == human else game.home
+    users = (
+        SimpleNamespace(id=human, telegram_id=viewer.telegram_id, username=viewer.username, team_name=None),
+        SimpleNamespace(id=opponent, telegram_id="ai", username="AI", team_name=None),
+    )
+    state["event_view"] = True
+    next_action = A_COMPLETED if result else state.get("event_next_action")
+    if state.get("event_paused") or event.status == "paused" or event_overlay["status"] == "under_review":
+        next_action = None if not result else next_action
+    if next_action == A_INNINGS_BREAK:
+        state["setup"] = SETUP_INNINGS_BREAK
+        if game.next_pick_at:
+            from datetime import timezone
+            state["innings_break_started_at"] = (
+                game.next_pick_at.replace(tzinfo=timezone.utc).timestamp() - INNINGS_BREAK_SECONDS)
+    match = SimpleNamespace(
+        id=f"event-{game.id}", status="completed" if result else "playing",
+        pitch_type=state.get("pitch_type"), stadium=state.get("stadium"),
+        user1_id=human, user2_id=opponent, toss_winner_id=state.get("toss_winner"),
+        toss_decision=state.get("toss_decision"), winner_id=result.winner if result else None,
+        margin_type=(result.detail.get("margin_type", result.kind) if result else None),
+    )
+    payload = _serialize_match_state_impl(
+        session, match, viewer, event_checkpoint=(state, next_action, users, game.version))
+    payload["officialEvent"] = event_overlay
+    if result:
+        kind = result.detail.get("margin_type")
+        margin = result.detail.get("margin")
+        if kind in ("runs", "wickets") and margin is not None:
+            unit = kind[:-1] if margin == 1 else kind
+            payload["result"]["resultText"] = f"Won by {margin} {unit}."
+        elif result.kind == "forfeited":
+            payload["result"]["resultText"] = "Official fixture forfeited."
+        if state.get("event_moment"):
+            payload["result"]["motm"] = None
+    return payload
+
+
+def _serialize_match_state_impl(session, match, viewer_user, *, event_checkpoint=None):
     match_id = match.id
-    state = mwa.get_state(match_id)
     completed_snapshot = False
     final_scorecard = None
-    if match.status == "completed":
-        # Live state is intentionally cleaned up at the end of a match. Restore
-        # the persisted read-only Arena snapshot so Play Match can reopen the
-        # result summary and scorecard later.
-        try:
-            from services.match_webapp_service import load_final_scorecard
-            final_scorecard = load_final_scorecard(session, match_id)
-            if not state:
-                state = (final_scorecard or {}).get("arena_state")
-                completed_snapshot = bool(state)
-        except Exception:
-            logger.exception("completed arena snapshot load failed")
+    if event_checkpoint is not None:
+        state, next_action, event_users, revision = event_checkpoint
+    else:
+        state = mwa.get_state(match_id)
+        if match.status == "completed":
+            # A completed match can have its persisted scorecard but no live cache.
+            try:
+                from services.match_webapp_service import load_final_scorecard
+                final_scorecard = load_final_scorecard(session, match_id)
+                if not state:
+                    state = (final_scorecard or {}).get("arena_state")
+                    completed_snapshot = bool(state)
+            except Exception:
+                logger.exception("completed arena snapshot load failed")
+        next_action = "COMPLETED" if completed_snapshot else mwa.get_next_action(match_id)
     if not state:
         return None
     final_scorecard = final_scorecard or {}
 
-    next_action = "COMPLETED" if completed_snapshot else mwa.get_next_action(match_id)
     # Prefer the state-machine terminal pointer over the Match row while an
     # action request is still finalizing. This prevents the Arena controls from
     # rendering an opponent-waiting sheet after a chase has already reached its
@@ -458,7 +505,7 @@ def _serialize_match_state_impl(session, match, viewer_user):
     effective_match_status = "completed" if next_action == "COMPLETED" else match.status
     status = phase_status(state, effective_match_status)  # xi_selection/innings1/innings2/completed
     turn_state = turn_state_name(next_action)            # bowling_delivery/batting_shot/...
-    viewer_uid = viewer_user.id if viewer_user else None
+    viewer_uid = event_users[0].id if event_checkpoint else viewer_user.id if viewer_user else None
 
     role = role_for(state, viewer_uid) if viewer_uid else "spectator"
     my_role = {"batsman": "batting", "bowler": "bowling"}.get(role, "spectator")
@@ -481,8 +528,11 @@ def _serialize_match_state_impl(session, match, viewer_user):
 
     # Telegram-id map for the two participants (battingId/bowlingId fields use
     # telegram ids in the UnderCover shape).
-    u1 = _user_lite(session, match.user1_id)
-    u2 = _user_lite(session, match.user2_id)
+    if event_checkpoint:
+        u1, u2 = event_users
+    else:
+        u1 = _user_lite(session, match.user1_id)
+        u2 = _user_lite(session, match.user2_id)
     tg_of = {}
     if u1:
         tg_of[u1.id] = u1.telegram_id
@@ -532,7 +582,7 @@ def _serialize_match_state_impl(session, match, viewer_user):
             team_name = (state.get("bat_team_name") if is_bat
                          else state.get("bowl_team_name"))
         from services.match_handover import controller_uid
-        captain = _user_lite(session, controller_uid(state, u.id)) or u
+        captain = u if event_checkpoint else _user_lite(session, controller_uid(state, u.id)) or u
         return {
             "telegramId": captain.telegram_id,
             "username": captain.username,
@@ -795,13 +845,13 @@ def _serialize_match_state_impl(session, match, viewer_user):
     # pill locked (🔒 PRO) whenever this is false, and both autoplay endpoints
     # reject the request server-side, so free users can never hand their side
     # to the AI.
-    my_autoplay_premium = _viewer_has_autoplay(viewer_user)
+    my_autoplay_premium = not event_checkpoint and _viewer_has_autoplay(viewer_user)
 
     # ── Impact Player availability/summary ──
     impact_player = {"canUse": False, "used": False, "summary": _impact_summary_for_result(state)}
     # Over-by-over matches: a Mini App bot match swaps here (the chat's own
     # rules, services.impact_player.cipl_options); every other one in the chat.
-    if viewer_uid and status != "completed" and approach_mode and not cipl_view_only:
+    if viewer_uid and status != "completed" and approach_mode and not cipl_view_only and not event_checkpoint:
         try:
             from services import injury_service
             injury_service.filter_impact_benches(session, state)
@@ -811,6 +861,8 @@ def _serialize_match_state_impl(session, match, viewer_user):
                 state["bat_bench"] = []
                 state["bowl_bench"] = []
             logger.exception("approach impact player options failed (non-fatal)")
+    elif event_checkpoint and viewer_uid and status != "completed" and state.get("event_impact") and not cipl_view_only:
+        impact_player = _approach_impact_payload(state, viewer_uid, next_action)
     elif viewer_uid and status != "completed" and not approach_mode:
         try:
             from services.match_webapp_service import get_impact_player_options
@@ -887,11 +939,11 @@ def _serialize_match_state_impl(session, match, viewer_user):
         "turnState": turn_state,
         # Free hit armed for the upcoming legal ball (UnderCover /cric parity)
         "freeHit": bool(state.get("free_hit")),
-        "ballSeq": mwa.get_ball_seq(match_id),
+        "ballSeq": revision if event_checkpoint else mwa.get_ball_seq(match_id),
         # TTL-aware persisted-flag check (legacy in-flight matches) OR the
         # live in-process action guard — keeps app.js's autoplay gating
         # behavior while the flag is no longer persisted per ball.
-        "isProcessing": _is_processing(state) or action_in_progress(match_id),
+        "isProcessing": not event_checkpoint and (_is_processing(state) or action_in_progress(match_id)),
         "myRole": my_role,
         "isMyTurn": bool(is_my_turn),
         "result": result,
@@ -1210,7 +1262,7 @@ def _build_result(session, state, match, host, guest, viewer_uid=None):
         viewer_reward = awarded.get("winner_coins" if viewer_uid == winner_uid else "loser_coins")
     winner_reward = awarded.get("winner_coins", 0)
     loser_reward = awarded.get("loser_coins", 0)
-    if not awarded:
+    if not awarded and not state.get("event_view"):
         try:
             from services.config_service import get_config
             cfg = get_config(session)
@@ -1245,7 +1297,7 @@ def _build_result(session, state, match, host, guest, viewer_uid=None):
         }
 
     from services.match_coaching import build_post_match_coaching
-    coaching = build_post_match_coaching(state)
+    coaching = None if state.get("event_view") else build_post_match_coaching(state)
 
     return {
         "coaching": coaching,

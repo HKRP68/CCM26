@@ -1,6 +1,6 @@
 
 import json
-import random
+from engine import match_random as random
 import logging
 import os
 

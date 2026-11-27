@@ -1,0 +1,34 @@
+.events-hub {max-width: 52rem; margin-inline: auto; padding-bottom: 2rem}
+.events-hub h1 {font: 800 1.55rem/1.2 var(--font-display, sans-serif); margin: .5rem 0 .85rem}
+.events-hub h2 {font-size: 1.13rem; margin: 1.3rem 0 .45rem}
+.events-hub h3 {font-size: 1rem; margin: 0}
+.events-hub p {margin: .4rem 0 .8rem; line-height: 1.45}
+.events-hub [hidden] {display: none !important}
+.events-hub .ev-meta {color: var(--text-muted, #a2afc5); font-size: .88rem; line-height: 1.5}
+.ev-panel, .ev-row {padding: 1rem; border: 1px solid var(--border, #2b3548); border-radius: 12px; background: var(--bg-card, #181821)}
+.ev-panel {margin-block: .8rem}
+.ev-row + .ev-row {margin-top: .5rem}
+.ev-row button, .ev-panel button {margin-block: .4rem 0}
+.ev-between, .ev-actions {display: flex; flex-wrap: wrap; gap: .55rem; align-items: center}
+.ev-between {justify-content: space-between}
+.ev-actions {margin-block: .65rem}
+.events-hub button {min-height: 44px}
+.events-hub button:disabled {opacity: .55; cursor: wait}
+.events-hub :focus-visible {outline: 2px solid var(--primary, #e7a443); outline-offset: 3px}
+.events-hub label:not(.ev-check) {display: grid; gap: .3rem; margin-block: .65rem}
+.events-hub select {width: 100%; max-width: 28rem; min-height: 44px; background: var(--surface-input, #181821); color: var(--text-primary, #f4f6f9); border: 1px solid var(--essential-border, #435169); border-radius: 7px; padding: .4rem}
+.events-hub fieldset {margin: .8rem 0; padding: .8rem; border: 1px solid var(--border, #2b3548); border-radius: 8px}
+.events-hub legend {padding: 0 .25rem; font-weight: 700}
+.events-hub summary {cursor: pointer; min-height: 44px; display: list-item; padding-block: .65rem}
+.ev-status {font-weight: 700; color: var(--primary, #efcb82); font-size: .84rem}
+.ev-score {font-variant-numeric: tabular-nums; font-size: 2rem; line-height: 1.15; font-weight: 800}
+.ev-error {color: var(--red, #ffd2c9)}
+.ev-scroll {overflow-x: auto}
+.events-hub table {width: 100%; text-align: left; border-collapse: collapse; font-variant-numeric: tabular-nums}
+.events-hub th, .events-hub td {padding: .5rem .4rem; white-space: nowrap; border-bottom: 1px solid var(--border, #2b3548)}
+.ev-banner {display: block; width: 100%; max-height: 18rem; object-fit: cover; border-radius: 8px; margin-block: .65rem}
+
+.ev-campaign-header {display: flex; align-items: center; gap: .4rem .8rem; flex-wrap: wrap; margin-block: .5rem 1rem}
+.ev-campaign-header p {margin: 0}
+.ev-campaign-header p:last-child {flex-basis: 100%}
+.events-hub .ev-primary {background: var(--primary); color: var(--on-primary); border-color: var(--primary); font-weight: 750}

@@ -15,7 +15,7 @@ mid-over batsman pick is required (per New Features.md).
 import json
 import logging
 import os
-import random
+from engine import match_random as random
 
 from engine.ball_outcome import calculate_outcome
 from engine.realism import integration as realism_integration
@@ -122,6 +122,12 @@ def approach_engine_format(state):
             {"label": "The100", "overs": engine_overs, "max_bowler_overs": 4,
              "powerplay_end": 4, "death_start": max(2, engine_overs - 3)}, overs)
     return _fmt_to_engine_fmt(None, overs)
+
+
+def uses_t20_realism(state, engine_format):
+    if state.get("official_event"):
+        return bool(state.get("event_realism_profile"))
+    return realism_integration.live_for(engine_format)
 
 
 def format_label(state):
@@ -744,7 +750,8 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
                      pitch_type="Hard", is_private=False, stadium=None,
                      bat_team_code="", bowl_team_code="",
                      bat_team_emoji="🏏", bowl_team_emoji="🏏", conditions=None,
-                     ball_format="T20", bat_bench=None, bowl_bench=None, odi_settings=None):
+                     ball_format="T20", bat_bench=None, bowl_bench=None, odi_settings=None,
+                     rng_seed=None):
     """Build the initial state dict for a Challenge League approach match."""
     if ball_format == "ODI":
         from services.match_formats import MEDIUM_OVERS_MIN
@@ -840,7 +847,7 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         # reproducible from this seed and never collide with another concurrent
         # match's global random state. ``engine_version`` pins the engine that
         # produced them, for debugging a saved match.
-        "rng_seed": random.SystemRandom().randrange(1 << 62),
+        "rng_seed": rng_seed if rng_seed is not None else random.SystemRandom().randrange(1 << 62),
         "engine_version": odi_settings["version"] if ball_format == "ODI" else ENGINE_VERSION,
         # Balanced Drama preset recorded at match creation (Codex Prompt 05,
         # §19/§20), so a competition records the engine version and preset used
@@ -961,6 +968,20 @@ def eligible_bowlers(state):
 
     specialists = [p for p in xi if p.get("category") in ("Bowler", "All-rounder")]
     part_timers = [p for p in xi if is_part_time_bowler(p)]
+
+    if state.get("official_event"):
+        remaining = state["overs"] - state["current_over"]
+        capacity = {p["roster_id"]: overs_left(state, p) for p in xi}
+        legal = []
+        for player in _avail(xi):
+            rid = player["roster_id"]
+            # After using this bowler, at most floor(remaining / 2) of
+            # their overs fit. Everyone else may start the remaining sequence.
+            usable = sum(min(left - (other == rid), (remaining + (other != rid)) // 2)
+                         for other, left in capacity.items())
+            if usable >= remaining:
+                legal.append(player)
+        return _sorted(legal)
 
     # 1) Front-line attack with overs left.
     pool = _avail(specialists)
@@ -1481,6 +1502,8 @@ def _after_ball_sledge(state, drama, oc, striker, bowler, batter_adapted,
                        bowl_adapted, over_timeline, bowl_p, innings, is_out):
     """Per legal ball: wear down any sledge the striker carries, then roll for
     a new exchange. Never raises — chirp is not worth an over."""
+    if state.get("official_event"):
+        return
     try:
         srid = str(striker.get("roster_id"))
         sledging.tick(state, srid, dismissed=is_out)
@@ -2129,7 +2152,8 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
     # gameplay layers always agree with whichever ball model is running: a
     # missing reference file must not leave a match on the legacy ball model
     # with the realism engine's gameplay changes applied anyway.
-    _realism_live = not is_odi and realism_integration.live_for(engine_fmt)
+    official = state.get("official_event") is True
+    _realism_live = not is_odi and uses_t20_realism(state, engine_fmt)
     # Over-to-over variation (Feature 2 — realism layer). One zero-mean scoring
     # tendency per over, drawn from a child RNG keyed on (innings, over) so it is
     # reproducible and identical on a pause/resume of the same over, and never
@@ -2138,17 +2162,20 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
     _overvol = None
     if _realism_live:
         from engine.realism import config as _rcfg_ov
-        if _rcfg_ov.over_volatility_enabled():
+        profile = state.get("event_realism_profile") if official else None
+        volatility_enabled = profile["over_volatility"] if profile else _rcfg_ov.over_volatility_enabled()
+        if volatility_enabled:
             from engine.realism import over_volatility as _ovmod
             _ov_seed = state.get("rng_seed")
             if _ov_seed is not None:
                 _ov_rng = SimRng(_ov_seed).derive("overvol", innings, over_idx)
-                _overvol = _ovmod.OverVolatility(
-                    dict(_rcfg_ov.over_volatility_config(), enabled=True), _ov_rng)
+                tuning = (profile["tuning"]["over_volatility"] if profile
+                          else _rcfg_ov.over_volatility_config())
+                _overvol = _ovmod.OverVolatility(dict(tuning, enabled=True), _ov_rng)
                 _overvol.new_over()
     # Dramatic-finish steering: live for the 2nd innings of an armed 20-over
     # chase, else None (and the per-ball logic below is a no-op).
-    scenario_eng = None if is_odi else _load_scenario_engine(state)
+    scenario_eng = None if official or is_odi else _load_scenario_engine(state)
 
     bowl_adapted = _adapt_player(bowler)
     # Fielding side quality — activates dropped catches / misfields in the
@@ -2256,7 +2283,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
         engine_fmt = approach_engine_format(state)
         engine_overs = max(1, round(innings_balls / 6)) if hundred else overs_total
         pressure_eng = PressureEngine(format_config=engine_fmt)
-        _realism_live = realism_integration.live_for(engine_fmt)
+        _realism_live = uses_t20_realism(state, engine_fmt)
 
     legal_extra_types = ("Byes", "LegByes", "LegBye", "Leg Byes")
     if is_odi:
@@ -2333,7 +2360,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             # CIPL never sets ``clutch_finale`` so its scripted finale is untouched.
             runs_needed = (target - state["total_runs"]) if target is not None else 0
             letsplay_finale = (
-                bool(state.get("clutch_finale"))
+                not official and bool(state.get("clutch_finale"))
                 and innings == 2 and target is not None
                 and runs_needed > 0 and balls_left > 0
                 and (scenario_phase == "finale" or balls_left <= CLUTCH_WINDOW_BALLS)
@@ -2347,7 +2374,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             # decides how often a chase of this size against these players comes
             # off. The layers that stand down are gated rather than deleted, so
             # CC_CHASE_MODEL=0 degrades to the old behaviour instead of to nothing.
-            chase_active = chase_model_active(state)
+            chase_active = not official and chase_model_active(state)
 
             # ── Pressure (services.match_drama) ──
             # How much each side is feeling it on this ball. A fielding side under
@@ -2400,7 +2427,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             # spec baseline and the matrix both answer "how likely is this
             # chase", which is exactly what the controller is now solving for,
             # and stacking them would only spend its authority undoing them.
-            if (not chase_active) \
+            if (not official and not chase_active) \
                     and (scenario_eng is None or scenario_phase == "inactive") \
                     and innings == 2 and target:
                 # Layer 1: spec total-band baseline — tilt the whole chase toward
@@ -2470,14 +2497,14 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             # chase; retired where the controller is in charge, since its fixed
             # multipliers were tuned by feel against no outcome distribution.
             drama_hook = _make_last_over_drama_hook(
-                state["current_over"] >= overs_total and not chase_active,
+                not official and state["current_over"] >= overs_total and not chase_active,
                 bool(target) and not chased)
             # Pitch Rule Engine layers: Sub-100 floor guard, the anti-capitulation
             # fighting-match corridor (2nd innings), and the per-innings variance
             # mood. All bounded nudges on top of the rating/trait weights.
-            floor_hook = _make_floor_hook(state, pitch)
-            corridor_hook = _make_no_collapse_hook(state)
-            variance_hook = _make_variance_hook(state.get("innings_variance"))
+            floor_hook = None if official else _make_floor_hook(state, pitch)
+            corridor_hook = None if official else _make_no_collapse_hook(state)
+            variance_hook = None if official else _make_variance_hook(state.get("innings_variance"))
             # v3.0 layers: how this surface has changed for the chase (section 2)
             # and where the batting side's head is (sections 8A-8C). Both are
             # bounded nudges in the same family as the three above.
@@ -2519,26 +2546,26 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             # Match drama: the surface playing to its name, the 270+ brake, the
             # no-runaway contest layer, pressure on either side and any sledge
             # the striker is still carrying. All bounded, all None when quiet.
-            if _realism_live and not _drama("pitch_character"):
+            if official or (_realism_live and not _drama("pitch_character")):
                 pitch_hook, pitch_strength = None, 0.0
             else:
                 pitch_hook, pitch_strength = match_drama.make_pitch_character_hook(
                     pitch, phase, innings, bowl_adapted.get("bowling_type"),
                     balls_bowled(state) / float(max(1, innings_balls)))
-            ceiling_hook = (None if (chase_active or (
+            ceiling_hook = (None if (official or chase_active or (
                                 _realism_live and not _drama("score_ceiling")))
                             else match_drama.make_score_ceiling_hook(
                                 pitch, state["total_runs"], balls_bowled(state),
                                 innings_balls, innings, target))
             contest_hook = (
-                None if (_realism_live and not _drama("contest"))
+                None if official or (_realism_live and not _drama("contest"))
                 else match_drama.make_contest_hook(
                     pitch, innings, state["total_runs"], state["total_wickets"],
                     balls_bowled(state), innings_balls, target, chase_active))
             bat_p_hook = match_drama.make_bat_pressure_hook(bat_p)
             big_ask = match_drama.final_over_big_ask(innings, runs_needed, balls_left, bpu)
             bowl_p_hook, bowl_p_kwargs = match_drama.bowl_pressure_effects(bowl_p, big_ask)
-            finisher_hook = None if chase_active else _make_set_finisher_hook(state)
+            finisher_hook = None if official or chase_active else _make_set_finisher_hook(state)
             sledge_hook = sledging.make_hook(state, srid)
             split = bowl_p_kwargs.get("extras_split", [0.40, 0.25, 0.20, 0.15])
             chase_hook = (_make_chase_hook(state, fielding_q, is_free_hit_ball,
@@ -2571,7 +2598,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             # keeps the global module, byte-for-byte. Self-heals a pre-seed
             # state saved before this field existed.
             _ball_rng = None
-            if _realism_live:
+            if _realism_live or official:
                 _seed = state.get("rng_seed")
                 if _seed is None:
                     _seed = random.SystemRandom().randrange(1 << 62)
@@ -2593,6 +2620,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                 batting_position=state["striker_idx"] + 1,
                 fielding_quality=fielding_q,
                 format_config=engine_fmt,
+                ground_config_override=state.get("ground_reference") if official else None,
                 batting_approach=bat_app, bowling_approach=bowl_app,
                 approach_context=delivery_ctx,
                 weight_hook=weight_hook,
@@ -2606,23 +2634,25 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                     "innings_balls": total_balls(state),
                 },
                 rng=_ball_rng,
+                **({"official_play": True, "realism_profile": state.get("event_realism_profile")}
+                   if official else {}),
                 **bowl_p_kwargs))
             # Batting side under the pump: the odd wicket becomes a mix-up.
-            if not _realism_live or _drama("wicket_mixup"):
+            if not official and (not _realism_live or _drama("wicket_mixup")):
                 oc = match_drama.maybe_mixup(oc, bat_p, free_hit=is_free_hit_ball)
-            if not (state.get('_planned_super_overs') or state.get('_planned_winner_user_id')):
+            if official or not (state.get('_planned_super_overs') or state.get('_planned_winner_user_id')):
                 oc = _resolve_running_wicket(oc, runs_needed)
 
-        if not is_odi and state.get('_planned_super_overs') and innings == 1:
+        if not official and not is_odi and state.get('_planned_super_overs') and innings == 1:
             from services.tournament_match_settings import cap_first_innings
             oc = cap_first_innings(oc, state['total_runs'], 6 * total_balls(state))
-        if not is_odi and state.get('_planned_super_overs') and innings == 2:
+        if not official and not is_odi and state.get('_planned_super_overs') and innings == 2:
             from services.tournament_match_settings import constrain_tie_outcome
             oc = constrain_tie_outcome(oc, runs=state['total_runs'], par=int(target) - 1,
                 remaining=total_balls(state) - balls_bowled(state),
                 wickets=state['total_wickets'], wicket_limit=state.get('wicket_limit', WICKET_LIMIT),
                 innings_balls=total_balls(state))
-        if state.get('_planned_winner_user_id') and not state.get('_planned_super_overs'):
+        if not official and not is_odi and state.get('_planned_winner_user_id') and not state.get('_planned_super_overs'):
             from services.tournament_match_settings import apply_winner_outcome
             oc = apply_winner_outcome(
                 oc, winner_is_batting=(int(state['_planned_winner_user_id'])
@@ -2787,7 +2817,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             needs_fielder = wtype.lower() in ("caught", "run out", "stumped")
             fielder = _pick_fielder(state, bowler,
                                     allow_bowler=(wtype.lower() == "run out"),
-                                    rng=_ball_rng if is_odi else random) if needs_fielder else ""
+                                    rng=_ball_rng if is_odi or official else random) if needs_fielder else ""
             if wtype.lower() == "stumped":
                 keeper = next((p for p in impact_player.active_players(state.get("bowl_xi") or [])
                                if str(p.get("category") or "").lower().replace(" ", "") == "wicketkeeper"), None)
@@ -3659,12 +3689,13 @@ def end_first_innings(state):
     state["innings_variance"] = _draw_variance()
     # Total-band Chase Win% for defending this target on this pitch — the
     # baseline that biases who wins the chase (Pitch Rule Engine spec).
-    state["chase_target_pct"] = ground_config.get_chase_win_pct(
-        state.get("pitch_type", "Hard"), state["target"] - 1)
+    if not state.get("official_event"):
+        state["chase_target_pct"] = ground_config.get_chase_win_pct(
+            state.get("pitch_type", "Hard"), state["target"] - 1)
 
     # Optionally arm a dramatic-finish scenario for the chase now that the
     # target is known (20-over matches only; self-disables if unrealistic).
-    if not odi_approach.is_odi(state):
+    if not state.get("official_event") and not odi_approach.is_odi(state):
         _maybe_enable_scenario(state)
 
 
