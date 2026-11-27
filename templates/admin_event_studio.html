@@ -23,11 +23,26 @@
 .studio input, .studio select, .studio textarea {max-width: 100%; padding: .55rem; border: 1px solid var(--studio-control-border); border-radius: 6px; background: var(--input-bg); color: var(--text)}
 .studio details {margin-block: .75rem}
 .studio summary {cursor: pointer; font-weight: 700; padding-block: .45rem}
+.studio .studio-example {margin-block: .3rem .9rem}
+.studio .studio-example > summary {font-weight: 500; font-size: .85rem; color: var(--studio-muted)}
+.studio .studio-example pre {overflow-x: auto; margin: .2rem 0 0; padding: .6rem .7rem;
+  background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px;
+  font: .82rem/1.5 ui-monospace, monospace}
+.studio .studio-example p {margin: .4rem 0 0; font-size: .82rem}
 .studio table {width: 100%; border-collapse: collapse; text-align: left; font-variant-numeric: tabular-nums}
 .studio th, .studio td {padding: .6rem; border-bottom: 1px solid var(--border); white-space: nowrap}
 .studio-scroll {overflow: auto; max-height: 22rem}
 .studio :focus-visible {outline: 2px solid var(--accent, #d9ae59); outline-offset: 2px}
 </style>
+{#- One collapsed example per JSON field, the pattern Challenge Data already uses. -#}
+{% macro json_example(body, note='') %}
+<details class="studio-example"><summary>Example</summary><pre>{{ body }}</pre>
+  {%- if note %}<p>{{ note }}</p>{% endif %}
+</details>
+{% endmacro %}
+{#- A fixture stamp without its seconds, so the conditions columns stay on screen. A
+    generated row is UTC; a manually authored one is in the event timezone. -#}
+{% macro stamp(value) %}{{ value[:16]|replace('T', ' ') }}{{ ' UTC' if value.endswith('+00:00') }}{% endmacro %}
 <div class="studio">
   {% if event %}<a href="{{ url_for('admin_event_studio') }}">All events</a>{% endif %}
   <h2>{{ event.name if event else 'CMU Event Studio' }}</h2>
@@ -45,6 +60,8 @@
           {% for item in events %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}
         </select></label>
         <label>Or paste a versioned JSON export <textarea name="import_config" spellcheck="false"></textarea></label>
+        {{ json_example('{\n  "schema_version": 1,\n  "kind": "live",\n  "format": "T20",\n  "timezone": "Asia/Kolkata",\n  "opens_at": "2026-12-01T09:00",\n  "enrollment_cutoff": "2026-12-01T20:00",\n  "closes_at": "2026-12-25T23:00",\n  "teams": [],\n  "schedule": {"preset": "round_robin", "legs": 2}\n}',
+           'Use Export configuration on an existing event to get a complete, valid export.') }}
       </details>
       <div class="studio-toolbar"><button class="btn btn-primary">Create draft</button></div>
     </form>
@@ -91,9 +108,20 @@
       <input type="hidden" name="revision" value="{{ event.draft_number }}">
       <section class="studio-panel">
         <h3>Draft configuration</h3>
+        <div class="studio-toolbar">
+          <label>Challenge League<select name="league_id"><option value="">Choose a league</option>
+            {% for league in leagues %}<option value="{{ league.id }}">{{ league.name }}</option>{% endfor %}
+          </select></label>
+          <button class="btn btn-ghost" name="action" value="copy">Copy teams and squads</button>
+        </div>
+        <p>Copying a league fills Team details and Squads below with every active team's name, short
+          name, logo, colours and full squad, and takes the league's overseas rules with it. It
+          replaces the draft's current team list.</p>
         <div data-studio-fields hidden>
           <details open><summary>Overview</summary>
-            <p>Use YYYY-MM-DDThh:mm. Times use your selected timezone unless you enter an offset.</p>
+            <p>Pick each date and time from the calendar. They use your selected timezone. A time that
+              crosses a daylight-saving boundary needs an explicit UTC offset instead — set it in
+              Full configuration and the field below turns into a text box showing it.</p>
             <div class="studio-grid">
               <label>Event type<select data-config-path="kind">
                 <option value="live">Live Event</option><option value="moment">Cricket Moment</option><option value="boss">Boss Battle</option>
@@ -103,25 +131,29 @@
               </select></label>
               <label>Format<select data-config-path="format"><option>T20</option><option>ODI</option></select></label>
               <label>Timezone <input data-config-path="timezone" placeholder="Asia/Kolkata"></label>
-              <label>Opens <input data-config-path="opens_at" placeholder="2026-12-01T09:00"></label>
-              <label>Enrollment cutoff <input data-config-path="enrollment_cutoff" placeholder="2026-12-01T20:00"></label>
-              <label>Closes <input data-config-path="closes_at" placeholder="2026-12-25T23:00"></label>
+              <label>Opens <input type="datetime-local" data-config-path="opens_at" data-value-type="datetime"></label>
+              <label>Enrollment cutoff <input type="datetime-local" data-config-path="enrollment_cutoff" data-value-type="datetime"></label>
+              <label>Closes <input type="datetime-local" data-config-path="closes_at" data-value-type="datetime"></label>
               <label>Banner URL <input data-config-path="banner_url" maxlength="500"></label>
               <label class="inline"><input type="checkbox" data-config-path="featured"> Feature in the Events Hub</label>
             </div>
             <label>Player description<textarea class="short" data-config-path="description" maxlength="2000"></textarea></label>
           </details>
-          <details><summary>Teams and squads</summary>
-            <label>Teams JSON<textarea data-config-path="teams" data-value-type="json" spellcheck="false"></textarea></label>
+          <details data-studio-teams><summary>Teams and squads</summary>
+            <p>Two views of the same team list, kept in step as you type. Team details holds the
+              identity and branding; Squads holds each team's master card IDs.</p>
+            <label>Team details JSON<textarea data-config-path="teams" data-value-type="team-details" spellcheck="false"></textarea></label>
+            {{ json_example('[\n  {\n    "key": "team-1",\n    "name": "Mumbai Indians",\n    "short_name": "MI",\n    "logo_url": "https://example.com/mi.png",\n    "primary_color": "#004BA0",\n    "secondary_color": "#D1AB3E"\n  },\n  { "key": "team-2", "name": "Chennai Super Kings", "short_name": "CSK" }\n]',
+               'Each team needs a lowercase key and a unique name. Up to 16 teams. Removing a team here removes its squad too.') }}
+            <label>Squads JSON<textarea data-config-path="teams" data-value-type="team-squads" spellcheck="false"></textarea></label>
+            {{ json_example('{\n  "team-1": [101, 102, 103],\n  "team-2": [204, 205, 206]\n}',
+               'Active master card IDs, up to 40 per team, keyed by the team key above. A team left out keeps the squad it has. To enter players by name instead, use Import team JSON or squad CSV below.') }}
           </details>
           <details><summary>Participation and gameplay</summary>
+            <p>Anyone may join while the event is open — there is no enrollment limit. Each fixture
+              gets its own pitch, venue and weather, drawn when you generate the schedule; see
+              Schedule to narrow the grounds, and Fixture rows to set a fixture's own.</p>
             <div class="studio-grid">
-              <label>Maximum enrollments <input type="number" min="1" max="5000" data-config-path="max_users"></label>
-              <label>Pitch <select data-config-path="pitch">{% for pitch in ('Hard', 'Flat', 'Dead', 'Green', 'Dry', 'Wicket') %}<option>{{ pitch }}</option>{% endfor %}</select></label>
-              <label>Venue <input maxlength="80" data-config-path="venue"></label>
-              <label>Fixed weather <select data-config-path="weather">
-                <option value="">Format default</option>{% for weather in ('Clear and Sunny', 'Partly Cloudy', 'Overcast', 'Humid', 'Hot and Dry', 'Light Rain Earlier', 'Windy') %}<option>{{ weather }}</option>{% endfor %}
-              </select></label>
               <label>AI difficulty override <select data-config-path="difficulty" data-value-type="nullable">
                 <option value="">Track default</option><option value="easy">Easy</option><option value="normal">Normal</option><option value="hard">Hard</option><option value="hard_plus">Hard++</option>
               </select></label>
@@ -129,6 +161,8 @@
               <label>Official attempts for a standalone challenge <input type="number" min="1" max="10" data-config-path="attempts"></label>
             </div>
             <label>Participation track keys<textarea data-config-path="mode" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+            {{ json_example('["tournament_team", "own_roster"]',
+               'Enable at least one. A Moment or Boss Battle uses the fixed ["tournament_team"] track.') }}
           </details>
           <details><summary>Schedule</summary>
             <div class="studio-grid">
@@ -142,16 +176,28 @@
               </select></label>
               <label>Fixture window in hours <input type="number" min="1" max="168" data-config-path="schedule.window_hours"></label>
               <label>Grace in minutes <input type="number" min="0" max="240" data-config-path="schedule.grace"></label>
+              <label>Condition seed <input type="number" min="0" max="4294967295" data-config-path="schedule.seed" data-value-type="nullable"></label>
             </div>
             <label>Groups by team key<textarea data-config-path="schedule.groups" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+            {{ json_example('{\n  "a": ["team-1", "team-2", "team-3", "team-4"],\n  "b": ["team-5", "team-6", "team-7", "team-8"]\n}',
+               'Groups and knockout only. Every team appears in exactly one group.') }}
+            <label>Venue countries<textarea data-config-path="schedule.venue_countries" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+            {{ json_example('["India", "Australia"]',
+               'Narrows the grounds a fixture may be drawn from. Leave it as [] for every ground in Stadium Data.'
+               ~ (' In use today: ' ~ stadium_countries|join(', ') ~ '.' if stadium_countries else '')) }}
             <label>Fixture rows<textarea data-config-path="fixtures" data-value-type="json" spellcheck="false"></textarea></label>
+            {{ json_example('[\n  {\n    "key": "r1-1",\n    "home": "team-1",\n    "away": "team-2",\n    "round": 1,\n    "stage": "league",\n    "opens_at": "2026-12-01T09:00",\n    "deadline": "2026-12-01T20:00",\n    "grace": 30,\n    "source": "manual",\n    "pitch": "Flat",\n    "venue": "Wankhede Stadium",\n    "weather": "Humid"\n  },\n  {\n    "key": "final",\n    "home": "winner:r1-1",\n    "away": "rank:2",\n    "round": 2,\n    "stage": "playoff",\n    "opens_at": "2026-12-05T09:00",\n    "deadline": "2026-12-05T20:00",\n    "grace": 30,\n    "source": "manual",\n    "venue": "Narendra Modi Stadium"\n  }\n]',
+               'Choose the Manual fixtures preset to author a whole tournament here. pitch, venue and weather are optional on any row — left out, Auto Schedule draws them. A playoff slot may depend on an earlier fixture with winner:<key>, loser:<key>, rank:<n> or group_rank:<group>:<n>.') }}
           </details>
           <details><summary>Fixture reminders</summary>
             <label class="inline"><input type="checkbox" data-config-path="notifications.enabled"> Send reminders to eligible enrolled players</label>
             <label>Hours before the deadline<textarea data-config-path="notifications.reminders_hours" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+            {{ json_example('[6, 1]', 'Up to four distinct offsets, each 1 to 168 hours before a fixture deadline.') }}
           </details>
           <details><summary>Objectives</summary>
             <label>Objective assignments<textarea data-config-path="objectives" data-value-type="json" spellcheck="false"></textarea></label>
+            {{ json_example('[\n  { "key": "win", "threshold": 1 },\n  { "key": "boundaries", "threshold": 4, "min_balls": 12 },\n  { "key": "wickets", "threshold": 3 },\n  { "key": "runs", "threshold": 40 }\n]',
+               'One entry per star. Keys are win, boundaries, wickets and runs.') }}
             <label class="inline"><input type="checkbox" data-config-path="objectives_locked"> Keep these assignments during generation</label>
           </details>
           <details><summary>Rewards</summary>
@@ -159,15 +205,24 @@
               {% for asset in ('coins', 'gems', 'quest_points') %}
               <label>{{ asset|replace('_', ' ')|capitalize }} budget <input type="number" min="0" max="2000000000" data-config-path="budget.{{ asset }}"></label>
               {% endfor %}
+              <label>Players covered by the budget <input type="number" min="1" max="5000" data-config-path="max_users"></label>
             </div>
+            <p>Players covered by the budget is not a cap on who may join — it is the number each
+              reward bundle is scaled against, and the number maximum liability is reported for.</p>
             <div class="studio-grid">
               <label>Community XP for eligible completion <input type="number" min="0" max="100" data-config-path="community.completion_xp"></label>
               <label>Distinct-winner goal for a Boss Battle <input type="number" min="0" max="5000" data-config-path="community.boss_goal"></label>
               <label>Daily limits for Event XP <input type="number" min="1" max="10" data-config-path="community.daily_limit"></label>
             </div>
             <label>Star milestones<textarea data-config-path="milestones" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+            {{ json_example('[\n  { "stars": 1, "free": {"gems": 1}, "diamond": {"gems": 3} },\n  { "stars": 5, "free": {"coins": 2000}, "diamond": {"coins": 5000, "gems": 10} }\n]',
+               'Up to 20 rows. Diamond must award at least the Free amount for each asset.') }}
             <label>Fixture conditions, difficulty, objective and reward overrides<textarea data-config-path="fixture_overrides" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+            {{ json_example('{\n  "r1-1": {\n    "pitch": "Flat",\n    "venue": "Eden Gardens",\n    "weather": "Overcast",\n    "difficulty": "hard"\n  },\n  "final": {\n    "rewards": {"free": {"win": {"coins": 2000}}, "diamond": {"win": {"coins": 4000}}}\n  }\n}',
+               'Keyed by fixture key, or "challenge" for a Moment or Boss Battle. An override here beats the fixture row\'s own ground. Pitches: ' ~ pitches|join(', ') ~ '. Weather: ' ~ weathers|join(', ') ~ '.') }}
             <label>Free and Diamond bundles<textarea data-config-path="rewards" data-value-type="json" spellcheck="false"></textarea></label>
+            {{ json_example('{\n  "free":    { "win": {"coins": 800, "gems": 5}, "loss": {"coins": 100}, "tie": {"coins": 200} },\n  "diamond": { "win": {"coins": 1600, "gems": 10}, "loss": {"coins": 200}, "tie": {"coins": 400} }\n}',
+               'Live Events award win, loss and tie. A Moment or Boss Battle awards success. Diamond must match or beat Free for every asset.') }}
           </details>
           <details data-kind-moment><summary>Cricket Moment checkpoint and rotation</summary>
             <div class="studio-grid">
@@ -183,7 +238,6 @@
                 <option value="none">Single edition</option><option value="daily">Daily</option><option value="weekly">Weekly</option>
               </select></label>
               <label>Number of editions <input type="number" min="1" max="12" data-config-path="rotation.periods"></label>
-              <label>Combined rotation budget<textarea data-config-path="rotation.series_budget" data-value-type="json" class="short" spellcheck="false"></textarea></label>
               <label>Chapter name <input data-config-path="chapter.name" maxlength="80"></label>
               <label>Moment position <input type="number" min="1" max="100" data-config-path="chapter.position"></label>
               <label>Prerequisite Moment slug <input data-config-path="chapter.prerequisite_slug"></label>
@@ -192,26 +246,32 @@
                 <option value="earned">From the first live delivery</option><option value="inclusive">Include preset figures</option>
               </select></label>
             </div>
+            <label>Combined rotation budget<textarea data-config-path="rotation.series_budget" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+            {{ json_example('{ "coins": 50000, "gems": 500, "quest_points": 2000 }',
+               'The ceiling across every edition of a daily or weekly rotation.') }}
             <label>Recorded scorecard checkpoint <textarea data-config-path="moment.checkpoint" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+            {{ json_example('{\n  "runs": 8,\n  "wickets": 0,\n  "extras": 0,\n  "crease": [1, 2],\n  "partnership": { "runs": 8, "balls": 6 },\n  "overs": [\n    { "bowler": 7, "balls": 6, "runs": 8, "wickets": 0, "credited_wickets": 0, "maidens": 0 }\n  ],\n  "batting": [\n    { "slot": 1, "runs": 5, "balls": 4, "fours": 1, "sixes": 0, "dots": 2, "dismissal": null, "bowler": null },\n    { "slot": 2, "runs": 3, "balls": 2, "fours": 0, "sixes": 0, "dots": 0, "dismissal": null, "bowler": null }\n  ],\n  "bowling": [\n    { "slot": 7, "runs": 8, "balls": 6, "wickets": 0, "dots": 2, "maidens": 0 }\n  ]\n}',
+               'Leave it as null to have the engine simulate the overs before the challenge from the prefix seed. Every object must carry exactly the fields shown. Numbers are XI positions from 1 to 11, not card IDs, and the figures must reconcile: the over rows against the total, and the partnership against the innings while no wicket has fallen.') }}
 
           </details>
         </div>
         <details><summary>Teams, fixture locks and budgets</summary>
           <p>Each team needs a lowercase key, a name and a list of master card IDs in <code>players</code>. An optional <code>xi</code> is an ordered list of 11 IDs. Copying Challenge Data replaces the draft team list.</p>
           <p>Use <code>source: "manual"</code> for a manually authored fixture or use <code>locks</code> to keep specific fields. Reward locks use <code>tier.result.asset</code>. Set <code>objectives_locked</code> to keep the objective list during regeneration.</p>
+          <p>A fixture's <code>pitch</code>, <code>venue</code> and <code>weather</code> are drawn when you generate the schedule. Edit one on its row and it is kept on the next run, or name it in <code>locks</code>. The draw is reproducible: the same draft regenerates the same grounds, and changing the condition seed re-rolls every one.</p>
           <p>Dates without an offset use the event timezone. For a Live Event, set the enrollment cutoff at or before the first fixture deadline. Enter budgets before generating rewards.</p>
         </details>
         <details data-studio-source open><summary>Full configuration and advanced fields</summary>
           <label>Event configuration (JSON)<textarea name="config" spellcheck="false" required rows="14">{{ config_json }}</textarea></label>
+          <p>The whole draft, and the one source of truth the sections above read and write. Use
+            Export configuration for a copy you can import into another event.</p>
         </details>
-        <div class="studio-toolbar">
-          <label>Challenge League<select name="league_id"><option value="">Choose a league</option>
-            {% for league in leagues %}<option value="{{ league.id }}">{{ league.name }}</option>{% endfor %}
-          </select></label>
-          <button class="btn btn-ghost" name="action" value="copy">Copy teams and squads</button>
-        </div>
         <details><summary>Import team JSON or squad CSV</summary>
           <label>Paste import data<textarea name="import_data" spellcheck="false" class="short"></textarea></label>
+          {{ json_example('{"teams": [\n  { "team_name": "Harbour XI", "short_name": "HBR", "primary_color": "#1d4ed8" }\n]}',
+             'Team JSON, in the Challenge Data field names. Matched to existing teams by name; a new name is added with a generated key and an empty squad.') }}
+          {{ json_example('TEAM NAME,PLAYER NAME,VERSION\nHarbour XI,Example Player,Base\nHarbour XI,Another Player,Gold',
+             'Squad CSV. Resolves each row to an active master card and replaces the listed teams\' squads. Leave VERSION blank for the Base card.') }}
           <div class="studio-toolbar">
             <button class="btn btn-ghost" name="action" value="import_teams">Preview team JSON</button>
             <button class="btn btn-ghost" name="action" value="import_squads">Preview squad CSV</button>
@@ -255,7 +315,7 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <div class="studio-grid">
             <label>Fixture ID <input type="number" name="game_id" min="1" required></label>
-            <label>New start deadline ({{ config.timezone }}) <input name="deadline" placeholder="2026-12-01T18:00" required></label>
+            <label>New start deadline ({{ config.timezone }}) <input type="datetime-local" name="deadline" required></label>
             <label>Reason <input name="reason" maxlength="500" required></label>
           </div>
           <div class="studio-toolbar"><button class="btn btn-ghost" name="action" value="extend">Extend deadline</button></div>
@@ -305,8 +365,13 @@
     {% if config.fixtures %}
     <section class="studio-panel"><h3>Fixture schedule</h3>
       <div class="studio-scroll" tabindex="0" role="region" aria-label="Fixture schedule">
-        <table><thead><tr><th scope="col">Fixture</th><th scope="col">Round</th><th scope="col">Home</th><th scope="col">Away</th><th scope="col">Opens</th><th scope="col">Deadline</th></tr></thead>
-        <tbody>{% for row in config.fixtures %}<tr><td>{{ row.key }}</td><td>{{ row.round }}</td><td>{{ row.home }}</td><td>{{ row.away }}</td><td>{{ row.opens_at }}</td><td>{{ row.deadline }}</td></tr>{% endfor %}</tbody></table>
+        <table><thead><tr><th scope="col">Fixture</th><th scope="col">Round</th><th scope="col">Home</th><th scope="col">Away</th><th scope="col">Opens</th><th scope="col">Deadline</th><th scope="col">Pitch</th><th scope="col">Venue</th><th scope="col">Weather</th></tr></thead>
+        <tbody>{% for row in config.fixtures %}
+          {% set ground = config.fixture_overrides.get(row.key) or {} %}
+          <tr><td>{{ row.key }}</td><td>{{ row.round }}</td><td>{{ row.home }}</td><td>{{ row.away }}</td><td>{{ stamp(row.opens_at) }}</td><td>{{ stamp(row.deadline) }}</td>
+          <td>{{ ground.pitch or row.pitch or config.pitch }}</td>
+          <td>{{ ground.venue or row.venue or config.venue or "—" }}</td>
+          <td>{{ ground.weather or row.weather or config.weather or "—" }}</td></tr>{% endfor %}</tbody></table>
       </div>
     </section>
     {% endif %}

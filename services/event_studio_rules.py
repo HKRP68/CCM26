@@ -99,15 +99,32 @@ def reward_peak(rewards, results, asset):
                 for key in results for tier in TIERS), default=0)
 
 
-def fixture_rules(config, key):
+def fixture_rows(config):
+    """``{key: row}`` for the event's fixtures, for callers that resolve many in a row."""
+    return {row["key"]: row for row in config["fixtures"] if isinstance(row.get("key"), str)}
+
+
+def fixture_rules(config, key, rows=None):
+    """The event's rules as they apply to one fixture.
+
+    A fixture row carries its own drawn or authored ground, and an explicit
+    ``fixture_overrides`` entry still wins over it. Pass ``rows`` from
+    :func:`fixture_rows` when resolving every fixture of a large schedule.
+    """
+    row = (fixture_rows(config) if rows is None else rows).get(key)
+    conditions = {field: row[field] for field in ("pitch", "venue", "weather")
+                  if field in row} if row else {}
     overrides = config["fixture_overrides"].get(key)
-    return {**config, **overrides} if overrides else config
+    if not conditions and not overrides:
+        return config
+    return {**config, **conditions, **(overrides or {})}
 
 
 def liability(config):
     ruling = ("win", "loss", "tie") if config["kind"] == "live" else ("success",)
     paths = candidate_paths(config)
-    payout = {key: fixture_rules(config, key)["rewards"] for path in paths for key in path}
+    rows = fixture_rows(config)
+    payout = {key: fixture_rules(config, key, rows)["rewards"] for path in paths for key in path}
     return {asset: config["max_users"] * (
         max((sum(reward_peak(payout[key], ruling, asset) for key in path) for path in paths), default=0)
         + milestone_liability(config, asset)) for asset in ASSETS}

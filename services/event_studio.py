@@ -11,6 +11,7 @@ import re
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
+from engine import pitch_registry
 from models import ChallengeLeague, ChallengeTeam, Player
 from models_events import StudioEvent, StudioRevision
 from services import event_studio_rules as rules, event_studio_schedule as schedule
@@ -20,7 +21,12 @@ from services.xi_rules import _category_is_keeper, validate_challenge_xi_dicts
 KEY = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}\Z")
 TRACKS = ("tournament_team", "own_roster")
 KINDS = ("live", "moment", "boss")
-PITCHES = ("Hard", "Flat", "Dead", "Green", "Dry", "Wicket")
+# The surfaces the engine actually models, from the one registry that owns them.
+# "Wicket" was never a surface — it is a ball-outcome bucket that an earlier copy of
+# this list mistook for one. It stays accepted so a draft saved with it still loads,
+# but it is never drawn and has no ground profile, so publishing with it still fails.
+LEGACY_PITCHES = ("Wicket",)
+PITCHES = tuple(pitch_registry.PITCHES) + LEGACY_PITCHES
 ACTIONS = ("schedule", "objectives", "rewards")
 OPEN_STATUSES = ("scheduled", "live")
 
@@ -69,7 +75,8 @@ def defaults():
         "schedule": {"preset": "round_robin", "legs": 2, "games": 3, "playoffs": "top4",
                      "round_spacing_days": 1, "window_hours": 20, "grace": 30,
                      "playing_days": list(range(1, 8)), "blackouts": [], "fixtures_per_day": 24,
-                     "third_place": False, "groups": {}, "qualify_per_group": 2, "seed": None},
+                     "third_place": False, "groups": {}, "qualify_per_group": 2, "seed": None,
+                     "venue_countries": []},
         "moment": {"side": "bat", "start_over": 16, "overs": 4, "goal": 35, "seed": 0, "goal_type": "segment",
                    "checkpoint": None, "objective_baseline": "earned"},
         "fixtures": [], "fixture_overrides": {}, "objectives": [], "rewards": {}, "reward_locks": [],
@@ -178,6 +185,10 @@ def normalize(raw):
             not KEY.fullmatch(key) or not isinstance(teams, list) or
             any(not isinstance(team, str) for team in teams) for key, teams in groups.items()):
         raise ValueError("Group settings must map group keys to lists of team keys.")
+    countries = settings["venue_countries"]
+    if not isinstance(countries, list) or len(countries) > 20 or any(
+            not isinstance(name, str) or not name.strip() or len(name) > 60 for name in countries):
+        raise ValueError("Venue countries must be up to 20 country names. Leave it empty for every stadium.")
     days = settings["playing_days"]
     if not isinstance(days, list) or not days or any(type(d) is not int or not 1 <= d <= 7 for d in days):
         raise ValueError("Playing days must be weekday numbers from 1 (Monday) through 7.")
@@ -267,9 +278,13 @@ def _validate_team_inputs(teams):
 
 
 def _validate_fixture_fields(rows):
+    from services.pitch_report import WEATHERS
     if len(rows) > schedule.MAX_FIXTURES:
         raise ValueError("Too many fixtures.")
-    lockable = {"home", "away", "round", "stage", "opens_at", "deadline", "grace"}
+    # Conditions are lockable like any other authored field, so a pitch or venue typed
+    # into one row survives the next Auto Schedule.
+    lockable = {"home", "away", "round", "stage", "opens_at", "deadline", "grace",
+                "pitch", "venue", "weather"}
     for row in rows:
         if not isinstance(row, dict) or not isinstance(row.get("key"), str) or not KEY.fullmatch(row["key"]):
             raise ValueError("Each fixture needs a valid key.")
@@ -282,6 +297,12 @@ def _validate_fixture_fields(rows):
             raise ValueError(f'{row["key"]}: invalid stage or provenance.')
         rules.integer(row["round"], "Round", 1, schedule.MAX_FIXTURES)
         rules.integer(row["grace"], "Grace minutes", 0, 240)
+        if "pitch" in row and row["pitch"] not in PITCHES:
+            raise ValueError(f'{row["key"]}: choose a supported pitch.')
+        if "weather" in row and row["weather"] not in ("", *WEATHERS):
+            raise ValueError(f'{row["key"]}: choose supported weather.')
+        if "venue" in row and (not isinstance(row["venue"], str) or len(row["venue"]) > 80):
+            raise ValueError(f'{row["key"]}: venue must be at most 80 characters.')
         for metadata in ("locks", "overrides"):
             if (not isinstance(row.get(metadata, []), list)
                     or any(key not in lockable for key in row.get(metadata, []))):
@@ -426,18 +447,51 @@ def _inputs(config, action):
     return digest(inputs)
 
 
+def condition_pools(config):
+    """``(venues, pitches)`` the generator may draw a fixture's ground from.
+
+    Venues come from Stadium Data, narrowed to ``schedule.venue_countries`` when that is
+    set. Pitches come from the registry's selectable surfaces, narrowed to what the
+    format's pinned reference can model — ODI's reference covers only five of them, and
+    ``validate_publish`` refuses anything outside it.
+    """
+    from services.draft_service import country_key
+    from services.tournament_stadiums import all_rows
+    wanted = {country_key(name) for name in config["schedule"]["venue_countries"]}
+    wanted.discard("")
+    venues = [str(row["name"]).strip() for row in all_rows()
+              if row.get("name") and (not wanted or country_key(row.get("country")) in wanted)]
+    if not venues:
+        raise ValueError("No stadium in Stadium Data matches the chosen venue countries."
+                         if wanted else "Add a ground to Stadium Data before generating a schedule.")
+    pitches = list(pitch_registry.SELECTABLE)
+    if config["format"] == "ODI":
+        from engine.realism import odi
+        supported = set(odi.new_settings()["pitch"])
+        pitches = [pitch for pitch in pitches if pitch in supported]
+    if not pitches:
+        raise ValueError("This format has no pitch its pinned reference can model.")
+    return sorted(set(venues)), pitches
+
+
 def generate(config, action, *, overwrite=False):
     if action not in (*ACTIONS, "all"):
         raise ValueError("Unknown generator.")
     updated = deepcopy(config)
     for step in ACTIONS if action == "all" else (action,):
         if step == "schedule":
+            venues, pitches = condition_pools(updated)
+            if updated["kind"] != "live":
+                # A standalone Moment or Boss has no fixtures, so its one ground is drawn
+                # onto the event itself. fixture_rules(config, "challenge") reads it from
+                # there, and fixture_overrides["challenge"] still wins if it is set.
+                updated.update(schedule.draw_conditions(updated, "challenge", venues, pitches))
             if updated["kind"] == "live" and updated["schedule"]["preset"] == "manual":
                 schedule.validate(updated, updated["fixtures"])
             else:
                 old = {row["key"]: row for row in updated["fixtures"]}
                 baseline = updated["generation"].get("schedule", {}).get("fields", {})
-                generated = schedule.generate(updated)
+                generated = schedule.generate(updated, venues=venues, pitches=pitches)
                 for row in generated:
                     previous = old.pop(row["key"], {})
                     if previous and previous.get("source", "manual") == "manual" and not overwrite:
@@ -578,7 +632,9 @@ def validate_publish(db, config, now):
     rules.validate_objectives(config)
     maximum = rules.validate_rewards(config)
     frozen = snapshot_teams(db, config)
-    pitches = {config["pitch"], *(row["pitch"] for row in config["fixture_overrides"].values() if "pitch" in row)}
+    pitches = {config["pitch"],
+               *(row["pitch"] for row in config["fixtures"] if "pitch" in row),
+               *(row["pitch"] for row in config["fixture_overrides"].values() if "pitch" in row)}
     if config["format"] == "ODI":
         from engine.realism import odi
         reference = odi.new_settings()

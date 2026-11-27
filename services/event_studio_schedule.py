@@ -1,10 +1,33 @@
 """Pure event fixture generation and validation."""
 
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from random import Random
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+import json
 
 MAX_FIXTURES = 240
+
+
+def _salt(config):
+    """A stable seed for this event's condition draws.
+
+    Order-insensitive on purpose: regenerating an unchanged draft must produce the
+    identical schedule, and reordering the groups mapping must not re-roll anything.
+    Setting ``schedule.seed`` re-rolls every fixture's ground.
+    """
+    material = {"seed": config["schedule"]["seed"],
+                "teams": sorted(team["key"] for team in config["teams"]),
+                "opens_at": config["opens_at"]}
+    return sha256(json.dumps(material, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def draw_conditions(config, key, venues, pitches, salt=None):
+    """The pitch, venue and weather for one fixture, drawn reproducibly from its key."""
+    from services.pitch_report import WEATHERS
+    rng = Random(f"{salt or _salt(config)}|{key}")
+    return {"pitch": rng.choice(pitches), "venue": rng.choice(venues),
+            "weather": rng.choice(list(WEATHERS))}
 
 
 def utc_instant(value, zone):
@@ -80,7 +103,7 @@ def _knockout(rows, entries, third_place):
         stage += 1
 
 
-def generate(config):
+def generate(config, venues=None, pitches=None):
     if config["kind"] != "live":
         return []
     keys = [team["key"] for team in config["teams"]]
@@ -158,6 +181,10 @@ def generate(config):
         deadline = opens + timedelta(hours=settings["window_hours"])
         row.update(opens_at=utc_text(opens), deadline=utc_text(deadline), grace=settings["grace"])
         round_usage += 1
+    if venues and pitches:
+        salt = _salt(config)
+        for row in rows:
+            row.update(draw_conditions(config, row["key"], venues, pitches, salt=salt))
     validate(config, rows)
     return rows
 

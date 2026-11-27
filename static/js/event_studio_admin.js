@@ -31,6 +31,77 @@
     else field.removeAttribute('aria-invalid');
   }
 
+  // A local wall-clock stamp, which is all a datetime-local input can hold.
+  const LOCAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/;
+
+  function teamList(config) {
+    return Array.isArray(config.teams) ? config.teams : [];
+  }
+
+  // Thrown for a problem the operator can read and fix, rather than "invalid JSON".
+  function fail(message) {
+    const error = new Error(message);
+    error.studio = true;
+    throw error;
+  }
+
+  function display(field, value, config) {
+    switch (field.dataset.valueType) {
+      case 'team-details':
+        return JSON.stringify(teamList(config).map(({players, xi, ...rest}) => rest), null, 2);
+      case 'team-squads': {
+        // One line per team: a forty-card squad one ID per line is unreadable.
+        const rows = teamList(config).map(team =>
+          `  ${JSON.stringify(team.key ?? null)}: ${JSON.stringify(team.players ?? [])}`);
+        return rows.length ? `{\n${rows.join(',\n')}\n}` : '{}';
+      }
+      case 'json':
+        return JSON.stringify(value ?? null, null, 2);
+      case 'datetime': {
+        // A picker cannot represent a UTC offset, so an offset-bearing stamp is shown in
+        // a text box instead of being silently blanked.
+        const text = value ?? '';
+        const local = LOCAL_TIME.test(text);
+        field.type = !text || local ? 'datetime-local' : 'text';
+        return local ? text.slice(0, 16) : text;
+      }
+      default:
+        return value ?? '';
+    }
+  }
+
+  // Team details and Squads are two views of config.teams, so each merges back into the
+  // other's half of a team rather than replacing the list.
+  function mergedDetails(config, rows) {
+    if (!Array.isArray(rows)) fail('Team details must be a list of team objects.');
+    const existing = new Map(teamList(config).map(team => [team.key, team]));
+    return rows.map(row => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) fail('Each team must be an object.');
+      const old = existing.get(row.key) ?? {};
+      const team = {...old, ...row, players: row.players ?? old.players ?? []};
+      if (!row.xi && !old.xi) delete team.xi;
+      return team;
+    });
+  }
+
+  function mergedSquads(config, squads) {
+    if (!squads || typeof squads !== 'object' || Array.isArray(squads))
+      fail('Squads must be an object keyed by team key.');
+    const teams = teamList(config);
+    const known = new Set(teams.map(team => team.key));
+    const unknown = Object.keys(squads).filter(key => !known.has(key));
+    if (unknown.length) fail(`Add ${unknown.join(', ')} under Team details first.`);
+    return teams.map(team => {
+      if (!(team.key in squads)) return team;
+      const players = squads[team.key];
+      if (!Array.isArray(players)) fail(`${team.key}: the squad must be a list of card IDs.`);
+      const next = {...team, players};
+      // A changed squad invalidates a fixed XI, as a squad CSV import does.
+      if (String(team.players ?? []) !== String(players)) delete next.xi;
+      return next;
+    });
+  }
+
   function refresh(config, except = null) {
     form.querySelector('[data-kind-boss]').hidden = config.kind !== 'boss';
     form.querySelector('[data-kind-moment]').hidden =
@@ -39,7 +110,7 @@
       if (field === except || field.getAttribute('aria-invalid') === 'true') continue;
       const value = path(field).reduce((object, key) => object?.[key], config);
       if (field.type === 'checkbox') field.checked = Boolean(value);
-      else field.value = field.dataset.valueType === 'json' ? JSON.stringify(value ?? null, null, 2) : value ?? '';
+      else field.value = display(field, value, config);
     }
   }
 
@@ -61,15 +132,24 @@
         return;
       }
       try {
-        if (field.dataset.valueType === 'json') value = JSON.parse(value);
-        else if (field.dataset.valueType === 'nullable') value = value || null;
-        if (field.type === 'number') value = field.valueAsNumber;
-        if (field.type === 'checkbox') value = field.checked;
-        const keys = path(field);
-        const target = keys.slice(0, -1).reduce((object, key) => object[key] ??= {}, config);
-        target[keys.at(-1)] = value;
-      } catch (_error) {
-        showError(field, 'Enter valid JSON before saving this draft.');
+        const type = field.dataset.valueType;
+        if (type === 'team-details' || type === 'team-squads') {
+          const parsed = JSON.parse(value);
+          config.teams = type === 'team-details'
+            ? mergedDetails(config, parsed) : mergedSquads(config, parsed);
+        } else {
+          if (type === 'json') value = JSON.parse(value);
+          else if (type === 'nullable') value = value || null;
+          if (field.type === 'number')
+            value = type === 'nullable' && field.value === '' ? null : field.valueAsNumber;
+          if (field.type === 'checkbox') value = field.checked;
+          const keys = path(field);
+          const target = keys.slice(0, -1).reduce((object, key) => object[key] ??= {}, config);
+          target[keys.at(-1)] = value;
+        }
+      } catch (error) {
+        showError(field, error?.studio ? error.message
+          : 'Enter valid JSON before saving this draft.');
         return;
       }
       showError(field, '');

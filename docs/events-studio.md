@@ -20,11 +20,13 @@ The main risks are concurrent starts and finalization, randomness changes on res
 ## Author and publish
 
 1. Open **Event Studio** in the authenticated admin navigation or visit `/events/studio`.
-2. Create a draft with a new slug. Set opening, enrollment cutoff and closing times. Enter offset-aware ISO timestamps when a local time crosses a daylight-saving boundary.
-3. Copy Challenge Data squads or import teams and squad CSV. A full configuration JSON can also be imported or duplicated when creating a draft. Active master card IDs are the source of all ratings. Resolve missing cards through the existing player editor.
-4. Choose tracks, schedule, pitch, objectives and a per-asset budget. For a Moment or standalone boss, enable just the `tournament_team` track and author two teams with the playable team first.
+2. Create a draft with a new slug. Pick the opening, enrollment cutoff and closing times from the calendar and clock. A local time that crosses a daylight-saving boundary needs an offset-aware ISO timestamp instead: enter it in the full configuration JSON and that field becomes a text box showing it.
+3. Choose a Challenge League at the top of the draft and select **Copy teams and squads**. It fills Team details with each active team's name, short name, logo and colours and Squads with its master card IDs, and takes the league's overseas rules with it. Team details and Squads are two views of the same team list, as Challenge Data separates them; teams and squad CSV can be imported instead, and a full configuration JSON can be imported or duplicated when creating a draft. Active master card IDs are the source of all ratings. Resolve missing cards through the existing player editor.
+4. Choose tracks, schedule, objectives and a per-asset budget. For a Moment or standalone boss, enable just the `tournament_team` track and author two teams with the playable team first. Every JSON field carries a collapsed example of its shape.
 5. Select **Auto Build Event** for schedule → objectives → rewards. Review the preview and select **Apply preview**. Each run records its generator version and digests. Fields edited after generation are preserved by default. Set fixture `locks`, reward `reward_locks` or `objectives_locked` to keep them even when replacing unlocked edits.
 6. Validate the draft, save any edits and publish the saved revision. Publication snapshots the legal XI, eligible squads, engine identifier, ground reference, objectives and reward policy. Draft copies omit the published snapshot and campaign records.
+
+Stadium Data (`/conditions`) groups its grounds into one collapsible per country, so an edit to a country's grounds does not mean scanning the whole list. The country is free text on a ground, with a list of the spellings already in use; spellings are folded when grouping, so `UAE` and `United Arab Emirates` stay one country.
 
 Team JSON accepts the Challenge Data field names, for example:
 
@@ -41,7 +43,11 @@ Harbour XI,Example Player,Base
 
 For a repeatable eight-team test cup select `round_robin` with two legs and `top4` playoffs. The generator produces 56 league fixtures and four playoff fixtures. Use an enrollment cutoff before the first fixture deadline and a closing date that accommodates the final grace period. Group events use a mapping such as `{"a":["team-1","team-2"],"b":["team-3","team-4"]}` and `qualify_per_group` in the schedule settings. The survival ladder uses the first team as the playable side.
 
-A manual fixture row contains `key`, `home`, `away`, `round`, `stage`, `opens_at`, `deadline`, `grace` and optional `source` and `locks`. Fixture overrides use the fixture key. They can set `pitch`, `weather`, `venue`, `difficulty`, `objectives` or `rewards`. A fixture may use different objectives with the same maximum stars. Bracket slots accept earlier `winner:<fixture>`, `loser:<fixture>`, `rank:<number>` and `group_rank:<group>:<number>` dependencies. JSON exports contain only versioned design inputs.
+Anyone may join an event while it is open; there is no enrollment limit. `max_users`, shown under Rewards as players covered by the budget, is only the figure each reward bundle is scaled against and liability is reported for.
+
+Conditions are per fixture, not per event. Generating a schedule draws each fixture's `pitch`, `venue` and `weather` — the pitch from the surfaces the format's pinned reference models, the venue from Stadium Data, narrowed by `schedule.venue_countries` when that is set, and the weather from the pitch report's list. The draw is reproducible from the draft itself, so regenerating an unchanged draft gives the identical grounds; changing `schedule.seed` re-rolls every one. A standalone Moment or Boss Battle has no fixtures, so its one ground is drawn onto the event. Editing a fixture's ground by hand keeps it on the next run, as with any other authored field, unless **Replace unlocked manual edits** is selected.
+
+A manual fixture row contains `key`, `home`, `away`, `round`, `stage`, `opens_at`, `deadline`, `grace` and optional `source`, `locks`, `pitch`, `venue` and `weather`. With the `manual` preset a whole tournament can be authored this way, each fixture carrying its own ground. Fixture overrides use the fixture key. They can set `pitch`, `weather`, `venue`, `difficulty`, `objectives` or `rewards`, and an override beats the fixture row's own ground. A fixture may use different objectives with the same maximum stars. Bracket slots accept earlier `winner:<fixture>`, `loser:<fixture>`, `rank:<number>` and `group_rank:<group>:<number>` dependencies. JSON exports contain only versioned design inputs.
 
 
 ## CIPL match integration

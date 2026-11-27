@@ -191,8 +191,10 @@ const EventHub = (() => {
   function renderDetail(event) {
     heading.textContent = event.name;
     const header = element('header', null, event.joined ? 'ev-campaign-header' : 'ev-panel');
+    // A Live Event draws a ground per fixture, so it reports no event-wide pitch.
+    const identity = [label(event.kind), event.format, event.pitch && `${event.pitch} pitch`];
     header.append(button('All events', () => load()),
-      element('p', `${label(event.kind)} · ${event.format} · ${event.pitch} pitch`, 'ev-meta'));
+      element('p', identity.filter(Boolean).join(' · '), 'ev-meta'));
     if (event.chapter.name) header.append(element('p',
       `${event.chapter.name} · Moment ${event.chapter.position}`, 'ev-meta'));
     if (event.boss_goal) {

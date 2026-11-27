@@ -266,6 +266,35 @@ class ConditionsAdminTests(unittest.TestCase):
             "step": "apply", "mode": mode, "only": only, "payload": payload,
             "filename": filename, "note": "test"}, follow_redirects=False)
 
+    def test_list_page_groups_the_grounds_by_country(self):
+        import re
+        from engine.sim import stadium as sim_stadium
+
+        rows = sim_stadium.live_rows()
+        r = self.client.get("/conditions")
+        self.assertEqual(r.status_code, 200)
+        body = r.data.decode()
+        # One collapsible per country, each headed by the country and its count.
+        headings = re.findall(r"<summary>([^<]*)", body)
+        self.assertTrue(any(head.strip().endswith("India") for head in headings), headings)
+        self.assertTrue(any(head.strip().endswith("Australia") for head in headings), headings)
+        self.assertEqual(body.count('class="cond-fold"'),
+                         len({(row.get("country") or "").strip().lower() for row in rows}))
+        self.assertIn("6 stadiums", body)          # the six Indian grounds that ship
+        # Every ground still reaches the page.
+        import html as html_module
+        plain = html_module.unescape(body)
+        for row in rows:
+            self.assertIn(row["name"], plain)
+        # A search opens the groups it matched rather than hiding them behind a fold.
+        found = self.client.get("/conditions?q=india").data.decode()
+        self.assertIn('<details class="cond-fold" open>', found)
+        self.assertNotIn("Melbourne Cricket Ground", found)
+        # The edit form offers the spellings already in use.
+        form = self.client.get("/conditions/stadium?name=Wankhede%20Stadium")
+        self.assertIn(b'list="stadium-countries"', form.data)
+        self.assertIn(b'<option value="India">', form.data)
+
     def test_list_page_and_exports(self):
         r = self.client.get("/conditions")
         self.assertEqual(r.status_code, 200)

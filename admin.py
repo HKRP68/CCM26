@@ -27204,6 +27204,36 @@ def _cond_form_to_raw(form):
     return raw
 
 
+def _stadium_country_names():
+    """The country spellings Stadium Data already uses, for the edit form's datalist."""
+    from engine.sim import stadium as sim_stadium
+    try:
+        rows = sim_stadium.live_rows()
+    except Exception:
+        logger.exception("Could not read Stadium Data countries")
+        return []
+    return sorted({str(row.get("country")).strip() for row in rows if row.get("country")})
+
+
+def _stadiums_by_country(rows):
+    """``rows`` as one group per country, each sorted by name, blanks last.
+
+    ``country_key`` folds the spellings ("UAE", "united arab emirates", "Ind.") so one
+    country cannot come out as two groups; the label keeps the spelling on the records.
+    """
+    from services.draft_service import country_flag, country_key
+    groups = {}
+    for row in rows:
+        country = (row.get("country") or "").strip()
+        group = groups.setdefault(country_key(country) or f"~{country.lower()}", {
+            "name": country or "Unlisted", "flag": country_flag(country), "rows": []})
+        group["rows"].append(row)
+    ordered = sorted(groups.values(), key=lambda g: (g["name"] == "Unlisted", g["name"].lower()))
+    for group in ordered:
+        group["rows"].sort(key=lambda r: r["name"].lower())
+    return ordered
+
+
 @app.route("/conditions")
 @login_required
 def admin_conditions():
@@ -27226,7 +27256,7 @@ def admin_conditions():
                     or any(q in a.lower() for a in r["aliases"])]
         overrides = conditions_io.live_modifier_overrides()
         return render_template(
-            "admin_conditions.html", rows=rows, q=q,
+            "admin_conditions.html", rows=rows, q=q, groups=_stadiums_by_country(rows),
             stadiums_saved=sim_store.current("stadiums", db) is not None,
             overrides=conditions_io._flatten(overrides),
             history_stadiums=sim_store.history("stadiums", db, limit=10),
@@ -27337,7 +27367,7 @@ def admin_conditions_stadium():
             db.rollback()
             flash(f"Not saved: {exc}", "error")
             return render_template("admin_conditions_stadium.html", s=raw, original=original,
-                                   regions=BOUNDARY_REGIONS,
+                                   regions=BOUNDARY_REGIONS, countries=_stadium_country_names(),
                                    modifiers=sim_stadium.MODIFIER_CHANNELS)
         finally:
             db.close()
@@ -27357,7 +27387,7 @@ def admin_conditions_stadium():
             flash(f"No stadium called {original!r}.", "error")
             return redirect(url_for("admin_conditions"))
     return render_template("admin_conditions_stadium.html", s=s, original=original,
-                           regions=BOUNDARY_REGIONS,
+                           regions=BOUNDARY_REGIONS, countries=_stadium_country_names(),
                            modifiers=sim_stadium.MODIFIER_CHANNELS)
 
 

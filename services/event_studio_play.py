@@ -128,9 +128,8 @@ def join(db, user, event_id, team_key, mode, now):
         raise ValueError("Choose a participating team and track.")
     if (config["kind"] != "live" or _ladder(config)) and team_key != _team_keys(config)[0]:
         raise ValueError("This challenge has a fixed playable side.")
-    count = db.scalar(select(func.count(StudioEnrollment.id)).filter_by(event_id=event.id))
-    if count >= config["max_users"]:
-        raise ValueError("This event has reached its enrollment limit.")
+    # There is no enrollment cap: anyone may join while the event is open. ``max_users``
+    # is only the figure the reward budget is planned against (event_studio_rules).
     roster = []
     if mode == "own_roster":
         owned = db.scalars(select(UserRoster).options(joinedload(UserRoster.player))
@@ -1032,8 +1031,13 @@ def detail(db, user, event_id, now):
     }, modes=config["mode"], teams=[{"key": key, "name": names[key]["name"]} for key in keys],
                    claim_days=config["claim_days"], rewards_preview=preview_rules["rewards"], survival=_ladder(config),
                    milestones=config["milestones"], community_xp=config["community"]["completion_xp"],
-                   enrollment_cutoff=schedule.utc_text(_cutoff(event, config)), pitch=config["pitch"],
-                   venue=config.get("venue"), weather=config.get("weather"), difficulty=config.get("difficulty"),
+                   # A Live Event's ground is per fixture, so there is no one pitch, venue or
+                   # weather to advertise here; each fixture reports its own in setup_fixture.
+                   enrollment_cutoff=schedule.utc_text(_cutoff(event, config)),
+                   pitch=None if config["kind"] == "live" else config["pitch"],
+                   venue=None if config["kind"] == "live" else config.get("venue"),
+                   weather=None if config["kind"] == "live" else config.get("weather"),
+                   difficulty=config.get("difficulty"),
                    attempt_limit=config["attempts"] if config["kind"] != "live" else None,
                    objectives=[{**row, "title": rules.OBJECTIVES[row["key"]][0]} for row in preview_rules["objectives"]],
                    moment=({key: challenge[key] for key in ("side", "goal", "start_over", "start_runs",

@@ -62,12 +62,21 @@ def _screen(db, event=None, config=None, preview=None, error=None):
                         StudioEntitlement.claimed_at.is_not(None))).all(),
             }
     clean_config = {key: value for key, value in current.items() if key in studio.defaults()}
+    from services.pitch_report import WEATHERS
     return render_template("admin_event_studio.html", events=events, event=event, config=current,
                            config_json=json.dumps(clean_config, indent=2, ensure_ascii=False),
                            leagues=db.scalars(select(ChallengeLeague).order_by(ChallengeLeague.name).limit(200)).all(),
                            history=history, stale=studio.stale(current), preview=preview, error=error,
                            activity=events_activity, audit=audit, maximum=liability(current),
+                           pitches=[pitch for pitch in studio.PITCHES if pitch not in studio.LEGACY_PITCHES],
+                           weathers=WEATHERS, stadium_countries=_stadium_countries(),
                            publish_enabled=studio.allowed(current["kind"], current["format"]))
+
+
+def _stadium_countries():
+    """The countries Stadium Data has a ground in, for the venue-country help."""
+    from services.tournament_stadiums import all_rows
+    return sorted({str(row.get("country")).strip() for row in all_rows() if row.get("country")})
 
 
 def _change(db, event, expected, action):
@@ -85,8 +94,13 @@ def _change(db, event, expected, action):
     config = _draft_form()
     g.studio_config = config
     if action == "copy":
-        config.update(studio.copied_teams(db, int(request.form["league_id"])))
+        league_id = (request.form.get("league_id") or "").strip()
+        if not league_id.isdigit():
+            raise ValueError("Choose a Challenge League before copying teams and squads.")
+        copied = studio.copied_teams(db, int(league_id))
+        config.update(copied)
         studio.save(db, event, expected, config, _actor(), "copy_squads")
+        g.studio_copied = copied["teams"]
     elif action in ("import_teams", "import_squads"):
         text = request.form.get("import_data", "")
         if not text or len(text) > 100_000:
@@ -179,7 +193,13 @@ def install(app, login_required, csrf_exempt, webapp_auth):
                     db.rollback()
                     return _screen(db, event, config, report)
                 db.commit()
-                flash("Event Studio changes saved.", "info")
+                copied = getattr(g, "studio_copied", None)
+                if copied is not None:
+                    cards = sum(len(team["players"]) for team in copied)
+                    flash(f"Copied {len(copied)} team{'' if len(copied) == 1 else 's'} and "
+                          f"{cards} card{'' if cards == 1 else 's'} into Team details and Squads.", "info")
+                else:
+                    flash("Event Studio changes saved.", "info")
                 return redirect(url_for("admin_event_studio_detail", event_id=event_id))
             except studio.Conflict as exc:
                 db.rollback()

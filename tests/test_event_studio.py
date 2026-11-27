@@ -1217,3 +1217,100 @@ def test_official_result_does_not_create_ordinary_stats_or_match_rewards(session
         assert not db.scalar(select(MatchRewardSettlement.match_id))
         assert user.matches_played == user.total_coins == 0
         assert db.scalar(select(StudioEntitlement.id).where(StudioEntitlement.game_id == game.id))
+
+
+def test_each_fixture_draws_its_own_reproducible_ground():
+    config = studio.generate(_schedule_config(8), "schedule")
+    venues, pitches = studio.condition_pools(config)
+    from services.pitch_report import WEATHERS
+
+    rows = config["fixtures"]
+    assert all(row["pitch"] in pitches and row["venue"] in venues and row["weather"] in WEATHERS
+               for row in rows)
+    # Not one ground for the whole event any more.
+    assert len({(row["pitch"], row["venue"]) for row in rows}) > 1
+    # "Dead" is never drawn, and the mistaken "Wicket" surface never was one.
+    assert not {row["pitch"] for row in rows} & {"Dead", "Wicket"}
+    # Regenerating an unchanged draft redraws the identical grounds; a new seed re-rolls.
+    assert studio.generate(config, "schedule")["fixtures"] == rows
+    reseeded = deepcopy(config)
+    reseeded["schedule"]["seed"] = 99
+    assert {row["venue"] for row in studio.generate(reseeded, "schedule")["fixtures"]} != \
+        {row["venue"] for row in rows} or len(venues) < 4
+
+
+def test_venue_countries_narrow_the_draw_and_odi_keeps_its_reference_pitches():
+    from services.draft_service import country_key
+    from services.tournament_stadiums import all_rows
+
+    config = _schedule_config(8)
+    config["schedule"]["venue_countries"] = ["india"]
+    indian = {row["name"] for row in all_rows() if country_key(row.get("country")) == "india"}
+    drawn = {row["venue"] for row in studio.generate(studio.normalize(config), "schedule")["fixtures"]}
+    assert drawn and drawn <= indian
+
+    config["schedule"]["venue_countries"] = ["Narnia"]
+    with pytest.raises(ValueError, match="matches the chosen venue countries"):
+        studio.generate(studio.normalize(config), "schedule")
+
+    odi = _schedule_config(8)
+    odi["format"] = "ODI"
+    from engine.realism import odi as odi_reference
+    supported = set(odi_reference.new_settings()["pitch"])
+    assert {row["pitch"] for row in studio.generate(studio.normalize(odi), "schedule")["fixtures"]} <= supported
+
+
+def test_manual_fixture_carries_its_own_pitch_and_venue():
+    config = _schedule_config(2)
+    config["schedule"].update(preset="manual", legs=1)
+    config["fixtures"] = [{
+        "key": "r1-1", "home": "team-0", "away": "team-1", "round": 1, "stage": "league",
+        "opens_at": "2026-12-01T09:00", "deadline": "2026-12-01T20:00", "grace": 30,
+        "source": "manual", "pitch": "Flat", "venue": "Wankhede Stadium", "weather": "Humid",
+    }]
+    config = studio.generate(studio.normalize(config), "schedule")
+    ruling = rules.fixture_rules(config, "r1-1")
+    assert (ruling["pitch"], ruling["venue"], ruling["weather"]) == ("Flat", "Wankhede Stadium", "Humid")
+
+    # An explicit fixture override still beats the row.
+    config["fixture_overrides"]["r1-1"] = {"venue": "Eden Gardens"}
+    assert rules.fixture_rules(studio.normalize(config), "r1-1")["venue"] == "Eden Gardens"
+
+    with pytest.raises(ValueError, match="supported pitch"):
+        studio.normalize({**config, "fixtures": [{**config["fixtures"][0], "pitch": "Trampoline"}]})
+
+
+def test_a_drawn_ground_survives_a_hand_edit_and_a_regeneration():
+    config = studio.generate(_schedule_config(8), "schedule")
+    key = config["fixtures"][0]["key"]
+    config["fixtures"][0]["venue"] = "Reserve Ground"
+    config["fixtures"][1].update(pitch="Dead", locks=["pitch"])
+    regenerated = studio.generate(studio.normalize(config), "schedule")
+    assert regenerated["fixtures"][0]["venue"] == "Reserve Ground"
+    assert regenerated["fixtures"][1]["pitch"] == "Dead"
+    # Replacing unlocked manual edits puts the drawn venue back.
+    replaced = studio.generate(studio.normalize(config), "schedule", overwrite=True)
+    assert replaced["fixtures"][0]["venue"] != "Reserve Ground"
+    assert next(row for row in replaced["fixtures"] if row["key"] == key)["venue"] in \
+        studio.condition_pools(config)[0]
+
+
+def test_a_standalone_challenge_draws_one_ground():
+    config = studio.generate(_schedule_config(2, kind="moment"), "schedule")
+    venues, pitches = studio.condition_pools(config)
+    assert not config["fixtures"]
+    assert config["pitch"] in pitches and config["venue"] in venues and config["weather"]
+    assert rules.fixture_rules(config, "challenge")["venue"] == config["venue"]
+
+
+def test_anyone_may_enrol_past_the_budget_figure(sessions):
+    with sessions() as db:
+        config = _seed(db)
+        config["max_users"] = 1
+        # max_users only scales the reward budget now, so regenerate against the new figure.
+        event = _publish(db, studio.generate(studio.normalize(config), "all"))
+        users = db.scalars(select(User).order_by(User.id)).all()
+        assert len(users) >= 2
+        for user in users:
+            _join(db, event, user)
+        assert db.scalar(select(func.count(StudioEnrollment.id)).filter_by(event_id=event.id)) == len(users)

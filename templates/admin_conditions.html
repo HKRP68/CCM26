@@ -1,6 +1,21 @@
 {% extends "base.html" %}
 {% block title %}Stadiums & Conditions{% endblock %}
 {% block content %}
+{# One native <details> per country: it survives a form POST landing back here, works with
+   the browser's own find-in-page, and needs no JavaScript. Same recipe as .au-fold. #}
+<style>
+.cond-fold {background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+  overflow: hidden; margin-bottom: .6rem}
+.cond-fold > summary {list-style: none; cursor: pointer; padding: .7rem 1rem; display: flex;
+  align-items: center; gap: .6rem; flex-wrap: wrap; font-weight: 800}
+.cond-fold > summary::-webkit-details-marker {display: none}
+.cond-fold > summary::before {content: "▸"; color: var(--muted); font-size: .85rem;
+  transition: transform .15s ease}
+.cond-fold[open] > summary::before {transform: rotate(90deg)}
+.cond-fold > summary:hover {background: var(--bg-soft)}
+.cond-fold .cond-count {color: var(--muted); font-weight: 500; font-size: .82rem; margin-left: auto}
+.cond-fold .table-wrap {border: 0; border-top: 1px solid var(--border)}
+</style>
 
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:.5rem;">
   <div>
@@ -40,6 +55,11 @@
   <button class="btn btn-ghost btn-sm" type="submit">Search</button>
 </form>
 
+{% for group in groups %}
+<details class="cond-fold" {% if q or groups|length == 1 %}open{% endif %}>
+  <summary>{{ group.flag }} {{ group.name }}
+    <span class="cond-count">{{ group.rows|length }} stadium{{ '' if group.rows|length == 1 else 's' }}</span>
+  </summary>
 <div class="table-wrap">
 <table>
   <thead><tr>
@@ -47,7 +67,7 @@
     <th>Outfield</th><th>Dew</th><th>Altitude</th><th>Own modifiers</th><th></th>
   </tr></thead>
   <tbody>
-  {% for s in rows %}
+  {% for s in group.rows %}
     <tr>
       <td><strong>{{ s.name }}</strong><div style="font-size:.75rem; color:var(--muted);">{{ s.city }}{% if s.country %}, {{ s.country }}{% endif %}{% if s.aliases %} · {{ s.aliases|join(', ') }}{% endif %}{% if s.slope %} · slope{% endif %}</div></td>
       <td style="white-space:nowrap;">{{ s.boundaryM.squareLeg }}/{{ s.boundaryM.fineLeg }}/{{ s.boundaryM.longOn }}/{{ s.boundaryM.longOff }} m</td>
@@ -66,12 +86,14 @@
         </form>
       </td>
     </tr>
-  {% else %}
-    <tr><td colspan="8" style="color:var(--muted);">No stadiums match.</td></tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
+</details>
+{% else %}
+<div class="form-card" style="max-width:none; color:var(--muted);">No stadiums match.</div>
+{% endfor %}
 
 {% if overrides %}
 <h2 style="margin:1.5rem 0 .5rem;">Modifier overrides</h2>
