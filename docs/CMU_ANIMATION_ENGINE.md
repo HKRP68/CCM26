@@ -295,6 +295,8 @@ Driven against the real app served from a throwaway SQLite database.
 | Match overlays | Classification pure and de-duplicated; layer `pointer-events: none` and a tap reaching the game underneath; focus unmoved; queue capped at 4; fast play drains; result card renders and cleans up. |
 | Arena | A ball through the real `triggerMatchEvent` raises a banner. With both engine scripts blocked the arena still boots, still handles the ball and logs no errors. |
 | Settings | Every control applies and persists; survives reload; particles disabled and budget 0 at Minimal; `ms(1000) === 0` at Off; both haptics controls stay in step; reduced motion floors the level, shows the note and suppresses the walkout. |
+| Interruption | Refreshing mid-reveal with a half-turned deck leaves the overlay hidden, no pending state, no scroll lock, no stray overlays and the app usable. A rejected purchase makes only the quote call, starts no reveal and clears the busy flag. |
+| Community XP | Counters, rank movement and the level-up badge against the page's real `loadOverview()`, with and without the engine — identical confirmed figures either way. |
 
 **Every mode, every reward surface.** The daily receipt and its chest, quest
 meters and the wallet counters were driven at Cinematic, Standard, Minimal,
