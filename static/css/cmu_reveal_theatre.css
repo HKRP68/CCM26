@@ -533,3 +533,255 @@
   .cmu-kb-hero { width: 88vw; }
   .cmu-kb-card { width: 68%; }
 }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * PHASE 3 · Legendary walkout
+ * ═══════════════════════════════════════════════════════════════════════════
+ * A night stadium: floodlights come up bank by bank, the tunnel opens, and the
+ * player's own card is presented. The scene is abstract on purpose — tiers and
+ * light, no figures — because CMU has no likeness for a real cricketer.
+ */
+
+.cmu-wo .cmu-fx-stage { width: min(100%, 30rem); }
+.cmu-wo .cmu-fx-backdrop { background: #04060A; }
+[data-theme="light"] .cmu-wo .cmu-fx-backdrop { background: #0B1018; }
+
+.cmu-wo-scene {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  /* The sky continues above the artwork, so the stadium can sit as a band
+     along the bottom instead of being zoomed in to cover a tall phone — at
+     slice on a 0.46:1 viewport the pylons and stand ended up off-screen. */
+  background: linear-gradient(180deg, #070B14 0%, #0C1322 52%, #101A2A 100%);
+}
+.cmu-wo-svg {
+  position: absolute;
+  display: block;
+  left: 50%;
+  bottom: 0;
+  width: 132%;
+  height: auto;
+  transform: translateX(-50%);
+}
+/* Landscape and tablets: the band would swallow the screen, so hold it to the
+   lower half and let the copy breathe above it. */
+@media (min-aspect-ratio: 3 / 4) {
+  .cmu-wo-svg { width: 100%; }
+}
+
+/* ───────────── Scene palette ───────────── */
+
+.cmu-wo-svg {
+  --wo-sky-1: #070B14;
+  --wo-sky-2: #101A2A;
+  --wo-turf: #10281B;
+  --wo-turf-line: #2F6B47;
+  --wo-stand: #090D16;
+  --wo-steel: #39404E;
+  --wo-lamp-off: #2B313C;
+  --wo-lamp-on: #FFF6DA;
+  --wo-beam: #FFE7A8;
+  --wo-tunnel: #04060A;
+  --wo-rim: var(--primary, #E7A443);
+}
+.wo-sky1 { stop-color: var(--wo-sky-1); }
+.wo-sky2 { stop-color: var(--wo-sky-2); }
+.wo-haze1 { stop-color: var(--wo-beam); stop-opacity: .16; }
+.wo-haze2 { stop-color: var(--wo-beam); stop-opacity: 0; }
+
+.wo-turf { fill: var(--wo-turf); }
+.wo-haze-layer { opacity: 0; transition: opacity calc(900ms * var(--cmu-motion-scale)) var(--cmu-ease); }
+.wo-crease { stroke: var(--wo-turf-line); stroke-opacity: .5; stroke-width: 1.2; fill: none; }
+.wo-tier { fill: var(--wo-stand); }
+.wo-rail { fill: var(--wo-steel); opacity: .7; }
+
+.wo-mast { stroke: var(--wo-steel); stroke-width: 3.4; fill: none; stroke-linecap: round; }
+.wo-mast-thin { stroke-width: 1.6; opacity: .75; }
+.wo-lamp-plate { fill: var(--wo-steel); }
+.wo-lamp { fill: var(--wo-lamp-off); transition: fill calc(260ms * var(--cmu-motion-scale)) linear; }
+
+.cmu-wo-beam {
+  fill: var(--wo-beam);
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: 50% 0%;
+  transition: opacity calc(620ms * var(--cmu-motion-scale)) var(--cmu-ease);
+}
+
+.wo-tunnel-dark { fill: var(--wo-tunnel); }
+.wo-tunnel-lip { fill: none; stroke: var(--wo-rim); stroke-opacity: .5; stroke-width: 2; }
+.wo-rib {
+  fill: none;
+  stroke: var(--wo-rim);
+  stroke-opacity: .16;
+  stroke-width: 1.3;
+}
+.cmu-wo-glow {
+  fill: var(--wo-lamp-on);
+  opacity: 0;
+  filter: blur(14px);
+  transition: opacity calc(620ms * var(--cmu-motion-scale)) var(--cmu-ease);
+}
+
+/* ───────────── Beat 2 · floodlights, bank by bank ─────────────
+ * Each pylon's --wo-bank staggers its own delay, so the ground lights up in
+ * four steps the way a real stadium does rather than all at once. */
+.cmu-wo.is-lighting .wo-lamp {
+  fill: var(--wo-lamp-on);
+  transition-delay: calc(var(--wo-bank, 0) * 150ms * var(--cmu-motion-scale));
+}
+.cmu-wo.is-lighting .cmu-wo-pylon .cmu-wo-beam {
+  opacity: .1;
+  transition-delay: calc(var(--wo-bank, 0) * 150ms * var(--cmu-motion-scale));
+}
+.cmu-wo.is-lit .cmu-wo-beam { opacity: .16; }
+.cmu-wo.is-lit .wo-haze-layer { opacity: 1; }
+.cmu-wo.is-lighting .cmu-wo-lamps {
+  animation: cmu-wo-flicker calc(520ms * var(--cmu-motion-scale)) steps(1, end) both;
+  animation-delay: calc(var(--wo-bank, 0) * 150ms * var(--cmu-motion-scale));
+}
+@keyframes cmu-wo-flicker {
+  0%, 18% { opacity: .25; }
+  22%, 34% { opacity: 1; }
+  38%, 48% { opacity: .4; }
+  52% { opacity: 1; }
+}
+
+/* ───────────── Beat 3 · the tunnel opens ───────────── */
+.cmu-wo.is-emerging .cmu-wo-glow { opacity: .9; }
+.cmu-wo.is-emerging .wo-rib {
+  animation: cmu-wo-rib calc(900ms * var(--cmu-motion-scale)) var(--cmu-ease) both;
+  animation-delay: calc(var(--wo-rib, 0) * 90ms * var(--cmu-motion-scale));
+}
+@keyframes cmu-wo-rib { from { stroke-opacity: .05; } to { stroke-opacity: .52; } }
+.cmu-wo.is-emerging .cmu-wo-tunnel {
+  animation: cmu-wo-push calc(1400ms * var(--cmu-motion-scale)) var(--cmu-ease) both;
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+@keyframes cmu-wo-push { to { transform: scale(1.14); } }
+
+/* ───────────── Copy stack ───────────── */
+
+/* Scene behind, confetti over the scene, copy over both. */
+.cmu-wo .cmu-fx-confetti { z-index: 1; }
+.cmu-wo-copy {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 8px 4px;
+  text-shadow: 0 2px 14px rgb(0 0 0 / 70%);
+}
+.cmu-wo-eyebrow { color: var(--cmu-rarity, var(--primary)); }
+
+.cmu-wo-line,
+.cmu-wo-rating,
+.cmu-wo-name,
+.cmu-wo-version,
+.cmu-wo-card {
+  margin: 0;
+  opacity: 0;
+  transform: translateY(16px);
+  transition:
+    opacity calc(420ms * var(--cmu-motion-scale)) var(--cmu-ease),
+    transform calc(420ms * var(--cmu-motion-scale)) var(--cmu-ease-pop);
+}
+.cmu-wo-line.is-on,
+.cmu-wo-rating.is-on,
+.cmu-wo-name.is-on,
+.cmu-wo-version.is-on,
+.cmu-wo-card.is-on { opacity: 1; transform: translateY(0); }
+.cmu-wo-line:empty { display: none; }
+
+.cmu-wo-country {
+  margin-top: 4px;
+  color: #fff;
+  font-size: clamp(1.1rem, 5.2vw, 1.55rem);
+  font-weight: 850;
+  line-height: 1.3;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+}
+.cmu-wo-category {
+  color: var(--cmu-rarity, var(--primary));
+  font-size: .76rem;
+  font-weight: 800;
+  letter-spacing: .24em;
+}
+.cmu-wo-rating {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 12px;
+  color: #fff;
+  font-size: clamp(3rem, 15vw, 4.4rem);
+  font-weight: 900;
+  line-height: 1;
+}
+.cmu-wo-rating small { font-size: .9rem; letter-spacing: .18em; opacity: .78; }
+.cmu-wo-name {
+  margin-top: 10px;
+  color: #fff;
+  font-size: clamp(1.15rem, 5.6vw, 1.6rem);
+  font-weight: 850;
+  letter-spacing: -.02em;
+  overflow-wrap: anywhere;
+}
+.cmu-wo-version {
+  color: var(--cmu-rarity, var(--primary));
+  font-size: .72rem;
+  font-weight: 800;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+}
+.cmu-wo-card {
+  width: min(84%, 17rem);
+  margin-top: 12px;
+  filter: drop-shadow(0 14px 30px rgb(0 0 0 / 60%));
+}
+.cmu-wo-card .player-reveal {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
+  text-align: center;
+  border-color: var(--cmu-rarity, var(--primary));
+  box-shadow: 0 0 34px color-mix(in srgb, var(--cmu-rarity, var(--primary)) 46%, transparent);
+  animation: none;
+}
+.cmu-wo-card .player-reveal-art { min-height: 0; aspect-ratio: 3 / 2; }
+.cmu-wo-card .player-reveal-slot { display: none; }
+.cmu-wo.is-presented .cmu-wo-card .player-reveal {
+  animation: cmu-pack-hit calc(700ms * var(--cmu-motion-scale)) var(--cmu-ease-pop);
+}
+
+/* ───────────── Motion gates ─────────────
+ * The walkout only runs at cinematic/standard — CMUAnim.deservesWalkout()
+ * returns false at minimal and off — but these keep the scene static if a
+ * level changes while it is on screen. */
+[data-cmu-motion="minimal"] .cmu-wo-tunnel,
+[data-cmu-motion="minimal"] .cmu-wo-lamps,
+[data-cmu-motion="minimal"] .wo-rib,
+[data-cmu-motion="off"] .cmu-wo-tunnel,
+[data-cmu-motion="off"] .cmu-wo-lamps,
+[data-cmu-motion="off"] .wo-rib { animation: none !important; }
+[data-cmu-motion="off"] .cmu-wo-line,
+[data-cmu-motion="off"] .cmu-wo-rating,
+[data-cmu-motion="off"] .cmu-wo-name,
+[data-cmu-motion="off"] .cmu-wo-version,
+[data-cmu-motion="off"] .cmu-wo-card { opacity: 1; transform: none; transition: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cmu-wo-tunnel, .cmu-wo-lamps, .wo-rib { animation: none !important; }
+  .cmu-wo-line, .cmu-wo-rating, .cmu-wo-name,
+  .cmu-wo-version, .cmu-wo-card { transition-duration: .01ms !important; }
+}
+
+@media (max-height: 700px) {
+  .cmu-wo-card { width: min(62%, 12rem); margin-top: 6px; }
+  .cmu-wo-rating { font-size: clamp(2.2rem, 11vw, 3rem); }
+}

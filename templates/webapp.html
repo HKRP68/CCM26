@@ -15,6 +15,7 @@
 <script src="{{ url_for('static', filename='js/cmu_animation_engine.js', v='fx-1') }}"></script>
 <script src="{{ url_for('static', filename='js/cmu_pack_theatre.js', v='fx-1') }}"></script>
 <script src="{{ url_for('static', filename='js/cmu_kitbag.js', v='fx-1') }}"></script>
+<script src="{{ url_for('static', filename='js/cmu_walkout.js', v='fx-1') }}"></script>
 <script>
   // Track third-party SDK load state so a DNS/network failure on these
   // hosts (e.g. net::ERR_NAME_NOT_RESOLVED where an ISP/region blocks the
@@ -5944,6 +5945,17 @@ function showReward(r) {
   else if (tier === 'epic') launchConfetti(60, 'epic', spinScreen);
   else if (tier === 'rare') launchConfetti(45, 'rare', spinScreen);
   else launchConfetti(32, '', spinScreen);
+
+  // A high-rated player pull earns the walkout here too. The banner above is
+  // already rendered, so closing or skipping the cinematic leaves the reward
+  // exactly where the player expects it.
+  if (r.type === 'player') {
+    playWalkout({
+      id: r.player_id, card_url: r.card_url, name: r.player_name,
+      rating: r.player_rating, country: r.player_country,
+      category: r.player_category, version: r.player_version,
+    });
+  }
 }
 
 // ════════════════ Browse (players with filters) ════════════════
@@ -8215,6 +8227,28 @@ function packTheatre() {
   return theatre && theatre.available ? theatre : null;
 }
 
+/**
+ * Play the legendary walkout for a confirmed player, if their rating earns it.
+ *
+ * Always resolves, and resolves to nothing the caller depends on: the reward
+ * is already granted and already on screen behind the overlay, so a walkout
+ * that is skipped, interrupted or fails changes nothing but the show. The OVR
+ * threshold lives on the engine (CMUAnim.rarity.walkoutFrom) and is cosmetic —
+ * it decides how loudly a pull is announced, never what it was.
+ */
+function playWalkout(player, title = '') {
+  const walkout = window.CMUWalkout;
+  if (!walkout || !walkout.available || !player) return Promise.resolve('unavailable');
+  return walkout.play({
+    name: player.name,
+    rating: player.rating,
+    country: player.country,
+    category: player.category,
+    version: player.version,
+    cardMarkup: playerRevealCard(player, 0),
+  }, title ? { title } : {}).catch(() => 'failed');
+}
+
 /** The Free Pack opens a CMU kit bag rather than a foil pouch. */
 function kitBag() {
   const bag = window.CMUKitBag;
@@ -8322,6 +8356,11 @@ function revealPackCards(skip = false) {
       });
       packDeckController = theatre.wireDeck(cards, {
         players,
+        // The walkout plays over the deck when a qualifying card is turned,
+        // and the deck is still there underneath when it ends. A card the
+        // player skipped past is already face up, so nothing is lost either
+        // way.
+        onFlip: (player) => { if (!instant) playWalkout(player); },
         onComplete: () => {
           status.textContent = label;
           tools.hidden = true;
@@ -8379,7 +8418,10 @@ function revealPackCards(skip = false) {
       cardMarkup: playerRevealCard(first, 0),
       status: (text) => { status.textContent = text; },
       skip: instant,
-    }).then(render, render);
+    }).then(() => {
+      render();
+      if (!instant) playWalkout(first);
+    }, render);
   } else if (instant) {
     if (theatre) theatre.open(pack, packOverlay, packTierKey, { skip: true });
     render();
