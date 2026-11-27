@@ -807,6 +807,10 @@ function applyMatchState(nextState, { force = false } = {}) {
   preloadEventGifs(matchState.eventGifs || {});
   preloadEventSounds(matchState.eventSounds || {});
   pollFailureCount = 0;
+  // Toss, Super Over, result, Player of the Match and a championship, read off
+  // the state the arena has just accepted. Each announces at most once per
+  // match, so running on every poll costs nothing.
+  announceMatchState();
 
   // Autoplay is a paid membership perk (Silver and above). Every state payload
   // carries the verdict, so assign it UNCONDITIONALLY: a missing field means
@@ -3126,6 +3130,10 @@ function handleAutoplayToggle(active) {
 
 function setAutoplayActive(active) {
   autoplayActive = !!active;
+  // Autoplay is fast play: deliveries arrive faster than a full banner can be
+  // watched, so the overlay layer shortens its holds and drops any backlog
+  // rather than lagging behind the game. Purely a display choice.
+  try { window.CMUMatchFX?.setFastPlay?.(autoplayActive); } catch (e) {}
   const btn = document.getElementById('autoplay-toggle-btn');
   if (!btn) return;
   btn.classList.toggle('active', autoplayActive);
@@ -3624,6 +3632,10 @@ function triggerMatchEvent(comm) {
   // Sound fires here — the single per-ball entry point — rather than inside
   // showEventBoxText/the GIF branch, so fallback paths can't double-play it.
   fireEventSound(comm);
+  // Broadcast banners for the confirmed delivery. Read-only and fire and
+  // forget: the layer is pointer-events: none, takes no focus and drops its
+  // own backlog, so it can never be the thing the player is waiting on.
+  announceMatchMoment(comm);
   const key = eventKeyForCommentary(comm);
   const choices = key ? (matchState?.eventGifs?.[key] || []) : [];
   if (!choices.length) {
@@ -3682,6 +3694,91 @@ function triggerMatchEvent(comm) {
   // The outcome (scorecard/commentary) already rendered instantly via
   // applyMatchState, so the overlay is just a quick celebratory beat.
   eventGifTimer = setTimeout(showEventBoxIdle, EVENT_FLASH_MS);
+}
+
+/* ═══════════════ CMU Animation Engine bridge ═══════════════
+ * Broadcast overlays for confirmed match events.
+ *
+ * Every value handed over has already been published by the server in
+ * matchState or the commentary feed. Nothing in here decides a ball, a
+ * wicket, a milestone or a result, and nothing writes back to matchState — if
+ * the engine is missing, every branch below is a no-op and the arena behaves
+ * exactly as it did before.
+ */
+function matchFX() {
+  const fx = window.CMUMatchFX;
+  return fx && fx.available ? fx : null;
+}
+
+/** Announce one revealed delivery. */
+function announceMatchMoment(comm) {
+  const fx = matchFX();
+  if (!fx || !comm) return;
+  try {
+    const index = Number(matchState?.currentInningsIdx) || 0;
+    fx.announce(comm, {
+      score: matchState?.score,
+      striker: matchState?.striker,
+      bowler: matchState?.bowler,
+      inningsIndex: index,
+      battingTeamName: (inningsTeamNames() || [])[index] || '',
+    });
+  } catch (error) {
+    console.warn('CMU match overlay skipped safely:', error);
+  }
+}
+
+/** Toss, Super Over and the match result, each announced once per match. */
+function announceMatchState() {
+  const fx = matchFX();
+  if (!fx || !matchState) return;
+  try {
+    fx.reset(String(matchState.matchId || matchState.id || ''));
+
+    if (matchState.tossWinnerId && matchState.tossDecision) {
+      const winner = [matchState.host, matchState.guest].find(team =>
+        team && String(team.telegramId) === String(matchState.tossWinnerId));
+      const name = winner?.teamName || winner?.username || (matchState.tossWinnerId ? 'AI XI' : '');
+      if (name) fx.toss({ winner: name, decision: matchState.tossDecision,
+                          token: String(matchState.matchId || '') });
+    }
+
+    if (matchState.superOver || matchState.result?.superOver || (matchState.superOverInnings || []).length) {
+      fx.superOver({ token: String(matchState.matchId || '') });
+    }
+
+    if (matchState.status === 'completed') {
+      const result = matchState.result || {};
+      const winnerName = result.winner?.teamName || result.winner?.username || result.winnerName || '';
+      fx.result({
+        winner: winnerName,
+        tied: result.outcome === 'tie',
+        detail: result.resultText || '',
+        token: String(matchState.matchId || ''),
+      }).then(() => {
+        if (!result.motm) return;
+        const m = result.motm;
+        const figures = [
+          m.runs != null ? m.runs + ' runs' + (m.balls != null ? ' (' + m.balls + 'b)' : '') : '',
+          m.wickets != null ? m.wickets + ' wickets' : '',
+        ].filter(Boolean).join(' · ');
+        return fx.potm({ name: m.name || '', detail: figures,
+                         token: String(matchState.matchId || '') });
+      }).then(() => {
+        // A championship is announced only when the published result says the
+        // match decided one.
+        const champion = result.championship || result.tournamentWin;
+        if (!champion) return;
+        return fx.championship({
+          team: champion.team || winnerName,
+          competition: champion.competition || champion.name || '',
+          token: String(matchState.matchId || ''),
+        });
+      });
+    }
+  } catch (error) {
+    console.warn('CMU match overlay skipped safely:', error);
+  }
 }
 
 function createParticles(container, color) {

@@ -231,7 +231,6 @@
     const taskTimeout = Number(options.taskTimeout) || 6000;
     const pending = [];
     let running = false;
-    let draining = false;
     let generation = 0;
 
     function sortPending() {
@@ -252,7 +251,10 @@
           try {
             const outcome = entry.task({
               // A task asks whether it should still bother with decoration.
-              get skipped() { return draining || myGeneration !== generation; },
+              // Generation alone answers that: it is bumped by every drain,
+              // so a task that started before one sees itself as skipped and
+              // a task queued after one does not.
+              get skipped() { return myGeneration !== generation; },
             });
             // Never let one sequence stall the queue: bound every task.
             await Promise.race([
@@ -266,7 +268,6 @@
         }
       } finally {
         running = false;
-        draining = false;
       }
     }
 
@@ -294,9 +295,11 @@
       return done;
     }
 
-    /** Abandon the backlog. In-flight tasks see `ctx.skipped === true`. */
+    /** Abandon the backlog. In-flight tasks see `ctx.skipped === true`.
+     *  Bumping the generation is the whole mechanism: nothing is left set
+     *  afterwards, so a drain while the queue is idle cannot silently skip
+     *  every task pushed after it. */
     function drain() {
-      draining = true;
       generation += 1;
       while (pending.length) pending.pop().settle();
     }

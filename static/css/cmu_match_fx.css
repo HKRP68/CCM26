@@ -1,0 +1,188 @@
+/*
+ * CMU Match FX — Phase 5 stylesheet
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Broadcast banners for in-play moments and full cards for the match-end ones.
+ *
+ * The banner layer is the important part: it covers the arena but is
+ * pointer-events: none throughout, so every tap goes to the game underneath.
+ * An animation must never be a thing the player has to wait out.
+ */
+
+.cmu-mx-layer {
+  position: fixed;
+  z-index: 9000;
+  inset: auto 0 0 0;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  gap: 8px;
+  padding:
+    0 max(12px, var(--safe-right, env(safe-area-inset-right, 0px)))
+    calc(96px + var(--safe-bottom, env(safe-area-inset-bottom, 0px)))
+    max(12px, var(--safe-left, env(safe-area-inset-left, 0px)));
+  pointer-events: none;
+}
+.cmu-mx-layer * { pointer-events: none; }
+
+/* ════════════════════════ Banner ════════════════════════ */
+
+.cmu-mx-banner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: min(84vw, 20rem);
+  max-width: min(94vw, 26rem);
+  padding: 11px 16px 11px 13px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--mx-tone) 52%, transparent);
+  border-left: 4px solid var(--mx-tone);
+  border-radius: 13px;
+  background: linear-gradient(100deg,
+    color-mix(in srgb, var(--mx-tone) 24%, var(--bg-card, #181821)) 0%,
+    var(--bg-card, #181821) 68%);
+  box-shadow:
+    0 10px 28px rgb(0 0 0 / 46%),
+    0 0 22px color-mix(in srgb, var(--mx-tone) 28%, transparent);
+  color: var(--text-primary, #F9F9F8);
+  opacity: 0;
+  transform: translateY(16px) scale(.94);
+  transition:
+    opacity calc(240ms * var(--cmu-motion-scale)) var(--cmu-ease),
+    transform calc(240ms * var(--cmu-motion-scale)) var(--cmu-ease-pop);
+}
+.cmu-mx-banner.is-in { opacity: 1; transform: translateY(0) scale(1); }
+.cmu-mx-banner.is-out { opacity: 0; transform: translateY(-10px) scale(.97); }
+
+.cmu-mx-banner.tone-blue { --mx-tone: #4A9EFF; }
+.cmu-mx-banner.tone-violet { --mx-tone: #A78BFA; }
+.cmu-mx-banner.tone-red { --mx-tone: #FF4D6D; }
+.cmu-mx-banner.tone-amber { --mx-tone: #E7A443; }
+.cmu-mx-banner.tone-gold { --mx-tone: #FFD966; }
+.cmu-mx-banner.tone-teal { --mx-tone: #6CD9AE; }
+
+[data-theme="light"] .cmu-mx-banner {
+  background: linear-gradient(100deg,
+    color-mix(in srgb, var(--mx-tone) 18%, var(--bg-card, #fff)) 0%,
+    var(--bg-card, #fff) 68%);
+  box-shadow: 0 10px 26px rgb(83 57 29 / 18%);
+}
+
+.cmu-mx-body { display: grid; gap: 1px; min-width: 0; }
+.cmu-mx-eyebrow {
+  color: var(--mx-tone);
+  font-size: .6rem;
+  font-weight: 850;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+.cmu-mx-headline {
+  font-size: 1.32rem;
+  font-weight: 900;
+  line-height: 1.05;
+  letter-spacing: -.02em;
+}
+.cmu-mx-detail,
+.cmu-mx-sub {
+  color: var(--text-secondary, #D9DCDE);
+  font-size: .76rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmu-mx-sub { color: var(--text-muted, #999A9B); font-size: .7rem; }
+
+/* A single light sweep across the banner as it lands — the broadcast "wipe". */
+.cmu-mx-flare {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(104deg, transparent 28%,
+    color-mix(in srgb, var(--mx-tone) 42%, transparent) 50%, transparent 72%);
+  transform: translateX(-120%);
+}
+.cmu-mx-banner.is-in .cmu-mx-flare {
+  animation: cmu-mx-flare calc(760ms * var(--cmu-motion-scale)) var(--cmu-ease) forwards;
+}
+@keyframes cmu-mx-flare { to { transform: translateX(120%); } }
+
+/* The loudest moments get a little extra weight. */
+.cmu-mx-banner.kind-six .cmu-mx-headline,
+.cmu-mx-banner.kind-century .cmu-mx-headline,
+.cmu-mx-banner.kind-hat_trick .cmu-mx-headline,
+.cmu-mx-banner.kind-five_wickets .cmu-mx-headline,
+.cmu-mx-banner.kind-record .cmu-mx-headline,
+.cmu-mx-banner.kind-super_over .cmu-mx-headline { font-size: 1.62rem; }
+
+.cmu-mx-banner.kind-wicket.is-in,
+.cmu-mx-banner.kind-six.is-in,
+.cmu-mx-banner.kind-century.is-in {
+  animation: cmu-mx-punch calc(420ms * var(--cmu-motion-scale)) var(--cmu-ease-pop);
+}
+@keyframes cmu-mx-punch { 38% { transform: translateY(0) scale(1.035); } }
+
+/* ════════════════════════ Match-end cards ════════════════════════ */
+
+.cmu-mx-card .cmu-fx-stage { width: min(100%, 26rem); }
+.cmu-mx-card-panel { display: grid; justify-items: center; gap: 8px; }
+.cmu-mx-card.tone-gold .cmu-fx-eyebrow { color: #FFD966; }
+.cmu-mx-card.tone-violet .cmu-fx-eyebrow { color: #C6B1FF; }
+.cmu-mx-card.tone-teal .cmu-fx-eyebrow { color: #6CD9AE; }
+[data-theme="light"] .cmu-mx-card.tone-gold .cmu-fx-eyebrow { color: #9A5A12; }
+[data-theme="light"] .cmu-mx-card.tone-violet .cmu-fx-eyebrow { color: #5D3C9D; }
+[data-theme="light"] .cmu-mx-card.tone-teal .cmu-fx-eyebrow { color: #146546; }
+
+.cmu-mx-card-headline {
+  margin: 0;
+  font-size: clamp(1.5rem, 8vw, 2.3rem);
+  font-weight: 900;
+  line-height: 1.08;
+  letter-spacing: -.03em;
+  overflow-wrap: anywhere;
+  animation: cmu-mx-card-in calc(560ms * var(--cmu-motion-scale)) var(--cmu-ease-pop) both;
+}
+@keyframes cmu-mx-card-in { from { opacity: 0; transform: scale(.76) translateY(14px); } }
+.cmu-mx-card-line {
+  margin: 0;
+  color: var(--text-secondary, #D9DCDE);
+  font-size: .85rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.cmu-mx-card.is-champions .cmu-mx-card-panel,
+.cmu-mx-card.is-potm .cmu-mx-card-panel {
+  border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+  box-shadow: 0 14px 38px rgb(0 0 0 / 42%), 0 0 34px var(--gold-glow);
+}
+
+/* ════════════════════════ Motion gates ════════════════════════ */
+/*
+ * Fast play and the reduced levels shorten a banner's hold in JavaScript; here
+ * the decoration is switched off so the layer stays cheap on a weak device.
+ */
+[data-cmu-motion="minimal"] .cmu-mx-flare,
+[data-cmu-motion="minimal"] .cmu-mx-banner.is-in,
+[data-cmu-motion="off"] .cmu-mx-flare,
+[data-cmu-motion="off"] .cmu-mx-banner.is-in { animation: none !important; }
+[data-cmu-motion="off"] .cmu-mx-banner { transition: none !important; }
+[data-cmu-motion="off"] .cmu-mx-card-headline { animation: none !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cmu-mx-flare,
+  .cmu-mx-banner.is-in,
+  .cmu-mx-card-headline { animation: none !important; }
+  .cmu-mx-banner { transition-duration: .01ms !important; }
+}
+
+@media (max-width: 380px) {
+  .cmu-mx-banner { min-width: 90vw; padding: 9px 12px 9px 11px; }
+  .cmu-mx-headline { font-size: 1.18rem; }
+}
+
+/* Landscape: the banner stack would cover the pitch, so keep it to one row's
+   worth of height and tuck it against the bottom edge. */
+@media (max-height: 460px) {
+  .cmu-mx-layer { padding-bottom: calc(12px + var(--safe-bottom, 0px)); gap: 5px; }
+  .cmu-mx-banner { padding: 7px 12px; }
+  .cmu-mx-headline { font-size: 1.05rem; }
+}
