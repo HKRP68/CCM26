@@ -89,6 +89,7 @@ class Base(unittest.TestCase):
     def setUp(self):
         from database import get_session
         from services import community_config_service as C
+        from services import config_service
         self.s = get_session()
         # Enable arena + official group.
         from models import GameConfig
@@ -96,6 +97,13 @@ class Base(unittest.TestCase):
             self.s.add(GameConfig(official_group_id=OFFICIAL))
             self.s.commit()
         C.invalidate()
+        # config_service caches the GameConfig row in a module global, and the hooks
+        # read the official group id back through it (community_hooks → gc_gate →
+        # config_service.get_config). This module used to get a clean cache by
+        # re-importing config_service; it no longer re-imports anything, so drop the
+        # cached row instead — otherwise an earlier test's config decides whether
+        # these awards are official.
+        config_service._CACHE["data"] = None
         C.save(self.s, enabled=True, auto_enabled=True)
 
     def tearDown(self):

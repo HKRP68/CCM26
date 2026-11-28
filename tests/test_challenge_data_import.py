@@ -17,44 +17,57 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import _module_swap  # noqa: E402
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
-_PREV_DATABASE_URL = None
-_SAVED_MODULES = {}
 _TMP = None
 _ENGINE = None
-_MODULE_NAMES = ("database", "models", "config", "admin",
-                 "handlers.challenge", "handlers.auction_league",
-                 "services.auction_league_service")
+_SAVED_FACTORY = None
+_SAVED_ENGINE = None
 
 
 def setUpModule():
-    global _PREV_DATABASE_URL, _SAVED_MODULES, _TMP, _ENGINE
-    _PREV_DATABASE_URL = os.environ.get("DATABASE_URL")
-    _SAVED_MODULES = _module_swap.save(_MODULE_NAMES)
-    _module_swap.unload(_MODULE_NAMES)
+    """Point the app at a throwaway database without re-importing ``models``.
+
+    Re-importing it builds a second declarative registry — another set of mapped
+    classes for the same tables. Importing ``admin`` then configures mappers while
+    both are live and models.py's relationship() strings resolve across the two.
+    Mapper configuration is cached, so restoring the modules does not undo it: the
+    next suite to query one of those tables gets ``FROM players, players``. This
+    module used to break all 30 of test_t20_championship that way.
+
+    ``get_session()`` reads ``SessionLocal`` from its module global at call time and
+    every caller imports the function, so swapping it redirects the whole app with
+    one registry and no re-import.
+    """
+    global _TMP, _ENGINE, _SAVED_FACTORY, _SAVED_ENGINE
+    import database
+    import models  # noqa: F401  (already imported; named so the tables are registered)
     _TMP = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     _TMP.close()
-    os.environ["DATABASE_URL"] = f"sqlite:///{_TMP.name}"
-    os.environ.setdefault("BOT_TOKEN", "test-token")
-    os.environ.setdefault("ADMIN_PASSWORD", "test")
-    os.environ.setdefault("ADMIN_USERNAME", "admin")
-    from database import Base, engine
-    import models  # noqa: F401
-    _ENGINE = engine
-    Base.metadata.create_all(bind=engine)
-    _seed()
+    _SAVED_FACTORY, _SAVED_ENGINE = database.SessionLocal, database.engine
+    try:
+        _ENGINE = create_engine(f"sqlite:///{_TMP.name}",
+                                connect_args={"check_same_thread": False})
+        database.Base.metadata.create_all(bind=_ENGINE)
+        database.SessionLocal = sessionmaker(bind=_ENGINE, autoflush=False, autocommit=False)
+        database.engine = _ENGINE
+        _seed()
+    except BaseException:
+        tearDownModule()
+        raise
 
 
 def tearDownModule():
+    global _ENGINE
+    import database
+    if _SAVED_FACTORY is not None:
+        database.SessionLocal = _SAVED_FACTORY
+    if _SAVED_ENGINE is not None:
+        database.engine = _SAVED_ENGINE
     if _ENGINE is not None:
         _ENGINE.dispose()
-    if _PREV_DATABASE_URL is None:
-        os.environ.pop("DATABASE_URL", None)
-    else:
-        os.environ["DATABASE_URL"] = _PREV_DATABASE_URL
-    _module_swap.restore(_SAVED_MODULES)
+        _ENGINE = None
     try:
         os.unlink(_TMP.name)
     except OSError:
