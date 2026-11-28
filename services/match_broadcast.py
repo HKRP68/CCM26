@@ -98,6 +98,8 @@ def _cricket_webapp_url(match_id, chat_id):
     if not host:
         return None
     match_key = str(match_id)
+    if match_key.startswith("competition-") and match_key[12:].isdigit():
+        return f"{host}/cricket?competition_fixture_id={match_key[12:]}"
     if match_key.startswith("event-") and match_key[6:].isdigit():
         return f"{host}/cricket?event_match_id={match_key[6:]}"
     return f"{host}/cricket?match_id={match_id}&chat_id={chat_id}"
@@ -187,11 +189,10 @@ def flip_coin(call_side):
     return coin, coin == call_side
 
 
-async def run_coin_toss(edit_fn, call_side):
-    """Animate a coin toss and return (coin_side, won).
+async def animate_coin_toss(edit_fn):
+    """Play the toss animation before revealing the recorded result.
 
     edit_fn: async callable taking the HTML string to display each frame.
-    call_side: 'heads' or 'tails' — what the calling captain chose.
 
     Animation-frame edits are best-effort: a dropped frame is cosmetic, so we
     swallow ordinary errors. Flood control (RetryAfter) is the exception — if we
@@ -207,6 +208,11 @@ async def run_coin_toss(edit_fn, call_side):
         except Exception:
             pass
         await asyncio.sleep(COIN_TOSS_FRAME_DELAY)
+
+
+async def run_coin_toss(edit_fn, call_side):
+    """Animate a coin toss and return (coin_side, won)."""
+    await animate_coin_toss(edit_fn)
     return flip_coin(call_side)
 
 

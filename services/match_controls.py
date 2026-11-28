@@ -9,7 +9,7 @@ TITLE = "⚙️ Manage match"
 _HTML_TITLE = f"<b>{TITLE}</b>"
 
 
-def attach(state, text, blocks, rows):
+def attach(state, text, blocks, rows, *, fallback_command=None):
     """Reuse the current authorized controls, with commands for regular HTML."""
     tools, legacy, seen = [], [], set()
     for row in rows or []:
@@ -32,7 +32,8 @@ def attach(state, text, blocks, rows):
                 tools.append(R.paragraph(R.callback_button(button.text, callback)))
                 command = ("/impact" if callback.startswith(("cipl_imp_", "impact_")) else
                            "/managebatting" if callback.startswith("lb_n_") else None)
-                legacy.append(f"{escape(button.text)} — {command}" if command else escape(button.text))
+                if not fallback_command:
+                    legacy.append(f"{escape(button.text)} — {command}" if command else escape(button.text))
     marker = f"\n\n<blockquote expandable>{_HTML_TITLE}\n"
     text = text.split(marker, 1)[0]
     base = ([block for block in blocks if not (block.get("type") == "details" and block.get("summary") == TITLE)]
@@ -44,5 +45,7 @@ def attach(state, text, blocks, rows):
     # Retried sends/edits may already carry the same section. Refresh it rather
     # than accumulating duplicate controls or retaining a stale captain's tools.
     base.append(R.details(TITLE, tools))
+    if fallback_command:
+        legacy.append(f"<code>{escape(fallback_command)}</code>")
     text += marker + "\n".join(legacy) + "</blockquote>"
     return base, text

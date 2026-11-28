@@ -573,9 +573,14 @@ def _check_signed_api():
         assert db.get(StudioGame, game_id).status == "scheduled"
     first = client.post(base + "/action", headers=signed(1000), json={**setup, "call": "heads"}).json["setup"]
     assert client.post(base + "/action", headers=signed(1000), json={**setup, "call": "tails"}).json["setup"]["toss"] == first["toss"]
-    assert client.post(base + "/action", headers=signed(1000), json={
-        "action": "start", "game_id": game_id, "decision": "bat", "tier": "diamond", "result": "win",
-    }).status_code == 200
+    launch = {"action": "start", "game_id": game_id, "tier": "diamond", "result": "win"}
+    assert client.post(base + "/action", headers=signed(1000), json=launch).status_code == 400
+    if first["toss"]["human_won"]:
+        election = client.post(base + "/action", headers=signed(1000), json={**setup, "decision": "bat"})
+        assert election.json["setup"]["toss"]["decision"] == "bat"
+    confirmed = client.post(base + "/action", headers=signed(1000), json={**setup, "xi": first["default_xi"]})
+    assert confirmed.json["setup"]["confirmed_xi"] == first["default_xi"]
+    assert client.post(base + "/action", headers=signed(1000), json=launch).status_code == 200
     arena = base + f"/arena/{game_id}"
     assert client.post(arena, headers=signed(1001), json={}).status_code == 400
     match = client.post(arena, headers=signed(1000), json={}).json
@@ -914,7 +919,7 @@ def test_chat_batting_and_bowling_use_committed_cipl_stages(sessions, monkeypatc
         text, _, _ = chat._match_panel(play.detail(db, user, event.id, NOW),
             play.game_view(game, None, entry.team_key, NOW, studio.revision(db, event, published=True).config),
             game.state)
-        assert "Choose your bowling approach." in text
+        assert "choose your <b>Bowling Approach</b>" in text
         assert "batting_approach" not in text
         with pytest.raises(ValueError, match="other surface"):
             play.submit_pick(db, user, game.id, game.version, picks.PICK_BOWL_APPROACH,
@@ -923,6 +928,129 @@ def test_chat_batting_and_bowling_use_committed_cipl_stages(sessions, monkeypatc
                          0, source="chat", clock=CLOCK)
         assert game.state["approach_log"][0]["bat"] == ai_pick
         db.commit()
+
+
+def test_event_chat_buttons_play_a_fixture_from_toss_to_result(sessions, monkeypatch):
+    from handlers import challenge, event_studio as chat
+    from services import match_broadcast
+    from services.rich_message_html import render
+    from telegram import InlineKeyboardButton
+
+    class FixtureClock(datetime):
+        @classmethod
+        def utcnow(cls):
+            return NOW
+
+    monkeypatch.setattr(chat, "datetime", FixtureClock)
+    monkeypatch.setattr(play, "datetime", FixtureClock)
+    monkeypatch.setattr(chat, "get_session", sessions)
+    monkeypatch.setattr(match_broadcast, "flip_coin", lambda call: (call, True))
+    monkeypatch.setattr(play, "token_hex", lambda _: "f" * 64)
+    monkeypatch.setenv("WEBAPP_URL", "https://mini.example/webapp")
+    monkeypatch.setenv("BOT_USERNAME", "CricketBot")
+    monkeypatch.setenv("MINIAPP_NAME", "play")
+    with sessions() as db:
+        event = _publish(db, _seed(db))
+        user = db.scalar(select(User).order_by(User.id))
+        entry = _join(db, event, user)
+        game_id = db.scalar(select(StudioGame.id).filter_by(enrollment_id=entry.id))
+        event_id, telegram_id = event.id, user.telegram_id
+        db.commit()
+
+    drafts = {}
+
+    def press(data):
+        return chat._dispatch(telegram_id, data.split(":")[1:], drafts=drafts)
+
+    def find(panel, prefix):
+        return [b for row in panel[1] for b in row if (b.callback_data or "").startswith(prefix)]
+
+    panel = press(f"ev:setup:{event_id}:{game_id}:0")
+    assert [b.text for b in find(panel, "ev:coin:")] == ["Heads", "Tails"]
+    panel = press(find(panel, "ev:coin:")[0].callback_data)
+    expected = challenge.toss_decision_buttons(lambda label, value: InlineKeyboardButton(label))
+    assert [b.text for b in find(panel, "ev:elect:")] == [b.text for b in expected[0]]
+    assert not find(panel, "ev:xp:")
+    panel = press(find(panel, "ev:elect:")[1].callback_data)
+    assert not find(panel, "ev:launch:")
+    assert find(panel, "ev:xp:")[0].text.startswith("1. ")
+    for selection in find(panel, "ev:xp:"):
+        panel = press(selection.callback_data)
+    panel = press(find(panel, "ev:xc:")[0].callback_data)
+    assert find(panel, "ev:launch:")[0].text == "Start Match"
+    panel = press(find(panel, "ev:launch:")[0].callback_data)
+    assert "pick your bowler" in panel[0]
+    assert len(find(panel, "ev:pick:")) == 5
+    assert not any("🧤" in button.text for button in find(panel, "ev:pick:"))
+    assert sum(map(len, panel[1])) == len(find(panel, "ev:pick:"))
+    section = next(block for block in panel[2] if block.get("summary") == "⚙️ Manage match")
+    assert not section.get("is_open")
+    html = render([section])
+    assert all(label in html for label in ("Pause", "Abandon…", "View Match", "Back to event"))
+    assert f"startapp=cricket_event-{game_id}_0" in html
+    assert f"/eventplay event-{game_id} manage" in panel[0]
+    fallback = press(f"ev:manage:{event_id}:{game_id}")
+    panel = press(find(fallback, "ev:pause:")[0].callback_data)
+    assert not panel[1]
+    fallback = press(f"ev:manage:{event_id}:{game_id}")
+    panel = press(find(fallback, "ev:resume:")[0].callback_data)
+    fallback = press(f"ev:manage:{event_id}:{game_id}")
+    confirm = press(find(fallback, "ev:confirm:")[0].callback_data)
+    assert "Abandon this official game?" in confirm[0]
+    panel = press(find(confirm, "ev:match:")[0].callback_data)
+    saw_chase = saw_batting = saw_bowling = False
+    for _ in range(160):
+        if "Match Over" in panel[0]:
+            break
+        options = find(panel, "ev:pick:")
+        assert options, panel[0]
+        code = options[0].callback_data.split(":")[-2]
+        assert code in {"a", "b", "n", "p"}
+        if code == "a":
+            saw_batting = True
+            assert [b.text for b in options] == [f"{emoji} {label}" for _, emoji, label in cricket.BATTING_APPROACHES]
+        if code == "p":
+            saw_bowling = True
+            assert [b.text for b in options] == [f"{emoji} {label}" for _, emoji, label in cricket.BOWLING_APPROACHES]
+        saw_chase |= "INNINGS BREAK" in panel[0]
+        panel = press(options[0].callback_data)
+    assert saw_chase and saw_batting and saw_bowling
+    assert "Match Over" in panel[0] and "stars" in panel[0] and "points" in panel[0]
+    assert not panel[1]
+    with sessions() as db:
+        assert db.get(StudioResult, game_id).kind == "completed"
+
+
+def test_event_bowler_picker_reserves_part_timers_for_an_emergency(sessions):
+    from services.crickidex_arena import _approach_payload
+
+    with sessions() as db:
+        event = _publish(db, _seed(db))
+        config = studio.revision(db, event, published=True).config
+    xis = {key: team["default_xi"] for key, team in config["snapshot"].items()}
+    state = cricket.build_state(config, 1, "team-0", "team-1", xis, "f" * 64, batting="team-0")
+    stage = picks.PICK_ACTION[picks.PICK_BOWLER]
+    state["event_next_action"] = stage
+
+    def app_options():
+        return _approach_payload(state, stage, "bowling")["overBowlers"]
+
+    options = app_options()
+    assert len(options) == 5 and all(not p["partTime"] for p in options)
+    batter = next(p for p in state["bowl_xi"] if p["category"] == "Batsman")
+    with pytest.raises(ValueError, match="isn't eligible"):
+        picks.validate(state, stage, picks.PICK_BOWLER, batter["roster_id"])
+
+    # Only the previous bowler has quota left. Their spell must still end.
+    state["current_over"] = 20
+    previous = options[0]["roster_id"]
+    state["prev_bowler_rid"] = previous
+    for player in options:
+        rid = player["roster_id"]
+        state["bowl_stats"][str(rid)]["balls"] = 18 if rid == previous else 24
+    options = app_options()
+    assert options and all(p["partTime"] for p in options)
+    assert picks.validate(state, stage, picks.PICK_BOWLER, batter["roster_id"]) == batter
 
 
 def test_wicket_checkpoint_timeout_and_surface_switch_preserve_resolved_balls(sessions, monkeypatch):
@@ -1157,6 +1285,7 @@ def test_t20_event_pins_enabled_measured_cipl_model(sessions, monkeypatch):
 
 
 def test_scheduled_conditions_and_impact_use_the_shared_t20_rules(sessions, monkeypatch):
+    from handlers import event_studio as chat
     from services import impact_player, match_broadcast
 
     monkeypatch.setattr(match_broadcast, "flip_coin", lambda call: (call, True))
@@ -1186,9 +1315,19 @@ def test_scheduled_conditions_and_impact_use_the_shared_t20_rules(sessions, monk
         assert impact["can_use"]
         leaving = next(p for p in impact["replaceable_players"] if p["category"] == "Bowler")
         incoming = impact["incoming_options"][0]
-        play.use_impact(db, user, game.id, game.version, incoming["roster_id"], leaving["roster_id"], None,
+        parts = ["impact", str(event.id), str(game.id), str(game.version)]
+        text, buttons, _ = chat._impact_panel(user, db, event.id, game.id, game.version, parts)
+        assert "Step 1 of 3" in text and len(buttons[0]) == 2
+        parts.append(str(leaving["roster_id"]))
+        text, buttons, _ = chat._impact_panel(user, db, event.id, game.id, game.version, parts)
+        assert "Step 2 of 3" in text and reserve.name in buttons[0][0].text
+        parts = buttons[0][0].callback_data.split(":")[1:]
+        text, buttons, _ = chat._impact_panel(user, db, event.id, game.id, game.version, parts)
+        assert "Step 3 of 3" in text and buttons[0][0].text == "#1 · Open"
+        play.use_impact(db, user, game.id, game.version, incoming["roster_id"], leaving["roster_id"], 0,
                         source="chat", clock=CLOCK)
         assert impact_player.summary(game.state)[0]["in_player"] == reserve.name
+        assert game.state["impact_players"]["usage"][entry.team_key]["bat_position"] == 0
         assert not impact_player.cipl_options(game.state, entry.team_key, game.state["event_next_action"])["can_use"]
         with pytest.raises(ValueError, match="full T20"):
             studio.normalize({**config, "format": "ODI"})

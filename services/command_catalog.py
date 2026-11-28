@@ -67,7 +67,9 @@ COMMAND_CATEGORIES = (
         '/handover /transfermatch @manager - Offer live tournament control to your team’s owner/co-owner; receiver accepts within 60 seconds',
     )),
     ('Events', (
-        '/events - Browse, join and resume official Live Events',
+        '/event - Browse, join and resume official Live Events',
+        '/events /liveevents - Events Hub and legacy campaigns',
+        '/eventlobby [code] - Open a group lobby or use an invitation',
         '/eventplay [event-match ID] - Open or resume an official CIPL match',
         '/moments - Open Cricket Moments',
         '/bossbattles - Open Boss Battles',

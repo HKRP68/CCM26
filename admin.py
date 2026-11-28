@@ -27351,31 +27351,37 @@ def admin_conditions_import():
 @app.route("/conditions/stadium/json", methods=["POST"])
 @login_required
 def admin_conditions_stadium_json():
-    """Add or update grounds from pasted JSON, without the import page's preview step.
-
-    Merge only, stadiums only: the destructive paths (replace, modifiers, removing a
-    ground that is not in the paste) stay behind the import page and its preview.
-    """
+    """Merge stadiums from pasted or uploaded JSON."""
     from services import conditions_io
-    text = (request.form.get("stadiums_json") or "").strip()
-    if not text:
-        flash("Paste a stadium object or a list of them first.", "error")
-        return redirect(url_for("admin_conditions"))
-    if len(text) > _COND_MAX_UPLOAD:
-        flash("That paste is over 2 MB — use Import for a file that large.", "error")
-        return redirect(url_for("admin_conditions"))
+    upload = request.files.get("stadiums_file")
+    source = "uploaded JSON" if upload else "pasted JSON"
     try:
+        if upload:
+            content = upload.read(_COND_MAX_UPLOAD + 1)
+            if len(content) > _COND_MAX_UPLOAD:
+                raise ValueError("the JSON file is over 2 MB")
+            try:
+                text = content.decode("utf-8-sig").strip()
+            except UnicodeDecodeError as exc:
+                raise ValueError("save the JSON file with UTF-8 encoding") from exc
+            if not text:
+                raise ValueError("the JSON file is empty")
+        else:
+            text = (request.form.get("stadiums_json") or "").strip()
+            if not text:
+                raise ValueError("Paste a stadium object or choose a JSON file first.")
+            if len(text.encode("utf-8")) > _COND_MAX_UPLOAD:
+                raise ValueError("the pasted JSON is over 2 MB")
         try:
             data = json.loads(text)
         except ValueError as exc:
             raise ValueError(f"not valid JSON: {exc}") from exc
-        if isinstance(data, dict) and data.get("name") and not {"stadiums", "modifiers"} & set(data):
-            # One ground on its own. parse_upload wants boundaries or an outfield speed
-            # before it calls a bare object a stadium; this form only ever takes
-            # stadiums, so a name is enough and every other field can take its default.
+        if (isinstance(data, dict) and data.get("name") and "stadiums" not in data
+                and data.get("format") != conditions_io.FORMAT):
+            # A single stadium can omit its boundaries and outfield speed.
             parsed = {"stadiums": [data], "modifiers": None}
         else:
-            parsed = conditions_io.parse_upload(text, "pasted.json")
+            parsed = conditions_io.parse_upload(text)
             parsed["modifiers"] = None
         if parsed.get("stadiums") is None:
             raise ValueError("that JSON holds no stadiums")
@@ -27386,19 +27392,20 @@ def admin_conditions_stadium_json():
         flash(f"Not added: {exc}", "error")
         return redirect(url_for("admin_conditions"))
 
-    added, changed = plan["stadiums"]["added"], plan["stadiums"]["changed"]
+    added = plan["stadiums"]["added"]
+    changed = [row["name"] for row in plan["stadiums"]["changed"]]
+    target_name = ", ".join(added + changed)[:AdminLog.target_name.type.length]
     db = get_session()
     try:
         conditions_io.apply_plan(plan, db, created_by="admin",
-                                 note=f"pasted JSON: +{len(added)} ~{len(changed)}")
-        log_admin(db, "conditions_stadium_json", "conditions", 0,
-                  ", ".join(added + [row["name"] for row in changed])[:200],
+                                 note=f"{source}: +{len(added)} ~{len(changed)}")
+        log_admin(db, "conditions_stadium_json", "conditions", 0, target_name,
                   f"added={len(added)} changed={len(changed)}")
         db.commit()
-    except Exception as exc:
+    except Exception:
         db.rollback()
-        logger.exception("pasted stadium JSON failed")
-        flash(f"Not added: {exc}", "error")
+        logger.exception("stadium import from %s failed", source)
+        flash("The stadium import could not be saved. Try again.", "error")
         return redirect(url_for("admin_conditions"))
     finally:
         db.close()
@@ -27415,10 +27422,12 @@ def admin_conditions_stadium_json():
         flash(f"{defaulted} unset field{'' if defaulted == 1 else 's'} took the default value.", "info")
     parts = []
     if added:
-        parts.append(f"Added {', '.join(added)}")
+        summary = ", ".join(added) if len(added) <= 10 else f"{len(added)} stadiums"
+        parts.append(f"Added {summary}")
     if changed:
-        parts.append(f"{'updated' if added else 'Updated'} {', '.join(row['name'] for row in changed)}")
-    flash(f"✅ {'; '.join(parts) if parts else 'No change — those grounds already match'}."
+        summary = ", ".join(changed) if len(changed) <= 10 else f"{len(changed)} stadiums"
+        parts.append(f"{'updated' if added else 'Updated'} {summary}")
+    flash(f"✅ {' and '.join(parts) if parts else 'Those grounds already match'}."
           " The previous version is in History.", "info")
     return redirect(url_for("admin_conditions"))
 

@@ -340,6 +340,69 @@ class ConditionsAdminTests(unittest.TestCase):
         self.assertEqual(self._ground("Clamp Test")["outfieldSpeed"], 100)
         self.assertEqual(len(self._all_rows()), before + 1)
 
+    def test_json_file_adds_and_updates_stadiums_without_pasted_text(self):
+        existing = self._ground("Eden Gardens")
+        payload = json.dumps({"stadiums": [
+            {"name": "Parque de Críquet", "country": "Spain"},
+            {"name": "Eden Gardens", "dewFactor": 70},
+        ]}, ensure_ascii=False).encode("utf-8-sig")
+        r = self.client.post("/conditions/stadium/json", data={
+            "stadiums_file": (io.BytesIO(payload), "grounds.json"),
+        }, follow_redirects=True)
+
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Added Parque de Críquet", r.data.decode())
+        self.assertIn("uploaded JSON: +1 ~1", r.data.decode())
+        self.assertEqual(self._ground("Parque de Críquet")["country"], "Spain")
+        self.assertEqual(self._ground("Eden Gardens"), dict(existing, dewFactor=70))
+
+    def test_bulk_json_file_saves_all_stadiums_and_fits_the_audit_log(self):
+        from database import get_session
+        from models import AdminLog
+
+        names = {f"International Cricket Stadium {i:02d}" for i in range(94)}
+        payload = json.dumps([{"name": name} for name in sorted(names)]).encode()
+        r = self.client.post("/conditions/stadium/json", data={
+            "stadiums_file": (io.BytesIO(payload), "grounds.json"),
+        }, follow_redirects=True)
+
+        with get_session() as db:
+            log = (db.query(AdminLog).filter_by(action="conditions_stadium_json")
+                   .order_by(AdminLog.id.desc()).first())
+            self.assertLessEqual(len(log.target_name), AdminLog.target_name.type.length)
+            self.assertEqual(log.detail, "added=94 changed=0")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(b"Added 94 stadiums", r.data)
+        self.assertIn(b"uploaded JSON: +94 ~0", r.data)
+        self.assertLessEqual(names, {stadium["name"] for stadium in self._all_rows()})
+
+    def test_json_file_takes_priority_over_pasted_json(self):
+        r = self.client.post("/conditions/stadium/json", data={
+            "stadiums_file": (io.BytesIO(b'{"name": "File Ground", "modifiers": {"bounce": 1.1}}'),
+                              "ground.json"),
+            "stadiums_json": '{"name": "Pasted Ground"}',
+        }, follow_redirects=True)
+
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self._ground("File Ground")["modifiers"], {"bounce": 1.1})
+        self.assertIsNone(self._ground("Pasted Ground"))
+
+    def test_invalid_json_files_do_not_save_stadiums(self):
+        before = self._all_rows()
+        for payload, message in (
+            (b"", "the JSON file is empty"),
+            (b"{invalid", "not valid JSON"),
+            (b'{"name": "\xff"}', "UTF-8 encoding"),
+            (b" " * (self.admin._COND_MAX_UPLOAD + 1), "over 2 MB"),
+        ):
+            with self.subTest(message=message):
+                r = self.client.post("/conditions/stadium/json", data={
+                    "stadiums_file": (io.BytesIO(payload), "grounds.json"),
+                }, follow_redirects=True)
+                self.assertEqual(r.status_code, 200)
+                self.assertIn(message, r.data.decode())
+                self.assertEqual(self._all_rows(), before)
+
     def _all_rows(self):
         from engine.sim import stadium as sim_stadium
         return sim_stadium.live_rows()

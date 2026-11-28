@@ -4,13 +4,17 @@ from datetime import datetime
 import json
 
 from flask import abort, flash, g, redirect, render_template, request, session, url_for
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 
 from database import get_session
-from models import ChallengeLeague
-from models_events import StudioAudit, StudioEnrollment, StudioEntitlement, StudioEvent, StudioGame, StudioRevision
+from models import ChallengeLeague, User
+from models_events import (
+    StudioAudit, StudioCompetition, StudioEnrollment, StudioEntitlement, StudioEvent, StudioFixture,
+    StudioGame, StudioParticipant, StudioRevision, StudioStarClaim,
+)
 from services import event_studio as studio, event_studio_import as imports, event_studio_play as play
+from services import event_studio_competition as competitions, event_studio_objectives as goals
 from services.event_studio_rules import liability
 from services.event_studio_schedule import utc_instant, utc_text
 
@@ -61,6 +65,29 @@ def _screen(db, event=None, config=None, preview=None, error=None):
                     StudioEntitlement.enrollment_id.in_(entries)).group_by(
                         StudioEntitlement.claimed_at.is_not(None))).all(),
             }
+            if goals.tournament(current):
+                events_activity["competitions"] = db.execute(
+                    select(StudioCompetition, func.count(StudioParticipant.id),
+                           func.sum(case((StudioParticipant.user_id.is_not(None), 1), else_=0)),
+                           func.coalesce(User.first_name, User.username, "Manager"))
+                    .join(User, User.id == StudioCompetition.host_id)
+                    .outerjoin(StudioParticipant, StudioParticipant.competition_id == StudioCompetition.id)
+                    .where(StudioCompetition.event_id == event.id)
+                    .group_by(StudioCompetition.id, User.first_name, User.username)
+                    .order_by(StudioCompetition.id.desc()).limit(50)).all()
+                events_activity["canonical"] = db.scalars(
+                    select(StudioFixture).join(StudioCompetition, StudioCompetition.id == StudioFixture.competition_id)
+                    .where(StudioCompetition.event_id == event.id)
+                    .order_by(StudioFixture.failure_at.is_(None), StudioFixture.id.desc()).limit(50)).all()
+                events_activity["star_claims"] = db.execute(
+                    select(StudioStarClaim, StudioParticipant.competition_id, StudioParticipant.team_key)
+                    .join(StudioParticipant, StudioParticipant.id == StudioStarClaim.participant_id)
+                    .where(StudioParticipant.event_id == event.id).order_by(StudioStarClaim.id.desc()).limit(80)).all()
+                members = db.scalars(select(StudioParticipant).where(
+                    StudioParticipant.event_id == event.id, StudioParticipant.user_id.is_not(None))
+                    .order_by(StudioParticipant.id.desc()).limit(40)).all()
+                events_activity["objective_progress"] = [(member, competitions._progress(db, member, current, datetime.utcnow()))
+                                                          for member in members]
     clean_config = {key: value for key, value in current.items() if key in studio.defaults()}
     from services.pitch_report import WEATHERS
     return render_template("admin_event_studio.html", events=events, event=event, config=current,
@@ -70,7 +97,10 @@ def _screen(db, event=None, config=None, preview=None, error=None):
                            activity=events_activity, audit=audit, maximum=liability(current),
                            pitches=[pitch for pitch in studio.PITCHES if pitch not in studio.LEGACY_PITCHES],
                            weathers=WEATHERS, stadium_countries=_stadium_countries(),
-                           publish_enabled=studio.allowed(current["kind"], current["format"]))
+                           publish_enabled=studio.allowed(current["kind"], current["format"]),
+                           objective_metrics=goals.METRICS, objective_max=goals.max_stars(current),
+                           objective_warnings=goals.warnings(current),
+                           multi_enabled=competitions.mode_enabled(current, "multi"))
 
 
 def _stadium_countries():
@@ -169,7 +199,12 @@ def install(app, login_required, csrf_exempt, webapp_auth):
             try:
                 event = studio.lock(db, StudioEvent, event_id)
                 action = request.form.get("action")
-                if action == "extend":
+                if action in ("close_lobby", "retry_fixture", "void_fixture", "extend_fixture"):
+                    competitions.administer(db, event_id, _actor(), "extend" if action == "extend_fixture" else action,
+                                            int(request.form["target_id"]), request.form.get("reason", ""),
+                                            datetime.utcnow(), deadline=request.form.get("deadline"))
+                    preview = None
+                elif action == "extend":
                     config = studio.revision(db, event, published=True)
                     if config is None:
                         raise ValueError("Publish the draft before extending an official fixture.")
@@ -246,6 +281,9 @@ def install(app, login_required, csrf_exempt, webapp_auth):
                 db.rollback()
                 return {"ok": False, "error": "conflict", "message": str(exc)}, 409
             except (ValueError, KeyError, TypeError) as exc:
+                if not isinstance(exc, ValueError):
+                    from flask import current_app
+                    current_app.logger.exception("Invalid Events Hub execution")
                 db.rollback()
                 return {"ok": False, "message": str(exc) if isinstance(exc, ValueError)
                         else "Invalid event request."}, 400
@@ -258,7 +296,76 @@ def install(app, login_required, csrf_exempt, webapp_auth):
     @app.post("/api/webapp/events-hub/<int:event_id>")
     @csrf_exempt
     def webapp_event_detail(event_id):
-        return api(lambda db, user, body, now: {"event": play.detail(db, user, event_id, now)})
+        def read(db, user, body, now):
+            event, config = play._published(db, event_id)
+            if goals.tournament(config):
+                return {"competition": competitions.dashboard(db, user, event_id, now)}
+            return {"event": play.detail(db, user, event_id, now)}
+        return api(read)
+
+    @app.post("/api/webapp/events-hub/competitions/<int:event_id>")
+    @csrf_exempt
+    def webapp_event_competition(event_id):
+        def dispatch(db, user, body, now):
+            action = body.get("action")
+            if action == "create":
+                competitions.create(db, user, event_id, body.get("mode"), body.get("team"), now, clock=datetime.utcnow)
+            elif action in ("claim_stars", "claim_rewards"):
+                receipt = competitions.claim(db, user, event_id, now, objective_id=body.get("objective_id"),
+                                             reward_id=body.get("reward_id"), wallet=action == "claim_rewards")
+                return receipt
+            elif action:
+                raise ValueError("Unknown competition action.")
+            return {"competition": competitions.dashboard(db, user, event_id, now)}
+        return api(dispatch, write=True)
+
+    @app.post("/api/webapp/events-hub/lobby")
+    @csrf_exempt
+    def webapp_event_lobby():
+        def dispatch(db, user, body, now):
+            invite, room_id = body.get("invite"), body.get("room_id")
+            if room_id is not None and (type(room_id) is not int or room_id < 1):
+                raise ValueError("Choose a valid lobby.")
+            if not body.get("action"):
+                return {"lobby": competitions.lobby(db, user, room_id, invite=invite, now=now)}
+            if body["action"] in ("start", "cancel") and body.get("confirmed") is not True:
+                raise ValueError("Confirm the lobby action before continuing.")
+            if room_id is None:
+                room_id = competitions._by_invite(db, invite)
+            return {"lobby": competitions.change_lobby(db, user, room_id, body["action"], now,
+                       team=body.get("team"), invite=invite, version=body.get("version"), clock=datetime.utcnow)}
+        return api(dispatch, write=True)
+
+    @app.post("/api/webapp/events-hub/fixture/<int:fixture_id>")
+    @csrf_exempt
+    def webapp_event_fixture(fixture_id):
+        return api(lambda db, user, body, now: {"setup": competitions.setup(
+            db, user, fixture_id, now, action=body.get("action"), version=body.get("version"),
+            value=body.get("value"))}, write=True)
+
+    @app.post("/api/webapp/events-hub/fixture-arena/<int:fixture_id>")
+    @csrf_exempt
+    def webapp_event_fixture_arena(fixture_id):
+        def dispatch(db, user, body, now):
+            name = body.get("type")
+            if name:
+                from services.match_webapp_service import APPROACH_ACTION_TYPES, approach_pick_value
+                version, value = body.get("version"), body.get("action")
+                if name in ("retire_batsman", "live_batting_order", "impact"):
+                    if not isinstance(value, dict):
+                        raise ValueError("Choose a valid player selection.")
+                elif name == "abandon":
+                    if body.get("confirmed") is not True:
+                        raise ValueError("Confirm forfeiting this fixture.")
+                elif name not in ("switch", "resume", "pause", "continue"):
+                    name = APPROACH_ACTION_TYPES.get(name)
+                    if name not in competitions.picks.PICK_ACTION:
+                        raise ValueError("Choose a valid match action.")
+                    value = approach_pick_value(name, value)
+                competitions.action(db, user, fixture_id, version, name, value, now, source="app")
+                db.flush()
+            return competitions.arena(db, user, fixture_id, now)
+        return api(dispatch, write=True)
 
     @app.post("/api/webapp/events-hub/progression/<int:event_id>")
     @csrf_exempt
@@ -321,16 +428,15 @@ def install(app, login_required, csrf_exempt, webapp_auth):
             elif action == "setup":
                 return {"setup": play.setup_fixture(
                     db, user, number("event_id"), number("game_id"), number("previous_attempt"),
-                    now, call=body.get("call"))}
+                    now, call=body.get("call"), decision=body.get("decision"),
+                    xi=body.get("xi"), edit=body.get("edit") is True)}
             elif action == "start":
-                game = play.start_fixture(db, user, number("game_id"), body.get("xi"), source="app",
-                                          decision=body.get("decision"), captain_id=body.get("captain_id"),
-                                          require_toss=True)
+                game = play.start_fixture(db, user, number("game_id"), None, source="app",
+                                          require_toss=True, require_confirmed=True)
                 return {"game_id": game.id}
             elif action == "attempt":
                 game = play.start_attempt(db, user, number("event_id"), number("previous_attempt"), source="app",
-                                          decision=body.get("decision"), selected=body.get("xi"),
-                                          captain_id=body.get("captain_id"), require_toss=True)
+                                          require_toss=True, require_confirmed=True)
                 return {"game_id": game.id}
             elif action == "abandon" and body.get("confirmed") is True:
                 play.abandon(db, user, number("game_id"), number("version"))

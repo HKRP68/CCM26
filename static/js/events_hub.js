@@ -76,7 +76,8 @@ const EventHub = (() => {
       const data = await request(eventId ? '/' + eventId : '');
       if (epoch !== screenEpoch) return;
       say('');
-      if (eventId) renderDetail(data.event);
+      if (data.competition) renderCompetition(data.competition);
+      else if (eventId) renderDetail(data.event);
       else { heading.textContent = 'Events Hub'; renderList(data.events); }
     } catch (error) {
       if (epoch !== screenEpoch) return;
@@ -129,8 +130,11 @@ const EventHub = (() => {
   function renderList(events) {
     if (!events.length) {
       root.append(element('p', 'There are no published events available right now.', 'ev-meta'));
+      lobbyEntry(root);
+
       return;
     }
+    lobbyEntry(root);
     const groups = [
       ['My events', events.filter(e => e.joined && !['closed', 'cancelled'].includes(e.availability))],
       ['Featured', events.filter(e => e.featured && !e.joined && !['closed', 'cancelled'].includes(e.availability))],
@@ -317,72 +321,101 @@ const EventHub = (() => {
     const content = element('div');
     details.append(content);
 
-    async function show(call = null) {
-      content.replaceChildren(element('p', 'Loading match setup…', 'ev-meta'));
-      try {
-        const {setup} = await request('/action', {action: 'setup', ...identifiers, call});
-        const level = {easy: 'Easy', normal: 'Normal', hard: 'Hard', hard_plus: 'Hard++'}[setup.difficulty];
-        const info = [setup.format, setup.pitch + ' pitch', setup.venue, setup.weather, level].filter(Boolean);
-        const deadline = element('p', 'Start by ', 'ev-meta');
-        deadline.append(timeNode(setup.cutoff, event.timezone));
-        content.replaceChildren(element('p', `${setup.team} v ${setup.opponent}`),
-          element('p', info.join(' · '), 'ev-meta'), deadline);
-        for (const goal of setup.objectives) {
-          content.append(element('p', goal.key === 'win' ? goal.title : `${goal.title} · ${goal.threshold}`, 'ev-meta'));
-        }
-        if (!setup.toss) {
-          content.append(button('Heads', () => show('heads')), button('Tails', () => show('tails')));
-          return;
-        }
-        const toss = setup.toss;
-        const label = toss.human_won ? 'You won the toss.' : `${setup.opponent} elected to ${toss.decision} first.`;
-        content.append(element('p', `${toss.coin.toUpperCase()} · ${label}`));
-        const options = setup.squad.map(p => ({
-          value: p.roster_id, text: `${p.name} · ${p.version || 'Base'} · ${p.category} · ${p.rating}`,
+    let selected = [];
+    let setupPending = false;
+
+    function render(setup) {
+      const level = {easy: 'Easy', normal: 'Normal', hard: 'Hard', hard_plus: 'Hard++'}[setup.difficulty];
+      const info = [setup.format, setup.pitch + ' pitch', setup.venue, setup.weather, level].filter(Boolean);
+      const deadline = element('p', 'Start by ', 'ev-meta');
+      deadline.append(timeNode(setup.cutoff, event.timezone));
+      content.replaceChildren(element('p', `${setup.team} v ${setup.opponent}`),
+        element('p', info.join(' · '), 'ev-meta'), deadline);
+      for (const goal of setup.objectives) {
+        content.append(element('p', goal.key === 'win' ? goal.title : `${goal.title} · ${goal.threshold}`, 'ev-meta'));
+      }
+      const actions = element('div', null, 'ev-actions');
+
+      const toss = setup.toss;
+      if (!toss) {
+        actions.append(button('Heads', () => show({call: 'heads'})), button('Tails', () => show({call: 'tails'})));
+        content.append(element('h3', '🪙 Toss'), element('p', 'Call the coin.'), actions);
+        return;
+      }
+      if (!toss.decision) {
+        actions.append(button('🏏 Bat First', () => show({decision: 'bat'})),
+          button('🎳 Bowl First', () => show({decision: 'bowl'})));
+        content.append(element('p', `The coin lands on ${toss.coin.toUpperCase()} · You won the toss.`), actions);
+        return;
+      }
+
+      const winner = toss.human_won ? setup.team : setup.opponent;
+      content.append(element('p', `${winner} won the toss and elected to ${toss.decision} first.`));
+      const confirmed = setup.confirmed_xi;
+      const order = confirmed || (setup.fixed_xi ? setup.default_xi : selected);
+      const squad = new Map(setup.squad.map(player => [player.roster_id, player]));
+      const players = order.map(id => squad.get(id)).filter(Boolean);
+      if (confirmed) {
+        content.append(element('h3', '🏏 Match ready'));
+        const start = button('Start Match', e => mutate(e.currentTarget, {
+          ...identifiers, action: identifiers.game_id ? 'start' : 'attempt',
         }));
-        const picks = [];
-        const captain = select(options.filter(p => setup.default_xi.includes(p.value)), 'Captain');
+        start.classList.add('ev-primary');
+        actions.append(start);
+        if (!setup.fixed_xi) actions.append(button('✏️ Edit XI', () => show({edit: true})));
+      } else {
+        content.append(element('h3', `${setup.team} Playing XI Selection`),
+          element('p', `Selected: ${players.length}/11`, 'ev-meta'));
         if (!setup.fixed_xi) {
-          const field = element('fieldset');
-          field.append(element('legend', 'Playing XI in batting order'));
-          const updateCaptain = () => {
-            const selected = picks.map(p => Number(p.control.value));
-            const previous = captain.control.value;
-            captain.control.replaceChildren();
-            for (const id of new Set(selected)) {
-              const player = options.find(p => p.value === id);
-              if (!player) continue;
-              const option = element('option', player.text);
-              option.value = id;
-              captain.control.append(option);
-            }
-            if ([...captain.control.options].some(option => option.value === previous)) captain.control.value = previous;
-          };
-          for (let position = 0; position < 11; position++) {
-            const pick = select(options, `Position ${position + 1}`);
-            pick.control.value = setup.default_xi[position];
-            pick.control.onchange = updateCaptain;
-            picks.push(pick);
-            field.append(pick.field);
+          const picks = element('div', null, 'ev-xi-picks');
+          setup.squad.forEach((player, index) => {
+            const picked = selected.includes(player.roster_id);
+            const control = button(`${picked ? '✅ ' : ''}${index + 1}. ${player.name}`, () => {
+              if (!picked && selected.length >= 11) return say('Remove a player before adding another.', true);
+              selected = picked ? selected.filter(id => id !== player.roster_id) : [...selected, player.roster_id];
+              say('');
+              render(setup);
+              content.querySelectorAll('.ev-xi-picks button')[index]?.focus();
+            });
+            control.setAttribute('aria-pressed', String(picked));
+            picks.append(control);
+          });
+          content.append(picks);
+          if (!selected.length) {
+            actions.append(button('⚡ Use suggested XI', () => show({xi: setup.default_xi})));
+          } else {
+            actions.append(button('🧹 Clear', () => { selected = []; render(setup); }));
           }
-          field.append(button('Quick XI', () => {
-            picks.forEach((pick, position) => { pick.control.value = setup.default_xi[position]; });
-            updateCaptain();
-          }));
-          content.append(field);
         }
-        content.append(captain.field);
-        for (const decision of toss.human_won ? ['bat', 'bowl'] : [toss.decision]) {
-          const text = toss.human_won ? `Start · ${decision === 'bat' ? 'Bat' : 'Bowl'} first` : 'Start match';
-          content.append(button(text, e => {
-            const xi = picks.length ? picks.map(p => Number(p.control.value)) : setup.default_xi;
-            if (new Set(xi).size !== 11) return say('Choose 11 distinct players to start.', true);
-            const action = identifiers.game_id ? 'start' : 'attempt';
-            return mutate(e.currentTarget, {...identifiers, action, xi, decision, captain_id: Number(captain.control.value)});
-          }));
-        }
+        if (order.length === 11) actions.prepend(button('✅ Confirm XI', () => show({xi: order})));
+      }
+      if (players.length) {
+        const lineup = element('ol');
+        for (const player of players) lineup.append(element('li', `${player.name} · ${player.category}`));
+        content.append(element('p', 'Batting order'), lineup);
+      }
+      content.append(actions);
+    }
+
+    async function show(update = {}) {
+      if (setupPending) return;
+      setupPending = true;
+      content.querySelectorAll('button').forEach(control => { control.disabled = true; });
+      if (!content.childNodes.length) content.append(element('p', 'Loading match setup…', 'ev-meta'));
+      try {
+        const {setup} = await request('/action', {action: 'setup', ...identifiers, ...update});
+        if (setup.editing_xi) selected = setup.editing_xi;
+        say('');
+        render(setup);
       } catch (error) {
-        content.replaceChildren(element('p', error.message, 'ev-error'), button('Retry setup', () => show()));
+        say(error.message, true);
+        if (content.querySelector('button')) {
+          content.querySelectorAll('button').forEach(control => { control.disabled = false; });
+        } else {
+          content.replaceChildren(button('Retry setup', () => show()));
+        }
+      } finally {
+        setupPending = false;
       }
     }
     details.addEventListener('toggle', () => { if (details.open && !content.childNodes.length) show(); });
@@ -547,6 +580,270 @@ const EventHub = (() => {
     return box;
   }
 
+  function liveAction(text, run) {
+    return button(text, async e => {
+      if (pending) return;
+      const control = e.currentTarget;
+      control.disabled = true;
+      pending = true;
+      try { say(''); await run(); } catch (error) { say(error.message, true); }
+      finally { pending = false; control.disabled = false; }
+    });
+  }
+
+  function lobbyEntry(box) {
+    const field = element('label', 'Lobby code');
+    const input = element('input');
+    input.autocomplete = 'off';
+    input.maxLength = 24;
+    field.append(input);
+    const form = element('details');
+    form.append(element('summary', 'Join existing lobby'), field, button('Open lobby', () => openLobby(input.value.trim())));
+    box.append(form);
+  }
+
+  function competitionArena(fixture) {
+    location.assign('/cricket?competition_fixture_id=' + fixture);
+  }
+
+  function detailsCard(name, target) {
+    const detail = element('details', null, 'ev-panel');
+    detail.append(element('summary', name));
+    target.append(detail);
+    return detail;
+  }
+
+  function renderCompetition(event) {
+    heading.textContent = event.name;
+    const intro = element('section', null, 'ev-panel');
+    intro.append(button('All events', () => load()), element('p', `${event.format} · ${event.fixture_count} fixtures · AI ${label(event.difficulty)}`));
+    for (const [key, caption] of [['enroll_until', 'Enrollment closes '], ['close', 'Event closes ']]) {
+      const line = element('p', caption, 'ev-meta');
+      line.append(timeNode(event[key], event.timezone));
+      intro.append(line);
+    }
+    if (event.description) intro.append(element('p', event.description));
+    if (event.banner) {
+      const banner = element('img', null, 'ev-banner');
+      banner.src = event.banner; banner.alt = '';
+      intro.append(banner);
+    }
+    root.append(intro);
+
+    if (!event.joined) {
+      if (event.registration_open) {
+        for (const mode of event.modes) {
+          const choices = detailsCard(mode === 'solo' ? 'Join Solo' : 'Join Multi', root);
+          for (const team of event.teams.filter(team => team.eligible)) {
+            const card = detailsCard(team.name, choices);
+            if (team.crest) {
+              const crest = element('img');
+              crest.src = team.crest; crest.alt = ''; crest.width = 42; crest.height = 42;
+              card.append(crest);
+            }
+            card.append(element('p', [team.venue, team.ovr + ' OVR'].filter(Boolean).join(' · '), 'ev-meta'));
+            for (const player of team.squad) card.append(element('p', `${player.name} · ${player.category} · ${player.rating}`, 'ev-meta'));
+            card.append(liveAction('Confirm ' + team.name, async () => {
+              await request('/competitions/' + event.id, {action: 'create', mode, team: team.key});
+              await load(event.id);
+            }));
+          }
+        }
+        lobbyEntry(root);
+      } else intro.append(element('p', 'Enrollment is closed.'));
+      const objectives = detailsCard(`Tournament objectives · ${event.maximum} stars`, root);
+      for (const obj of event.objectives) objectives.append(element('p', `${obj.title} ${obj.comparator || '≥'} ${obj.target} · ${obj.stars} ★`));
+      renderRewardRoad(event, 0);
+      return;
+    }
+
+    if (event.room.status === 'lobby') {
+      mountLobby(event.room);
+      return;
+    }
+    const panel = element('section', null, 'ev-panel');
+    const team = event.teams.find(t => t.key === event.team);
+    panel.append(element('h2', team.name),
+      element('p', `${event.my_standing.points} points · NRR ${event.my_standing.nrr.toFixed(3)} · ${event.remaining} fixtures left`));
+    if (event.form.length) panel.append(element('p', 'Recent form · ' + event.form.join(' '), 'ev-meta'));
+    if (event.trophy) panel.append(element('p', '🏆 ' + event.trophy));
+    const next = event.fixtures.find(f => f.personal && !f.result);
+    if (next) renderFixture(panel, next, event);
+    root.append(panel);
+    const fixtures = detailsCard('Fixtures', root);
+    for (const fixture of event.fixtures) renderFixture(fixtures, fixture, event);
+    const board = detailsCard('Standings', root);
+    for (const [index, row] of event.standings.entries()) {
+      board.append(element('p', `${index + 1}. ${row.name} · ${row.points} pts · ${row.won}W ${row.lost}L · NRR ${row.nrr.toFixed(3)}`));
+    }
+    const squad = detailsCard('Squad', root);
+    for (const player of team.squad) squad.append(element('p', `${player.name} · ${player.category} · ${player.rating}`));
+    const stars = detailsCard(`Objectives · ${event.stars.claimed}/${event.maximum} stars claimed`, root);
+    stars.open = true;
+    stars.append(element('p', `${event.stars.earned} earned · ${event.stars.unclaimed} ready to claim`));
+    const claim = (text, action, id = {}) => liveAction(text, async () => {
+      await request('/competitions/' + event.id, {action, ...id});
+      await load(event.id);
+    });
+    if (event.stars.unclaimed) stars.append(claim('Claim All Stars', 'claim_stars'));
+    const states = {ready: 'Ready to claim', claimed: 'Claimed', expired: 'Expired', locked: 'Locked', in_progress: 'In progress'};
+    for (const obj of event.stars.objectives) {
+      stars.append(element('p', `${obj.title} · ${obj.measured}/${obj.target} · ${obj.stars} ★ · ${states[obj.status]}`));
+      const progress = element('progress');
+      progress.max = 1; progress.value = obj.progress; progress.setAttribute('aria-label', obj.title);
+      stars.append(progress);
+      if (obj.status === 'ready') stars.append(element('p', 'Claim by ' + date(obj.expires_at, event.timezone), 'ev-meta'),
+        claim('Claim Star', 'claim_stars', {objective_id: obj.id}));
+    }
+    const road = renderRewardRoad(event, event.stars.claimed);
+    if (event.tier) road.append(element('p', `Reward tier: ${title(event.tier)} · fixed at first eligibility`, 'ev-meta'));
+    if (event.rewards.some(r => r.status === 'claimable')) road.append(claim('Claim All Rewards', 'claim_rewards'));
+    for (const reward of event.rewards) {
+      const line = element('p', `${assets(reward.assets)} · ${title(reward.status)}`);
+      road.append(line);
+      if (reward.status === 'claimable') road.append(element('p', 'Claim by ' + date(reward.expires_at, event.timezone), 'ev-meta'),
+        claim('Claim Reward', 'claim_rewards', {reward_id: reward.id}));
+    }
+    const stats = detailsCard('Statistics', root);
+    for (const p of event.statistics.batting.slice(0, 15)) stats.append(element('p', `${p.name} · ${p.runs} runs · HS ${p.high}`));
+    for (const p of event.statistics.bowling.slice(0, 15)) stats.append(element('p', `${p.name} · ${p.wickets} wickets`));
+    const table = detailsCard(`${event.room.kind === 'solo' ? 'Solo' : 'Multiplayer'} leaderboard`, root);
+    for (const row of event.leaderboard) table.append(element('p', `${row.rank}. ${row.name} · ${row.stars} ★`));
+  }
+
+  function renderRewardRoad(event, claimed) {
+    const road = detailsCard('Reward road', root);
+    for (const row of event.milestones) road.append(element('p',
+      `${row.stars} ★ · ${row.stars <= claimed ? 'Unlocked' : 'Locked'} · Free ${assets(row.free || {}) || '—'} · Diamond ${assets(row.diamond || {}) || '—'}`));
+    return road;
+  }
+
+  function renderFixture(box, fixture, event) {
+    const panel = element('article', null, 'ev-row');
+    panel.append(element('h3', `Round ${fixture.round} · ${fixture.home || 'Qualifier'} v ${fixture.away || 'Qualifier'}`));
+    panel.append(element('p', fixture.result?.winner ? fixture.result.winner + ' won' : title(fixture.status), 'ev-meta'));
+    if (!fixture.result) panel.append(element('p',
+      `Opens ${date(fixture.opens_at, event.timezone)} · Deadline ${date(fixture.deadline, event.timezone)}`, 'ev-meta'));
+    if (fixture.personal && fixture.status === 'in_progress') {
+      panel.append(button('Resume Match', () => competitionArena(fixture.id)));
+    } else if (fixture.can_start) {
+      const setup = detailsCard('Match setup', panel);
+      setup.addEventListener('toggle', () => {
+        if (setup.open && setup.childElementCount === 1) showCompetitionSetup(setup, fixture.id).catch(e => say(e.message, true));
+      });
+    } else if (fixture.personal && fixture.result?.kind === 'completed') {
+      panel.append(button('View Scorecard', () => competitionArena(fixture.id)));
+    }
+    box.append(panel);
+  }
+
+  async function showCompetitionSetup(box, fixture, update = {}) {
+    const {setup} = await request('/fixture/' + fixture, update);
+    if (setup.status === 'in_progress') { competitionArena(fixture); return; }
+    const menu = element('div');
+    box.replaceChildren(element('summary', 'Match setup'), menu);
+    menu.append(element('p', `${setup.team.name} v ${setup.opponent}`));
+    const controls = element('div', null, 'ev-actions');
+    const op = (text, action, value) => liveAction(text, () => showCompetitionSetup(box, fixture, {action, value, version: setup.version}));
+    if (!setup.ready) controls.append(op('Ready', 'ready'));
+    else if (!setup.all_ready) controls.append(element('p', 'Waiting for the other captain.'));
+    else if (!setup.toss && setup.can_call) controls.append(op('Heads', 'coin', 'heads'), op('Tails', 'coin', 'tails'));
+    else if (!setup.toss) controls.append(element('p', 'Waiting for the toss call.'));
+    else if (!setup.toss.decision && setup.won_toss) controls.append(op('Bat First', 'elect', 'bat'), op('Bowl First', 'elect', 'bowl'));
+    else if (!setup.toss.decision) controls.append(element('p', 'Waiting for the toss winner.'));
+    else if (!setup.confirmed_xi) {
+      menu.append(element('p', `Coin: ${setup.toss.coin} · Toss winner chose to ${setup.toss.decision}.`));
+      controls.append(op(setup.fixed_xi ? 'Confirm XI' : 'Use suggested XI', 'xi', setup.default_xi));
+      if (!setup.fixed_xi) {
+        const squad = element('div', null, 'ev-xi-picks');
+        const selected = [];
+        const confirm = op('Confirm XI', 'xi', selected);
+        confirm.hidden = true;
+        for (const [i, card] of setup.team.squad.entries()) {
+          const pick = button(`${i + 1}. ${card.name}`, () => {
+            const index = selected.indexOf(card.roster_id);
+            if (index >= 0) selected.splice(index, 1);
+            else if (selected.length < 11) selected.push(card.roster_id);
+            choices.textContent = selected.map(id => setup.team.squad.find(p => p.roster_id === id).name).join(' → ');
+            pick.setAttribute('aria-pressed', String(selected.includes(card.roster_id)));
+            confirm.hidden = selected.length !== 11;
+          });
+          pick.setAttribute('aria-pressed', 'false');
+          squad.append(pick);
+        }
+        const choices = element('p', '');
+        menu.append(squad, choices);
+        controls.append(confirm);
+      }
+    } else if (setup.all_confirmed) controls.append(op('Start Match', 'start'));
+    else controls.append(element('p', 'Waiting for the other Playing XI.'));
+    controls.append(liveAction('Refresh', () => showCompetitionSetup(box, fixture)));
+    menu.append(controls);
+  }
+
+  async function openLobby(invite) {
+    try {
+      const {lobby} = await request('/lobby', {invite});
+      stop();
+      activeEvent = lobby.event_id;
+      root.replaceChildren(button('All events', () => load()));
+      heading.textContent = lobby.name;
+      say('');
+      mountLobby(lobby, invite);
+    } catch (error) { say(error.message, true); }
+  }
+
+  function mountLobby(initial, invite = null) {
+    let lobby = initial;
+    const panel = element('section', null, 'ev-panel');
+    root.append(panel);
+    const route = () => ({room_id: lobby.id, invite: invite || lobby.invite});
+    async function refresh() {
+      const response = await request('/lobby', route());
+      lobby = response.lobby;
+      draw();
+    }
+    function draw() {
+      panel.replaceChildren(element('h2', 'Multiplayer lobby'));
+      if (lobby.status !== 'lobby') {
+        clearInterval(countdown);
+        panel.append(element('p', title(lobby.status)));
+        if (lobby.my_team) panel.append(button('Open tournament', () => load(lobby.event_id)));
+        return;
+      }
+      panel.append(element('p', `${lobby.ai_count} AI managers if started now · ${duration(lobby.join_until)}`),
+        timeNode(lobby.join_until, lobby.timezone));
+      if (lobby.invite) {
+        panel.append(element('p', 'Lobby code ' + lobby.invite));
+        if (navigator.clipboard) panel.append(button('Copy code', () => navigator.clipboard.writeText(lobby.invite)));
+        if (navigator.share) panel.append(button('Share lobby', () => navigator.share(lobby.invite_url ? {url: lobby.invite_url, title: lobby.name} : {text: 'Join my CCM26 Live Event with lobby code ' + lobby.invite})));
+      }
+      const op = (text, action, team, confirm = false) => liveAction(text, async () => {
+        if (confirm && !window.confirm(confirm)) return;
+        const result = await request('/lobby', {...route(), action, team, version: lobby.version,
+                                                confirmed: Boolean(confirm)});
+        lobby = result.lobby;
+        if (lobby.status === 'running' && lobby.my_team) await load(lobby.event_id);
+        else draw();
+      });
+      for (const team of lobby.teams) {
+        const row = element('p', `${team.name} · ${team.owner || 'Open'}`);
+        if (lobby.can_join && !team.owner) row.append(op('Claim seat', 'claim', team.key));
+        panel.append(row);
+      }
+      if (lobby.can_join && lobby.my_team && !lobby.is_host) panel.append(op('Release my team', 'release'));
+      if (lobby.is_host) {
+        if (lobby.can_join && lobby.early_start) panel.append(op('Start Now', 'start', null, `Start with ${lobby.ai_count} AI managers?`));
+        panel.append(op('Close lobby', 'cancel', null, 'Close registration and release all seats?'));
+      }
+    }
+    draw();
+    const epoch = screenEpoch;
+    countdown = setInterval(() => {
+      if (!pending && epoch === screenEpoch && lobby.status === 'lobby') refresh().catch(e => say(e.message, true));
+    }, 6000);
+  }
+
   function stop() {
     ++screenEpoch;
     clearInterval(countdown);
@@ -554,5 +851,5 @@ const EventHub = (() => {
     activeEvent = null;
   }
 
-  return {open: load, stop};
+  return {open: load, openLobby, stop};
 })();

@@ -5,6 +5,7 @@ from datetime import datetime
 from html import escape
 import logging
 import re
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
@@ -12,7 +13,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from database import get_session
 from models import User
-from models_events import StudioGame
+from models_events import StudioEnrollment, StudioGame
 from services import cipl_picks as picks, impact_player, rich_message as rich
 from services.match_state_store import A_INNINGS_BREAK
 from services import event_studio as studio, event_studio_play as play
@@ -83,23 +84,57 @@ def _list(events, kind=None):
     return "\n\n".join(lines), buttons
 
 
-def _match_panel(event, game, state):
-    from handlers.cipl_play import _approach_card, _approach_card_blocks
+def _match_panel(event, game, state, *, manage=False, button=_button, public_id=None):
+    from handlers import cipl_play as cipl
+    from services import cipl_match, match_controls
     from services.bot_captain import difficulty_label
-    from services.match_broadcast import play_match_keyboard
+    from services.live_batting_help import manage_batting_button
 
     header = f'{event["name"]} · {game["home"]} v {game["away"]}'
     round_label = f'Round {game["round"]}' if game["round"] else f'Attempt {game["attempt"]}'
-    lines = [f'{round_label} · {event["format"]} · {difficulty_label(state)}',
-             f'{game["status"].replace("_", " ").capitalize()} · {game["cutoff"]}']
+    lines = [f'{round_label} · {event["format"]} · {difficulty_label(state)}']
     identifiers = (event["id"], game["id"], game["version"])
     buttons = []
+    tools = []
     score = game.get("score") or {}
     choices = score.get("choices")
     result = game.get("result")
+    text, blocks = "", None
+
+    if state:
+        state = {**state, "chat_id": 0, "event_game_version": game["version"]}
+        if result and result["kind"] == "completed":
+            outcome = cipl_match.compute_result(state)
+            text = cipl._completion_text(state, outcome, cipl.match_result_line(outcome))
+        elif not result and choices and not game["event_paused"] and game["play_mode"] == "chat":
+            stage = choices["stage"]
+
+            def picked(code):
+                return lambda label, value: button(label, "pick", *identifiers, code, value)
+
+            if stage == picks.PICK_ACTION[picks.PICK_BOWLER]:
+                text, buttons, blocks = cipl.bowler_prompt(state, picked("b"))
+            elif stage == picks.PICK_ACTION[picks.PICK_NEW_BATSMAN]:
+                text, buttons = cipl.new_batsman_prompt(state, picked("n"))
+            elif stage in (picks.PICK_ACTION[picks.PICK_BAT_APPROACH], picks.PICK_ACTION[picks.PICK_BOWL_APPROACH]):
+                batting = stage == picks.PICK_ACTION[picks.PICK_BAT_APPROACH]
+                text, buttons, blocks = cipl.approach_prompt(state, batting, picked("a" if batting else "p"))
+            if (state["innings"] == 2 and not state.get("event_moment")
+                    and cipl_match.balls_bowled(state) == 0):
+                break_blocks, break_text = cipl.innings_break_card(state)
+                if stage == A_INNINGS_BREAK:  # Checkpoints created before chat advanced automatically.
+                    buttons.append([button("Continue", "pick", *identifiers, "c", 0)])
+                text = f"{break_text}\n\n{text}"
+                if blocks:
+                    blocks = break_blocks + blocks
+        if not text:
+            text, blocks = cipl._approach_card(state), cipl._approach_card_blocks(state)
+
     if result:
-        if result.get("winner"):
-            lines.append(f'{result["winner"]} won.')
+        if result["kind"] != "completed":
+            lines.append(result["kind"].replace("_", " ").capitalize())
+            if result.get("winner"):
+                lines.append(f'{result["winner"]} won.')
         if result.get("stars") is not None:
             lines.append(f'{result["stars"]} stars')
         if result.get("points") is not None:
@@ -111,135 +146,202 @@ def _match_panel(event, game, state):
         if any(row["game_id"] == game["id"] and row["status"] == "claimable"
                for row in event.get("rewards") or []):
             lines.append("Reward available in Events Hub.")
-        for objective in result.get("objectives", []):
-            lines.append(f'{objective["title"]} · {objective["measured"]}/{objective["threshold"]}')
-    elif not game["event_paused"] and game["status"] != "under_review":
-        if game["player_paused"]:
-            buttons.append([_button("Resume in chat", "resume", *identifiers)])
+    else:
+        lines.append(f'Play until {_when(game["cutoff"], event.get("timezone") or "UTC")}')
+        if game["event_paused"] or game["status"] == "under_review":
+            lines.append(game["status"].replace("_", " ").capitalize())
+        elif game["player_paused"]:
+            tools.append([button("Resume in chat", "resume", *identifiers)])
         elif game["play_mode"] == "app":
-            buttons.append([_button("Play in chat", "switch", *identifiers)])
+            tools.append([button("Play in chat", "switch", *identifiers)])
         elif choices:
-            stage = choices["stage"]
-            if stage == A_INNINGS_BREAK:
-                lines.append(f'Innings break · Target {score["target"]}')
-                buttons.append([_button("Continue", "pick", *identifiers, "c", 0)])
-            elif stage == picks.PICK_ACTION[picks.PICK_BOWLER]:
-                lines.append("Choose a bowler.")
-                buttons.extend([_button(f'{p["name"][:45]} · {p["overs_left"]} left', "pick", *identifiers, "b", p["id"])]
-                               for p in choices["bowlers"])
-            elif stage == picks.PICK_ACTION[picks.PICK_NEW_BATSMAN]:
-                lines.append("Choose the incoming batter.")
-                buttons.extend([_button(p["name"][:48], "pick", *identifiers, "n", p["id"])]
-                               for p in choices["incoming"])
-            else:
-                if choices["bowler"]:
-                    lines.append(f'Bowler · {choices["bowler"]}')
-                batting = stage == picks.PICK_ACTION[picks.PICK_BAT_APPROACH]
-                lines.append("Choose your batting approach." if batting else "Choose your bowling approach.")
-                buttons.extend([_button(row["label"], "pick", *identifiers, "a" if batting else "p", index)]
-                               for index, row in enumerate(choices["approaches"]))
             if state.get("event_impact") and impact_player.cipl_available_to(
                     state, state["bat_team_id"] if choices["role"] == "bat" else state["bowl_team_id"]):
-                buttons.append([_button("Impact Player", "impact", *identifiers)])
-            buttons.append([_button("Pause", "pause", *identifiers)])
-        buttons.append([_button("Abandon…", "confirm", *identifiers)])
-    for objective in score.get("objectives", []):
+                tools.append([button("🔄 Impact Player", "impact", *identifiers)])
+            batting = manage_batting_button(state)
+            if batting:
+                tools.append([batting])
+            tools.append([button("Pause", "pause", *identifiers)])
+        if not game["event_paused"] and game["status"] != "under_review":
+            tools.append([button("Abandon…", "confirm", *identifiers)])
+
+    for objective in (result or score).get("objectives", []):
         lines.append(f'{objective["title"]} · {objective["measured"]}/{objective["threshold"]}')
     if score.get("moment"):
         moment = score["moment"]
         lines.append(f'Goal {moment["progress"]}/{moment["goal"]} · {moment["balls_left"]} balls left')
-    keyboard = play_match_keyboard(f"event-{game['id']}", chat_id=0, is_private=True,
-                                   label="Open CIPL Arena" if not result else "View scorecard")
-    if keyboard:
-        buttons.extend(list(row) for row in keyboard.inline_keyboard)
-    buttons.append([_button("Back to event", "show", event["id"])])
-    if not state:
-        return "\n".join([header, *lines]), buttons
-    # CIPL's rich card renders the same strike, bowler, projection, chase and
-    # delivery details that ordinary chat matches show.
-    text = "\n".join([f"<b>{escape(header)}</b>", *(escape(line) for line in lines), "", _approach_card(state)])
-    blocks = _approach_card_blocks(state, [[line] for line in lines])
+    if state:
+        tools.extend(cipl._miniapp_row(state) or [])
+    tools.append([button("Back to event", "show", event["id"])])
+    if manage:
+        return match_controls.TITLE, [*tools, [button("Back to match", "match", *identifiers[:2])]]
+
+    text = "\n\n".join(filter(None, (text, f"<b>{escape(header)}</b>\n" + "\n".join(map(escape, lines)))))
     if blocks:
-        blocks.insert(0, rich.heading(header, size=3))
+        blocks += [rich.heading(header, size=3), *(rich.paragraph(line) for line in lines)]
+    match_id = public_id or f"event-{game['id']}"
+    blocks, text = match_controls.attach(
+        {"match_id": match_id, "chat_id": 0}, text, blocks, tools,
+        fallback_command=f"/eventplay {match_id} manage")
     return text, buttons, blocks
 
 
 def _impact_panel(user, db, event_id, game_id, version, parts):
-    owned = play.owned_game(db, user, game_id)
-    if not owned:
-        raise ValueError("Match is unavailable.")
-    game, entry = owned
+    from handlers.cipl_play import _impact_label, _impact_overseas_block, impact_batting_slots
+
+    game, entry, _ = play._ownership(db, user.id, game_id)
     if entry.event_id != event_id or game.status != "in_progress" or game.version != version:
         raise studio.Conflict("This match changed. Reopen the Impact Player picker.")
-    state = game.state
+    state = play._checkpoint(game, entry, user)
     if not state.get("event_impact") or state.get("play_mode") != "chat" or state.get("event_paused"):
         raise ValueError("Impact Player is unavailable on this surface.")
     opts = impact_player.cipl_options(state, entry.team_key, state.get("event_next_action"))
     identifiers = (event_id, game_id, version)
-    back = [_button("Back to match", "match", event_id, game_id)]
+    back = [_button("✖️ Cancel", "match", event_id, game_id)]
     if not opts.get("can_use"):
         return opts["message"], [back]
+    title = "🔄 <b>Impact Player</b>"
+    side = opts["side"]
     if len(parts) == 4:
-        return "Choose the player coming off.", [
-            *[[_button(p["name"][:45], "impact", *identifiers, p["roster_id"])]
-              for p in opts["replaceable_players"]], back]
-    out = int(parts[4])
+        off = [_button(_impact_label(p), "impact", *identifiers, p["roster_id"])
+               for p in opts["replaceable_players"]]
+        text = (f"{title} — {escape(str(opts['legal_break']))}\n\n"
+                f"{_impact_overseas_block(state, side)}Step 1 of 3: who comes <b>off</b>?")
+        return text, [*[off[i:i + 2] for i in range(0, len(off), 2)], back], None
+    out = _part(parts, 4, "outgoing player")
+    outgoing = next((p for p in opts["replaceable_players"] if p["roster_id"] == out), None)
+    if outgoing is None:
+        raise ValueError("Choose a player from your active XI.")
+    legal = impact_player.cipl_incoming_for(state, side, out, opts["incoming_options"])
+    if not legal:
+        raise ValueError(impact_player.NO_LEGAL_SWAP_MESSAGE)
+    recap = f"{title}\n\nOff: <b>{escape(str(outgoing['name']))}</b>\n"
     if len(parts) == 5:
-        incoming = impact_player.cipl_incoming_for(state, opts["side"], out, opts["incoming_options"])
-        action = "imp_pos" if opts["side"] == "bat" else "imp_use"
-        return "Choose an eligible substitute.", [
-            *[[_button(p["name"][:45], action, *identifiers, out, p["roster_id"])] for p in incoming], back]
-    positions = impact_player.cipl_batting_slots(state, out)
-    return "Choose a batting slot for the substitute.", [
-        *[[_button(label, "imp_use", *identifiers, out, int(parts[5]), slot)] for slot, label in positions], back]
-
-
-def _setup_panel(event_id, game_id, previous, setup, draft, position=0, page=0):
-    identifiers = (event_id, game_id, previous)
-    lines = [f'{setup["team"]} v {setup["opponent"]}',
-             " · ".join(filter(None, (setup["format"], setup["pitch"] + " pitch",
-                                      setup["venue"], setup["weather"], setup["difficulty"]))),
-             f'Start by {setup["cutoff"]}']
-    for goal in setup["objectives"]:
-        lines.append(f'{goal["title"]} · {goal["threshold"]}')
-    buttons = []
-    if not setup["toss"]:
-        lines.append("Call the toss.")
-        buttons.append([_button("Heads", "coin", *identifiers, "heads"),
-                        _button("Tails", "coin", *identifiers, "tails")])
+        options = [_button(_impact_label(p), "imp_pos", *identifiers, out, p["roster_id"]) for p in legal]
+        text = (recap + _impact_overseas_block(state, side, legal, opts.get("bench_all"))
+                + "Step 2 of 3: who comes <b>on</b>?")
     else:
-        toss = setup["toss"]
-        ruling = "You won the toss." if toss["human_won"] else f'{setup["opponent"]} chose to {toss["decision"]}.'
-        lines.append(f'{toss["coin"].title()} · {ruling}')
-        squad = {p["roster_id"]: p for p in setup["squad"]}
-        xi = draft.get("xi") or setup["default_xi"]
-        captain = draft.get("captain")
-        if position:
-            lines.append(f'Choose batting position {position}.')
-            available = [p for p in squad.values() if p["roster_id"] not in xi[:position - 1]]
-            buttons.extend([_button(f'{p["name"][:35]} · {p["category"]} · {p["rating"]}',
-                                     "xi", *identifiers, position, p["roster_id"])]
-                           for p in available[page * 10:page * 10 + 10])
-            pages = []
-            if page:
-                pages.append(_button("Previous", "order", *identifiers, position, page - 1))
-            if len(available) > (page + 1) * 10:
-                pages.append(_button("Next", "order", *identifiers, position, page + 1))
-            if pages:
-                buttons.append(pages)
-            buttons.append([_button("Quick XI", "quick", *identifiers)])
+        in_id = _part(parts, 5, "incoming player")
+        incoming = next((p for p in legal if p["roster_id"] == in_id), None)
+        if incoming is None:
+            raise ValueError("Choose an eligible substitute.")
+        name = escape(str(incoming["name"]))
+        when = "bats" if side == "bat" else "bats next innings"
+        text = f"{recap}On: <b>{name}</b>\n\nStep 3 of 3: where {when} <b>{name}</b>?"
+        options = [_button(f"#{slot + 1} · {label}", "imp_use", *identifiers, out, in_id, slot)
+                   for slot, label in impact_batting_slots(state, side, out)]
+    return text, [*[options[i:i + 2] for i in range(0, len(options), 2)], back], None
+
+
+def _batting_panel(db, user, event_id, game_id, version, parts):
+    from handlers.live_batting import _menu
+    from services import live_batting
+
+    game, entry, _ = play._ownership(db, user.id, game_id)
+    if entry.event_id != event_id or game.status != "in_progress" or game.version != version:
+        raise studio.Conflict("This match changed. Reopen Manage batting.")
+    state = play._checkpoint(game, entry, user)
+    if (state.get("event_paused") or state.get("play_mode") != "chat"
+            or state["bat_team_id"] != entry.team_key):
+        raise ValueError("Only the batting captain can change batting on the active play surface.")
+    options = live_batting.options(state, state["event_next_action"], can_control=True)
+    if not options["canManage"]:
+        raise ValueError(options["message"])
+    action = parts[4]
+    if action in ("r", "o"):
+        first, second = _part(parts, 5, "player"), _part(parts, 6, "player")
+        data = {"token": options["token"]}
+        if action == "r":
+            kind = "retire_batsman"
+            data.update(outRosterId=first, inRosterId=second)
         else:
-            lines.extend(f'{index}. {squad[rid]["name"]}{" (c)" if rid == captain else ""}'
-                         for index, rid in enumerate(xi, 1))
+            kind = "live_batting_order"
+            ids = [p["id"] for p in options["waiting"]]
+            if min(first, second) < 0 or max(first, second) >= len(ids) or abs(first - second) != 1:
+                raise ValueError("Invalid batting position.")
+            ids[first], ids[second] = ids[second], ids[first]
+            data["rosterIds"] = ids
+        play.change_batting(db, user, game_id, version, kind, data, source="chat")
+        if game.status != "in_progress":
+            return None
+        options = live_batting.options(game.state, game.state["event_next_action"], can_control=True)
+
+    def control(label, step, *values):
+        if step == "x":
+            return _button(label, "match", event_id, game_id)
+        return _button(label, "bat", event_id, game_id, game.version, step, *values[1:])
+
+    outgoing = _part(parts, 5, "player") if action == "p" else None
+    text, markup = _menu(game_id, options, outgoing=outgoing, button=control)
+    return text, [list(row) for row in markup.inline_keyboard], None
+
+
+def _setup_panel(event_id, game_id, previous, setup, selected):
+    from handlers.challenge import (
+        _challenge_xi_player_keyboard, start_match_buttons, toss_call_buttons, toss_decision_buttons,
+    )
+    from services.xi_rules import _category_is_keeper
+
+    identifiers = (event_id, game_id, previous)
+    lines = [f'<b>{escape(setup["team"])} v {escape(setup["opponent"])}</b>',
+             escape(" · ".join(filter(None, (setup["format"], setup["pitch"] + " pitch",
+                                               setup["venue"], setup["weather"], setup["difficulty"])))),
+             f'Start by {escape(_when(setup["cutoff"], setup["timezone"]))}']
+
+    def control(label, action, *values):
+        return _button(label, action, *identifiers, *values)
+
+    toss = setup["toss"]
+    if not toss:
+        lines[:0] = ["🪙 <b>TOSS</b>", "Call the coin."]
+        buttons = toss_call_buttons(lambda label, call: control(label, "coin", call))
+    elif not toss["decision"]:
+        lines = [f'🪙 The coin lands on <b>{toss["coin"].upper()}</b> — you called '
+                 f'<b>{toss["call"].upper()}</b>.', "", "🏆 You won the toss. Choose:"]
+        buttons = toss_decision_buttons(lambda label, decision: control(label, "elect", decision))
+    else:
+        winner = setup["team"] if toss["human_won"] else setup["opponent"]
+        decision = toss["decision"].upper()
+        lines.append(f'🪙 <b>Toss:</b> {escape(winner)} won and elected to <b>{decision}</b>.')
+        squad = {p["roster_id"]: p for p in setup["squad"]}
+        confirmed = setup["confirmed_xi"]
+        if confirmed:
+            lines.insert(0, "🏏 <b>MATCH READY!</b>\n")
+            lines.append("\n<b>Playing XI</b>")
+            buttons = start_match_buttons(lambda label: control(label, "launch"))
             if not setup["fixed_xi"]:
-                buttons.append([_button("Set batting order", "order", *identifiers, 1, 0),
-                                _button("Quick XI", "quick", *identifiers)])
-            buttons.append([_button("Choose captain", "captains", *identifiers)])
-            decisions = ("bat", "bowl") if toss["human_won"] else (toss["decision"],)
-            buttons.append([_button(f'Start · {decision.title()} first', "launch", *identifiers, decision)
-                            for decision in decisions])
+                buttons.append([control("✏️ Edit XI", "xe")])
+        else:
+            lines.append(f'\n🏏 <b>{escape(setup["team"])} Playing XI Selection</b>')
+            if setup["fixed_xi"]:
+                selected = setup["default_xi"]
+                buttons = [[control("✅ Confirm XI", "xc")]]
+            else:
+                lines.append("Tap a player to add/remove, or reply with their numbers "
+                             "(e.g. <code>1 2 3 4 5 6 7 8 9 10 11</code>).")
+                players = [SimpleNamespace(id=p["roster_id"], name=p["name"]) for p in squad.values()]
+                actions = {"pick": "xp", "clear": "xz", "confirm": "xc", "useprev": "xq"}
+                keyboard = _challenge_xi_player_keyboard(None, None, players, selected,
+                    saved_available=True, saved_label="⚡ Use suggested XI",
+                    button=lambda label, action, *values: control(label, actions[action], *values))
+                buttons = [list(row) for row in keyboard.inline_keyboard]
+            playing = [squad[rid] for rid in selected if rid in squad]
+            keepers = sum(_category_is_keeper(p["category"]) for p in playing)
+            bowlers = sum(p["category"] in ("Bowler", "All-rounder") for p in playing)
+            overseas = sum(bool(p["is_overseas"]) for p in playing)
+            lower, upper = setup["min_overseas"], setup["max_overseas"]
+            checks = [(keepers >= 1, f"1 Wicket Keeper ({keepers}/1)"),
+                      (bowlers >= 5, f"At least 5 Bowling Options ({bowlers}/5)")]
+            if lower > 0 or upper < 11:
+                checks.append((lower <= overseas <= upper, f"Overseas ✈️ {overseas} (min {lower} / max {upper})"))
+            lines += [f'\n<b>Selected:</b> {len(playing)}/11', "<b>Rules:</b>",
+                      *(f'{"✅" if met else "⬜"} {label}' for met, label in checks),
+                      "• Selection order becomes batting order", "\n<b>Batting order:</b>"]
+        lines.extend(f'{pos}. {escape(squad[rid]["name"])}' for pos, rid in enumerate(confirmed or selected, 1)
+                     if rid in squad)
     buttons.append([_button("Back to event", "show", event_id)])
-    return "\n".join(lines), buttons
+    lines.extend(f'{escape(goal["title"])} · {goal["threshold"]}' for goal in setup["objectives"])
+    return "\n".join(lines), buttons, None
 
 
 def _event_panel(event):
@@ -374,6 +476,11 @@ def _dispatch(telegram_id, parts=None, kind=None, drafts=None):
             db.commit()
         event_id = _part(parts, 1, "event id")
         game_id = None
+        if action == "show":
+            event, config = play._published(db, event_id)
+            if config.get("objective_scope") == "tournament":
+                from handlers.event_competitions import event_panel
+                return event_panel(db, user, event_id, now)
         if action == "join":
             event = play.detail(db, user, event_id, now)
             choice = _part(parts, 3, "team")
@@ -381,44 +488,57 @@ def _dispatch(telegram_id, parts=None, kind=None, drafts=None):
                 raise StaleControl("team index is outside the published team list")
             team = event["teams"][choice]["key"]
             play.join(db, user, event_id, team, parts[2], now)
-        elif action in ("setup", "coin", "order", "xi", "quick", "captains", "captain", "launch"):
+        elif action in ("setup", "coin", "elect", "xp", "xc", "xq", "xz", "xe", "xn", "launch",
+                        "order", "xi", "quick", "captains", "captain"):
             game_id, previous = _part(parts, 2, "game id"), _part(parts, 3, "attempt")
-            setup = play.setup_fixture(db, user, event_id, game_id, previous, now,
-                                       call=parts[4] if action == "coin" else None)
-            draft = drafts.setdefault(f"{event_id}:{game_id}:{previous}", {})
-            if action == "quick":
-                draft.clear()
-            if action == "captains":
-                xi = set(draft.get("xi") or setup["default_xi"])
-                buttons = [[_button(p["name"][:45], "captain", event_id, game_id, previous, p["roster_id"])]
-                           for p in setup["squad"] if p["roster_id"] in xi]
-                buttons.append([_button("Back", "setup", event_id, game_id, previous)])
-                return "Choose your captain.", buttons
-            if action == "captain":
-                draft["captain"] = int(parts[4])
-            position = int(parts[4]) if action in ("order", "xi") else 0
-            if action == "xi":
-                xi = draft.setdefault("xi", list(setup["default_xi"]))
-                selected = int(parts[5])
-                if selected in xi[:position - 1] or selected not in {p["roster_id"] for p in setup["squad"]}:
-                    raise ValueError("Choose an available player.")
-                if selected in xi:
-                    former = xi.index(selected)
-                    xi[former] = xi[position - 1]
-                xi[position - 1] = selected
-                if draft.get("captain") not in xi:
-                    draft.pop("captain", None)
-                position = 0 if position == 11 else position + 1
-            if action != "launch":
+            options = {"call": parts[4]} if action == "coin" else {}
+            if action == "elect":
+                options["decision"] = parts[4]
+            elif action == "xe":
+                options["edit"] = True
+            setup = play.setup_fixture(db, user, event_id, game_id, previous, now, **options)
+            if drafts is None:
+                drafts = {}
+            key = f"{event_id}:{game_id}:{previous}"
+            selected = drafts.get(key, [])
+            if setup["editing_xi"]:
+                selected = drafts[key] = setup["editing_xi"]
+            if action in ("xp", "xc", "xq", "xz", "xn") and setup["toss"] and setup["toss"]["decision"] and not setup["confirmed_xi"]:
+                squad = [p["roster_id"] for p in setup["squad"]]
+                selected = [rid for rid in selected if rid in squad]
+                if action == "xp" and not setup["fixed_xi"]:
+                    rid = _part(parts, 4, "player")
+                    if rid not in squad:
+                        raise ValueError("Choose an available player.")
+                    if rid in selected:
+                        selected.remove(rid)
+                    elif len(selected) < 11:
+                        selected.append(rid)
+                    else:
+                        raise ValueError("You already have 11 players. Remove one first.")
+                elif action == "xz" and not setup["fixed_xi"]:
+                    selected = []
+                elif action == "xn" and not setup["fixed_xi"]:
+                    numbers = [int(number) for number in parts[4:]]
+                    if len(numbers) > 11 or len(set(numbers)) != len(numbers):
+                        raise ValueError("Choose up to 11 different player numbers.")
+                    if any(number < 1 or number > len(squad) for number in numbers):
+                        raise ValueError(f"Choose player numbers from 1 to {len(squad)}.")
+                    selected = [squad[number - 1] for number in numbers]
+                elif action in ("xc", "xq"):
+                    if action == "xq" or setup["fixed_xi"]:
+                        selected = setup["default_xi"]
+                    setup = play.setup_fixture(db, user, event_id, game_id, previous, now, xi=selected)
+                drafts[key] = selected
+            if action != "launch" or not setup["confirmed_xi"]:
                 db.commit()
-                page = int(parts[5]) if action == "order" else 0
-                return _setup_panel(event_id, game_id, previous, setup, draft, position, page)
-            launch = {"selected": draft.get("xi"), "captain_id": draft.get("captain"),
-                      "decision": parts[4], "require_toss": True}
+                return _setup_panel(event_id, game_id, previous, setup, selected)
+            launch = {"require_toss": True, "require_confirmed": True}
             if game_id:
-                game_id = play.start_fixture(db, user, game_id, **launch).id
+                game_id = play.start_fixture(db, user, game_id, None, **launch).id
             else:
                 game_id = play.start_attempt(db, user, event_id, previous, **launch).id
+            drafts.pop(key, None)
         elif action == "attempt":
             game_id = play.start_attempt(db, user, event_id, int(parts[3]), require_toss=True).id
         elif action == "pick":
@@ -437,6 +557,12 @@ def _dispatch(telegram_id, parts=None, kind=None, drafts=None):
             game_id = play.set_play_state(db, user, int(parts[2]), int(parts[3]), action, "chat").id
         elif action in ("impact", "imp_pos"):
             return _impact_panel(user, db, event_id, int(parts[2]), int(parts[3]), parts)
+        elif action == "bat":
+            game_id, version = _part(parts, 2, "game id"), _part(parts, 3, "version")
+            panel = _batting_panel(db, user, event_id, game_id, version, parts)
+            db.commit()
+            if panel:
+                return panel
         elif action == "imp_use":
             position = int(parts[6]) if len(parts) > 6 else None
             game_id = play.use_impact(db, user, int(parts[2]), int(parts[3]),
@@ -452,7 +578,7 @@ def _dispatch(telegram_id, parts=None, kind=None, drafts=None):
                        for idx, team in enumerate(event["teams"])]
             buttons.append([_button("Back", "show", event_id)])
             return "Choose a team and confirm enrollment. Your choice is permanent for this campaign.", buttons
-        if action in ("match", "confirm"):
+        if action in ("match", "confirm", "timeout", "manage"):
             game_id = _part(parts, 2, "game id")
         if action in ("table", "stats", "rewards") and event["joined"]:
             return _progress_panel(db, user, event, action)
@@ -460,6 +586,9 @@ def _dispatch(telegram_id, parts=None, kind=None, drafts=None):
             game = next((game for game in event.get("games", []) if game["id"] == game_id and game["personal"]), None)
             if not game:
                 raise ValueError("Match is unavailable.")
+            if action == "timeout" and (game["version"] != _part(parts, 3, "version")
+                                        or game["play_mode"] != "chat" or game["event_paused"]):
+                return None
             if action == "confirm":
                 return ("Abandon this official game? The result is permanent and no reward will be earned.",
                         [[_button("Confirm abandon", "abandon", event_id, game_id, _part(parts, 3, "version"))],
@@ -467,7 +596,11 @@ def _dispatch(telegram_id, parts=None, kind=None, drafts=None):
             row = db.get(StudioGame, game_id)
             if row is None:
                 raise StaleControl(f"game {game_id} is no longer in the database")
-            return _match_panel(event, game, row.state)
+            state = row.state
+            if game["score"] and state and not state.get("event_next_action"):
+                entry = db.get(StudioEnrollment, row.enrollment_id)
+                state = play._checkpoint(row, entry, user)
+            return _match_panel(event, game, state, manage=action == "manage")
         return _event_panel(event)
 
 
@@ -479,8 +612,11 @@ async def command(update, context):
             reply_markup=InlineKeyboardMarkup([[hub]]) if hub else None)
         return
     name = update.effective_message.text.split()[0].split("@")[0][1:].lower()
-    if name == "eventplay" and await handle_match_command(update, context, "match"):
-        return
+    if name == "eventplay":
+        args = getattr(context, "args", None) or []
+        action = "manage" if len(args) > 1 and args[1].lower() == "manage" else "match"
+        if await handle_match_command(update, context, action):
+            return
     try:
         text, buttons = await asyncio.to_thread(_dispatch, update.effective_user.id, kind=KINDS.get(name))
     except ValueError as exc:
@@ -512,7 +648,13 @@ def _target_match(telegram_id, game_id, action):
 
 async def handle_match_command(update, context, action):
     args = getattr(context, "args", None)
-    target = re.fullmatch(r"event-(\d{1,10})", args[0].lower()) if isinstance(args, (list, tuple)) and args else None
+    key = args[0].lower() if isinstance(args, (list, tuple)) and args else ""
+    shared = re.fullmatch(r"competition-(\d{1,10})", key)
+    if shared:
+        from handlers.event_competitions import match_command
+        await match_command(update, context, int(shared[1]), action)
+        return True
+    target = re.fullmatch(r"event-(\d{1,10})", key)
     if not target:
         return False
     if update.effective_chat.type != "private":
@@ -521,10 +663,11 @@ async def handle_match_command(update, context, action):
     game_id = int(target[1])
     try:
         event_id, version = await asyncio.to_thread(_target_match, update.effective_user.id, game_id, action)
-        parts = ["confirm" if action == "clear" else "match", str(event_id), str(game_id), str(version)]
+        panel_action = {"clear": "confirm", "manage": "manage"}.get(action, "match")
+        parts = [panel_action, str(event_id), str(game_id), str(version)]
         panel = await asyncio.to_thread(_dispatch, update.effective_user.id, parts)
         text, buttons, *render = panel
-        markup = InlineKeyboardMarkup(buttons)
+        markup = InlineKeyboardMarkup(buttons) if buttons else None
         if render:
             await rich.send_rich_message(context.bot, update.effective_chat.id, render[0], text, reply_markup=markup)
         else:
@@ -540,6 +683,18 @@ async def handle_match_command(update, context, action):
     return True
 
 
+async def send_timeout_prompt(bot, telegram_id, event_id, game_id, version):
+    try:
+        panel = await asyncio.to_thread(
+            _dispatch, telegram_id, ["timeout", str(event_id), str(game_id), str(version)])
+        if panel:
+            text, buttons, *render = panel
+            await rich.send_rich_message(bot, telegram_id, render[0] if render else None, text,
+                                         reply_markup=InlineKeyboardMarkup(buttons) if buttons else None)
+    except Exception:
+        logger.exception("events: could not refresh the chat picker for match %s", game_id)
+
+
 async def callback(update, context):
     query = update.callback_query
     if update.effective_chat is None or update.effective_chat.type != "private":
@@ -547,10 +702,31 @@ async def callback(update, context):
         return
     await query.answer()
     parts = query.data.split(":")[1:]
+    toss = parts[0] == "coin"
+    toss_key = (query.message.chat_id, query.message.message_id) if toss else None
+    flipping = context.user_data.setdefault("event_flips", set())
+    if toss and toss_key in flipping:
+        return
+    if toss:
+        flipping.add(toss_key)
     try:
-        panel = await asyncio.to_thread(_dispatch, update.effective_user.id, parts,
-                                        drafts=context.user_data.setdefault("event_xi", {}))
+        try:
+            panel = await asyncio.to_thread(_dispatch, update.effective_user.id, parts,
+                                            drafts=context.user_data.setdefault("event_xi", {}))
+        except studio.Conflict:
+            if parts[0] not in ("pick", "pause", "resume", "switch", "bat", "imp_use"):
+                raise
+            panel = await asyncio.to_thread(_dispatch, update.effective_user.id,
+                                            ["match", *parts[1:3]])
         text, buttons, *render = panel
+        if toss:
+            from services.match_broadcast import animate_coin_toss, reveal_toss_result
+            markup = InlineKeyboardMarkup(buttons)
+            await animate_coin_toss(lambda frame: query.edit_message_text(frame, parse_mode="HTML"))
+            if not await reveal_toss_result(lambda: query.edit_message_text(
+                    text, reply_markup=markup, parse_mode="HTML")):
+                await query.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+            return
     except ValueError as exc:
         await query.message.reply_text(str(exc))
         return
@@ -565,10 +741,13 @@ async def callback(update, context):
         logger.exception("events: could not render %r for %s", query.data, update.effective_user.id)
         await query.message.reply_text(BROKEN_TEXT)
         return
+    finally:
+        if toss:
+            flipping.discard(toss_key)
     from telegram.error import BadRequest
     try:
         markup = InlineKeyboardMarkup(buttons)
-        if render and await rich.edit_rich_message(context.bot, query.message.chat_id,
+        if render and render[0] and await rich.edit_rich_message(context.bot, query.message.chat_id,
                                                     query.message.message_id, render[0],
                                                     reply_markup=markup, fallback_text=text):
             return
@@ -576,3 +755,28 @@ async def callback(update, context):
     except BadRequest as exc:
         if "message is not modified" not in str(exc).lower():
             raise
+
+
+async def quickselect_reply(update, context):
+    """Route a reply to a numbered Event Studio XI picker."""
+    message = update.effective_message
+    chat = update.effective_chat
+    if chat is None or chat.type != "private":
+        return False
+    target = getattr(message, "reply_to_message", None)
+    markup = getattr(target, "reply_markup", None)
+    if not markup:
+        return False
+    data = next((button.callback_data for row in markup.inline_keyboard for button in row
+                 if (button.callback_data or "").startswith("ev:xp:")), None)
+    tokens = re.split(r"[\s,]+", (message.text or "").strip())
+    if not data or len(tokens) < 2 or not all(token.isdecimal() for token in tokens):
+        return False
+    try:
+        parts = ["xn", *data.split(":")[2:5], *tokens]
+        text, buttons, _ = await asyncio.to_thread(
+            _dispatch, update.effective_user.id, parts, drafts=context.user_data.setdefault("event_xi", {}))
+        await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+    except ValueError as exc:
+        await message.reply_text(str(exc))
+    return True

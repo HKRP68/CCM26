@@ -106,6 +106,12 @@
     form.querySelector('[data-kind-boss]').hidden = config.kind !== 'boss';
     form.querySelector('[data-kind-moment]').hidden =
       !(config.kind === 'moment' || config.kind === 'boss' && config.challenge_style === 'moment');
+    const tournament = config.kind === 'live' && config.objective_scope === 'tournament';
+    form.querySelector('[data-kind-live]').hidden = config.kind !== 'live';
+    form.querySelector('[data-tournament-objectives]').hidden = !tournament;
+    form.querySelector('[data-legacy-objectives]').hidden = tournament;
+    form.querySelector('[data-event-budget-label]').textContent = tournament ? 'Total human capacity' : 'Players covered by the budget';
+    form.querySelector('[data-auto-objectives]').textContent = tournament ? 'Auto Tournament Objectives' : 'Auto Objectives';
     for (const field of fields) {
       if (field === except || field.getAttribute('aria-invalid') === 'true') continue;
       const value = path(field).reduce((object, key) => object?.[key], config);
@@ -146,6 +152,16 @@
           const keys = path(field);
           const target = keys.slice(0, -1).reduce((object, key) => object[key] ??= {}, config);
           target[keys.at(-1)] = value;
+          if (keys[0] === 'kind' && config.kind !== 'live') {
+            config.objective_scope = 'fixture';
+            config.tournament_objectives = [];
+          } else if (keys[0] === 'objective_scope') {
+            if (value === 'fixture') config.tournament_objectives = [];
+            else if (value === 'tournament') {
+              config.objectives = [];
+              config.mode = ['tournament_team'];
+            }
+          }
         }
       } catch (error) {
         showError(field, error?.studio ? error.message

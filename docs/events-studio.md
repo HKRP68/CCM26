@@ -1,5 +1,7 @@
 # CMU Event Studio
 
+For new Live Events with Solo and Multiplayer registration, tournament objectives, and a claimed-star reward road, see [Live Events 2.0 staging and migration](event-operations.md#live-events-20-staging-and-migration). The fixture-objective workflow below describes legacy campaigns and standalone challenges.
+
 ## Checkout and integration
 
 The clean workspace initially checked out `89e4e87`. GitHub main had advanced by 81 commits to `f207918`. Events Studio was ported to and verified against that newer base. `admin.py` serves the authenticated Flask panel and Telegram MiniApp. The legacy `/events` screen in that panel configures economy multipliers. `website.py` serves the franchise site.

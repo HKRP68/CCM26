@@ -48,8 +48,11 @@ def _ladder(config):
 
 
 def list_events(db, user, now):
+    from models_events import StudioParticipant
+
     joined = {row.event_id for row in db.scalars(select(StudioEnrollment)
                                                .filter_by(user_id=user.id))}
+    joined.update(db.scalars(select(StudioParticipant.event_id).filter_by(user_id=user.id)))
     events = db.scalars(select(StudioEvent).where(StudioEvent.published_number.is_not(None))
                         .where(((StudioEvent.closes_at > now) & (StudioEvent.status != "cancelled"))
                                | StudioEvent.id.in_(joined))
@@ -64,6 +67,7 @@ def list_events(db, user, now):
 
 def event_summary(event, config, joined, now):
     return {"id": event.id, "slug": event.slug, "name": event.name, "kind": config["kind"],
+            "competition": config.get("objective_scope") == "tournament",
             "format": config["format"], "description": config["description"], "featured": config["featured"],
             "banner_url": config.get("banner_url"), "cadence": config["rotation"]["cadence"],
             "opens_at": schedule.utc_text(event.opens_at), "closes_at": schedule.utc_text(event.closes_at),
@@ -119,6 +123,8 @@ def join(db, user, event_id, team_key, mode, now):
     if previous:
         return previous
     config = studio.revision(db, event, published=True).config
+    if config.get("objective_scope") == "tournament":
+        raise ValueError("Join this Live Event through Solo or Multiplayer.")
     if not event_summary(event, config, False, now)["can_join"]:
         raise ValueError("Enrollment is closed.")
     restriction = _chapter_lock(db, user.id, config)
@@ -246,8 +252,9 @@ def _last_attempt(db, entry):
                      .order_by(StudioGame.attempt.desc()).limit(1))
 
 
-def setup_fixture(db, user, event_id, game_id, previous_attempt, now, *, call=None):
-    """Read the legal lineup and commit at most one toss for a schedule slot."""
+def setup_fixture(db, user, event_id, game_id, previous_attempt, now, *,
+                  call=None, decision=None, xi=None, edit=False):
+    """Persist the toss and confirmed XI for a fixture or full-match attempt."""
     if game_id:
         game, entry, config = _ownership(db, user.id, game_id)
         if entry.event_id != event_id:
@@ -283,26 +290,51 @@ def setup_fixture(db, user, event_id, game_id, previous_attempt, now, *, call=No
     default = _selected_xi(db, config, entry, None)
     squad, _ = _available_roster(db, config, entry)
     setups = dict(entry.match_setup or {})
-    toss = setups.get(slot)
+    saved = dict(setups.get(slot) or {})
+    editing_xi = None
     if call is not None:
         if call not in ("heads", "tails"):
             raise ValueError("Call heads or tails.")
-        if toss is None:
+        if not saved:
             from services.match_broadcast import flip_coin
             from services.bot_captain import elect_toss_decision
             coin, won = flip_coin(call)
-            toss = {"coin": coin, "call": call, "winner": entry.team_key if won else opponent,
-                    "decision": None if won else elect_toss_decision()}
-            setups[slot] = toss
-            entry.match_setup = setups
+            saved = {"coin": coin, "call": call, "winner": entry.team_key if won else opponent,
+                     "decision": None if won else elect_toss_decision()}
+    if decision is not None:
+        if decision not in ("bat", "bowl") or not saved or saved["winner"] != entry.team_key:
+            raise ValueError("Only the toss winner can choose to bat or bowl.")
+        if saved["decision"] not in (None, decision):
+            raise studio.Conflict("The toss decision is already locked.")
+        saved["decision"] = decision
+    if xi is not None or edit:
+        if not saved.get("decision"):
+            raise ValueError("Decide the toss before picking your Playing XI.")
+        if edit:
+            if entry.mode == "tournament_team" and "xi" in team:
+                raise ValueError("This fixture uses a fixed XI and batting order.")
+            editing_xi = saved.pop("xi", None)
+        else:
+            confirmed = [p["roster_id"] for p in _selected_xi(db, config, entry, xi)]
+            if saved.get("xi") and saved["xi"] != confirmed:
+                raise studio.Conflict("The Playing XI has already been confirmed. Choose Edit XI to change it.")
+            saved["xi"] = confirmed
+    if saved != setups.get(slot, {}):
+        setups[slot] = saved
+        entry.match_setup = setups
     effective = rules.fixture_rules(config, key)
+    toss = ({key: saved[key] for key in ("coin", "call", "winner", "decision")} if saved else None)
+    if toss:
+        toss["human_won"] = saved["winner"] == entry.team_key
     return {"team": team["name"], "opponent": config["snapshot"][opponent]["name"],
-            "toss": ({**toss, "human_won": toss["winner"] == entry.team_key} if toss else None),
-            "cutoff": schedule.utc_text(cutoff), "format": effective["format"], "pitch": effective["pitch"],
+            "toss": toss, "confirmed_xi": saved.get("xi"), "editing_xi": editing_xi,
+            "cutoff": schedule.utc_text(cutoff), "timezone": config["timezone"],
+            "format": effective["format"], "pitch": effective["pitch"],
             "venue": effective.get("venue"), "weather": effective.get("weather"),
             "difficulty": cricket.difficulty(effective, entry.mode),
+            "min_overseas": config["min_overseas"], "max_overseas": config["max_overseas"],
             "fixed_xi": entry.mode == "tournament_team" and "xi" in team,
-            "squad": [{key: p[key] for key in ("roster_id", "name", "version", "rating", "category")}
+            "squad": [{key: p.get(key) for key in ("roster_id", "name", "version", "rating", "category", "is_overseas")}
                       for p in squad],
             "default_xi": [p["roster_id"] for p in default],
             "objectives": [{**row, "title": rules.OBJECTIVES[row["key"]][0]} for row in effective["objectives"]]}
@@ -314,19 +346,29 @@ def _opponent_xi(team, config, mode):
     return team["default_xi"]
 
 
+def _saved_setup(entry, game):
+    slot = f"fixture:{game.id}" if game.fixture_key != "challenge" else f"attempt:{game.attempt}"
+    return (entry.match_setup or {}).get(slot) or {}
+
+
+def _launch_xi(entry, game, selected, require_confirmed):
+    saved = _saved_setup(entry, game)
+    if require_confirmed and not saved.get("xi"):
+        raise ValueError("Confirm your Playing XI before starting the match.")
+    return saved.get("xi", selected)
+
+
 def _launch_settings(entry, game, xis, decision, captain_id, require_toss):
     if captain_id is not None and (type(captain_id) is not int or
             captain_id not in {p["roster_id"] for p in xis[entry.team_key]}):
         raise ValueError("Choose a captain in your playing XI.")
-    slot = f"fixture:{game.id}" if game.fixture_key != "challenge" else f"attempt:{game.attempt}"
-    setup = (entry.match_setup or {}).get(slot)
-    if setup is None:
+    setup = _saved_setup(entry, game)
+    if not setup:
         if require_toss:
             raise ValueError("Call the toss before starting the official match.")
         return {}
     winner = setup["winner"]
-    if winner != entry.team_key:
-        decision = setup["decision"]
+    decision = setup["decision"] or decision
     if decision not in ("bat", "bowl"):
         raise ValueError("The toss winner must choose to bat or bowl.")
     batting = winner if decision == "bat" else game.away if winner == game.home else game.home
@@ -334,7 +376,7 @@ def _launch_settings(entry, game, xis, decision, captain_id, require_toss):
 
 
 def start_fixture(db, user, game_id, selected, clock=None, *, source="chat",
-                  decision=None, captain_id=None, require_toss=False):
+                  decision=None, captain_id=None, require_toss=False, require_confirmed=False):
     game, entry, config = _ownership(db, user.id, game_id)
     if game.status not in ("locked", "scheduled"):
         if require_toss and game.status != "in_progress":
@@ -346,6 +388,7 @@ def start_fixture(db, user, game_id, selected, clock=None, *, source="chat",
     entry = studio.lock(db, StudioEnrollment, entry.id)
     effective = rules.fixture_rules(config, game.fixture_key)
     opponent = game.away if game.home == entry.team_key else game.home
+    selected = _launch_xi(entry, game, selected, require_confirmed)
     xis = {entry.team_key: _selected_xi(db, config, entry, selected),
            opponent: _opponent_xi(config["snapshot"][opponent], effective, entry.mode)}
     toss = _launch_settings(entry, game, xis, decision, captain_id, require_toss)
@@ -354,7 +397,7 @@ def start_fixture(db, user, game_id, selected, clock=None, *, source="chat",
 
 
 def start_attempt(db, user, event_id, previous_attempt, clock=None, *, source="chat", selected=None,
-                  decision=None, captain_id=None, require_toss=False):
+                  decision=None, captain_id=None, require_toss=False, require_confirmed=False):
     event, config = _published(db, event_id)
     entry = _enrollment(db, event.id, user.id)
     if not entry or config["kind"] == "live":
@@ -380,9 +423,11 @@ def start_attempt(db, user, event_id, previous_attempt, clock=None, *, source="c
     xis = {key: config["snapshot"][key]["default_xi"] for key in (home, away)}
     toss = {}
     if not rules.is_moment(config):
+        selected = _launch_xi(entry, game, selected, require_confirmed)
         xis[entry.team_key] = _selected_xi(db, config, entry, selected)
         effective = rules.fixture_rules(config, "challenge")
-        xis[away] = _opponent_xi(config["snapshot"][away], effective, entry.mode)
+        opponent = away if home == entry.team_key else home
+        xis[opponent] = _opponent_xi(config["snapshot"][opponent], effective, entry.mode)
         toss = _launch_settings(entry, game, xis, decision, captain_id, require_toss)
     _launch(db, game, event, entry, config, xis, user, clock, source=source, toss=toss, captain_id=captain_id)
     return game
@@ -422,6 +467,7 @@ def _launch(db, game, event, entry, config, xis, user, clock, *, source, toss, c
     }
     state.update(event_context=event_context, play_mode=source, is_private=True,
                  event_captain=captain_id or xis[entry.team_key][0]["roster_id"])
+    state["user_names"] = {str(user.telegram_id): user.username or user.first_name or "Player"}
     _bind_actor(state, entry.team_key, user.telegram_id)
     cricket.prepare_pick(state, game.seed, game.step, entry.team_key)
     game.state = state
@@ -548,6 +594,9 @@ def _apply_pick(db, game, entry, config, state, kind, value, clock=None, *, now=
             terminal = None
         else:
             terminal = cricket.apply_pick(state, game.seed, game.step, entry.team_key, kind, selected)
+            if (state.get("event_next_action") == A_INNINGS_BREAK
+                    and state.get("play_mode", "chat") == "chat"):
+                cricket.prepare_pick(state, game.seed, game.step + 1, entry.team_key)
     except Exception as exc:
         game.failure_at = now or _time(clock)
         game.failure_type = type(exc).__name__[:90]
@@ -574,7 +623,7 @@ def _apply_pick(db, game, entry, config, state, kind, value, clock=None, *, now=
 
 def _checkpoint(game, entry, user=None):
     state = deepcopy(game.state)
-    if "event_next_action" not in state:
+    if not state.get("event_next_action"):
         state.setdefault("play_mode", "chat")
         # Existing official saves were all at over boundaries.
         cricket.prepare_pick(state, game.seed, game.step, entry.team_key)
@@ -842,7 +891,9 @@ def run_due(db, game_id, now, *, over_budget=8):
             try:
                 _apply_pick(db, game, entry, config, state, kind, value, now=now)
             except studio.ExecutionUnavailable:
-                pass
+                return
+            if state.get("play_mode", "chat") == "chat":
+                return entry.user_id, entry.event_id, game.version
         return
     if game.status not in ("scheduled", "simulating"):
         return
@@ -888,13 +939,16 @@ def due_ids(db, now, limit=12):
 
 
 def sync_lifecycle(db, now):
+    from models_events import StudioCompetition
     db.execute(update(StudioEvent).where(StudioEvent.status == "scheduled",
                                         StudioEvent.opens_at <= now).values(status="live"))
     db.execute(update(StudioEvent).where(StudioEvent.status == "live",
                                         StudioEvent.closes_at <= now).values(status="closing"))
     pending = select(StudioEnrollment.event_id).join(StudioGame, StudioGame.enrollment_id == StudioEnrollment.id)
     db.execute(update(StudioEvent).where(StudioEvent.status == "closing",
-                                        StudioEvent.id.not_in(pending.where(StudioGame.status.in_(PENDING))))
+                                        StudioEvent.id.not_in(pending.where(StudioGame.status.in_(PENDING))),
+                                        StudioEvent.id.not_in(select(StudioCompetition.event_id).where(
+                                            StudioCompetition.status.in_(("lobby", "running")))))
                .values(status="completed"))
 
 
@@ -1096,6 +1150,8 @@ def operate(db, event, action, actor, reason, now):
     reason = reason.strip()
     if not reason or len(reason) > 500:
         raise ValueError("Enter an operations reason of up to 500 characters.")
+    from services import event_studio_competition as competitions
+
     previous = event.status
     before = {"status": previous, "opens_at": schedule.utc_text(event.opens_at),
               "closes_at": schedule.utc_text(event.closes_at)}
@@ -1128,6 +1184,7 @@ def operate(db, event, action, actor, reason, now):
                 entry = db.get(StudioEnrollment, game.enrollment_id)
                 if entry.team_key in (game.home, game.away):
                     notices.enqueue(db, game, config, now)
+        competitions.operate(db, event, "resume", actor, reason, now, shift=shift)
         event.opens_at += shift
         event.closes_at += shift
         event.delay_seconds += seconds
@@ -1141,6 +1198,7 @@ def operate(db, event, action, actor, reason, now):
             game.version += 1
             db.add(StudioResult(game_id=game.id, kind="cancelled", winner=None,
                                 detail={"reason": "event_cancelled"}, recorded_at=now))
+        competitions.operate(db, event, "cancel", actor, reason, now)
         event.status = "cancelled"
     elif action == "retry" and previous in ("scheduled", "live", "closing"):
         db.execute(update(StudioGame).where(StudioGame.id.in_(game_ids), StudioGame.retry_at.is_not(None))

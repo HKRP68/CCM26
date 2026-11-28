@@ -33,8 +33,17 @@ def manage_batting_button(state):
     from services.match_state_store import A_PICK_BAT_APPROACH
     # Prompts render before their action pointer is saved. Check the innings
     # and interruption rules here; the callback checks the latest turn as well.
-    if blocked_reason(state, A_PICK_BAT_APPROACH) or not waiting_indices(state):
+    stage = state.get("event_next_action") if state.get("official_event") else A_PICK_BAT_APPROACH
+    if blocked_reason(state, stage) or not waiting_indices(state):
         return None
+    if state.get("official_event"):
+        if state.get("competition_batting_callback"):
+            return InlineKeyboardButton("🏏 Manage batting", callback_data=state["competition_batting_callback"])
+        event_id = state.get("event_context", {}).get("event_id")
+        version = state.get("event_game_version")
+        if event_id is None or version is None:
+            return None
+        return InlineKeyboardButton("🏏 Manage batting", callback_data=f"ev:bat:{event_id}:{mid}:{version}:n")
     return InlineKeyboardButton("🏏 Manage batting", callback_data=f"lb_n_{mid}")
 
 

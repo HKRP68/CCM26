@@ -198,9 +198,31 @@
             {{ json_example('[6, 1]', 'Up to four distinct offsets, each 1 to 168 hours before a fixture deadline.') }}
           </details>
           <details><summary>Objectives</summary>
+            <label data-kind-live>Objective scope <select data-config-path="objective_scope"><option value="tournament">Tournament</option><option value="fixture">Legacy fixture</option></select></label>
+            <div data-legacy-objectives>
             <label>Objective assignments<textarea data-config-path="objectives" data-value-type="json" spellcheck="false"></textarea></label>
             {{ json_example('[\n  { "key": "win", "threshold": 1 },\n  { "key": "boundaries", "threshold": 4, "min_balls": 12 },\n  { "key": "wickets", "threshold": 3 },\n  { "key": "runs", "threshold": 40 }\n]',
                'One entry per star. Keys are win, boundaries, wickets and runs.') }}
+            </div>
+            <div data-tournament-objectives>
+              <div class="studio-grid">
+                <label>Objective preset <select data-config-path="objective_preset">
+                  {% for preset in ('easy', 'balanced', 'hard', 'extreme', 'custom') %}<option value="{{ preset }}">{{ preset|capitalize }}</option>{% endfor %}
+                </select></label>
+                <label>Tournament modes <textarea class="short" data-config-path="competition.modes" data-value-type="json"></textarea></label>
+                <label>Registration minutes <input type="number" min="60" max="60" data-config-path="competition.registration_minutes"></label>
+                <label>Minimum human managers <input type="number" min="1" max="16" data-config-path="competition.min_humans"></label>
+                <label>Double no-show points <input type="number" min="0" max="20" data-config-path="competition.double_no_show_points"></label>
+                <label class="inline"><input type="checkbox" data-config-path="competition.early_start"> Let hosts start early</label>
+                <label class="inline"><input type="checkbox" data-config-path="competition.match_rewards"> Include completed-match rewards</label>
+              </div>
+              <label>Tournament objectives <textarea data-config-path="tournament_objectives" data-value-type="json" spellcheck="false"></textarea></label>
+              <p>{{ objective_max }} possible stars. Multiplayer registration {{ 'enabled for this format' if multi_enabled else 'requires staging flags for this format' }}. Lobby capacity equals the number of published teams.</p>
+              {% for warning in objective_warnings %}<p>{{ warning }}</p>{% endfor %}
+              {{ json_example('[{"id":"boundaries_100","metric":"boundaries","target":100,"stars":3,"locked":true}]', 'Edit, add, remove or reorder rows here. A locked row keeps its target and stars when regenerating. Rates require min_balls and accept a decimal target. Scope to stages with ["league"] or ["playoff"].') }}
+              <details><summary>Supported objective metrics</summary><p>{{ objective_metrics.keys()|join(', ') }}.</p><p>Phase filters support runs, bowler wickets and team dismissals. Role filters apply to individual batting and bowling metrics. Named-player filters are unavailable.</p></details>
+              <p>Solo reserves one franchise and fills the other seats with AI. Multiplayer opens one shared room for an hour. Allow at least 30 minutes after registration for the first fixture.</p>
+            </div>
             <label class="inline"><input type="checkbox" data-config-path="objectives_locked"> Keep these assignments during generation</label>
           </details>
           <details><summary>Rewards</summary>
@@ -208,7 +230,7 @@
               {% for asset in ('coins', 'gems', 'quest_points') %}
               <label>{{ asset|replace('_', ' ')|capitalize }} budget <input type="number" min="0" max="2000000000" data-config-path="budget.{{ asset }}"></label>
               {% endfor %}
-              <label>Players covered by the budget <input type="number" min="1" max="5000" data-config-path="max_users"></label>
+              <label><span data-event-budget-label>{{ "Total human capacity" if config.objective_scope == "tournament" else "Players covered by the budget" }}</span> <input type="number" min="1" max="5000" data-config-path="max_users"></label>
             </div>
             <p>Players covered by the budget is not a cap on who may join — it is the number each
               reward bundle is scaled against, and the number maximum liability is reported for.</p>
@@ -282,7 +304,7 @@
         </details>
         <div class="studio-toolbar">
           <button class="btn btn-ghost" name="action" value="schedule">Auto Schedule</button>
-          <button class="btn btn-ghost" name="action" value="objectives">Auto Objectives</button>
+          <button class="btn btn-ghost" name="action" value="objectives"><span data-auto-objectives>{{ "Auto Tournament Objectives" if config.kind == "live" and config.objective_scope == "tournament" else "Auto Objectives" }}</span></button>
           <button class="btn btn-ghost" name="action" value="rewards">Auto Rewards</button>
         </div>
         <label class="inline"><input type="checkbox" name="overwrite" value="yes"> Replace unlocked manual edits</label>
@@ -353,6 +375,42 @@
       <p>{{ activity.enrolled }} enrolled · {{ config.fixtures|length }} fixtures per campaign</p>
       {% for status, count in activity.results %}<p>{{ status|replace('_', ' ')|capitalize }} · {{ count }}</p>{% endfor %}
       {% for claimed, count in activity.claims %}<p>{{ 'Claimed' if claimed else 'Unclaimed' }} rewards · {{ count }}</p>{% endfor %}
+      {% if activity.competitions is defined %}
+      <details open><summary>Lobbies and competitions</summary>
+        {% for room, seats, humans, host in activity.competitions %}
+        <p>Room {{ room.id }} · {{ room.kind|title }} · {{ room.status|title }} · {{ host }} · {{ humans }} human / {{ seats - humans }} AI
+           {% if room.status == 'lobby' %} · closes {{ room.join_until.isoformat() }} UTC{% endif %}</p>
+        {% else %}<p>No competitions have been created.</p>{% endfor %}
+      </details>
+      <details><summary>Canonical fixtures and technical operations</summary>
+        {% for fixture in activity.canonical %}
+        <p>#{{ fixture.id }} · Room {{ fixture.competition_id }} · {{ fixture.fixture_key }} · {{ fixture.status }} · {{ fixture.deadline.isoformat() }} UTC{% if fixture.failure_type %} · {{ fixture.failure_type }}{% endif %}</p>
+        {% endfor %}
+        {% if event.status in ('scheduled','live','paused','closing') %}
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="studio-grid">
+            <label>Room or fixture ID <input name="target_id" type="number" min="1" required></label>
+            <label>Reason <input name="reason" maxlength="500" required></label>
+            <label>New deadline for extensions <input name="deadline" type="datetime-local"></label>
+          </div>
+          <button class="btn btn-ghost" name="action" value="close_lobby">Close pre-start lobby</button>
+          <button class="btn btn-ghost" name="action" value="extend_fixture">Extend fixture</button>
+          <button class="btn btn-ghost" name="action" value="retry_fixture">Retry engine checkpoint</button>
+          <button class="btn btn-ghost" name="action" value="void_fixture">Record technical no-result</button>
+        </form>
+        {% endif %}
+      </details>
+      <details><summary>Objective progress and star claims</summary>
+        {% for member, progress in activity.objective_progress %}
+        <p>Room {{ member.competition_id }} · {{ member.team_key }} · {{ progress.claimed }}/{{ progress.maximum }} claimed, {{ progress.unclaimed }} claimable</p>
+        <p>{% for obj in progress.objectives %}{{ obj.title }} {{ obj.measured }}/{{ obj.target }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+        {% endfor %}
+        {% for claim, room, team in activity.star_claims %}
+        <p>Room {{ room }} · {{ team }} · {{ claim.objective_id }} · {{ claim.stars }} stars · {{ claim.claimed_at or 'Unclaimed' }}</p>
+        {% endfor %}
+      </details>
+      {% endif %}
       {% if activity.recent_fixtures %}
       <details><summary>Recent personal fixture records</summary>
         <div class="studio-scroll" tabindex="0" role="region" aria-label="Recent fixtures">
@@ -393,5 +451,5 @@
     </section>
   {% endif %}
 </div>
-<script src="{{ url_for('static', filename='js/event_studio_admin.js', v='1') }}"></script>
+<script src="{{ url_for('static', filename='js/event_studio_admin.js', v='2') }}"></script>
 {% endblock %}

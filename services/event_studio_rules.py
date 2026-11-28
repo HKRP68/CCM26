@@ -126,7 +126,8 @@ def liability(config):
     rows = fixture_rows(config)
     payout = {key: fixture_rules(config, key, rows)["rewards"] for path in paths for key in path}
     return {asset: config["max_users"] * (
-        max((sum(reward_peak(payout[key], ruling, asset) for key in path) for path in paths), default=0)
+        (max((sum(reward_peak(payout[key], ruling, asset) for key in path) for path in paths), default=0)
+         if config.get("objective_scope") != "tournament" or config.get("competition", {}).get("match_rewards", True) else 0)
         + milestone_liability(config, asset)) for asset in ASSETS}
 
 
@@ -171,6 +172,8 @@ def validate_rewards(config, *, require_budget=True):
     thresholds = set()
     max_stars = (len(config["objectives"]) + 1 if is_moment(config)
                  else max_sources(config) * len(config["objectives"]))
+    if config.get("objective_scope") == "tournament" and config["kind"] == "live":
+        max_stars = sum(row["stars"] for row in config["tournament_objectives"])
     for row in config["milestones"]:
         if require_budget and not max_stars:
             raise ValueError("Star milestones need a schedule and star objectives.")
@@ -190,7 +193,29 @@ def validate_rewards(config, *, require_budget=True):
     return maximum
 
 
+
+def auto_milestones(config):
+    """Price a four-step claimed-star road within its per-human reserve."""
+    from math import ceil
+
+    stars = sum(row["stars"] for row in config["tournament_objectives"])
+    if not stars:
+        return []
+    steps = sorted({ceil(stars * i / 4) for i in range(1, 5)})
+    human_cap = config["max_users"]
+    fraction = 35 if config["competition"]["match_rewards"] else 100
+    cap = {asset: (config["budget"].get(asset, 0) * fraction) // (100 * human_cap * len(steps))
+           for asset in ASSETS}
+    cap = {asset: min(amount, 1_000_000) for asset, amount in cap.items() if amount}
+    if not cap:
+        return []
+    return [{"stars": threshold, "diamond": cap,
+             "free": {asset: max(1, amount // 2) for asset, amount in cap.items()}}
+            for threshold in steps]
+
 def auto_rewards(config):
+    if config.get("objective_scope") == "tournament" and not config.get("competition", {}).get("match_rewards", True):
+        return {}
     counts = config["max_users"] * max_sources(config)
     if not counts:
         raise ValueError("Add teams and generate fixtures before generating rewards.")

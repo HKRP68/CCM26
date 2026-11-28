@@ -1003,11 +1003,17 @@ def _resolve_fixture_venue(draft):
         session.close()
 
 
+def toss_call_buttons(button):
+    return [[button("Heads", "heads"), button("Tails", "tails")]]
+
+
+def toss_decision_buttons(button):
+    return [[button("🏏 Bat First", "bat"), button("🎳 Bowl First", "bowl")]]
+
+
 def _toss_call_keyboard(draft_id):
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("Heads", callback_data=f"cipl_coin_heads_{draft_id}"),
-        InlineKeyboardButton("Tails", callback_data=f"cipl_coin_tails_{draft_id}"),
-    ]])
+    return InlineKeyboardMarkup(toss_call_buttons(
+        lambda label, call: InlineKeyboardButton(label, callback_data=f"cipl_coin_{call}_{draft_id}")))
 
 
 def _toss_caller_side(draft):
@@ -1561,10 +1567,13 @@ def _challenge_match_ready_text(draft):
     )
 
 
+def start_match_buttons(button):
+    return [[button("Start Match")]]
+
+
 def _challenge_start_match_keyboard(draft_id):
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("Start Match", callback_data=f"cl_start_{draft_id}"),
-    ]])
+    return InlineKeyboardMarkup(start_match_buttons(
+        lambda label: InlineKeyboardButton(label, callback_data=f"cl_start_{draft_id}")))
 
 
 # The Challenge League XI rulebook lives in services/xi_rules.py so the bot's XI
@@ -1953,7 +1962,7 @@ def _challenge_match_ready_blocks(draft):
 
 def _challenge_xi_player_keyboard(draft_id, side, players, selected_ids,
                                   saved_available=False, team_code="",
-                                  saved_label=None):
+                                  saved_label=None, *, button=None):
     """Numbered name buttons (2/row), e.g. "1. Dhoni". A ✅ marks picked players;
     the button text carries the roster number + name, the callback carries
     player_id so the toggle handler is unchanged. Confirm XI shows only at 11.
@@ -1963,21 +1972,21 @@ def _challenge_xi_player_keyboard(draft_id, side, players, selected_ids,
     valid, instantly confirms) the user's last saved XI for this team.
     ``saved_label`` overrides that wording where the one-tap XI is not a saved
     one — /cdraft offers the order the captain just drafted."""
+    if button is None:
+        def button(label, action, *values):
+            suffix = "".join(f"_{value}" for value in values)
+            return InlineKeyboardButton(label, callback_data=f"cl_{action}_{draft_id}_{side}{suffix}")
     selected_set = {int(pid) for pid in selected_ids}
     rows = []
     if saved_available and not selected_ids:
         label = saved_label or (f"⚡ Use my last {team_code} XI" if team_code
                                 else "⚡ Use my last XI")
-        rows.append([InlineKeyboardButton(
-            label, callback_data=f"cl_useprev_{draft_id}_{side}")])
+        rows.append([button(label, "useprev")])
     row = []
     for idx, player in enumerate(players, start=1):
         player_id = int(getattr(player, "id"))
         mark = "✅ " if player_id in selected_set else ""
-        row.append(InlineKeyboardButton(
-            f"{mark}{idx}. {player.name}",
-            callback_data=f"cl_pick_{draft_id}_{side}_{player_id}",
-        ))
+        row.append(button(f"{mark}{idx}. {player.name}", "pick", player_id))
         if len(row) == 2:
             rows.append(row)
             row = []
@@ -1985,9 +1994,9 @@ def _challenge_xi_player_keyboard(draft_id, side, players, selected_ids,
         rows.append(row)
     control = []
     if len(selected_ids) == 11:
-        control.append(InlineKeyboardButton("✅ Confirm XI", callback_data=f"cl_confirm_{draft_id}_{side}"))
+        control.append(button("✅ Confirm XI", "confirm"))
     if selected_ids:
-        control.append(InlineKeyboardButton("🧹 Clear", callback_data=f"cl_clear_{draft_id}_{side}"))
+        control.append(button("🧹 Clear", "clear"))
     if control:
         rows.append(control)
     return InlineKeyboardMarkup(rows)
@@ -4299,6 +4308,10 @@ async def challenge_xi_quickselect(update: Update, context: ContextTypes.DEFAULT
     text = (getattr(message, "text", None) or "").strip()
     if not text or text.startswith("/"):
         return
+    if getattr(message, "reply_to_message", None):
+        from handlers.event_studio import quickselect_reply
+        if await quickselect_reply(update, context):
+            return
     chat = getattr(update, "effective_chat", None)
     user = getattr(update, "effective_user", None)
     if chat is None or user is None:
