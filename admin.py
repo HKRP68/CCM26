@@ -27392,19 +27392,20 @@ def admin_conditions_stadium_json():
         flash(f"Not added: {exc}", "error")
         return redirect(url_for("admin_conditions"))
 
-    added, changed = plan["stadiums"]["added"], plan["stadiums"]["changed"]
+    added = plan["stadiums"]["added"]
+    changed = [row["name"] for row in plan["stadiums"]["changed"]]
+    target_name = ", ".join(added + changed)[:AdminLog.target_name.type.length]
     db = get_session()
     try:
         conditions_io.apply_plan(plan, db, created_by="admin",
                                  note=f"{source}: +{len(added)} ~{len(changed)}")
-        log_admin(db, "conditions_stadium_json", "conditions", 0,
-                  ", ".join(added + [row["name"] for row in changed])[:200],
+        log_admin(db, "conditions_stadium_json", "conditions", 0, target_name,
                   f"added={len(added)} changed={len(changed)}")
         db.commit()
-    except Exception as exc:
+    except Exception:
         db.rollback()
         logger.exception("stadium import from %s failed", source)
-        flash(f"Not added: {exc}", "error")
+        flash("The stadium import could not be saved. Try again.", "error")
         return redirect(url_for("admin_conditions"))
     finally:
         db.close()
@@ -27421,10 +27422,12 @@ def admin_conditions_stadium_json():
         flash(f"{defaulted} unset field{'' if defaulted == 1 else 's'} took the default value.", "info")
     parts = []
     if added:
-        parts.append(f"Added {', '.join(added)}")
+        summary = ", ".join(added) if len(added) <= 10 else f"{len(added)} stadiums"
+        parts.append(f"Added {summary}")
     if changed:
-        parts.append(f"{'updated' if added else 'Updated'} {', '.join(row['name'] for row in changed)}")
-    flash(f"✅ {'; '.join(parts) if parts else 'No change — those grounds already match'}."
+        summary = ", ".join(changed) if len(changed) <= 10 else f"{len(changed)} stadiums"
+        parts.append(f"{'updated' if added else 'Updated'} {summary}")
+    flash(f"✅ {' and '.join(parts) if parts else 'Those grounds already match'}."
           " The previous version is in History.", "info")
     return redirect(url_for("admin_conditions"))
 
