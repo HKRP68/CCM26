@@ -8,6 +8,7 @@ if (tg) {
 // Global UI State
 let matchId = null;
 let eventMatchId = null;
+let eventArenaRoute = null;
 let chatId = null;
 let userId = null;
 let matchState = null;
@@ -328,7 +329,15 @@ async function init() {
 
   const linkedEvent = /^event-(\d+)$/.exec(matchId || '');
   eventMatchId ||= linkedEvent?.[1] || null;
-  if (eventMatchId) matchId = `event-${eventMatchId}`;
+  const sharedFixture = urlParams.get('competition_fixture_id') || /^competition-(\d+)$/.exec(matchId || '')?.[1];
+  if (sharedFixture && /^\d+$/.test(sharedFixture)) {
+    eventMatchId = sharedFixture;
+    matchId = `competition-${sharedFixture}`;
+    eventArenaRoute = 'fixture-arena';
+  } else if (eventMatchId) {
+    matchId = `event-${eventMatchId}`;
+    eventArenaRoute = 'arena';
+  }
 
   // 3. Direct/browser launches do not receive Telegram identity. Reuse an
   // explicitly chosen local identity when possible; otherwise poll once as a
@@ -767,12 +776,12 @@ async function fetchWithTimeout(url, options = {}) {
 
 function fetchArenaState(params) {
   return eventMatchId
-    ? fetchWithTimeout(`/api/webapp/events-hub/arena/${eventMatchId}`, { method: 'POST' })
+    ? fetchWithTimeout(`/api/webapp/events-hub/${eventArenaRoute}/${eventMatchId}`, { method: 'POST' })
     : fetchWithTimeout(`/api/match?${params.toString()}`);
 }
 
 function eventPick(type, action = {}, confirmed = false) {
-  return matchFetch(`/api/webapp/events-hub/arena/${eventMatchId}`, {
+  return matchFetch(`/api/webapp/events-hub/${eventArenaRoute}/${eventMatchId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type, action, confirmed, version: matchState?.officialEvent?.version }),

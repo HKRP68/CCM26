@@ -98,6 +98,8 @@ def _cricket_webapp_url(match_id, chat_id):
     if not host:
         return None
     match_key = str(match_id)
+    if match_key.startswith("competition-") and match_key[12:].isdigit():
+        return f"{host}/cricket?competition_fixture_id={match_key[12:]}"
     if match_key.startswith("event-") and match_key[6:].isdigit():
         return f"{host}/cricket?event_match_id={match_key[6:]}"
     return f"{host}/cricket?match_id={match_id}&chat_id={chat_id}"

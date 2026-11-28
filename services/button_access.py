@@ -38,6 +38,11 @@ _current_button_owner: contextvars.ContextVar[Optional[int]] = contextvars.Conte
 SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # Group RCPL checks room, host and franchise ownership for each action.
     "rcpl:",
+    # Live Events checks group/invite access, lobby host and each fixture's
+    # captain and turn. Personal browser navigation keeps its owner lock.
+    "ec:room:", "ec:seat:", "ec:release:", "ec:ask_start:", "ec:ask_cancel:",
+    "ec:start:", "ec:cancel:", "ec:dash:", "ec:fixture:", "ec:setup:", "ec:pick:",
+    "ec:pause:", "ec:resume:", "ec:switch:", "ec:confirm:", "ec:abandon:", "ec:impact:", "ec:bat:",
     # Franchise draft handlers persist the confirmation's actor and check
     # current team authority; navigation and controls carry their own actor.
     "fd_",

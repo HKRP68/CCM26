@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import re
 import logging
 import threading
 import time
@@ -601,7 +602,8 @@ BOT_MENU_COMMANDS = (
     ("bal", "Check your catch-game balance"),
     ("cm", "Start a two-wicket challenge match"),
     ("cdraft", "Draft an XI pick-by-pick, then play the match"),
-    ("challengeipl", "Challenge another user to an IPL match"),
+    # /challengeipl is still a dynamic league command. Its menu slot opens Live Events.
+    ("event", "Browse, join and resume Live Event tournaments"),
     ("challengebbl", "Challenge another user to a BBL match"),
     ("challengeint", "Challenge another user to an international match"),
     ("unscramble", "Create an Unscramble Player lobby"),
@@ -882,6 +884,11 @@ async def start_handler(update, context):
         replayed = await _replay_dm_only_command(update, context, str(args[0]))
         if replayed:
             return
+
+    if re.fullmatch(r"eventlobby_[a-f0-9]{24}", payload):
+        from handlers.event_competitions import deep_link
+        await deep_link(update, context, payload.removeprefix("eventlobby_"))
+        return
 
     # ── Referral payload ──
     if payload.startswith("ref"):
@@ -1610,6 +1617,11 @@ def main():
         from handlers.botstatus import botstatus_handler
         from handlers.event_studio import command as event_command, callback as event_callback
         app.add_handler(CommandHandler(["events", "eventplay", "liveevents", "myevents", "moments", "bossbattles", "bossbattle"], event_command))
+        from handlers.event_competitions import command as competition_command, callback as competition_callback
+        app.add_handler(CommandHandler(
+            ["event", "eventlobby", "eventobjectives", "eventtable", "eventstats", "eventrewards"],
+            competition_command))
+        app.add_handler(CallbackQueryHandler(competition_callback, pattern=r"^ec:"))
         app.add_handler(CallbackQueryHandler(event_callback, pattern=r"^ev:"))
         app.add_handler(CommandHandler(["botstatus", "bstatus", "ping"], botstatus_handler))
         app.add_handler(CommandHandler(["start", "s"], start_handler))

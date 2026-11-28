@@ -981,7 +981,9 @@ def eligible_bowlers(state):
                          for other, left in capacity.items())
             if usable >= remaining:
                 legal.append(player)
-        return _sorted(legal)
+        # Preserve a legal finish while keeping the same specialist-first
+        # picker as CIPL Bot. A part-timer is available only in an emergency.
+        return _sorted([p for p in legal if not is_part_time_bowler(p)] or legal)
 
     # 1) Front-line attack with overs left.
     pool = _avail(specialists)

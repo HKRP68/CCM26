@@ -15,6 +15,7 @@ from engine import pitch_registry
 from models import ChallengeLeague, ChallengeTeam, Player
 from models_events import StudioEvent, StudioRevision
 from services import event_studio_rules as rules, event_studio_schedule as schedule
+from services import event_studio_objectives as tournament_goals
 from services.challenge_team_io import team_values
 from services.xi_rules import _category_is_keeper, validate_challenge_xi_dicts
 
@@ -30,6 +31,7 @@ PITCHES = tuple(pitch_registry.PITCHES) + LEGACY_PITCHES
 # Config keys that older drafts and published revisions still carry. They are dropped
 # on load so those revisions keep opening; nothing reads them.
 LEGACY_KEYS = ("enrollment_cutoff",)
+
 ACTIONS = ("schedule", "objectives", "rewards")
 OPEN_STATUSES = ("scheduled", "live")
 
@@ -84,6 +86,10 @@ def defaults():
                    "checkpoint": None, "objective_baseline": "earned"},
         "fixtures": [], "fixture_overrides": {}, "objectives": [], "rewards": {}, "reward_locks": [],
         "objectives_locked": False, "milestones": [],
+        "objective_scope": "fixture", "objective_preset": "balanced", "tournament_objectives": [],
+        "competition": {"modes": ["solo", "multi"], "registration_minutes": 60,
+                        "early_start": True, "min_humans": 1, "match_rewards": True,
+                        "double_no_show_points": 0},
         "budget": {"coins": 0, "gems": 0, "quest_points": 0}, "generation": {},
     }
 
@@ -109,11 +115,11 @@ def normalize(raw):
         raw = {key: value for key, value in raw.items() if key not in LEGACY_KEYS}
     if not isinstance(raw, dict) or set(raw) - set(config):
         raise ValueError("Import contains unsupported fields.")
-    for key in ("schedule", "moment", "points", "community", "rotation", "notifications", "chapter"):
+    for key in ("schedule", "moment", "points", "community", "rotation", "notifications", "chapter", "competition"):
         if key in raw and (not isinstance(raw[key], dict) or set(raw[key]) - set(config[key])):
             raise ValueError(f"{key}: unsupported fields.")
         config[key].update(raw.get(key, {}))
-    config.update({key: value for key, value in raw.items() if key not in ("schedule", "moment", "points", "community", "rotation", "notifications", "chapter")})
+    config.update({key: value for key, value in raw.items() if key not in ("schedule", "moment", "points", "community", "rotation", "notifications", "chapter", "competition")})
     if type(config["schema_version"]) is not int or config["schema_version"] != 1:
         raise ValueError("Unsupported event schema version.")
     for key in ("description", "banner_url", "timezone", "kind", "format", "opens_at", "closes_at",
@@ -235,6 +241,23 @@ def normalize(raw):
     rules.integer(moment["seed"], "Moment prefix seed", 0, 2**32 - 1)
     _validate_team_inputs(config["teams"])
     _validate_fixture_fields(config["fixtures"])
+    tournament_goals.validate(config)
+    if config["kind"] != "live":
+        config["objective_scope"] = "fixture"
+    if config["objective_preset"] not in tournament_goals.PRESETS:
+        raise ValueError("Choose a supported tournament objective preset.")
+    if tournament_goals.tournament(config):
+        settings = config["competition"]
+        modes = settings["modes"]
+        if not isinstance(modes, list) or not modes or any(mode not in ("solo", "multi") for mode in modes) or len(set(modes)) != len(modes):
+            raise ValueError("Enable Solo, Multiplayer, or both.")
+        rules.integer(settings["registration_minutes"], "Registration minutes", 60, 60)
+        rules.integer(settings["min_humans"], "Minimum humans", 1, 16)
+        rules.integer(settings["double_no_show_points"], "Double no-show points", 0, 20)
+        if any(type(settings[key]) is not bool for key in ("early_start", "match_rewards")):
+            raise ValueError("Early start and match rewards must be enabled or disabled.")
+        if config["mode"] != ["tournament_team"] or config["objectives"]:
+            raise ValueError("Tournament Live Events use published franchise squads and tournament objectives.")
     rules.validate_objectives(config)
     if len(config["fixture_overrides"]) > schedule.MAX_FIXTURES:
         raise ValueError("Too many fixture overrides.")
@@ -250,6 +273,8 @@ def normalize(raw):
         if "venue" in override and (not isinstance(override["venue"], str) or len(override["venue"]) > 80):
             raise ValueError(f"{key}: venue must be at most 80 characters.")
         if "objectives" in override:
+            if tournament_goals.tournament(config):
+                raise ValueError("Tournament objectives cannot be overridden per fixture.")
             rules.validate_objectives({**config, **override})
         if "rewards" in override and not isinstance(override["rewards"], dict):
             raise ValueError(f"{key}: rewards must be a tier object.")
@@ -283,6 +308,9 @@ def _validate_team_inputs(teams):
             raise ValueError(f"{name}: unsupported team fields.")
         team_values({field: team[field] for field in ("name", "short_name", "logo_url",
                      "primary_color", "secondary_color") if field in team})
+        home_venue = team.get("home_venue", "")
+        if not isinstance(home_venue, str) or len(home_venue) > 80:
+            raise ValueError(f"{name}: home venue must be at most 80 characters.")
         ids = team["players"]
         if not isinstance(ids, list) or len(ids) > 40:
             raise ValueError(f"{name}: provide up to 40 card IDs.")
@@ -464,6 +492,12 @@ def _inputs(config, action):
             for key, override in config["fixture_overrides"].items()
             if "rewards" in override or "objectives" in override
         }
+    if tournament_goals.tournament(config) and action in ("objectives", "rewards"):
+        inputs.update(objective_scope="tournament", tournament_objectives=config["tournament_objectives"]
+                      if action == "rewards" else None, competition=config["competition"])
+        if action == "objectives":
+            inputs.update(preset=config["objective_preset"], teams=[row["key"] for row in config["teams"]],
+                          fixtures=config["fixtures"])
     return digest(inputs)
 
 
@@ -531,6 +565,11 @@ def generate(config, action, *, overwrite=False):
                                  if row.get("locks") or (row.get("source", "manual") == "manual" and not overwrite))
                 schedule.validate(updated, generated)
                 updated["fixtures"] = generated
+        elif step == "objectives" and tournament_goals.tournament(updated):
+            edited = False
+            if not updated["objectives_locked"]:
+                updated["tournament_objectives"] = tournament_goals.generate(updated)
+            tournament_goals.validate(updated)
         elif step == "objectives":
             previous = updated["generation"].get("objectives", {})
             edited = previous.get("manual") or (previous and
@@ -539,6 +578,8 @@ def generate(config, action, *, overwrite=False):
                 updated["objectives"] = rules.auto_objectives(updated)
             rules.validate_objectives(updated)
         else:
+            if tournament_goals.tournament(updated) and not updated["milestones"]:
+                updated["milestones"] = rules.auto_milestones(updated)
             proposed = rules.auto_rewards(updated)
             previous = updated["generation"].get("rewards", {})
             preserved = set(updated["reward_locks"])
@@ -560,7 +601,9 @@ def generate(config, action, *, overwrite=False):
             updated["rewards"] = proposed
             rules.validate_rewards(updated)
         output_key = "fixtures" if step == "schedule" else step
-        generated_metadata = {"version": 1, "input": _inputs(updated, step),
+        if step == "objectives" and tournament_goals.tournament(updated):
+            output_key = "tournament_objectives"
+        generated_metadata = {"version": 2 if output_key == "tournament_objectives" else 1, "input": _inputs(updated, step),
                               "output": digest(updated[output_key])}
         if step == "schedule":
             generated_metadata["fields"] = {
@@ -612,7 +655,7 @@ def create(db, name, slug, actor, initial=None):
     event = StudioEvent(name=name.strip(), slug=slug)
     db.add(event)
     db.flush()
-    _record(db, event, actor, "create", normalize(initial if initial is not None else defaults()))
+    _record(db, event, actor, "create", normalize(initial if initial is not None else {**defaults(), "objective_scope": "tournament"}))
     return event
 
 
@@ -646,6 +689,17 @@ def validate_publish(db, config, now):
         if "objectives" in override and len(override["objectives"]) != len(config["objectives"]):
             raise ValueError(f"{key}: fixture objectives must have the same maximum stars as the event.")
     rules.validate_objectives(config)
+    tournament_goals.validate(config, publishing=True)
+    if tournament_goals.tournament(config):
+        modes = config["competition"]["modes"]
+        if "multi" in modes:
+            if config["schedule"]["preset"] == "survival":
+                raise ValueError("Multiplayer requires a shared schedule. Survival is Solo only.")
+            if config["competition"]["min_humans"] > min(config["max_users"], len(config["teams"])):
+                raise ValueError("The minimum human count exceeds the team or event capacity.")
+            earliest = min(schedule.utc_instant(row["deadline"], config["timezone"]) for row in config["fixtures"])
+            if earliest - max(opens, now) <= timedelta(minutes=90):
+                raise ValueError("Allow 60 minutes of registration and at least 30 minutes to play the first fixture.")
     maximum = rules.validate_rewards(config)
     frozen = snapshot_teams(db, config)
     pitches = {config["pitch"],
@@ -698,6 +752,10 @@ def publish(db, event, expected, actor, now):
     config = revision(db, event).config
     if not allowed(config["kind"], config["format"]):
         raise ValueError("Publishing is disabled for this mode or format.")
+    if tournament_goals.tournament(config):
+        from services.event_studio_competition import mode_enabled
+        if not any(mode_enabled(config, mode) for mode in ("solo", "multi")):
+            raise ValueError("Enable Solo or qualify this format for Multiplayer before publishing.")
     if (("own_roster" in config["mode"] and config.get("difficulty") is None)
             or config.get("difficulty") == "hard_plus"
             or any(row.get("difficulty") == "hard_plus" for row in config["fixture_overrides"].values())

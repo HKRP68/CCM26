@@ -115,6 +115,9 @@ def _automated_choices(state):
 
 def prepare_pick(state, seed, step, human):
     """At an over boundary, commit the AI's bowler and private plan before prompting."""
+    if state.get("event_pvp"):
+        state["event_next_action"] = picks.PICK_ACTION[picks.PICK_BOWLER]
+        return
     if state.get("event_impact"):
         from services import impact_player
         bot = state["bot_user_id"]
@@ -143,8 +146,9 @@ def submit(state, seed, step, human, kind, value):
 def apply_pick(state, seed, step, human, kind, selected):
     if kind == picks.PICK_BOWLER:
         state["current_bowler"] = selected
-        with match_random.use(rng_for(seed, f"captain:{step}")):
-            state["batting_approach"] = captain.pick_batting_approach(state)
+        if not state.get("event_pvp"):
+            with match_random.use(rng_for(seed, f"captain:{step}")):
+                state["batting_approach"] = captain.pick_batting_approach(state)
         state["event_next_action"] = picks.PICK_ACTION[picks.PICK_BOWL_APPROACH]
         return None
     if kind == picks.PICK_NEW_BATSMAN:
@@ -153,6 +157,9 @@ def apply_pick(state, seed, step, human, kind, selected):
         state["batting_approach"] = selected
     else:
         state["bowling_approach"] = selected
+        if state.get("event_pvp"):
+            state["event_next_action"] = picks.PICK_ACTION[picks.PICK_BAT_APPROACH]
+            return None
     return resolve_over(state, seed, step, human=human, moment=state.get("event_moment"))
 
 
@@ -161,6 +168,8 @@ def resolve_over(state, seed, step, *, human=None, moment=None):
     if not spec or state.get("event_engine_version") != spec["engine"]:
         raise RuntimeError("This match requires an unavailable engine version.")
     pause = human is not None and state["bat_team_id"] == human
+    if state.get("event_pvp"):
+        pause = False  # Standard CIPL PvP brings in the next batter in XI order.
     with match_random.use(rng_for(seed, f"delivery:{step}:{state.get('_rng_tick', 0)}")):
         while True:
             summary = match.simulate_over(state, pause_on_wicket=pause,
@@ -172,7 +181,7 @@ def resolve_over(state, seed, step, *, human=None, moment=None):
         if summary.get("paused"):
             state["event_next_action"] = picks.PICK_ACTION[picks.PICK_NEW_BATSMAN]
             return None
-        if human is not None:
+        if human is not None and not state.get("event_pvp"):
             captain.observe_over(state, summary)
         if moment:
             if match.is_innings_over(state):

@@ -48,8 +48,11 @@ def _ladder(config):
 
 
 def list_events(db, user, now):
+    from models_events import StudioParticipant
+
     joined = {row.event_id for row in db.scalars(select(StudioEnrollment)
                                                .filter_by(user_id=user.id))}
+    joined.update(db.scalars(select(StudioParticipant.event_id).filter_by(user_id=user.id)))
     events = db.scalars(select(StudioEvent).where(StudioEvent.published_number.is_not(None))
                         .where(((StudioEvent.closes_at > now) & (StudioEvent.status != "cancelled"))
                                | StudioEvent.id.in_(joined))
@@ -64,6 +67,7 @@ def list_events(db, user, now):
 
 def event_summary(event, config, joined, now):
     return {"id": event.id, "slug": event.slug, "name": event.name, "kind": config["kind"],
+            "competition": config.get("objective_scope") == "tournament",
             "format": config["format"], "description": config["description"], "featured": config["featured"],
             "banner_url": config.get("banner_url"), "cadence": config["rotation"]["cadence"],
             "opens_at": schedule.utc_text(event.opens_at), "closes_at": schedule.utc_text(event.closes_at),
@@ -119,6 +123,8 @@ def join(db, user, event_id, team_key, mode, now):
     if previous:
         return previous
     config = studio.revision(db, event, published=True).config
+    if config.get("objective_scope") == "tournament":
+        raise ValueError("Join this Live Event through Solo or Multiplayer.")
     if not event_summary(event, config, False, now)["can_join"]:
         raise ValueError("Enrollment is closed.")
     restriction = _chapter_lock(db, user.id, config)
@@ -933,13 +939,16 @@ def due_ids(db, now, limit=12):
 
 
 def sync_lifecycle(db, now):
+    from models_events import StudioCompetition
     db.execute(update(StudioEvent).where(StudioEvent.status == "scheduled",
                                         StudioEvent.opens_at <= now).values(status="live"))
     db.execute(update(StudioEvent).where(StudioEvent.status == "live",
                                         StudioEvent.closes_at <= now).values(status="closing"))
     pending = select(StudioEnrollment.event_id).join(StudioGame, StudioGame.enrollment_id == StudioEnrollment.id)
     db.execute(update(StudioEvent).where(StudioEvent.status == "closing",
-                                        StudioEvent.id.not_in(pending.where(StudioGame.status.in_(PENDING))))
+                                        StudioEvent.id.not_in(pending.where(StudioGame.status.in_(PENDING))),
+                                        StudioEvent.id.not_in(select(StudioCompetition.event_id).where(
+                                            StudioCompetition.status.in_(("lobby", "running")))))
                .values(status="completed"))
 
 
@@ -1141,6 +1150,8 @@ def operate(db, event, action, actor, reason, now):
     reason = reason.strip()
     if not reason or len(reason) > 500:
         raise ValueError("Enter an operations reason of up to 500 characters.")
+    from services import event_studio_competition as competitions
+
     previous = event.status
     before = {"status": previous, "opens_at": schedule.utc_text(event.opens_at),
               "closes_at": schedule.utc_text(event.closes_at)}
@@ -1173,6 +1184,7 @@ def operate(db, event, action, actor, reason, now):
                 entry = db.get(StudioEnrollment, game.enrollment_id)
                 if entry.team_key in (game.home, game.away):
                     notices.enqueue(db, game, config, now)
+        competitions.operate(db, event, "resume", actor, reason, now, shift=shift)
         event.opens_at += shift
         event.closes_at += shift
         event.delay_seconds += seconds
@@ -1186,6 +1198,7 @@ def operate(db, event, action, actor, reason, now):
             game.version += 1
             db.add(StudioResult(game_id=game.id, kind="cancelled", winner=None,
                                 detail={"reason": "event_cancelled"}, recorded_at=now))
+        competitions.operate(db, event, "cancel", actor, reason, now)
         event.status = "cancelled"
     elif action == "retry" and previous in ("scheduled", "live", "closing"):
         db.execute(update(StudioGame).where(StudioGame.id.in_(game_ids), StudioGame.retry_at.is_not(None))

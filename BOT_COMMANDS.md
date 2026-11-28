@@ -1494,7 +1494,11 @@ still works. Both admin range editors support pasting and editing these rows.
 
 ### Events Hub
 
-- `/events` opens official events and provides join, resume and claim controls in a private chat.
+- `/event` opens the live tournament browser. Join Solo or create a Multiplayer lobby with a published franchise squad.
+- `/eventlobby [code]` reopens a hosting group's lobby or opens an invitation.
+- `/eventplay competition-<id>` opens a shared fixture in setup or live play.
+- `/eventobjectives`, `/eventtable`, `/eventstats` and `/eventrewards` open the most recent joined tournament by default. Add an event ID to select a different tournament.
+- `/events` opens the Events Hub and provides join, resume and claim controls in a private chat.
 - `/eventplay event-<id>` opens an official CIPL match. Use the same ID with `/pause`, `/continue`, `/playapp`, `/playchat` or `/clear`. Clearing a started official fixture requires confirmation and forfeits the fixture.
 - `/liveevents` filters to Live Events. `/myevents` opens joined campaigns and attempt history.
 - `/moments` opens Cricket Moments. `/bossbattles` and `/bossbattle` open Boss Battles.

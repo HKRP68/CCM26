@@ -7,6 +7,9 @@ from collections import defaultdict
 
 
 def phase(state):
+    if state.get("event_match_key"):
+        from services.cipl_match import approach_phase
+        return approach_phase(state)
     total = max(1, int(state.get('overs') or 20))
     unit = max(1, int(state.get('current_over') or 1))
     hundred = state.get('ball_format') == 'The100'

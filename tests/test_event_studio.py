@@ -933,6 +933,7 @@ def test_chat_batting_and_bowling_use_committed_cipl_stages(sessions, monkeypatc
 def test_event_chat_buttons_play_a_fixture_from_toss_to_result(sessions, monkeypatch):
     from handlers import challenge, event_studio as chat
     from services import match_broadcast
+    from services.rich_message_html import render
     from telegram import InlineKeyboardButton
 
     class FixtureClock(datetime):
@@ -945,6 +946,9 @@ def test_event_chat_buttons_play_a_fixture_from_toss_to_result(sessions, monkeyp
     monkeypatch.setattr(chat, "get_session", sessions)
     monkeypatch.setattr(match_broadcast, "flip_coin", lambda call: (call, True))
     monkeypatch.setattr(play, "token_hex", lambda _: "f" * 64)
+    monkeypatch.setenv("WEBAPP_URL", "https://mini.example/webapp")
+    monkeypatch.setenv("BOT_USERNAME", "CricketBot")
+    monkeypatch.setenv("MINIAPP_NAME", "play")
     with sessions() as db:
         event = _publish(db, _seed(db))
         user = db.scalar(select(User).order_by(User.id))
@@ -976,6 +980,24 @@ def test_event_chat_buttons_play_a_fixture_from_toss_to_result(sessions, monkeyp
     assert find(panel, "ev:launch:")[0].text == "Start Match"
     panel = press(find(panel, "ev:launch:")[0].callback_data)
     assert "pick your bowler" in panel[0]
+    assert len(find(panel, "ev:pick:")) == 5
+    assert not any("🧤" in button.text for button in find(panel, "ev:pick:"))
+    assert sum(map(len, panel[1])) == len(find(panel, "ev:pick:"))
+    section = next(block for block in panel[2] if block.get("summary") == "⚙️ Manage match")
+    assert not section.get("is_open")
+    html = render([section])
+    assert all(label in html for label in ("Pause", "Abandon…", "View Match", "Back to event"))
+    assert f"startapp=cricket_event-{game_id}_0" in html
+    assert f"/eventplay event-{game_id} manage" in panel[0]
+    fallback = press(f"ev:manage:{event_id}:{game_id}")
+    panel = press(find(fallback, "ev:pause:")[0].callback_data)
+    assert not panel[1]
+    fallback = press(f"ev:manage:{event_id}:{game_id}")
+    panel = press(find(fallback, "ev:resume:")[0].callback_data)
+    fallback = press(f"ev:manage:{event_id}:{game_id}")
+    confirm = press(find(fallback, "ev:confirm:")[0].callback_data)
+    assert "Abandon this official game?" in confirm[0]
+    panel = press(find(confirm, "ev:match:")[0].callback_data)
     saw_chase = saw_batting = saw_bowling = False
     for _ in range(160):
         if "Match Over" in panel[0]:
@@ -994,9 +1016,41 @@ def test_event_chat_buttons_play_a_fixture_from_toss_to_result(sessions, monkeyp
         panel = press(options[0].callback_data)
     assert saw_chase and saw_batting and saw_bowling
     assert "Match Over" in panel[0] and "stars" in panel[0] and "points" in panel[0]
-    assert not find(panel, "ev:pick:")
+    assert not panel[1]
     with sessions() as db:
         assert db.get(StudioResult, game_id).kind == "completed"
+
+
+def test_event_bowler_picker_reserves_part_timers_for_an_emergency(sessions):
+    from services.crickidex_arena import _approach_payload
+
+    with sessions() as db:
+        event = _publish(db, _seed(db))
+        config = studio.revision(db, event, published=True).config
+    xis = {key: team["default_xi"] for key, team in config["snapshot"].items()}
+    state = cricket.build_state(config, 1, "team-0", "team-1", xis, "f" * 64, batting="team-0")
+    stage = picks.PICK_ACTION[picks.PICK_BOWLER]
+    state["event_next_action"] = stage
+
+    def app_options():
+        return _approach_payload(state, stage, "bowling")["overBowlers"]
+
+    options = app_options()
+    assert len(options) == 5 and all(not p["partTime"] for p in options)
+    batter = next(p for p in state["bowl_xi"] if p["category"] == "Batsman")
+    with pytest.raises(ValueError, match="isn't eligible"):
+        picks.validate(state, stage, picks.PICK_BOWLER, batter["roster_id"])
+
+    # Only the previous bowler has quota left. Their spell must still end.
+    state["current_over"] = 20
+    previous = options[0]["roster_id"]
+    state["prev_bowler_rid"] = previous
+    for player in options:
+        rid = player["roster_id"]
+        state["bowl_stats"][str(rid)]["balls"] = 18 if rid == previous else 24
+    options = app_options()
+    assert options and all(p["partTime"] for p in options)
+    assert picks.validate(state, stage, picks.PICK_BOWLER, batter["roster_id"]) == batter
 
 
 def test_wicket_checkpoint_timeout_and_surface_switch_preserve_resolved_balls(sessions, monkeypatch):

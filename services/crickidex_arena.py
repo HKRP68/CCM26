@@ -429,7 +429,7 @@ def serialize_match_state(session, match, viewer_user):
         return _serialize_match_state_impl(session, match, viewer_user)
 
 
-def serialize_event_match(session, game, entry, event, viewer, result, event_overlay, *, state):
+def serialize_event_match(session, game, entry, event, viewer, result, event_overlay, *, state, opponent_user=None):
     """Render the official checkpoint with the Arena's normal CIPL viewer."""
     from copy import deepcopy
     from types import SimpleNamespace
@@ -440,7 +440,9 @@ def serialize_event_match(session, game, entry, event, viewer, result, event_ove
     opponent = game.away if game.home == human else game.home
     users = (
         SimpleNamespace(id=human, telegram_id=viewer.telegram_id, username=viewer.username, team_name=None),
-        SimpleNamespace(id=opponent, telegram_id="ai", username="AI", team_name=None),
+        SimpleNamespace(id=opponent, telegram_id=opponent_user.telegram_id if opponent_user else "ai",
+                        username=(opponent_user.first_name or opponent_user.username or "Captain") if opponent_user else "AI",
+                        team_name=None),
     )
     state["event_view"] = True
     next_action = A_COMPLETED if result else state.get("event_next_action")
@@ -453,7 +455,7 @@ def serialize_event_match(session, game, entry, event, viewer, result, event_ove
             state["innings_break_started_at"] = (
                 game.next_pick_at.replace(tzinfo=timezone.utc).timestamp() - INNINGS_BREAK_SECONDS)
     match = SimpleNamespace(
-        id=f"event-{game.id}", status="completed" if result else "playing",
+        id=state.get("event_match_key") or f"event-{game.id}", status="completed" if result else "playing",
         pitch_type=state.get("pitch_type"), stadium=state.get("stadium"),
         user1_id=human, user2_id=opponent, toss_winner_id=state.get("toss_winner"),
         toss_decision=state.get("toss_decision"), winner_id=result.winner if result else None,

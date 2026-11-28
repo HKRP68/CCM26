@@ -84,9 +84,9 @@ def _list(events, kind=None):
     return "\n\n".join(lines), buttons
 
 
-def _match_panel(event, game, state):
+def _match_panel(event, game, state, *, manage=False, button=_button, public_id=None):
     from handlers import cipl_play as cipl
-    from services import cipl_match
+    from services import cipl_match, match_controls
     from services.bot_captain import difficulty_label
     from services.live_batting_help import manage_batting_button
 
@@ -95,6 +95,7 @@ def _match_panel(event, game, state):
     lines = [f'{round_label} · {event["format"]} · {difficulty_label(state)}']
     identifiers = (event["id"], game["id"], game["version"])
     buttons = []
+    tools = []
     score = game.get("score") or {}
     choices = score.get("choices")
     result = game.get("result")
@@ -109,7 +110,7 @@ def _match_panel(event, game, state):
             stage = choices["stage"]
 
             def picked(code):
-                return lambda label, value: _button(label, "pick", *identifiers, code, value)
+                return lambda label, value: button(label, "pick", *identifiers, code, value)
 
             if stage == picks.PICK_ACTION[picks.PICK_BOWLER]:
                 text, buttons, blocks = cipl.bowler_prompt(state, picked("b"))
@@ -122,7 +123,7 @@ def _match_panel(event, game, state):
                     and cipl_match.balls_bowled(state) == 0):
                 break_blocks, break_text = cipl.innings_break_card(state)
                 if stage == A_INNINGS_BREAK:  # Checkpoints created before chat advanced automatically.
-                    buttons.append([_button("Continue", "pick", *identifiers, "c", 0)])
+                    buttons.append([button("Continue", "pick", *identifiers, "c", 0)])
                 text = f"{break_text}\n\n{text}"
                 if blocks:
                     blocks = break_blocks + blocks
@@ -150,22 +151,19 @@ def _match_panel(event, game, state):
         if game["event_paused"] or game["status"] == "under_review":
             lines.append(game["status"].replace("_", " ").capitalize())
         elif game["player_paused"]:
-            buttons.append([_button("Resume in chat", "resume", *identifiers)])
+            tools.append([button("Resume in chat", "resume", *identifiers)])
         elif game["play_mode"] == "app":
-            buttons.append([_button("Play in chat", "switch", *identifiers)])
+            tools.append([button("Play in chat", "switch", *identifiers)])
         elif choices:
-            tools = []
             if state.get("event_impact") and impact_player.cipl_available_to(
                     state, state["bat_team_id"] if choices["role"] == "bat" else state["bowl_team_id"]):
-                tools.append(_button("🔄 Impact Player", "impact", *identifiers))
-            manage = manage_batting_button(state)
-            if manage:
-                tools.append(manage)
-            if tools:
-                buttons.append(tools)
-            buttons.append([_button("Pause", "pause", *identifiers)])
+                tools.append([button("🔄 Impact Player", "impact", *identifiers)])
+            batting = manage_batting_button(state)
+            if batting:
+                tools.append([batting])
+            tools.append([button("Pause", "pause", *identifiers)])
         if not game["event_paused"] and game["status"] != "under_review":
-            buttons.append([_button("Abandon…", "confirm", *identifiers)])
+            tools.append([button("Abandon…", "confirm", *identifiers)])
 
     for objective in (result or score).get("objectives", []):
         lines.append(f'{objective["title"]} · {objective["measured"]}/{objective["threshold"]}')
@@ -173,14 +171,18 @@ def _match_panel(event, game, state):
         moment = score["moment"]
         lines.append(f'Goal {moment["progress"]}/{moment["goal"]} · {moment["balls_left"]} balls left')
     if state:
-        buttons.extend(cipl._miniapp_row(state) or [])
-    buttons.append([_button("Back to event", "show", event["id"])])
-    if not state:
-        return "\n".join([header, *lines]), buttons
+        tools.extend(cipl._miniapp_row(state) or [])
+    tools.append([button("Back to event", "show", event["id"])])
+    if manage:
+        return match_controls.TITLE, [*tools, [button("Back to match", "match", *identifiers[:2])]]
 
-    text = "\n\n".join([text, f"<b>{escape(header)}</b>\n" + "\n".join(map(escape, lines))])
+    text = "\n\n".join(filter(None, (text, f"<b>{escape(header)}</b>\n" + "\n".join(map(escape, lines)))))
     if blocks:
         blocks += [rich.heading(header, size=3), *(rich.paragraph(line) for line in lines)]
+    match_id = public_id or f"event-{game['id']}"
+    blocks, text = match_controls.attach(
+        {"match_id": match_id, "chat_id": 0}, text, blocks, tools,
+        fallback_command=f"/eventplay {match_id} manage")
     return text, buttons, blocks
 
 
@@ -474,6 +476,11 @@ def _dispatch(telegram_id, parts=None, kind=None, drafts=None):
             db.commit()
         event_id = _part(parts, 1, "event id")
         game_id = None
+        if action == "show":
+            event, config = play._published(db, event_id)
+            if config.get("objective_scope") == "tournament":
+                from handlers.event_competitions import event_panel
+                return event_panel(db, user, event_id, now)
         if action == "join":
             event = play.detail(db, user, event_id, now)
             choice = _part(parts, 3, "team")
@@ -571,7 +578,7 @@ def _dispatch(telegram_id, parts=None, kind=None, drafts=None):
                        for idx, team in enumerate(event["teams"])]
             buttons.append([_button("Back", "show", event_id)])
             return "Choose a team and confirm enrollment. Your choice is permanent for this campaign.", buttons
-        if action in ("match", "confirm", "timeout"):
+        if action in ("match", "confirm", "timeout", "manage"):
             game_id = _part(parts, 2, "game id")
         if action in ("table", "stats", "rewards") and event["joined"]:
             return _progress_panel(db, user, event, action)
@@ -593,7 +600,7 @@ def _dispatch(telegram_id, parts=None, kind=None, drafts=None):
             if game["score"] and state and not state.get("event_next_action"):
                 entry = db.get(StudioEnrollment, row.enrollment_id)
                 state = play._checkpoint(row, entry, user)
-            return _match_panel(event, game, state)
+            return _match_panel(event, game, state, manage=action == "manage")
         return _event_panel(event)
 
 
@@ -605,8 +612,11 @@ async def command(update, context):
             reply_markup=InlineKeyboardMarkup([[hub]]) if hub else None)
         return
     name = update.effective_message.text.split()[0].split("@")[0][1:].lower()
-    if name == "eventplay" and await handle_match_command(update, context, "match"):
-        return
+    if name == "eventplay":
+        args = getattr(context, "args", None) or []
+        action = "manage" if len(args) > 1 and args[1].lower() == "manage" else "match"
+        if await handle_match_command(update, context, action):
+            return
     try:
         text, buttons = await asyncio.to_thread(_dispatch, update.effective_user.id, kind=KINDS.get(name))
     except ValueError as exc:
@@ -638,7 +648,13 @@ def _target_match(telegram_id, game_id, action):
 
 async def handle_match_command(update, context, action):
     args = getattr(context, "args", None)
-    target = re.fullmatch(r"event-(\d{1,10})", args[0].lower()) if isinstance(args, (list, tuple)) and args else None
+    key = args[0].lower() if isinstance(args, (list, tuple)) and args else ""
+    shared = re.fullmatch(r"competition-(\d{1,10})", key)
+    if shared:
+        from handlers.event_competitions import match_command
+        await match_command(update, context, int(shared[1]), action)
+        return True
+    target = re.fullmatch(r"event-(\d{1,10})", key)
     if not target:
         return False
     if update.effective_chat.type != "private":
@@ -647,10 +663,11 @@ async def handle_match_command(update, context, action):
     game_id = int(target[1])
     try:
         event_id, version = await asyncio.to_thread(_target_match, update.effective_user.id, game_id, action)
-        parts = ["confirm" if action == "clear" else "match", str(event_id), str(game_id), str(version)]
+        panel_action = {"clear": "confirm", "manage": "manage"}.get(action, "match")
+        parts = [panel_action, str(event_id), str(game_id), str(version)]
         panel = await asyncio.to_thread(_dispatch, update.effective_user.id, parts)
         text, buttons, *render = panel
-        markup = InlineKeyboardMarkup(buttons)
+        markup = InlineKeyboardMarkup(buttons) if buttons else None
         if render:
             await rich.send_rich_message(context.bot, update.effective_chat.id, render[0], text, reply_markup=markup)
         else:
@@ -673,7 +690,7 @@ async def send_timeout_prompt(bot, telegram_id, event_id, game_id, version):
         if panel:
             text, buttons, *render = panel
             await rich.send_rich_message(bot, telegram_id, render[0] if render else None, text,
-                                         reply_markup=InlineKeyboardMarkup(buttons))
+                                         reply_markup=InlineKeyboardMarkup(buttons) if buttons else None)
     except Exception:
         logger.exception("events: could not refresh the chat picker for match %s", game_id)
 

@@ -37,6 +37,8 @@ def manage_batting_button(state):
     if blocked_reason(state, stage) or not waiting_indices(state):
         return None
     if state.get("official_event"):
+        if state.get("competition_batting_callback"):
+            return InlineKeyboardButton("🏏 Manage batting", callback_data=state["competition_batting_callback"])
         event_id = state.get("event_context", {}).get("event_id")
         version = state.get("event_game_version")
         if event_id is None or version is None:

@@ -2667,8 +2667,8 @@ def bowler_prompt(state, button):
             rows.append(row); row = []
     if row:
         rows.append(row)
-    part_time_note = ("\n⚠️ <i>Front-line bowlers are bowled out — only part-time "
-                      "bowlers (🧤) are left.</i>" if only_part_timers else "")
+    emergency = "⚠️ No front-line bowler is eligible for this over. Only part-timers (🧤) are available."
+    part_time_note = f"\n<i>{emergency}</i>" if only_part_timers else ""
     text = (f"{_approach_card(state)}\n\n"
             f"🎳 {_mention_tg(state, state['bowl_user_tg'])}, pick your bowler "
             f"for {_unit_word(state)} {state['current_over']}:{part_time_note}")
@@ -2676,8 +2676,7 @@ def bowler_prompt(state, button):
                f", pick your bowler for {_unit_word(state)} "
                f"{state['current_over']}:"]]
     if only_part_timers:
-        prompt.append(R.italic("⚠️ Front-line bowlers are bowled out — only "
-                               "part-time bowlers (🧤) are left."))
+        prompt.append(R.italic(emergency))
     return text, rows, _approach_card_blocks(state, prompt)
 
 
@@ -4947,7 +4946,7 @@ def _pitch_text(state):
 
 def _display_match_id(state):
     match_id = state.get("match_id")
-    return f"event-{match_id}" if state.get("official_event") else match_id
+    return state.get("event_match_key") or (f"event-{match_id}" if state.get("official_event") else match_id)
 
 
 def _card_heading_parts(state):
