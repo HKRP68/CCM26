@@ -153,6 +153,137 @@ def test_double_round_robin_bracket_and_locked_manual_schedule():
         studio.generate(first, "schedule")
 
 
+@pytest.mark.parametrize("count", [4, 6, 8, 10])
+def test_one_and_a_half_round_robin_sits_between_one_and_two_legs(count):
+    config = _schedule_config(count)
+    config["schedule"].update(preset="one_half_round_robin")
+    rows = studio.generate(config, "schedule")["fixtures"]
+    single = count * (count - 1) // 2
+    assert single < len(rows) < single * 2
+    played = {}
+    for row in rows:
+        for team in (row["home"], row["away"]):
+            played[team] = played.get(team, 0) + 1
+    # A balanced partial second leg: team totals differ by at most one game.
+    assert max(played.values()) - min(played.values()) <= 1
+    assert studio.generate(studio.generate(config, "schedule"), "schedule")["fixtures"] == rows
+
+
+def test_one_and_a_half_round_robin_honours_an_explicit_match_target():
+    config = _schedule_config(8)
+    config["schedule"].update(preset="one_half_round_robin", match_target=9, playoffs="top4")
+    rows = studio.generate(config, "schedule")["fixtures"]
+    league = [row for row in rows if row["stage"] == "league"]
+    played = {}
+    for row in league:
+        for team in (row["home"], row["away"]):
+            played[team] = played.get(team, 0) + 1
+    assert set(played.values()) == {9}
+    assert len([row for row in rows if row["stage"] == "playoff"]) == 4
+
+
+def test_match_target_is_refused_outside_a_one_and_a_half_round_robin():
+    config = _schedule_config(8)
+    config["schedule"]["match_target"] = 9
+    with pytest.raises(ValueError, match="1.5 round robin"):
+        studio.normalize(config)
+
+
+def test_minimum_rest_spaces_rounds_and_defaults_to_the_previous_cadence():
+    config = _schedule_config(4)
+    config["schedule"].update(legs=1)
+    opens = sorted({row["opens_at"] for row in studio.generate(config, "schedule")["fixtures"]})
+    unrested = datetime.fromisoformat(opens[1]) - datetime.fromisoformat(opens[0])
+    # A draft saved before the setting existed keeps the one-day round interval.
+    assert unrested == timedelta(days=1)
+    config["schedule"]["min_rest_minutes"] = 3 * 24 * 60
+    rested = studio.generate(config, "schedule")["fixtures"]
+    opens = sorted({row["opens_at"] for row in rested})
+    gaps = [datetime.fromisoformat(b) - datetime.fromisoformat(a)
+            for a, b in zip(opens, opens[1:])]
+    assert gaps and all(gap >= timedelta(days=3) for gap in gaps)
+
+
+PLAYOFF_SHAPES = {
+    "top2": (1, ["final"]),
+    "top4_semis": (3, ["semi-final-1", "semi-final-2", "final"]),
+    "top4": (4, ["qualifier", "eliminator", "qualifier-2", "final"]),
+    "top6": (5, ["eliminator-1", "eliminator-2", "semi-final-1", "semi-final-2", "final"]),
+    "top8": (7, ["quarter-final-1", "quarter-final-2", "quarter-final-3", "quarter-final-4",
+                 "semi-final-1", "semi-final-2", "final"]),
+}
+
+
+@pytest.mark.parametrize("preset,shape", sorted(PLAYOFF_SHAPES.items()))
+def test_playoff_brackets_resolve_from_the_league_table(preset, shape):
+    count, keys = shape
+    config = _schedule_config(8)
+    config["schedule"].update(legs=1, playoffs=preset)
+    rows = studio.generate(config, "schedule")["fixtures"]
+    playoffs = [row for row in rows if row["stage"] == "playoff"]
+    assert len(playoffs) == count
+    assert sorted(row["key"] for row in playoffs) == sorted(keys)
+    # Every slot is either a standings rank or an earlier fixture in this bracket.
+    written = {row["key"] for row in playoffs}
+    for row in playoffs:
+        for slot in (row["home"], row["away"]):
+            kind, _, target = slot.partition(":")
+            assert kind in ("rank", "winner", "loser"), slot
+            if kind != "rank":
+                assert target in written, slot
+    # The final is last and decides the title.
+    final = next(row for row in playoffs if row["key"] == "final")
+    assert final["round"] == max(row["round"] for row in playoffs)
+    # Regenerating an unchanged draft is a no-op.
+    assert studio.generate(studio.generate(config, "schedule"), "schedule")["fixtures"] == rows
+
+
+@pytest.mark.parametrize("preset,teams", [("top4", 3), ("top4_semis", 3), ("top6", 5), ("top8", 7)])
+def test_playoff_bracket_refuses_a_table_too_small_to_seed_it(preset, teams):
+    config = _schedule_config(teams)
+    config["schedule"].update(legs=1, playoffs=preset)
+    with pytest.raises(ValueError, match="need"):
+        studio.generate(config, "schedule")
+
+
+def test_custom_playoffs_keep_the_rows_the_admin_authored():
+    config = _schedule_config(4)
+    config["schedule"].update(legs=1, playoffs="custom")
+    config = studio.generate(config, "schedule")
+    assert not [row for row in config["fixtures"] if row["stage"] == "playoff"]
+    last = max(row["round"] for row in config["fixtures"])
+    config["fixtures"].append({
+        "key": "grand-final", "home": "rank:1", "away": "rank:2", "round": last + 1,
+        "stage": "playoff", "opens_at": "2026-12-20T09:00:00+00:00",
+        "deadline": "2026-12-20T20:00:00+00:00", "grace": 30, "source": "manual"})
+    again = studio.generate(studio.normalize(config), "schedule")
+    authored = next(row for row in again["fixtures"] if row["key"] == "grand-final")
+    assert authored["opens_at"] == "2026-12-20T09:00:00+00:00"
+    assert authored["source"] == "manual"
+
+
+def test_manual_league_takes_a_generated_bracket_without_retiming_itself():
+    config = _schedule_config(4)
+    config["schedule"].update(preset="manual", playoffs="top4_semis")
+    config["fixtures"] = [
+        {"key": f"l{index}", "home": home, "away": away, "round": rnd, "stage": "league",
+         "opens_at": f"2026-12-0{rnd + 1}T09:00:00+00:00",
+         "deadline": f"2026-12-0{rnd + 1}T20:00:00+00:00", "grace": 30, "source": "manual",
+         "venue": "Eden Gardens", "pitch": "Flat", "weather": "Humid"}
+        for index, (home, away, rnd) in enumerate(
+            [("team-0", "team-1", 1), ("team-2", "team-3", 1),
+             ("team-0", "team-2", 3), ("team-1", "team-3", 3)])]
+    rows = studio.generate(studio.normalize(config), "schedule")["fixtures"]
+    league = [row for row in rows if row["stage"] == "league"]
+    playoffs = [row for row in rows if row["stage"] == "playoff"]
+    assert len(league) == 4 and len(playoffs) == 3
+    # The authored rows keep their own timings and grounds.
+    assert all(row["venue"] == "Eden Gardens" and row["opens_at"].endswith("T09:00:00+00:00")
+               for row in league)
+    # The bracket is timed after the league it follows.
+    assert min(row["opens_at"] for row in playoffs) > max(row["deadline"] for row in league)
+
+
 def test_knockout_byes_and_dst():
     config = _schedule_config(7)
     config["schedule"].update(preset="knockout", third_place=True)

@@ -80,6 +80,7 @@ def defaults():
         "schedule": {"preset": "round_robin", "legs": 2, "games": 3, "playoffs": "top4",
                      "round_spacing_days": 1, "window_hours": 20, "grace": 30,
                      "playing_days": list(range(1, 8)), "blackouts": [], "fixtures_per_day": 24,
+                     "match_target": None, "min_rest_minutes": 0,
                      "third_place": False, "groups": {}, "qualify_per_group": 2, "seed": None,
                      "venue_countries": [], "template": "", "rest_minutes": 60, "grand_final_reset": True, "previous_event_id": 0, "tour": []},
         "moment": {"side": "bat", "start_over": 16, "overs": 4, "goal": 35, "seed": 0, "goal_type": "segment",
@@ -207,16 +208,22 @@ def normalize(raw):
                            ("qualify_per_group", 1, 4)):
         rules.integer(settings[key], key, low, high)
     schedule.validate_template(config)
-    if settings["preset"] not in ("round_robin", "series", "knockout", "groups", "survival", "manual", "double_elimination"):
+    if settings["preset"] not in schedule.PRESETS:
         raise ValueError("Unsupported schedule preset.")
     if type(settings["grand_final_reset"]) is not bool:
         raise ValueError("Grand final reset must be enabled or disabled.")
     if settings["preset"] == "double_elimination" and config["objective_scope"] != "tournament":
         raise ValueError("Double elimination requires a shared tournament schedule.")
-    if settings["playoffs"] not in ("none", "top2", "top4") or type(settings["third_place"]) is not bool:
+    if settings["playoffs"] not in schedule.PLAYOFFS or type(settings["third_place"]) is not bool:
         raise ValueError("Invalid playoff settings.")
     if settings["seed"] is not None:
         rules.integer(settings["seed"], "Schedule seed", 0, 2**32 - 1)
+    rules.integer(settings["min_rest_minutes"], "Minimum rest between matches", 0, 10080)
+    if settings["match_target"] is not None:
+        if settings["preset"] != "one_half_round_robin":
+            raise ValueError("A league match target applies only to a 1.5 round robin.")
+        if type(settings["match_target"]) not in (int, float) or not 1 <= settings["match_target"] <= 60:
+            raise ValueError("League match target must be a number of games from 1 to 60.")
     groups = settings["groups"]
     if not isinstance(groups, dict) or len(groups) > 8 or any(
             not KEY.fullmatch(key) or not isinstance(teams, list) or
@@ -595,10 +602,16 @@ def generate(config, action, *, overwrite=False):
                 # onto the event itself. fixture_rules(config, "challenge") reads it from
                 # there, and fixture_overrides["challenge"] still wins if it is set.
                 updated.update(schedule.draw_conditions(updated, "challenge", venues, pitches))
-            if updated["kind"] == "live" and updated["schedule"]["preset"] == "manual":
+            manual = updated["kind"] == "live" and updated["schedule"]["preset"] == "manual"
+            if manual and updated["schedule"]["playoffs"] in ("none", "custom"):
+                # The admin authors every row, league and playoff alike.
                 schedule.validate(updated, updated["fixtures"])
             else:
                 old = {row["key"]: row for row in updated["fixtures"]}
+                if manual:
+                    # The generated bracket replaces whatever playoff rows the draft
+                    # carries, so they must not come back as preserved manual rows.
+                    old = {key: row for key, row in old.items() if row.get("stage") != "playoff"}
                 baseline = updated["generation"].get("schedule", {}).get("fields", {})
                 generated = schedule.generate(updated, venues=venues, pitches=pitches)
                 for row in generated:

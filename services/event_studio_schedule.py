@@ -1,5 +1,6 @@
 """Pure event fixture generation and validation."""
 
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from random import Random
@@ -105,6 +106,68 @@ def _knockout(rows, entries, third_place):
         stage += 1
 
 
+# The league shapes the generator can write. "manual" means the admin authors the
+# league rows themselves; it still accepts a generated playoff bracket.
+PRESETS = ("round_robin", "one_half_round_robin", "series", "groups", "knockout",
+           "double_elimination", "survival", "manual")
+
+# The playoff brackets a league table can hand its qualified teams, as rounds of
+# (key, home, away). A slot is a reference the official final standings resolve
+# (rank:n) or an earlier playoff fixture does (winner:<key>, loser:<key>), so a
+# bracket is stored once here and advanced from results rather than re-authored.
+# "custom" generates nothing: the admin authors the playoff rows themselves and the
+# generator preserves them like any other manual fixture.
+PLAYOFFS = {
+    "none": (0, ()),
+    "top2": (2, ((("final", "rank:1", "rank:2"),),)),
+    "top4_semis": (4, ((("semi-final-1", "rank:1", "rank:4"),
+                        ("semi-final-2", "rank:2", "rank:3")),
+                       (("final", "winner:semi-final-1", "winner:semi-final-2"),))),
+    "top4": (4, ((("qualifier", "rank:1", "rank:2"),
+                  ("eliminator", "rank:3", "rank:4")),
+                 (("qualifier-2", "loser:qualifier", "winner:eliminator"),),
+                 (("final", "winner:qualifier", "winner:qualifier-2"),))),
+    "top6": (6, ((("eliminator-1", "rank:3", "rank:6"),
+                  ("eliminator-2", "rank:4", "rank:5")),
+                 (("semi-final-1", "rank:1", "winner:eliminator-2"),
+                  ("semi-final-2", "rank:2", "winner:eliminator-1")),
+                 (("final", "winner:semi-final-1", "winner:semi-final-2"),))),
+    "top8": (8, ((("quarter-final-1", "rank:1", "rank:8"),
+                  ("quarter-final-2", "rank:4", "rank:5"),
+                  ("quarter-final-3", "rank:2", "rank:7"),
+                  ("quarter-final-4", "rank:3", "rank:6")),
+                 (("semi-final-1", "winner:quarter-final-1", "winner:quarter-final-2"),
+                  ("semi-final-2", "winner:quarter-final-3", "winner:quarter-final-4")),
+                 (("final", "winner:semi-final-1", "winner:semi-final-2"),))),
+    "custom": (0, ()),
+}
+# The brackets whose fixtures the generator writes, in the order the builder offers them.
+PLAYOFF_PRESETS = tuple(PLAYOFFS)
+
+
+PLAYOFF_LABELS = {
+    "none": "No", "top2": "Top two direct final", "top4_semis": "Top four semi-final",
+    "top4": "Top four IPL-style", "top6": "Top six knockout", "top8": "Top eight quarter-final",
+    "custom": "Custom",
+}
+
+
+def playoff_rounds(preset, teams):
+    """The bracket for ``preset``, refusing one the table cannot seed."""
+    if preset not in PLAYOFFS:
+        raise ValueError("Choose a supported playoff bracket.")
+    minimum, rounds = PLAYOFFS[preset]
+    if rounds and teams < minimum:
+        raise ValueError(f"{PLAYOFF_LABELS[preset]} playoffs need {minimum} teams.")
+    return rounds
+
+
+def _append_playoffs(rows, preset, teams):
+    for games in playoff_rounds(preset, teams):
+        _append_round(rows, [(home, away) for _, home, away in games], "playoff",
+                      [key for key, _, _ in games])
+
+
 EVENT_TEMPLATES = {
     "weekend": ("round_robin", "knockout"),
     "nations": ("round_robin", "groups", "knockout"),
@@ -168,21 +231,20 @@ def generate(config, venues=None, pitches=None):
     settings = config["schedule"]
     preset = settings.get("preset", "round_robin")
     rows = []
+    fixed = 0  # Leading rows that were authored, not generated, so they keep their timings.
     if preset == "round_robin":
         for games in round_robin(keys, settings["legs"]):
             _append_round(rows, games, "league")
-        playoffs = settings.get("playoffs")
-        if playoffs == "top2":
-            _append_round(rows, [("rank:1", "rank:2")], "playoff", ["final"])
-        elif playoffs == "top4":
-            if len(keys) < 4:
-                raise ValueError("Top-four playoffs need four teams.")
-            _append_round(rows, [("rank:1", "rank:2"), ("rank:3", "rank:4")],
-                          "playoff", ["qualifier", "eliminator"])
-            _append_round(rows, [("loser:qualifier", "winner:eliminator")],
-                          "playoff", ["qualifier-2"])
-            _append_round(rows, [("winner:qualifier", "winner:qualifier-2")],
-                          "playoff", ["final"])
+        _append_playoffs(rows, settings.get("playoffs", "none"), len(keys))
+    elif preset == "one_half_round_robin":
+        # Every pair meets once, then a balanced subset meets again with home and away
+        # reversed, so team totals differ by at most one. The plan comes from the
+        # existing partial round-robin service rather than a second implementation.
+        from services.partial_round_robin import build_schedule
+        plan = build_schedule(keys, settings.get("match_target") or None)
+        for stage_round in plan["rounds"]:
+            _append_round(rows, stage_round["pairs"], "league")
+        _append_playoffs(rows, settings.get("playoffs", "none"), len(keys))
     elif preset == "series":
         if len(keys) != 2:
             raise ValueError("A bilateral series requires two teams.")
@@ -214,6 +276,21 @@ def generate(config, venues=None, pitches=None):
                           [key for key, _, _ in round_rows])
     elif preset == "knockout":
         _knockout(rows, keys, settings.get("third_place", False))
+    elif preset == "manual":
+        # A hand-authored league can still take a generated playoff bracket. The
+        # authored rows keep their own keys, slots and timings untouched; only the
+        # appended bracket is written, and it is timed after the league finishes.
+        if settings["playoffs"] in ("none", "custom"):
+            # Nothing to generate: those rows are the admin's own, and dropping the
+            # playoffs they authored to return a league-only schedule would lose work.
+            raise ValueError("Choose a playoff bracket to generate from a manual schedule, "
+                             "or validate the authored fixtures instead.")
+        rows = sorted((deepcopy(row) for row in config["fixtures"] if row.get("stage") != "playoff"),
+                      key=lambda row: (row["round"], row["key"]))
+        if not rows:
+            raise ValueError("Author the league fixtures before generating their playoffs.")
+        fixed = len(rows)
+        _append_playoffs(rows, settings["playoffs"], len(keys))
     else:
         raise ValueError("Choose a supported schedule preset or enter fixtures manually.")
     if len(rows) > MAX_FIXTURES:
@@ -226,10 +303,24 @@ def generate(config, venues=None, pitches=None):
     weekend = settings.get("template") == "weekend"
     interval = timedelta(hours=settings["window_hours"],
                          minutes=settings["grace"] + settings.get("rest_minutes", 60))
+    # The weekend template folds its rest into the interval above. Everywhere else the
+    # general setting pushes the next round on by whole days, keeping the time of day.
+    min_rest = timedelta(minutes=0 if weekend else settings.get("min_rest_minutes", 0) or 0)
     current_round = 0
     round_usage = 0
+    round_end = None  # When every fixture in the round being timed is finally settled.
     cap = settings.get("fixtures_per_day", 24)
-    for row in rows:
+    if fixed:
+        # Resume at the event's opening time of day on the first date clear of the
+        # authored league, so a generated bracket never overlaps the rows it follows.
+        played = max(utc_instant(row["deadline"], zone) + timedelta(minutes=row.get("grace", 0) or 0)
+                     for row in rows[:fixed])
+        local = played.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(zone)).replace(tzinfo=None)
+        calendar = calendar.replace(year=local.year, month=local.month, day=local.day)
+        if calendar < local:
+            calendar += timedelta(days=1)
+        current_round, round_end = rows[fixed - 1]["round"], played
+    for row in rows[fixed:]:
         if current_round != row["round"] or round_usage >= cap:
             if current_round:
                 if weekend:
@@ -237,6 +328,8 @@ def generate(config, venues=None, pitches=None):
                     calendar = stamp.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(zone)).replace(tzinfo=None)
                 else:
                     calendar += timedelta(days=settings["round_spacing_days"])
+                while round_end and utc_instant(calendar.isoformat(), zone) < round_end + min_rest:
+                    calendar += timedelta(days=1)
             while (calendar.isoweekday() not in settings["playing_days"]
                    or calendar.date().isoformat() in settings["blackouts"]):
                 calendar += timedelta(days=1)
@@ -247,6 +340,7 @@ def generate(config, venues=None, pitches=None):
         opens = utc_instant(calendar.isoformat(), zone)
         deadline = opens + timedelta(hours=settings["window_hours"])
         row.update(opens_at=utc_text(opens), deadline=utc_text(deadline), grace=settings["grace"])
+        round_end = deadline + timedelta(minutes=settings["grace"])
         round_usage += 1
     if venues and pitches:
         salt = _salt(config)
@@ -261,6 +355,8 @@ def generate(config, venues=None, pitches=None):
                     pools.setdefault(country_key(record.get("country")), []).append(record["name"])
             trips = [stop["country"] for stop in settings["tour"] for _ in range(stop["games"])]
         for index, row in enumerate(rows):
+            if index < fixed:
+                continue  # An authored row keeps the ground it was authored with.
             options = sorted(set(pools.get(country_key(trips[index]), ()))) if world else venues
             if not options:
                 raise ValueError(f"No eligible stadium in {trips[index]} for World Tour.")
@@ -281,7 +377,11 @@ def validate(config, rows):
     opens = utc_instant(config["opens_at"], zone)
     close = utc_instant(config["closes_at"], zone)
     weekend = config["schedule"].get("template") == "weekend"
-    rest = timedelta(minutes=config["schedule"].get("rest_minutes", 60) if weekend else 0)
+    # The weekend template packs rounds into days, so it carries its own rest figure.
+    # min_rest_minutes is the general setting, and defaults to 0 so a draft saved
+    # before it existed validates exactly as it did.
+    rest = timedelta(minutes=max(config["schedule"].get("rest_minutes", 60) if weekend else 0,
+                                 config["schedule"].get("min_rest_minutes", 0) or 0))
     if weekend and not timedelta(days=2) <= close - opens <= timedelta(days=3):
         raise ValueError("Weekend Championship must fit a two- or three-day event window.")
     if brackets.is_double(config):
