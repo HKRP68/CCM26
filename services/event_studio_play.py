@@ -31,8 +31,8 @@ def _time(clock):
 
 
 def _cutoff(event, config):
-    return (schedule.utc_instant(config["enrollment_cutoff"] or config["closes_at"], config["timezone"])
-            + timedelta(seconds=event.delay_seconds))
+    """When joining stops — derived, not authored. See studio.enrollment_closes."""
+    return studio.enrollment_closes(config) + timedelta(seconds=event.delay_seconds)
 
 
 def _enrollment(db, event_id, user_id):

@@ -58,7 +58,6 @@ def _play_over(db, user, game_id, version, approach, bowler, clock=None):
 def _schedule_config(count, kind="live"):
     config = studio.defaults()
     config.update(kind=kind, opens_at="2026-12-01T09:00", closes_at="2026-12-24T07:00",
-                  enrollment_cutoff="2026-12-01T22:00",
                   teams=[{"key": f"team-{i}", "name": f"Team {i}", "players": []} for i in range(count)])
     config["schedule"]["playoffs"] = "none"
     return config
@@ -546,7 +545,6 @@ def _check_signed_api():
         config = _seed(db)
         now = datetime.utcnow()
         config.update(timezone="UTC", opens_at=(now - timedelta(hours=1)).isoformat(),
-                      enrollment_cutoff=(now + timedelta(hours=1)).isoformat(),
                       closes_at=(now + timedelta(days=3)).isoformat())
         config = studio.generate(config, "all")
         event = studio.create(db, "Local signed cup", "signed", "operator", config)
@@ -716,8 +714,7 @@ def test_deadline_extension_keeps_official_seed_and_cannot_reopen_a_result(sessi
 def test_rotation_publishes_distinct_prevalidated_editions_with_a_combined_cap(sessions):
     with sessions() as db:
         config = _seed(db, kind="moment")
-        config.update(opens_at="2026-12-01T09:00", closes_at="2026-12-01T19:00",
-                      enrollment_cutoff="2026-12-01T18:00")
+        config.update(opens_at="2026-12-01T09:00", closes_at="2026-12-01T19:00")
         config["moment"].update(start_over=0, overs=2, goal=5)
         config["rotation"].update(cadence="daily", periods=3)
         config = studio.generate(config, "all")
@@ -1314,3 +1311,44 @@ def test_anyone_may_enrol_past_the_budget_figure(sessions):
         for user in users:
             _join(db, event, user)
         assert db.scalar(select(func.count(StudioEnrollment.id)).filter_by(event_id=event.id)) == len(users)
+
+
+def test_enrollment_closes_is_derived_and_the_old_key_still_loads():
+    # A Live Event takes players until its first fixture deadline, because a campaign's
+    # games are written at join time with the published deadlines.
+    config = studio.generate(_schedule_config(4), "schedule")
+    first = min(schedule.utc_instant(row["deadline"], config["timezone"])
+                for row in config["fixtures"])
+    assert studio.enrollment_closes(config) == first
+
+    # A standalone challenge has no fixtures, so it takes players right up to Closes.
+    moment = studio.normalize(_schedule_config(2, kind="moment"))
+    assert studio.enrollment_closes(moment) == schedule.utc_instant(
+        moment["closes_at"], moment["timezone"])
+
+    # The field is gone, but a draft saved before that still opens — the key is dropped.
+    assert "enrollment_cutoff" not in studio.defaults()
+    revived = studio.normalize({**_schedule_config(4), "enrollment_cutoff": "2026-12-01T22:00"})
+    assert "enrollment_cutoff" not in revived
+    with pytest.raises(ValueError, match="unsupported fields"):
+        studio.normalize({**_schedule_config(4), "not_a_real_key": 1})
+
+
+def test_a_late_joiner_is_turned_away_rather_than_given_dead_fixtures(sessions):
+    with sessions() as db:
+        event = _publish(db, _seed(db))
+        config = studio.revision(db, event, published=True).config
+        user = db.scalar(select(User).order_by(User.id))
+        closes = play._cutoff(event, config)
+        team = config["teams"][0]["key"]
+        # One second before enrollment closes, joining still works, and every fixture
+        # the campaign is given is still ahead of the player.
+        entry = play.join(db, user, event.id, team, "tournament_team", closes - timedelta(seconds=1))
+        db.flush()
+        games = db.scalars(select(StudioGame).filter_by(enrollment_id=entry.id)).all()
+        assert games and all(game.deadline >= closes for game in games)
+
+        # After it, the event reports itself closed to new players.
+        other = db.scalars(select(User).order_by(User.id)).all()[1]
+        with pytest.raises(ValueError, match="Enrollment is closed"):
+            play.join(db, other, event.id, team, "tournament_team", closes + timedelta(seconds=1))

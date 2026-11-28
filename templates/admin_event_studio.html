@@ -60,7 +60,7 @@
           {% for item in events %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}
         </select></label>
         <label>Or paste a versioned JSON export <textarea name="import_config" spellcheck="false"></textarea></label>
-        {{ json_example('{\n  "schema_version": 1,\n  "kind": "live",\n  "format": "T20",\n  "timezone": "Asia/Kolkata",\n  "opens_at": "2026-12-01T09:00",\n  "enrollment_cutoff": "2026-12-01T20:00",\n  "closes_at": "2026-12-25T23:00",\n  "teams": [],\n  "schedule": {"preset": "round_robin", "legs": 2}\n}',
+        {{ json_example('{\n  "schema_version": 1,\n  "kind": "live",\n  "format": "T20",\n  "timezone": "Asia/Kolkata",\n  "opens_at": "2026-12-01T09:00",\n  "closes_at": "2026-12-25T23:00",\n  "teams": [],\n  "schedule": {"preset": "round_robin", "legs": 2}\n}',
            'Use Export configuration on an existing event to get a complete, valid export.') }}
       </details>
       <div class="studio-toolbar"><button class="btn btn-primary">Create draft</button></div>
@@ -122,6 +122,10 @@
             <p>Pick each date and time from the calendar. They use your selected timezone. A time that
               crosses a daylight-saving boundary needs an explicit UTC offset instead — set it in
               Full configuration and the field below turns into a text box showing it.</p>
+            <p>There is no enrollment deadline to set. A Live Event takes players until its first
+              fixture deadline, because a campaign's fixtures are written when someone joins and a
+              later joiner would get one they could never play. A Moment or Boss Battle has no
+              fixtures, so it takes players right up to Closes.</p>
             <div class="studio-grid">
               <label>Event type<select data-config-path="kind">
                 <option value="live">Live Event</option><option value="moment">Cricket Moment</option><option value="boss">Boss Battle</option>
@@ -132,7 +136,6 @@
               <label>Format<select data-config-path="format"><option>T20</option><option>ODI</option></select></label>
               <label>Timezone <input data-config-path="timezone" placeholder="Asia/Kolkata"></label>
               <label>Opens <input type="datetime-local" data-config-path="opens_at" data-value-type="datetime"></label>
-              <label>Enrollment cutoff <input type="datetime-local" data-config-path="enrollment_cutoff" data-value-type="datetime"></label>
               <label>Closes <input type="datetime-local" data-config-path="closes_at" data-value-type="datetime"></label>
               <label>Banner URL <input data-config-path="banner_url" maxlength="500"></label>
               <label class="inline"><input type="checkbox" data-config-path="featured"> Feature in the Events Hub</label>
@@ -259,7 +262,7 @@
           <p>Each team needs a lowercase key, a name and a list of master card IDs in <code>players</code>. An optional <code>xi</code> is an ordered list of 11 IDs. Copying Challenge Data replaces the draft team list.</p>
           <p>Use <code>source: "manual"</code> for a manually authored fixture or use <code>locks</code> to keep specific fields. Reward locks use <code>tier.result.asset</code>. Set <code>objectives_locked</code> to keep the objective list during regeneration.</p>
           <p>A fixture's <code>pitch</code>, <code>venue</code> and <code>weather</code> are drawn when you generate the schedule. Edit one on its row and it is kept on the next run, or name it in <code>locks</code>. The draw is reproducible: the same draft regenerates the same grounds, and changing the condition seed re-rolls every one.</p>
-          <p>Dates without an offset use the event timezone. For a Live Event, set the enrollment cutoff at or before the first fixture deadline. Enter budgets before generating rewards.</p>
+          <p>Dates without an offset use the event timezone. Enter budgets before generating rewards.</p>
         </details>
         <details data-studio-source open><summary>Full configuration and advanced fields</summary>
           <label>Event configuration (JSON)<textarea name="config" spellcheck="false" required rows="14">{{ config_json }}</textarea></label>

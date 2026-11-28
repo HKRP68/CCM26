@@ -27,6 +27,9 @@ KINDS = ("live", "moment", "boss")
 # but it is never drawn and has no ground profile, so publishing with it still fails.
 LEGACY_PITCHES = ("Wicket",)
 PITCHES = tuple(pitch_registry.PITCHES) + LEGACY_PITCHES
+# Config keys that older drafts and published revisions still carry. They are dropped
+# on load so those revisions keep opening; nothing reads them.
+LEGACY_KEYS = ("enrollment_cutoff",)
 ACTIONS = ("schedule", "objectives", "rewards")
 OPEN_STATUSES = ("scheduled", "live")
 
@@ -64,7 +67,7 @@ def defaults():
     return {
         "schema_version": 1, "kind": "live", "challenge_style": "full", "format": "T20", "timezone": "Asia/Kolkata",
         "description": "", "banner_url": "", "featured": False, "opens_at": "", "closes_at": "",
-        "enrollment_cutoff": "", "max_users": 500, "mode": ["tournament_team"], "teams": [],
+        "max_users": 500, "mode": ["tournament_team"], "teams": [],
         "min_overseas": 0, "max_overseas": 11, "gender": None, "home_country": "",
         "pitch": "Hard", "venue": "", "weather": "", "difficulty": None, "impact_player": False, "claim_days": 7, "attempts": 3,
         "points": {"win": 2, "loss": 0, "tie": 1, "no_result": 1},
@@ -85,8 +88,25 @@ def defaults():
     }
 
 
+def enrollment_closes(config):
+    """When joining stops, derived rather than authored.
+
+    A campaign's games are written when a player joins, carrying the published
+    deadlines, so joining after the first fixture deadline would hand them a fixture
+    they could never play. A Moment or Boss Battle has no fixtures, so joining stays
+    open for as long as the event is.
+    """
+    zone = config["timezone"]
+    deadlines = [schedule.utc_instant(row["deadline"], zone) for row in config["fixtures"]]
+    return min(deadlines) if deadlines else schedule.utc_instant(config["closes_at"], zone)
+
+
 def normalize(raw):
     config = defaults()
+    if isinstance(raw, dict) and set(raw) & set(LEGACY_KEYS):
+        # Enrollment is no longer authored, but a draft or published revision saved
+        # before that still carries the key. Drop it rather than refuse the import.
+        raw = {key: value for key, value in raw.items() if key not in LEGACY_KEYS}
     if not isinstance(raw, dict) or set(raw) - set(config):
         raise ValueError("Import contains unsupported fields.")
     for key in ("schedule", "moment", "points", "community", "rotation", "notifications", "chapter"):
@@ -97,7 +117,7 @@ def normalize(raw):
     if type(config["schema_version"]) is not int or config["schema_version"] != 1:
         raise ValueError("Unsupported event schema version.")
     for key in ("description", "banner_url", "timezone", "kind", "format", "opens_at", "closes_at",
-                "enrollment_cutoff", "home_country", "pitch", "venue", "weather"):
+                "home_country", "pitch", "venue", "weather"):
         if not isinstance(config[key], str) or len(config[key]) > ({"description": 2000, "banner_url": 500}.get(key, 80)):
             raise ValueError(f"Invalid {key}.")
     from services.pitch_report import WEATHERS
@@ -608,8 +628,7 @@ def validate_publish(db, config, now):
         raise ValueError("This format has no qualified Events Approach adapter.")
     opens = schedule.utc_instant(config["opens_at"], config["timezone"])
     closes = schedule.utc_instant(config["closes_at"], config["timezone"])
-    cutoff = schedule.utc_instant(config["enrollment_cutoff"] or config["closes_at"], config["timezone"])
-    if not opens < cutoff <= closes or closes <= now or (closes - opens).days > 365:
+    if not opens < closes or closes <= now or (closes - opens).days > 365:
         raise ValueError("Event timestamps must form an upcoming window no longer than one year.")
     if len(config["teams"]) < 2 or (config["kind"] != "live" and len(config["teams"]) != 2):
         raise ValueError("Standalone challenges require two teams. Live Events require at least two.")
@@ -617,9 +636,6 @@ def validate_publish(db, config, now):
         raise ValueError("Standalone challenges require the fixed Tournament Team track.")
     if config["kind"] != "live" and closes - opens <= timedelta(minutes=config["schedule"]["grace"]):
         raise ValueError("A challenge needs a start window longer than its grace period.")
-    if config["kind"] == "live" and any(cutoff > schedule.utc_instant(row["deadline"], config["timezone"])
-                                       for row in config["fixtures"]):
-        raise ValueError("Set enrollment cutoff no later than the first fixture deadline.")
     if stale(config):
         raise ValueError("Regenerate the stale sections before publishing: " + ", ".join(stale(config)))
     schedule.validate(config, config["fixtures"])
@@ -663,7 +679,7 @@ def validate_publish(db, config, now):
     if prerequisite:
         previous = db.scalar(select(StudioEvent).where(StudioEvent.slug == prerequisite,
                                                        StudioEvent.published_number.is_not(None)))
-        if previous is None or previous.opens_at >= cutoff:
+        if previous is None or previous.opens_at >= enrollment_closes(config):
             raise ValueError("Choose a published chapter prerequisite that opens before enrollment closes.")
         previous_config = revision(db, previous, published=True).config
         if not rules.is_moment(previous_config) or config["chapter"]["min_stars"] > len(previous_config["objectives"]) + 1:
@@ -731,21 +747,17 @@ def rotation_editions(config, opens, closes, maximum):
         return schedule.utc_instant((local + offset).isoformat(), config["timezone"])
 
     editions = [(config, opens, closes)]
-    cutoff = schedule.utc_instant(config["enrollment_cutoff"] or config["closes_at"], config["timezone"])
     from services.event_studio_cricket import build_moment
     for index in range(1, periods):
         opening = shifted(opens, step * index)
         closing = shifted(closes, step * index)
         if opening < editions[-1][2]:
             raise ValueError("The published window overlaps the next rotation edition.")
-        closing_enrollment = shifted(cutoff, step * index)
-        if not opening < closing_enrollment <= closing:
-            raise ValueError("A rotation edition has an invalid enrollment window.")
         if closing - opening <= timedelta(minutes=config["schedule"]["grace"]):
             raise ValueError("A rotation edition needs a play window longer than its grace period.")
         seed = int(digest([config["moment"]["seed"], index, schedule.utc_text(opening)])[:8], 16)
+        # Enrollment is derived from the edition's own window, so it shifts with it.
         upcoming = {**config, "opens_at": schedule.utc_text(opening), "closes_at": schedule.utc_text(closing),
-                    "enrollment_cutoff": schedule.utc_text(closing_enrollment),
                     "moment": {**config["moment"], "seed": seed},
                     "rotation": {**rotation, "periods": 1, "series_budget": {}},
                     "generation": {}}

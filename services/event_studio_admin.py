@@ -25,7 +25,7 @@ def _decode(value):
 
 def _draft_form():
     raw = _decode(request.form["config"])
-    for key in ("kind", "format", "timezone", "opens_at", "closes_at", "enrollment_cutoff", "description"):
+    for key in ("kind", "format", "timezone", "opens_at", "closes_at", "description"):
         if key in request.form:
             raw[key] = request.form[key].strip()
     return studio.normalize(raw)
