@@ -353,7 +353,7 @@ def _validate_team_inputs(teams):
                 or name.casefold() in names):
             raise ValueError("Use unique team keys and team names.")
         unknown = set(team) - {"key", "name", "players", "xi", "source_team_id", "short_name",
-                               "logo_url", "primary_color", "secondary_color"}
+                               "logo_url", "primary_color", "secondary_color", "home_venue"}
         if unknown:
             raise ValueError(f"{name}: unsupported team fields.")
         team_values({field: team[field] for field in ("name", "short_name", "logo_url",

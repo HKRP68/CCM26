@@ -2,8 +2,8 @@
 {% block title %}Event Studio{% endblock %}
 {% block content %}
 <style>
-.studio {max-width: 74rem; margin-inline: auto; --studio-muted: #535d68; --studio-control-border: #808a95; --studio-error: #922126}
-[data-theme="dark"] .studio {--studio-muted: #bac5d2; --studio-control-border: #778697; --studio-error: #ffacb0}
+.studio {max-width: 74rem; margin-inline: auto; --studio-muted: #535d68; --studio-control-border: #808a95; --studio-error: #922126; --studio-ok: #1d6f42}
+[data-theme="dark"] .studio {--studio-muted: #bac5d2; --studio-control-border: #778697; --studio-error: #ffacb0; --studio-ok: #74d79b}
 .studio [hidden] {display: none !important}
 :root:not([data-theme="dark"]) .studio .btn-primary {background: var(--brand-dark)}
 .studio .btn-ghost, .studio label.inline {color: var(--studio-muted)}
@@ -37,6 +37,37 @@
 .studio-pass-bundle {display: grid; gap: .3rem}
 .studio-pass-bundle label {display: flex !important; justify-content: space-between; align-items: center}
 .studio :focus-visible {outline: 2px solid var(--accent, #d9ae59); outline-offset: 2px}
+
+/* Step-by-step creation. Each step is a panel; the nav doubles as the progress
+   indicator, marking the step you are on and the ones already visited. */
+.studio-steps {margin-block: 1rem}
+.studio-steps ol {display: flex; flex-wrap: wrap; gap: .4rem; margin: 0; padding: 0; list-style: none; counter-reset: studio-step}
+.studio-steps li {counter-increment: studio-step; margin: 0}
+.studio-steps button {display: inline-flex; gap: .45rem; align-items: baseline; padding: .4rem .7rem;
+  font: inherit; color: var(--studio-muted); background: var(--input-bg);
+  border: 1px solid var(--border); border-radius: 999px; cursor: pointer}
+.studio-steps button::before {content: counter(studio-step); font-variant-numeric: tabular-nums; opacity: .75}
+.studio-steps button:hover {color: var(--text)}
+.studio-steps button[aria-current="step"] {color: var(--text); font-weight: 700;
+  border-color: var(--accent, #d9ae59); background: var(--card)}
+.studio-steps button[data-visited] {color: var(--text)}
+.studio-steps button[data-invalid] {border-color: var(--studio-error); color: var(--studio-error)}
+.studio-progress {display: flex; gap: .6rem; align-items: center; font-size: .9rem; color: var(--studio-muted)}
+.studio-progress progress {flex: 1 1 12rem; max-width: 22rem; height: .5rem}
+.studio-step-nav {justify-content: space-between; margin-top: 1.25rem;
+  padding-top: .9rem; border-top: 1px solid var(--border)}
+.studio-hint {font-size: .88rem}
+.studio-panel h3 + p, .studio-panel h4 + p {margin-top: .2rem}
+.studio-panel h3:not(:first-child), .studio-panel h4 {margin-top: 1.6rem}
+.studio-panel fieldset {margin-block: 1rem; padding: .8rem; border: 1px solid var(--border); border-radius: 8px}
+.studio-count {color: var(--studio-ok); font-weight: 700}
+/* The fixture editor packs eleven columns of controls, so each needs a width of its
+   own; the table scrolls sideways inside its region rather than crushing them. */
+.studio-fixtures td label {display: block; margin: 0}
+.studio-fixtures input[type="text"] {width: 11rem}
+.studio-fixtures input[type="number"] {width: 5rem}
+.studio-fixtures select {min-width: 9rem}
+.studio-fixtures th, .studio-fixtures td {padding: .4rem}
 </style>
 {#- One collapsed example per JSON field, the pattern Challenge Data already uses. -#}
 {% macro json_example(body, note='') %}
@@ -47,6 +78,15 @@
 {#- A fixture stamp without its seconds, so the conditions columns stay on screen. A
     generated row is UTC; a manually authored one is in the event timezone. -#}
 {% macro stamp(value) %}{{ value[:16]|replace('T', ' ') }}{{ ' UTC' if value.endswith('+00:00') }}{% endmacro %}
+{#- Back and Next for one step. The buttons are the same control the nav uses. -#}
+{% macro step_nav(back='', forward='') %}
+<div class="studio-toolbar studio-step-nav">
+  {% if back %}<button type="button" class="btn btn-ghost" data-step-to="{{ back }}">&larr; Back</button>
+  {% else %}<span></span>{% endif %}
+  {% if forward %}<button type="button" class="btn btn-primary" data-step-to="{{ forward }}">Next &rarr;</button>
+  {% else %}<span></span>{% endif %}
+</div>
+{% endmacro %}
 <div class="studio">
   {% if event %}<a href="{{ url_for('admin_event_studio') }}">All events</a>{% endif %}
   <h2>{{ event.name if event else 'CMU Event Studio' }}</h2>
@@ -57,12 +97,14 @@
   {% if not event %}
     <form class="studio-panel" method="post">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <h3>Create an event draft</h3>
+      <h3>Create New Event</h3>
+      <p>Name the event and the studio opens a draft you fill in step by step. Nothing is
+        published until you review the summary on the last step.</p>
       <div class="studio-grid">
         <label>Event name <input name="name" required maxlength="120"></label>
         <label>Slug <input name="slug" required maxlength="40" pattern="[a-z0-9][a-z0-9_-]*"></label>
       </div>
-      <details><summary>Use an existing configuration</summary>
+      <details><summary>Start from an existing configuration</summary>
         <label>Duplicate an event <select name="copy_event"><option value="">Choose an event</option>
           {% for item in events %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}
         </select></label>
@@ -70,7 +112,7 @@
         {{ json_example('{\n  "schema_version": 1,\n  "kind": "live",\n  "format": "T20",\n  "timezone": "Asia/Kolkata",\n  "opens_at": "2026-12-01T09:00",\n  "closes_at": "2026-12-25T23:00",\n  "teams": [],\n  "schedule": {"preset": "round_robin", "legs": 2}\n}',
            'Use Export configuration on an existing event to get a complete, valid export.') }}
       </details>
-      <div class="studio-toolbar"><button class="btn btn-primary">Create draft</button></div>
+      <div class="studio-toolbar"><button class="btn btn-primary">Create New Event</button></div>
     </form>
     <section class="studio-panel"><h3>Events</h3>
       {% if events %}
@@ -93,7 +135,7 @@
         {% if preview.key != 'validate' %}<p>Review the fixture rows, objective thresholds and both reward tracks before saving a new revision.</p>
           <p>Fixtures {{ preview.old_fixtures }} → {{ config.fixtures|length }}. Maximum liability {{ preview.old_max.coins }} → {{ maximum.coins }} coins, {{ preview.old_max.gems }} → {{ maximum.gems }} gems and {{ preview.old_max.quest_points }} → {{ maximum.quest_points }} Quest Points.</p>
           <div class="studio-toolbar">
-            <button form="studio-draft" class="btn btn-primary" name="action" value="apply">Apply preview</button>
+            <button form="studio-draft" class="btn btn-primary" name="action" value="apply">Apply Schedule</button>
             <a href="{{ url_for('admin_event_studio_detail', event_id=event.id) }}" class="btn btn-ghost">Return to saved draft</a>
           </div>
         {% else %}
@@ -106,81 +148,216 @@
       </section>
     {% endif %}
     {% if event.status == 'draft' %}
-    <form method="post" id="studio-draft">
+    <form method="post" id="studio-draft" data-player-search="{{ url_for('admin_event_studio_players') }}">
       <noscript><div class="studio-toolbar">
         <button class="btn btn-primary" name="action" value="save">Save configuration</button>
         <button class="btn btn-ghost" name="action" value="all">Auto Build Event</button>
       </div></noscript>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="revision" value="{{ event.draft_number }}">
-      <section class="studio-panel">
-        <h3>Draft configuration</h3>
-        <div class="studio-toolbar">
-          <label>Challenge League<select name="league_id"><option value="">Choose a league</option>
-            {% for league in leagues %}<option value="{{ league.id }}">{{ league.name }}</option>{% endfor %}
-          </select></label>
-          <button class="btn btn-ghost" name="action" value="copy">Copy teams and squads</button>
-        </div>
-        <p>Copying a league fills Team details and Squads below with every active team's name, short
-          name, logo, colours and full squad, and takes the league's overseas rules with it. It
-          replaces the draft's current team list.</p>
-        <div data-studio-fields hidden>
-          <details open><summary>Overview</summary>
-            <p>Pick each date and time from the calendar. They use your selected timezone. A time that
-              crosses a daylight-saving boundary needs an explicit UTC offset instead — set it in
-              Full configuration and the field below turns into a text box showing it.</p>
-            <p>There is no enrollment deadline to set. A Live Event takes players until its first
-              fixture deadline, because a campaign's fixtures are written when someone joins and a
-              later joiner would get one they could never play. A Moment or Boss Battle has no
-              fixtures, so it takes players right up to Closes.</p>
-            <div class="studio-grid">
-              <label>Event type<select data-config-path="kind">
-                <option value="live">Live Event</option><option value="moment">Cricket Moment</option><option value="boss">Boss Battle</option>
-              </select></label>
-              <label data-kind-boss>Boss challenge style<select data-config-path="challenge_style">
-                <option value="full">Full match</option><option value="moment">Moment</option>
-              </select></label>
-              <label>Format<select data-config-path="format"><option>T20</option><option>ODI</option></select></label>
-              <label>Timezone <input data-config-path="timezone" placeholder="Asia/Kolkata"></label>
-              <label>Opens <input type="datetime-local" data-config-path="opens_at" data-value-type="datetime"></label>
-              <label>Closes <input type="datetime-local" data-config-path="closes_at" data-value-type="datetime"></label>
-              <label>Banner URL <input data-config-path="banner_url" maxlength="500"></label>
-              <label class="inline"><input type="checkbox" data-config-path="featured"> Feature in the Events Hub</label>
-            </div>
-            <label>Player description<textarea class="short" data-config-path="description" maxlength="2000"></textarea></label>
-          </details>
-          <details data-studio-teams><summary>Teams and squads</summary>
-            <p>Two views of the same team list, kept in step as you type. Team details holds the
-              identity and branding; Squads holds each team's master card IDs.</p>
+      <input type="hidden" name="step" value="{{ step or 'event' }}" data-studio-step>
+      {#- The cards this draft's squads already name, so the editor shows players rather
+          than IDs, and the endpoint its picker searches for more. -#}
+      <script type="application/json" data-studio-cards>{{ squad_cards_json | safe }}</script>
+      {#- The vocabularies the editors offer, from the registries that own them. -#}
+      <script type="application/json" data-studio-options>{{
+        {'pitches': pitches, 'weathers': weathers, 'metrics': objective_metrics.keys()|list} | tojson
+      }}</script>
+      <div data-studio-fields hidden>
+        <nav class="studio-steps" aria-label="Event creation steps">
+          <ol>
+            {% for key, title in (('event', 'Event & league'), ('timing', 'Dates'), ('schedule', 'Schedule'),
+                                  ('participation', 'Participation'), ('match', 'Match rules'),
+                                  ('objectives', 'Objectives'), ('rewards', 'Rewards'),
+                                  ('features', 'Features'), ('advanced', 'Advanced'), ('publish', 'Review')) %}
+            <li><button type="button" data-step-to="{{ key }}">{{ title }}</button></li>
+            {% endfor %}
+          </ol>
+        </nav>
+        <p class="studio-progress"><progress data-studio-progress max="10" value="1"></progress>
+          <span data-studio-progress-text>Step 1 of 10</span></p>
+        <section class="studio-panel" data-step="event" hidden>
+          <h3>Event and league</h3>
+          <p>Choose the match format and a Challenge League, then import its teams. Everything
+            imported becomes this draft's own copy, so editing a squad here never touches
+            Challenge Data.</p>
+          <div class="studio-grid">
+            <label>Event type<select data-config-path="kind">
+              <option value="live">Live Event</option><option value="moment">Cricket Moment</option><option value="boss">Boss Battle</option>
+            </select></label>
+            <label data-kind-boss>Boss challenge style<select data-config-path="challenge_style">
+              <option value="full">Full match</option><option value="moment">Moment</option>
+            </select></label>
+            <label>Match format<select data-config-path="format"><option>T20</option><option>ODI</option></select></label>
+            <label>Event banner URL <input data-config-path="banner_url" maxlength="500"></label>
+            <label class="inline"><input type="checkbox" data-config-path="featured"> Feature in the Events Hub</label>
+          </div>
+          <label>Event description<textarea class="short" data-config-path="description" maxlength="2000"></textarea></label>
+
+          <h4>League import</h4>
+          <div class="studio-toolbar">
+            <label>Challenge League<select name="league_id"><option value="">Choose a league</option>
+              {% for league in leagues %}<option value="{{ league.id }}">{{ league.name }}</option>{% endfor %}
+            </select></label>
+            <button class="btn btn-ghost" name="action" value="copy">Import teams and squads</button>
+          </div>
+          <p>Importing a league fills the table below with every active team's name, short name,
+            logo, colours and full squad, and brings the league's overseas rules with it. It
+            replaces the draft's current team list.</p>
+
+          <h4>Teams and squads <span class="studio-count" data-team-count></span></h4>
+          <p class="studio-hint">Edit any team's identity and branding here. A squad is the team's
+            list of active master card IDs; add players by name and the studio resolves the card.</p>
+          <div data-teams-editor></div>
+          <div class="studio-toolbar">
+            <button type="button" class="btn btn-ghost" data-team-add>Add team</button>
+          </div>
+
+          <h4>Squad eligibility</h4>
+          <div class="studio-grid">
+            <label>Minimum overseas players in an XI <input type="number" min="0" max="11" data-config-path="min_overseas"></label>
+            <label>Maximum overseas players in an XI <input type="number" min="0" max="11" data-config-path="max_overseas"></label>
+            <label>Home country (players from here are not overseas) <input data-config-path="home_country" maxlength="60"></label>
+            <label>Allowed gender<select data-config-path="gender" data-value-type="nullable">
+              <option value="">Any</option><option value="Male">Male</option><option value="Female">Female</option>
+            </select></label>
+          </div>
+
+          <details><summary>Edit teams and squads as JSON</summary>
+            <p>Two views of the same team list, kept in step with the table above.</p>
             <label>Team details JSON<textarea data-config-path="teams" data-value-type="team-details" spellcheck="false"></textarea></label>
             {{ json_example('[\n  {\n    "key": "team-1",\n    "name": "Mumbai Indians",\n    "short_name": "MI",\n    "logo_url": "https://example.com/mi.png",\n    "primary_color": "#004BA0",\n    "secondary_color": "#D1AB3E"\n  },\n  { "key": "team-2", "name": "Chennai Super Kings", "short_name": "CSK" }\n]',
                'Each team needs a lowercase key and a unique name. Up to 16 teams. Removing a team here removes its squad too.') }}
             <label>Squads JSON<textarea data-config-path="teams" data-value-type="team-squads" spellcheck="false"></textarea></label>
             {{ json_example('{\n  "team-1": [101, 102, 103],\n  "team-2": [204, 205, 206]\n}',
-               'Active master card IDs, up to 40 per team, keyed by the team key above. A team left out keeps the squad it has. To enter players by name instead, use Import team JSON or squad CSV below.') }}
+               'Active master card IDs, up to 40 per team, keyed by the team key above. A team left out keeps the squad it has.') }}
           </details>
-          <details><summary>Participation and gameplay</summary>
-            <p>Anyone may join while the event is open — there is no enrollment limit. Each fixture
-              gets its own pitch, venue and weather, drawn when you generate the schedule; see
-              Schedule to narrow the grounds, and Fixture rows to set a fixture's own.</p>
-            <div class="studio-grid">
-              <label>AI difficulty override <select data-config-path="difficulty" data-value-type="nullable">
-                <option value="">Track default</option><option value="easy">Easy</option><option value="normal">Normal</option><option value="hard">Hard</option><option value="hard_plus">Hard++</option>
-              </select></label>
-              <label><input type="checkbox" data-config-path="impact_player"> Allow Impact Player in full T20 matches</label>
-              <label>Official attempts for a standalone challenge <input type="number" min="1" max="10" data-config-path="attempts"></label>
+          <details><summary>Import team JSON or squad CSV</summary>
+            <label>Paste import data<textarea name="import_data" spellcheck="false" class="short"></textarea></label>
+            {{ json_example('{"teams": [\n  { "team_name": "Harbour XI", "short_name": "HBR", "primary_color": "#1d4ed8" }\n]}',
+               'Team JSON, in the Challenge Data field names. Matched to existing teams by name; a new name is added with a generated key and an empty squad.') }}
+            {{ json_example('TEAM NAME,PLAYER NAME,VERSION\nHarbour XI,Example Player,Base\nHarbour XI,Another Player,Gold',
+               'Squad CSV. Resolves each row to an active master card and replaces the listed teams\' squads. Leave VERSION blank for the Base card.') }}
+            <div class="studio-toolbar">
+              <button class="btn btn-ghost" name="action" value="import_teams">Preview team JSON</button>
+              <button class="btn btn-ghost" name="action" value="import_squads">Preview squad CSV</button>
             </div>
-            <label>Participation track keys<textarea data-config-path="mode" data-value-type="json" class="short" spellcheck="false"></textarea></label>
-            {{ json_example('["tournament_team", "own_roster"]',
-               'Enable at least one. A Moment or Boss Battle uses the fixed ["tournament_team"] track.') }}
           </details>
-          <details><summary>Schedule</summary>
+          {{ step_nav(forward='timing') }}
+        </section>
+        <section class="studio-panel" data-step="timing" hidden>
+          <h3>Dates and timing</h3>
+          <p>Pick each date and time from the calendar. They use the timezone you select. A time
+            that crosses a daylight-saving boundary needs an explicit UTC offset instead — set it
+            on the Advanced step and the field below turns into a text box showing it.</p>
+          <div class="studio-grid">
+            <label>Timezone <input data-config-path="timezone" placeholder="Asia/Kolkata"></label>
+            <label>Start date and time <input type="datetime-local" data-config-path="opens_at" data-value-type="datetime"></label>
+            <label>End date and time <input type="datetime-local" data-config-path="closes_at" data-value-type="datetime"></label>
+            <label>Reward claim expiry (days after the event closes) <input type="number" min="1" max="90" data-config-path="claim_days"></label>
+          </div>
+          <p data-studio-window role="status"></p>
+          <h4>Registration cutoff</h4>
+          <p>Automatic, and not an authored field. A Live Event takes players until its first
+            fixture deadline, because a campaign's fixtures are written when someone joins and a
+            later joiner would get one they could never play. A Moment or Boss Battle has no
+            fixtures, so it takes players right up to the end date.</p>
+          <h4>Deadline reminders</h4>
+          <label class="inline"><input type="checkbox" data-config-path="notifications.enabled"> Remind eligible enrolled players before a deadline</label>
+          <label>Hours before the deadline<textarea data-config-path="notifications.reminders_hours" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+          {{ json_example('[6, 1]', 'Up to four distinct offsets, each 1 to 168 hours before a fixture deadline.') }}
+          <details><summary>Repeat this event on a schedule</summary>
             <div class="studio-grid">
-              <label>Preset<select data-config-path="schedule.preset">
-                <option value="round_robin">Round robin</option><option value="series">Bilateral series</option>
-                <option value="knockout">Knockout</option><option value="double_elimination">Double elimination</option><option value="groups">Groups and knockout</option><option value="survival">Survival ladder</option><option value="manual">Manual fixtures</option>
+              <label>Rotation<select data-config-path="rotation.cadence">
+                <option value="none">Single edition</option><option value="daily">Daily</option><option value="weekly">Weekly</option>
               </select></label>
-              <label>Live Event template<select data-config-path="schedule.template">
+              <label>Number of editions <input type="number" min="1" max="12" data-config-path="rotation.periods"></label>
+            </div>
+            <label>Combined rotation budget<textarea data-config-path="rotation.series_budget" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+            {{ json_example('{ "coins": 50000, "gems": 500, "quest_points": 2000 }',
+               'The ceiling across every edition of a daily or weekly rotation.') }}
+          </details>
+          {{ step_nav(back='event', forward='schedule') }}
+        </section>
+        <section class="studio-panel" data-step="schedule" hidden>
+          <h3>Schedule builder</h3>
+          <div class="studio-grid">
+            <label>Schedule type<select data-config-path="schedule.preset">
+              <option value="round_robin">Round robin</option>
+              <option value="one_half_round_robin">1.5 round robin</option>
+              <option value="groups">Group stage and knockout</option>
+              <option value="knockout">Knockout</option>
+              <option value="double_elimination">Double elimination</option>
+              <option value="series">Bilateral series</option>
+              <option value="survival">Survival ladder</option>
+              <option value="manual">Manual schedule</option>
+            </select></label>
+            <label data-preset-legs>Home and away fixtures<select data-config-path="schedule.legs" data-value-type="number">
+              <option value="1">One meeting per pair</option>
+              <option value="2">Home and away (double round robin)</option>
+              <option value="3">Three meetings per pair</option>
+              <option value="4">Four meetings per pair</option>
+              <option value="5">Five meetings per pair</option>
+            </select></label>
+            <label data-preset-target>League games per team <input type="number" min="1" max="60" step="0.5" data-config-path="schedule.match_target" data-value-type="nullable"></label>
+            <label data-preset-series>Games in the series <input type="number" min="1" max="15" data-config-path="schedule.games"></label>
+            <label data-preset-groups>Teams qualifying from each group <input type="number" min="1" max="4" data-config-path="schedule.qualify_per_group"></label>
+            <label class="inline" data-preset-knockout><input type="checkbox" data-config-path="schedule.third_place"> Play a third-place fixture</label>
+            <label class="inline" data-preset-double><input type="checkbox" data-config-path="schedule.grand_final_reset"> Reset the grand final after the upper finalist's first loss</label>
+          </div>
+          <label data-preset-groups>Groups by team key<textarea data-config-path="schedule.groups" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+          {{ json_example('{\n  "a": ["team-1", "team-2", "team-3", "team-4"],\n  "b": ["team-5", "team-6", "team-7", "team-8"]\n}',
+             'Group stage only. Every team appears in exactly one group.') }}
+
+          <h3>Playoff builder</h3>
+          <p data-playoff-shape class="studio-hint"></p>
+          <label data-preset-playoffs>Playoffs<select data-config-path="schedule.playoffs">
+            <option value="none">No playoffs</option>
+            <option value="top2">Top 2 — direct final</option>
+            <option value="top4_semis">Top 4 — semifinals</option>
+            <option value="top4">Top 4 — IPL style</option>
+            <option value="top6">Top 6 — knockout</option>
+            <option value="top8">Top 8 — quarterfinals</option>
+            <option value="custom">Custom playoffs (author the rows yourself)</option>
+          </select></label>
+          <p class="studio-hint">A playoff slot is a reference the official final standings resolve
+            (<code>rank:1</code>, <code>group_rank:a:1</code>) or an earlier playoff fixture does
+            (<code>winner:qualifier</code>, <code>loser:qualifier</code>). Qualified teams advance
+            automatically from official results. A manual league schedule can take a generated
+            bracket, and an automatic league can take custom playoff rows.</p>
+
+          <h3>Scheduling settings</h3>
+          <div class="studio-grid">
+            <label>Round interval in days <input type="number" min="1" max="30" data-config-path="schedule.round_spacing_days"></label>
+            <label>Match deadline duration in hours <input type="number" min="1" max="168" data-config-path="schedule.window_hours"></label>
+            <label>Grace period in minutes <input type="number" min="0" max="240" data-config-path="schedule.grace"></label>
+            <label>Minimum rest between matches in minutes <input type="number" min="0" max="10080" data-config-path="schedule.min_rest_minutes"></label>
+            <label>Maximum fixtures per day <input type="number" min="1" max="24" data-config-path="schedule.fixtures_per_day"></label>
+            <label>Condition seed <input type="number" min="0" max="4294967295" data-config-path="schedule.seed" data-value-type="nullable"></label>
+          </div>
+          <fieldset><legend>Playing days</legend>
+            <div class="studio-toolbar" data-playing-days>
+              {% for number, name in ((1, 'Mon'), (2, 'Tue'), (3, 'Wed'), (4, 'Thu'), (5, 'Fri'), (6, 'Sat'), (7, 'Sun')) %}
+              <label class="inline"><input type="checkbox" data-playing-day="{{ number }}"> {{ name }}</label>
+              {% endfor %}
+            </div>
+            <details><summary>Playing days as a list</summary>
+              {#- The canonical bound control the day checkboxes above write through, so the
+                  whole screen keeps one binding mechanism and one escape hatch per field. -#}
+              <label>Weekday numbers<textarea data-config-path="schedule.playing_days" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+              {{ json_example('[1, 2, 3, 4, 5, 6, 7]', 'Monday is 1 through Sunday 7. At least one day is required.') }}
+            </details>
+          </fieldset>
+          <label>Blackout dates<textarea data-config-path="schedule.blackouts" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+          {{ json_example('["2026-12-25", "2027-01-01"]', 'Local YYYY-MM-DD dates no fixture may open on.') }}
+          <label>Venue countries<textarea data-config-path="schedule.venue_countries" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+          {{ json_example('["India", "Australia"]',
+             'Narrows the grounds a fixture may be drawn from. Leave it as [] for every ground in Stadium Data.'
+             ~ (' In use today: ' ~ stadium_countries|join(', ') ~ '.' if stadium_countries else '')) }}
+
+          <details><summary>Live Event template</summary>
+            <div class="studio-grid">
+              <label>Template<select data-config-path="schedule.template">
                 <option value="">Standard</option><option value="weekend">Weekend Championship</option>
                 <option value="nations">Nations Cup</option><option value="legends">Legends League</option>
                 <option value="rivalry">Rivalry Cup</option><option value="road_to_final">Road to the Final</option>
@@ -189,135 +366,112 @@
                 <option value="champions">Champions League</option><option value="dynasty">Franchise Dynasty</option>
                 <option value="world_tour">World Tour</option>
               </select></label>
-              <label class="inline"><input type="checkbox" data-config-path="schedule.grand_final_reset"> Reset the grand final after the upper finalist's first loss</label>
-              <label>Previous event ID (Champions League or Dynasty) <input type="number" min="0" data-config-path="schedule.previous_event_id"></label>
               <label>Weekend rest between rounds (minutes) <input type="number" min="0" max="1440" data-config-path="schedule.rest_minutes"></label>
-              <label>Round-robin legs <input type="number" min="1" max="5" data-config-path="schedule.legs"></label>
-              <label>Round-robin playoffs<select data-config-path="schedule.playoffs">
-                <option value="none">None</option><option value="top2">Top two</option><option value="top4">Top four</option>
-              </select></label>
-              <label>Fixture window in hours <input type="number" min="1" max="168" data-config-path="schedule.window_hours"></label>
-              <label>Grace in minutes <input type="number" min="0" max="240" data-config-path="schedule.grace"></label>
-              <label>Condition seed <input type="number" min="0" max="4294967295" data-config-path="schedule.seed" data-value-type="nullable"></label>
+              <label>Previous event ID (Champions League or Dynasty) <input type="number" min="0" data-config-path="schedule.previous_event_id"></label>
             </div>
             <label>World Tour country series<textarea data-config-path="schedule.tour" data-value-type="json" class="short" spellcheck="false"></textarea></label>
             {{ json_example('[{"country":"India","games":3},{"country":"Australia","games":3}]', 'World Tour uses the bilateral series preset.') }}
-            <label>Groups by team key<textarea data-config-path="schedule.groups" data-value-type="json" class="short" spellcheck="false"></textarea></label>
-            {{ json_example('{\n  "a": ["team-1", "team-2", "team-3", "team-4"],\n  "b": ["team-5", "team-6", "team-7", "team-8"]\n}',
-               'Groups and knockout only. Every team appears in exactly one group.') }}
-            <label>Venue countries<textarea data-config-path="schedule.venue_countries" data-value-type="json" class="short" spellcheck="false"></textarea></label>
-            {{ json_example('["India", "Australia"]',
-               'Narrows the grounds a fixture may be drawn from. Leave it as [] for every ground in Stadium Data.'
-               ~ (' In use today: ' ~ stadium_countries|join(', ') ~ '.' if stadium_countries else '')) }}
+          </details>
+
+          <h3>Generate Schedule</h3>
+          <div class="studio-toolbar">
+            <button class="btn btn-primary" name="action" value="schedule">Generate Schedule</button>
+            <button class="btn btn-ghost" name="action" value="schedule" data-regenerate>Regenerate Schedule</button>
+            <button type="button" class="btn btn-ghost" data-fixture-shuffle>Shuffle Fixtures</button>
+            <button type="button" class="btn btn-ghost" data-fixture-autofix>Auto Fix Schedule</button>
+            <a href="{{ url_for('admin_event_studio_export', event_id=event.id) }}" class="btn btn-ghost">Export JSON</a>
+          </div>
+          <p class="studio-hint">Generating writes fixture keys, round numbers, opening times,
+            deadlines, stadiums, pitches and weather. A fixture you edit by hand is kept on the
+            next run; tick <em>Replace unlocked manual edits</em> to overwrite it. Shuffle re-rolls
+            which teams meet when, and Auto Fix pulls a schedule that overruns back inside the
+            event window — neither changes the event's own dates.</p>
+          <label class="inline"><input type="checkbox" name="overwrite" value="yes"> Replace unlocked manual edits</label>
+          <p data-fixture-fit role="status"></p>
+          <div data-fixture-views></div>
+          <details><summary>Edit fixtures as JSON</summary>
             <label>Fixture rows<textarea data-config-path="fixtures" data-value-type="json" spellcheck="false"></textarea></label>
             {{ json_example('[\n  {\n    "key": "r1-1",\n    "home": "team-1",\n    "away": "team-2",\n    "round": 1,\n    "stage": "league",\n    "opens_at": "2026-12-01T09:00",\n    "deadline": "2026-12-01T20:00",\n    "grace": 30,\n    "source": "manual",\n    "pitch": "Flat",\n    "venue": "Wankhede Stadium",\n    "weather": "Humid"\n  },\n  {\n    "key": "final",\n    "home": "winner:r1-1",\n    "away": "rank:2",\n    "round": 2,\n    "stage": "playoff",\n    "opens_at": "2026-12-05T09:00",\n    "deadline": "2026-12-05T20:00",\n    "grace": 30,\n    "source": "manual",\n    "venue": "Narendra Modi Stadium"\n  }\n]',
-               'Choose the Manual fixtures preset to author a whole tournament here. pitch, venue and weather are optional on any row — left out, Auto Schedule draws them. A playoff slot may depend on an earlier fixture with winner:<key>, loser:<key>, rank:<n> or group_rank:<group>:<n>.') }}
+               'Choose the Manual schedule type to author a whole tournament here. pitch, venue and weather are optional on any row — left out, generating draws them. A playoff slot may depend on an earlier fixture with winner:<key>, loser:<key>, rank:<n> or group_rank:<group>:<n>.') }}
           </details>
-          <details><summary>Fixture reminders</summary>
-            <label class="inline"><input type="checkbox" data-config-path="notifications.enabled"> Send reminders to eligible enrolled players</label>
-            <label>Hours before the deadline<textarea data-config-path="notifications.reminders_hours" data-value-type="json" class="short" spellcheck="false"></textarea></label>
-            {{ json_example('[6, 1]', 'Up to four distinct offsets, each 1 to 168 hours before a fixture deadline.') }}
+          {{ step_nav(back='timing', forward='participation') }}
+        </section>
+        <section class="studio-panel" data-step="participation" hidden>
+          <h3>Participation modes</h3>
+          <p>Enable any one, two or all three. Players can only join through an enabled mode.</p>
+          <div class="studio-grid">
+            <label class="inline"><input type="checkbox" data-mode-toggle="solo"> <span><strong>Solo</strong><br>
+              <span class="studio-hint">One official franchise, managed against AI for the whole
+              tournament. No auction or draft; published league squads.</span></span></label>
+            <label class="inline"><input type="checkbox" data-mode-toggle="multi"> <span><strong>Team (Multiplayer)</strong><br>
+              <span class="studio-hint">The player picks a franchise and hosts a room. Others join
+              the remaining franchises during a registration window; AI fills what is left.</span></span></label>
+            <label class="inline"><input type="checkbox" data-mode-toggle="own_roster"> <span><strong>Own Roster</strong><br>
+              <span class="studio-hint">The player's own CMU roster replaces one official franchise
+              and inherits its fixtures. Their master roster is never modified.</span></span></label>
+          </div>
+          <p data-mode-warning role="status"></p>
+
+          <h3>Participation rules</h3>
+          <div class="studio-grid">
+            <label>Maximum participants <input type="number" min="1" max="5000" data-config-path="max_users"></label>
+            <label>Multiplayer registration minutes <input type="number" min="60" max="60" data-config-path="competition.registration_minutes"></label>
+            <label>Minimum human managers <input type="number" min="1" max="16" data-config-path="competition.min_humans"></label>
+            <label class="inline"><input type="checkbox" data-config-path="competition.early_start"> Let hosts start early</label>
+            <label class="inline"><input type="checkbox" data-config-path="competition.auto_start_full"> Start when all franchises are claimed</label>
+            <label class="inline"><input type="checkbox" data-config-path="competition.lobby_v2"> Offer public and private lobbies</label>
+          </div>
+          <p class="studio-hint">Entry is free and one entry per user per event. Lobby capacity
+            equals the number of published teams, and squad size and the overseas limit come from
+            the squad eligibility rules on the Event step.</p>
+          <details><summary>Participation track keys</summary>
+            <label>Tracks<textarea data-config-path="mode" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+            {{ json_example('["tournament_team", "own_roster"]',
+               'The stored form of the checkboxes above. A Moment or Boss Battle uses the fixed ["tournament_team"] track.') }}
+            <label>Tournament modes<textarea class="short" data-config-path="competition.modes" data-value-type="json"></textarea></label>
+            {{ json_example('["solo", "multi"]', 'Solo reserves one franchise and fills the rest with AI. Multiplayer opens one shared room for an hour.') }}
           </details>
-          <details><summary>Objectives</summary>
-            <label data-kind-live>Objective scope <select data-config-path="objective_scope"><option value="tournament">Tournament</option><option value="fixture">Legacy fixture</option></select></label>
-            <div data-legacy-objectives>
-            <label>Objective assignments<textarea data-config-path="objectives" data-value-type="json" spellcheck="false"></textarea></label>
-            {{ json_example('[\n  { "key": "win", "threshold": 1 },\n  { "key": "boundaries", "threshold": 4, "min_balls": 12 },\n  { "key": "wickets", "threshold": 3 },\n  { "key": "runs", "threshold": 40 }\n]',
-               'One entry per star. Keys are win, boundaries, wickets and runs.') }}
-            </div>
-            <div data-tournament-objectives>
-              <label>Auto ladder settings<textarea data-config-path="ladder_generator" data-value-type="json" class="short"></textarea></label>
-              {{ json_example('{"metrics":["runs","wickets"],"stage_count":4,"star_cap":60,"preset":"Balanced"}', 'Auto Objectives preserves existing ladders unless you explicitly regenerate. Locked stages survive regeneration.') }}
-              <label>Versioned objective ladders<textarea data-config-path="objective_ladders" data-value-type="json" class="short"></textarea></label>
-              {{ json_example('{"metric_version":1,"objectives":[{"id":"results","metric":"wins","stages":[{"id":"wins_bronze","target":1,"stars":2},{"id":"wins_silver","target":2,"stars":5}]}]}', 'Stable stage IDs must be unique across the whole event. Leave null to use the existing objectives.') }}
-              <div class="studio-grid">
-                <label>Objective preset <select data-config-path="objective_preset">
-                  {% for preset in ('easy', 'balanced', 'hard', 'extreme', 'custom') %}<option value="{{ preset }}">{{ preset|capitalize }}</option>{% endfor %}
-                </select></label>
-                <label>Tournament modes <textarea class="short" data-config-path="competition.modes" data-value-type="json"></textarea></label>
-                <label>Registration minutes <input type="number" min="60" max="60" data-config-path="competition.registration_minutes"></label>
-                <label>Minimum human managers <input type="number" min="1" max="16" data-config-path="competition.min_humans"></label>
-                <label>Double no-show points <input type="number" min="0" max="20" data-config-path="competition.double_no_show_points"></label>
-                <label class="inline"><input type="checkbox" data-config-path="competition.early_start"> Let hosts start early</label>
-                <label class="inline"><input type="checkbox" data-config-path="competition.match_rewards"> Include completed-match rewards</label>
-              </div>
-              <label>Tournament objectives <textarea data-config-path="tournament_objectives" data-value-type="json" spellcheck="false"></textarea></label>
-              <p>{{ objective_max }} possible stars. Multiplayer registration {{ 'enabled for this format' if multi_enabled else 'requires staging flags for this format' }}. Lobby capacity equals the number of published teams.</p>
-              {% for warning in objective_warnings %}<p>{{ warning }}</p>{% endfor %}
-              {{ json_example('[{"id":"boundaries_100","metric":"boundaries","target":100,"stars":3,"locked":true}]', 'Edit, add, remove or reorder rows here. A locked row keeps its target and stars when regenerating. Rates require min_balls and accept a decimal target. Scope to stages with ["league"] or ["playoff"].') }}
-              <details><summary>Supported objective metrics</summary><p>{{ objective_metrics.keys()|join(', ') }}.</p><p>Phase filters support runs, bowler wickets and team dismissals. Role filters apply to individual batting and bowling metrics. Named-player filters are unavailable.</p></details>
-              <p>Solo reserves one franchise and fills the other seats with AI. Multiplayer opens one shared room for an hour. Allow at least 30 minutes after registration for the first fixture.</p>
-            </div>
-            <label class="inline"><input type="checkbox" data-config-path="objectives_locked"> Keep these assignments during generation</label>
-          </details>
-          <details><summary>Rewards</summary>
-            <div class="studio-grid">
-              {% for asset in ('coins', 'gems', 'quest_points') %}
-              <label>{{ asset|replace('_', ' ')|capitalize }} budget <input type="number" min="0" max="2000000000" data-config-path="budget.{{ asset }}"></label>
-              {% endfor %}
-              <label><span data-event-budget-label>{{ "Total human capacity" if config.objective_scope == "tournament" else "Players covered by the budget" }}</span> <input type="number" min="1" max="5000" data-config-path="max_users"></label>
-            </div>
-            <p>Players covered by the budget is not a cap on who may join — it is the number each
-              reward bundle is scaled against, and the number maximum liability is reported for.</p>
-            <div class="studio-grid">
-              <label>Community XP for eligible completion <input type="number" min="0" max="100" data-config-path="community.completion_xp"></label>
-              <label>Distinct-winner goal for a Boss Battle <input type="number" min="0" max="5000" data-config-path="community.boss_goal"></label>
-              <label>Daily limits for Event XP <input type="number" min="1" max="10" data-config-path="community.daily_limit"></label>
-            </div>
-            <fieldset data-tournament-objectives>
-              <legend>Live Event features</legend>
-              <div class="studio-grid">
-                {% for key, title in (('event_pass', 'Event Pass'), ('lobby_v2', 'Public and private lobbies'),
-                   ('dressing_room', 'Dressing Room'), ('news', 'Tournament News'), ('manager_profile', 'Manager XP'),
-                   ('competitive_rating', 'Multiplayer Elo'), ('qualification', 'Qualification Centre'),
-                   ('honour_board', 'Honour Board'), ('group_engagement', 'Hosting group notices'), ('world_rankings', 'Public room World Rankings'), ('analytics', 'Record analytics telemetry')) %}
-                <label class="inline"><input type="checkbox" data-config-path="competition.{{ key }}"> {{ title }}</label>
-                {% endfor %}
-                <label>Solo Dressing Room cap <input type="number" min="0" max="1" data-config-path="competition.management_cap"></label>
-                <label>Major upset gap (published OVR) <input type="number" min="1" max="50" data-config-path="competition.news_upset_gap"></label>
-                <label class="inline"><input type="checkbox" data-config-path="competition.auto_start_full"> Start when all franchises are claimed</label>
-                <label>Manager XP cap <input type="number" min="0" max="10000" data-config-path="competition.manager_xp_cap"></label>
-                <label>Predictor samples (0 disables estimates) <input type="number" min="0" max="2000" data-config-path="competition.predictor_samples"></label>
-                <label>Rating K-factor <input type="number" min="1" max="64" data-config-path="competition.rating_k"></label>
-              </div>
-              <label class="inline"><input type="checkbox" data-config-path="ai_managers.enabled"> Persistent AI managers</label>
-              <label>AI tactical influence <input type="number" min="0" max=".2" step=".01" data-config-path="ai_managers.blend"></label>
-              <label>AI manager allowlist<textarea data-config-path="ai_managers.allowlist" data-value-type="json" class="short"></textarea></label>
-              <label>Franchise AI managers<textarea data-config-path="ai_managers.franchises" data-value-type="json" class="short"></textarea></label>
-              <p>Assign profile keys such as aggressor, wall or architect. An empty allowlist uses all ten. Tactical calibration is still in staging.</p>
-              <label>Manager XP weights<textarea data-config-path="competition.manager_xp_weights" data-value-type="json" class="short"></textarea></label>
-              <label>Dressing Room weights<textarea data-config-path="competition.management_weights" data-value-type="json" class="short"></textarea></label>
-            </fieldset>
-            <section data-pass-editor hidden>
-              <h3>Event Pass milestones</h3>
-              <p>Each milestone unlocks from claimed stars. Diamond replaces its Free bundle.</p>
-              <div class="studio-scroll" role="region" aria-label="Milestone editor" tabindex="0">
-                <table class="studio-pass-table">
-                  <thead><tr><th scope="col">Milestone</th><th scope="col">Free</th><th scope="col">Diamond</th><th scope="col">Options</th></tr></thead>
-                  <tbody data-pass-rows></tbody>
-                </table>
-              </div>
-              <div class="studio-toolbar"><button type="button" class="btn btn-ghost" data-pass-add>Add milestone</button></div>
-            </section>
-            <div class="studio-grid">
-              <label>Event-wide pack cap <input type="number" min="0" data-config-path="pass_inventory.packs"></label>
-              <label>Event-wide card cap <input type="number" min="0" data-config-path="pass_inventory.cards"></label>
-            </div>
-            <p>Maximum inventory liability {{ inventory_maximum.packs }} packs · {{ inventory_maximum.cards }} cards</p>
-            <label>Auto Rewards Free items<textarea data-config-path="pass_inventory.auto_free" data-value-type="json" class="short"></textarea></label>
-            <label>Auto Rewards Diamond items<textarea data-config-path="pass_inventory.auto_diamond" data-value-type="json" class="short"></textarea></label>
-            {{ json_example('[{"kind":"pack","pack_id":1},{"kind":"player","player_id":12},{"kind":"random_player","min_rating":80,"max_rating":85,"version":"Base"}]', 'Use existing pack and collectible card IDs. Add free_items and diamond_items to any manual milestone. Auto Rewards attaches these lists to the last unlocked milestone.') }}
-            <label>Star milestone JSON<textarea data-config-path="milestones" data-value-type="json" class="short" spellcheck="false"></textarea></label>
-            {{ json_example('[\n  { "stars": 1, "free": {"gems": 1}, "diamond": {"gems": 3} },\n  { "stars": 5, "free": {"coins": 2000}, "diamond": {"coins": 5000, "gems": 10} }\n]',
-               'Up to 20 rows. Event Pass rows require a unique id. Use locked: true to keep a milestone during regeneration and bonus: true for a playoff-dependent threshold. Diamond must award at least the Free amount for each asset.') }}
-            <label>Fixture conditions, difficulty, objective and reward overrides<textarea data-config-path="fixture_overrides" data-value-type="json" class="short" spellcheck="false"></textarea></label>
-            {{ json_example('{\n  "r1-1": {\n    "pitch": "Flat",\n    "venue": "Eden Gardens",\n    "weather": "Overcast",\n    "difficulty": "hard"\n  },\n  "final": {\n    "rewards": {"free": {"win": {"coins": 2000}}, "diamond": {"win": {"coins": 4000}}}\n  }\n}',
-               'Keyed by fixture key, or "challenge" for a Moment or Boss Battle. An override here beats the fixture row\'s own ground. Pitches: ' ~ pitches|join(', ') ~ '. Weather: ' ~ weathers|join(', ') ~ '.') }}
-            <label>Free and Diamond bundles<textarea data-config-path="rewards" data-value-type="json" spellcheck="false"></textarea></label>
-            {{ json_example('{\n  "free":    { "win": {"coins": 800, "gems": 5}, "loss": {"coins": 100}, "tie": {"coins": 200} },\n  "diamond": { "win": {"coins": 1600, "gems": 10}, "loss": {"coins": 200}, "tie": {"coins": 400} }\n}',
-               'Live Events award win, loss and tie. A Moment or Boss Battle awards success. Diamond must match or beat Free for every asset.') }}
-          </details>
-          <details data-kind-moment><summary>Cricket Moment checkpoint and rotation</summary>
+          {{ step_nav(back='schedule', forward='match') }}
+        </section>
+        <section class="studio-panel" data-step="match" hidden>
+          <h3>Match configuration</h3>
+          <p>Every Live Event match plays exactly like a normal CIPL match, on the same engine:
+            XI selection, batting order, captain, toss, bowler and approach choices, ball-by-ball
+            commentary, the completed Over Card after every over, projected score and chase
+            comparison, innings break, Super Over where enabled, scorecard and summary.</p>
+          <div class="studio-grid">
+            <label>AI difficulty override <select data-config-path="difficulty" data-value-type="nullable">
+              <option value="">Track default</option><option value="easy">Easy</option><option value="normal">Normal</option><option value="hard">Hard</option><option value="hard_plus">Hard++</option>
+            </select></label>
+            <label class="inline"><input type="checkbox" data-config-path="impact_player"> Allow Impact Player in full T20 matches</label>
+            <label>Official attempts for a standalone challenge <input type="number" min="1" max="10" data-config-path="attempts"></label>
+          </div>
+          <p class="studio-hint">Pitch, venue and weather are per fixture, not per event: generating
+            the schedule draws each one. Narrow the grounds with venue countries on the Schedule
+            step, or set a single fixture's own on the Advanced step.</p>
+
+          <h3>Points table</h3>
+          <div class="studio-grid">
+            <label>Win points <input type="number" min="0" max="20" data-config-path="points.win"></label>
+            <label>Loss points <input type="number" min="0" max="20" data-config-path="points.loss"></label>
+            <label>Tie points <input type="number" min="0" max="20" data-config-path="points.tie"></label>
+            <label>No-result points <input type="number" min="0" max="20" data-config-path="points.no_result"></label>
+            <label>Double no-show points <input type="number" min="0" max="20" data-config-path="competition.double_no_show_points"></label>
+          </div>
+          <p class="studio-hint">Standings are ordered by points, then wins, then net run rate, and
+            the playoffs read those official final standings.</p>
+
+          <h3>AI manager personalities</h3>
+          <label class="inline"><input type="checkbox" data-config-path="ai_managers.enabled"> Persistent AI managers</label>
+          <div class="studio-grid">
+            <label>AI tactical influence <input type="number" min="0" max=".2" step=".01" data-config-path="ai_managers.blend"></label>
+          </div>
+          <label>AI manager allowlist<textarea data-config-path="ai_managers.allowlist" data-value-type="json" class="short"></textarea></label>
+          <label>Franchise AI managers<textarea data-config-path="ai_managers.franchises" data-value-type="json" class="short"></textarea></label>
+          <p class="studio-hint">Assign profile keys such as aggressor, wall or architect. An empty
+            allowlist uses all ten. Tactical calibration is still in staging.</p>
+
+          <details data-kind-moment><summary>Cricket Moment challenge</summary>
             <div class="studio-grid">
               <label>Goal style<select data-config-path="moment.goal_type">
                 <option value="segment">Runs or wickets</option><option value="chase">Simulated chase or defense</option>
@@ -327,66 +481,210 @@
               <label>Overs to play <input type="number" min="1" max="50" data-config-path="moment.overs"></label>
               <label>Runs or wickets needed <input type="number" min="1" data-config-path="moment.goal"></label>
               <label>Prefix seed <input type="number" min="0" max="4294967295" data-config-path="moment.seed"></label>
-              <label>Rotation<select data-config-path="rotation.cadence">
-                <option value="none">Single edition</option><option value="daily">Daily</option><option value="weekly">Weekly</option>
-              </select></label>
-              <label>Number of editions <input type="number" min="1" max="12" data-config-path="rotation.periods"></label>
-              <label>Chapter name <input data-config-path="chapter.name" maxlength="80"></label>
-              <label>Moment position <input type="number" min="1" max="100" data-config-path="chapter.position"></label>
-              <label>Prerequisite Moment slug <input data-config-path="chapter.prerequisite_slug"></label>
-              <label>Minimum prerequisite stars <input type="number" min="1" max="5" data-config-path="chapter.min_stars"></label>
               <label>Objective baseline<select data-config-path="moment.objective_baseline">
                 <option value="earned">From the first live delivery</option><option value="inclusive">Include preset figures</option>
               </select></label>
             </div>
-            <label>Combined rotation budget<textarea data-config-path="rotation.series_budget" data-value-type="json" class="short" spellcheck="false"></textarea></label>
-            {{ json_example('{ "coins": 50000, "gems": 500, "quest_points": 2000 }',
-               'The ceiling across every edition of a daily or weekly rotation.') }}
             <label>Recorded scorecard checkpoint <textarea data-config-path="moment.checkpoint" data-value-type="json" class="short" spellcheck="false"></textarea></label>
             {{ json_example('{\n  "runs": 8,\n  "wickets": 0,\n  "extras": 0,\n  "crease": [1, 2],\n  "partnership": { "runs": 8, "balls": 6 },\n  "overs": [\n    { "bowler": 7, "balls": 6, "runs": 8, "wickets": 0, "credited_wickets": 0, "maidens": 0 }\n  ],\n  "batting": [\n    { "slot": 1, "runs": 5, "balls": 4, "fours": 1, "sixes": 0, "dots": 2, "dismissal": null, "bowler": null },\n    { "slot": 2, "runs": 3, "balls": 2, "fours": 0, "sixes": 0, "dots": 0, "dismissal": null, "bowler": null }\n  ],\n  "bowling": [\n    { "slot": 7, "runs": 8, "balls": 6, "wickets": 0, "dots": 2, "maidens": 0 }\n  ]\n}',
                'Leave it as null to have the engine simulate the overs before the challenge from the prefix seed. Every object must carry exactly the fields shown. Numbers are XI positions from 1 to 11, not card IDs, and the figures must reconcile: the over rows against the total, and the partnership against the innings while no wicket has fallen.') }}
-
+            <div class="studio-grid">
+              <label>Chapter name <input data-config-path="chapter.name" maxlength="80"></label>
+              <label>Moment position <input type="number" min="1" max="100" data-config-path="chapter.position"></label>
+              <label>Prerequisite Moment slug <input data-config-path="chapter.prerequisite_slug"></label>
+              <label>Minimum prerequisite stars <input type="number" min="1" max="5" data-config-path="chapter.min_stars"></label>
+            </div>
           </details>
-        </div>
-        <details><summary>Teams, fixture locks and budgets</summary>
-          <p>Each team needs a lowercase key, a name and a list of master card IDs in <code>players</code>. An optional <code>xi</code> is an ordered list of 11 IDs. Copying Challenge Data replaces the draft team list.</p>
-          <p>Use <code>source: "manual"</code> for a manually authored fixture or use <code>locks</code> to keep specific fields. Reward locks use <code>tier.result.asset</code>. Set <code>objectives_locked</code> to keep the objective list during regeneration.</p>
-          <p>A fixture's <code>pitch</code>, <code>venue</code> and <code>weather</code> are drawn when you generate the schedule. Edit one on its row and it is kept on the next run, or name it in <code>locks</code>. The draw is reproducible: the same draft regenerates the same grounds, and changing the condition seed re-rolls every one.</p>
-          <p>Dates without an offset use the event timezone. Enter budgets before generating rewards.</p>
-        </details>
-        <details data-studio-source open><summary>Full configuration and advanced fields</summary>
-          <label>Event configuration (JSON)<textarea name="config" spellcheck="false" required rows="14">{{ config_json }}</textarea></label>
-          <p>The whole draft, and the one source of truth the sections above read and write. Use
-            Export configuration for a copy you can import into another event.</p>
-        </details>
-        <details><summary>Import team JSON or squad CSV</summary>
-          <label>Paste import data<textarea name="import_data" spellcheck="false" class="short"></textarea></label>
-          {{ json_example('{"teams": [\n  { "team_name": "Harbour XI", "short_name": "HBR", "primary_color": "#1d4ed8" }\n]}',
-             'Team JSON, in the Challenge Data field names. Matched to existing teams by name; a new name is added with a generated key and an empty squad.') }}
-          {{ json_example('TEAM NAME,PLAYER NAME,VERSION\nHarbour XI,Example Player,Base\nHarbour XI,Another Player,Gold',
-             'Squad CSV. Resolves each row to an active master card and replaces the listed teams\' squads. Leave VERSION blank for the Base card.') }}
-          <div class="studio-toolbar">
-            <button class="btn btn-ghost" name="action" value="import_teams">Preview team JSON</button>
-            <button class="btn btn-ghost" name="action" value="import_squads">Preview squad CSV</button>
+          {{ step_nav(back='participation', forward='objectives') }}
+        </section>
+        <section class="studio-panel" data-step="objectives" hidden>
+          <h3>Objective builder</h3>
+          <div class="studio-grid">
+            <label data-kind-live>Objective scope <select data-config-path="objective_scope">
+              <option value="tournament">Tournament objectives</option>
+              <option value="fixture">Per match objectives</option>
+            </select></label>
+            <label data-tournament-objectives>Difficulty <select data-config-path="objective_preset">
+              {% for preset in ('easy', 'balanced', 'hard', 'extreme', 'custom') %}<option value="{{ preset }}">{{ preset|capitalize }}</option>{% endfor %}
+            </select></label>
           </div>
-        </details>
-        <div class="studio-toolbar">
-          <button class="btn btn-ghost" name="action" value="schedule">Auto Schedule</button>
-          <button class="btn btn-ghost" name="action" value="objectives"><span data-auto-objectives>{{ "Auto Tournament Objectives" if config.kind == "live" and config.objective_scope == "tournament" else "Auto Objectives" }}</span></button>
-          <button class="btn btn-ghost" name="action" value="rewards">Auto Rewards</button>
-        </div>
-        <label class="inline"><input type="checkbox" name="overwrite" value="yes"> Replace unlocked manual edits</label>
-      </section>
-      <section class="studio-panel">
-        <h3>Validation and publication</h3>
-        <p>Maximum liability is {{ maximum.coins }} coins, {{ maximum.gems }} gems and {{ maximum.quest_points }} Quest Points. Publish freezes the saved revision, squads and rules.</p>
-        <div class="studio-toolbar">
-          <button class="btn btn-ghost" name="action" value="validate">Validate draft</button>
-          {% if publish_enabled and not preview %}
-            <button class="btn btn-primary" name="action" value="publish" onclick="return confirm('Publish the last saved revision of this event?');">Publish saved revision</button>
-          {% elif not publish_enabled %}<span>Publishing is disabled for this mode or format.</span>{% endif %}
-        </div>
-      </section>
+          <p class="studio-hint">Per-match objectives reset each match; tournament objectives
+            accumulate across the event. Only eligible official match performances count, and
+            players claim earned stars themselves. Objective scope is independent of
+            participation mode.</p>
+          <div class="studio-toolbar">
+            <button class="btn btn-ghost" name="action" value="objectives"><span data-auto-objectives>Auto Generate Objectives</span></button>
+          </div>
+          <label class="inline"><input type="checkbox" data-config-path="objectives_locked"> Keep these objectives during generation</label>
+
+          <div data-tournament-objectives>
+            <h4>Objectives <span class="studio-count" data-objective-count></span></h4>
+            <div data-objectives-editor></div>
+            <div class="studio-toolbar">
+              <button type="button" class="btn btn-ghost" data-objective-add>Add objective</button>
+            </div>
+            <p>{{ objective_max }} possible stars. Multiplayer registration {{ 'enabled for this format' if multi_enabled else 'requires staging flags for this format' }}.</p>
+            {% for warning in objective_warnings %}<p role="status">{{ warning }}</p>{% endfor %}
+            <details><summary>Supported objective metrics</summary>
+              <p>{{ objective_metrics.keys()|join(', ') }}.</p>
+              <p>Phase filters support runs, bowler wickets and team dismissals. Role filters apply
+                to individual batting and bowling metrics. Named-player filters are unavailable.</p>
+            </details>
+            <details><summary>Progressive ladders and JSON</summary>
+              <label>Auto ladder settings<textarea data-config-path="ladder_generator" data-value-type="json" class="short"></textarea></label>
+              {{ json_example('{"metrics":["runs","wickets"],"stage_count":4,"star_cap":60,"preset":"Balanced"}', 'Auto Generate Objectives preserves existing ladders unless you explicitly regenerate. Locked stages survive regeneration.') }}
+              <label>Versioned objective ladders<textarea data-config-path="objective_ladders" data-value-type="json" class="short"></textarea></label>
+              {{ json_example('{"metric_version":1,"objectives":[{"id":"results","metric":"wins","stages":[{"id":"wins_bronze","target":1,"stars":2},{"id":"wins_silver","target":2,"stars":5}]}]}', 'Progressive Bronze, Silver, Gold and Diamond stages. Stable stage IDs must be unique across the whole event. Leave null to use the existing objectives.') }}
+              <label>Tournament objectives<textarea data-config-path="tournament_objectives" data-value-type="json" spellcheck="false"></textarea></label>
+              {{ json_example('[{"id":"boundaries_100","metric":"boundaries","target":100,"stars":3,"locked":true}]', 'The stored form of the table above. A locked row keeps its target and stars when regenerating. Rates require min_balls and accept a decimal target. Scope to stages with ["league"] or ["playoff"].') }}
+            </details>
+          </div>
+          <div data-legacy-objectives>
+            <h4>Per match objectives</h4>
+            <label>Objective assignments<textarea data-config-path="objectives" data-value-type="json" spellcheck="false"></textarea></label>
+            {{ json_example('[\n  { "key": "win", "threshold": 1 },\n  { "key": "boundaries", "threshold": 4, "min_balls": 12 },\n  { "key": "wickets", "threshold": 3 },\n  { "key": "runs", "threshold": 40 }\n]',
+               'One entry per star. Keys are win, boundaries, wickets and runs.') }}
+          </div>
+          {{ step_nav(back='match', forward='rewards') }}
+        </section>
+        <section class="studio-panel" data-step="rewards" hidden>
+          <h3>Reward budget</h3>
+          <div class="studio-grid">
+            {% for asset in ('coins', 'gems', 'quest_points') %}
+            <label>{{ asset|replace('_', ' ')|capitalize }} budget <input type="number" min="0" max="2000000000" data-config-path="budget.{{ asset }}"></label>
+            {% endfor %}
+            <label><span data-event-budget-label>{{ "Total human capacity" if config.objective_scope == "tournament" else "Players covered by the budget" }}</span> <input type="number" min="1" max="5000" data-config-path="max_users"></label>
+          </div>
+          <p>Maximum liability is <strong>{{ maximum.coins }}</strong> coins,
+            <strong>{{ maximum.gems }}</strong> gems and <strong>{{ maximum.quest_points }}</strong>
+            Quest Points, plus {{ inventory_maximum.packs }} packs and {{ inventory_maximum.cards }}
+            cards. Generation never proposes rewards beyond the budget above.</p>
+          <div class="studio-toolbar">
+            <button class="btn btn-ghost" name="action" value="rewards">Auto Generate Rewards</button>
+          </div>
+
+          <h3>Per match rewards</h3>
+          <div data-rewards-editor></div>
+          <details><summary>Edit per match rewards as JSON</summary>
+            <label>Free and Diamond bundles<textarea data-config-path="rewards" data-value-type="json" spellcheck="false"></textarea></label>
+            {{ json_example('{\n  "free":    { "win": {"coins": 800, "gems": 5}, "loss": {"coins": 100}, "tie": {"coins": 200} },\n  "diamond": { "win": {"coins": 1600, "gems": 10}, "loss": {"coins": 200}, "tie": {"coins": 400} }\n}',
+               'Live Events award win, loss and tie. A Moment or Boss Battle awards success. Diamond must match or beat Free for every asset.') }}
+          </details>
+
+          <h3>Event Pass and star milestones</h3>
+          <label class="inline" data-tournament-objectives><input type="checkbox" data-config-path="competition.event_pass"> Offer an Event Pass</label>
+          <p class="studio-hint">Event Pass rewards unlock at claimed-star milestones without
+            spending stars. Diamond replaces its Free bundle at the same milestone.</p>
+          <section data-pass-editor hidden>
+            <h4>Event Pass milestones</h4>
+            <div class="studio-scroll" role="region" aria-label="Milestone editor" tabindex="0">
+              <table class="studio-pass-table">
+                <thead><tr><th scope="col">Milestone</th><th scope="col">Free</th><th scope="col">Diamond</th><th scope="col">Options</th></tr></thead>
+                <tbody data-pass-rows></tbody>
+              </table>
+            </div>
+            <div class="studio-toolbar"><button type="button" class="btn btn-ghost" data-pass-add>Add milestone</button></div>
+          </section>
+          <div class="studio-grid">
+            <label>Event-wide pack cap <input type="number" min="0" data-config-path="pass_inventory.packs"></label>
+            <label>Event-wide card cap <input type="number" min="0" data-config-path="pass_inventory.cards"></label>
+          </div>
+          <details><summary>Pack and card reward items</summary>
+            <label>Auto Rewards Free items<textarea data-config-path="pass_inventory.auto_free" data-value-type="json" class="short"></textarea></label>
+            <label>Auto Rewards Diamond items<textarea data-config-path="pass_inventory.auto_diamond" data-value-type="json" class="short"></textarea></label>
+            {{ json_example('[{"kind":"pack","pack_id":1},{"kind":"player","player_id":12},{"kind":"random_player","min_rating":80,"max_rating":85,"version":"Base"}]', 'Use existing pack and collectible card IDs. Add free_items and diamond_items to any manual milestone. Auto Generate Rewards attaches these lists to the last unlocked milestone.') }}
+            <label>Star milestone JSON<textarea data-config-path="milestones" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+            {{ json_example('[\n  { "stars": 1, "free": {"gems": 1}, "diamond": {"gems": 3} },\n  { "stars": 5, "free": {"coins": 2000}, "diamond": {"coins": 5000, "gems": 10} }\n]',
+               'Up to 20 rows. Event Pass rows require a unique id. Use locked: true to keep a milestone during regeneration and bonus: true for a playoff-dependent threshold. Diamond must award at least the Free amount for each asset.') }}
+          </details>
+
+          <h3>Community rewards</h3>
+          <div class="studio-grid">
+            <label>Community XP for eligible completion <input type="number" min="0" max="100" data-config-path="community.completion_xp"></label>
+            <label>Distinct-winner goal for a Boss Battle <input type="number" min="0" max="5000" data-config-path="community.boss_goal"></label>
+            <label>Daily limits for Event XP <input type="number" min="1" max="10" data-config-path="community.daily_limit"></label>
+          </div>
+          {{ step_nav(back='objectives', forward='features') }}
+        </section>
+        <section class="studio-panel" data-step="features" hidden>
+          <h3>Tournament features</h3>
+          <p>Enable only what this event needs. Nothing here is required to publish.</p>
+          <fieldset data-tournament-objectives>
+            <legend>Live Event features</legend>
+            <div class="studio-grid">
+              {% for key, title in (('event_pass', 'Event Pass'), ('lobby_v2', 'Public and private lobbies'),
+                 ('dressing_room', 'Dressing Room'), ('news', 'Tournament News'), ('manager_profile', 'Manager XP'),
+                 ('competitive_rating', 'Multiplayer Elo'), ('qualification', 'Qualification Centre'),
+                 ('honour_board', 'Honour Board'), ('group_engagement', 'Hosting group notices'),
+                 ('world_rankings', 'Public room World Rankings'), ('analytics', 'Tournament Analytics')) %}
+              <label class="inline"><input type="checkbox" data-config-path="competition.{{ key }}"> {{ title }}</label>
+              {% endfor %}
+            </div>
+            <div class="studio-grid">
+              <label>Solo Dressing Room cap <input type="number" min="0" max="1" data-config-path="competition.management_cap"></label>
+              <label>Major upset gap (published OVR) <input type="number" min="1" max="50" data-config-path="competition.news_upset_gap"></label>
+              <label>Manager XP cap <input type="number" min="0" max="10000" data-config-path="competition.manager_xp_cap"></label>
+              <label>Predictor samples (0 disables estimates) <input type="number" min="0" max="2000" data-config-path="competition.predictor_samples"></label>
+              <label>Rating K-factor <input type="number" min="1" max="64" data-config-path="competition.rating_k"></label>
+              <label class="inline"><input type="checkbox" data-config-path="competition.match_rewards"> Include completed-match rewards</label>
+            </div>
+            <details><summary>Scoring weights</summary>
+              <label>Manager XP weights<textarea data-config-path="competition.manager_xp_weights" data-value-type="json" class="short"></textarea></label>
+              <label>Dressing Room weights<textarea data-config-path="competition.management_weights" data-value-type="json" class="short"></textarea></label>
+            </details>
+            <p class="studio-hint">Rankings, analytics and collections are shared with Challenge
+              League Tournaments, and multiplayer Elo is kept separate from solo play so the two
+              are never ranked against each other.</p>
+          </fieldset>
+          {{ step_nav(back='rewards', forward='advanced') }}
+        </section>
+        <section class="studio-panel" data-step="advanced" hidden>
+          <h3>Advanced settings</h3>
+          <p>Nothing on this step is needed for an ordinary event. JSON is kept here for custom
+            schedules, configuration imports and exports, and per-fixture overrides.</p>
+          <label>Fixture conditions, difficulty, objective and reward overrides<textarea data-config-path="fixture_overrides" data-value-type="json" class="short" spellcheck="false"></textarea></label>
+          {{ json_example('{\n  "r1-1": {\n    "pitch": "Flat",\n    "venue": "Eden Gardens",\n    "weather": "Overcast",\n    "difficulty": "hard"\n  },\n  "final": {\n    "rewards": {"free": {"win": {"coins": 2000}}, "diamond": {"win": {"coins": 4000}}}\n  }\n}',
+             'Keyed by fixture key, or "challenge" for a Moment or Boss Battle. An override here beats the fixture row\'s own ground. Pitches: ' ~ pitches|join(', ') ~ '. Weather: ' ~ weathers|join(', ') ~ '.') }}
+          <details><summary>How locks and generation interact</summary>
+            <p>Use <code>source: "manual"</code> for a hand-authored fixture, or <code>locks</code>
+              to keep specific fields on a generated one. Reward locks use
+              <code>tier.result.asset</code>. Set <code>objectives_locked</code> to keep the
+              objective list during regeneration.</p>
+            <p>A fixture's <code>pitch</code>, <code>venue</code> and <code>weather</code> are drawn
+              when you generate the schedule. Edit one on its row and it is kept on the next run.
+              The draw is reproducible: the same draft regenerates the same grounds, and changing
+              the condition seed re-rolls every one.</p>
+            <p>Dates without an offset use the event timezone. Enter budgets before generating rewards.</p>
+          </details>
+          <details data-studio-source open><summary>Full configuration</summary>
+            <label>Event configuration (JSON)<textarea name="config" spellcheck="false" required rows="14">{{ config_json }}</textarea></label>
+            <p>The whole draft, and the one source of truth every step reads and writes. Use
+              Export configuration for a copy you can import into another event.</p>
+          </details>
+          {{ step_nav(back='features', forward='publish') }}
+        </section>
+        <section class="studio-panel" data-step="publish" hidden>
+          <h3>Review and publish</h3>
+          <div class="studio-scroll" role="region" aria-label="Event summary" tabindex="0">
+            <table><tbody data-studio-summary></tbody></table>
+          </div>
+          <p>Maximum reward expenditure is <strong>{{ maximum.coins }}</strong> coins,
+            <strong>{{ maximum.gems }}</strong> gems, <strong>{{ maximum.quest_points }}</strong>
+            Quest Points, {{ inventory_maximum.packs }} packs and {{ inventory_maximum.cards }}
+            cards. Publishing freezes the saved revision's squads, schedule and rules.</p>
+          <div class="studio-toolbar">
+            <button class="btn btn-ghost" name="action" value="validate">Validate Event</button>
+            {% if publish_enabled and not preview %}
+              <button class="btn btn-primary" name="action" value="publish" onclick="return confirm('Publish the last saved revision of this event?');">Publish Event</button>
+            {% elif not publish_enabled %}<span role="status">Publishing is disabled for this event type or format.</span>{% endif %}
+          </div>
+          <p class="studio-hint">Validate checks team and squad eligibility, schedule conflicts,
+            playoff dependencies, objective achievability, the maximum stars reachable and the
+            reward budget, and reports each problem with the field to fix. Publish acts on the last
+            <em>saved</em> revision, so save the draft first.</p>
+          {{ step_nav(back='advanced') }}
+        </section>
+      </div>
     </form>
     {% else %}
     <section class="studio-panel"><h3>Operations</h3>
@@ -505,7 +803,7 @@
       {% endif %}
     </section>
     {% endif %}
-    {% if config.fixtures %}
+    {% if config.fixtures and event.status != 'draft' %}
     <section class="studio-panel"><h3>Fixture schedule</h3>
       <div class="studio-scroll" tabindex="0" role="region" aria-label="Fixture schedule">
         <table><thead><tr><th scope="col">Fixture</th><th scope="col">Round</th><th scope="col">Home</th><th scope="col">Away</th><th scope="col">Opens</th><th scope="col">Deadline</th><th scope="col">Pitch</th><th scope="col">Venue</th><th scope="col">Weather</th></tr></thead>
@@ -533,5 +831,5 @@
     </section>
   {% endif %}
 </div>
-<script src="{{ url_for('static', filename='js/event_studio_admin.js', v='2') }}"></script>
+<script src="{{ url_for('static', filename='js/event_studio_admin.js', v='3') }}"></script>
 {% endblock %}

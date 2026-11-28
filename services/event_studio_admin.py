@@ -8,7 +8,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 
 from database import get_session
-from models import ChallengeLeague, User
+from models import ChallengeLeague, Player, User
 from models_events import (
     StudioAudit, StudioAwardMedia, StudioCompetition, StudioEnrollment, StudioEntitlement, StudioEvent, StudioFixture,
     StudioGame, StudioGroupNotice, StudioParticipant, StudioRevision, StudioStarClaim,
@@ -100,6 +100,8 @@ def _screen(db, event=None, config=None, preview=None, error=None):
     from services.pitch_report import WEATHERS
     return render_template("admin_event_studio.html", events=events, event=event, config=current,
                            config_json=json.dumps(clean_config, indent=2, ensure_ascii=False),
+                           squad_cards_json=json.dumps(_squad_cards(db, current), ensure_ascii=False),
+                           step=request.form.get("step") or request.args.get("step") or "",
                            leagues=db.scalars(select(ChallengeLeague).order_by(ChallengeLeague.name).limit(200)).all(),
                            history=history, stale=studio.stale(current), preview=preview, error=error,
                            inventory_maximum=inventory_liability(current),
@@ -111,6 +113,30 @@ def _screen(db, event=None, config=None, preview=None, error=None):
                            objective_metrics=goals.METRICS, objective_max=goals.max_stars(current),
                            objective_warnings=goals.warnings(current),
                            multi_enabled=competitions.mode_enabled(current, "multi"))
+
+
+CARD_SEARCH_LIMIT = 40
+
+
+def _card_rows(db, ids):
+    """The cards a draft's squads name, so the editor can show players not IDs."""
+    wanted = {pid for pid in ids if isinstance(pid, int)}
+    if not wanted:
+        return {}
+    rows = db.scalars(select(Player).where(Player.id.in_(wanted))).all()
+    return {row.id: _card_view(row) for row in rows}
+
+
+def _card_view(card):
+    return {"id": card.id, "name": card.name, "version": card.version or "Base",
+            "rating": card.rating, "category": card.category, "country": card.country,
+            "gender": card.gender, "retired": not card.is_active or bool(card.is_career)}
+
+
+def _squad_cards(db, config):
+    return _card_rows(db, [pid for team in config.get("teams", [])
+                           if isinstance(team, dict) and isinstance(team.get("players"), list)
+                           for pid in team["players"]])
 
 
 def _news_preview(db, event, config):
@@ -209,6 +235,25 @@ def install(app, login_required, csrf_exempt, webapp_auth):
                 db.rollback()
                 message = str(exc) if isinstance(exc, ValueError) else "Check the event fields and ensure the slug is unique."
                 return _screen(db, error=message), 400
+
+    @app.route("/events/studio/players")
+    @login_required
+    def admin_event_studio_players():
+        """Active master cards matching a name, for the squad editor's picker.
+
+        Read-only and deliberately narrow: it returns the same fields the editor
+        renders, never a whole card, and only cards a squad may actually hold.
+        """
+        term = (request.args.get("q") or "").strip()
+        if len(term) < 2:
+            return {"players": []}
+        with get_session() as db:
+            like = f"%{term.lower()}%"
+            rows = db.scalars(
+                select(Player).where(func.lower(Player.name).like(like),
+                                     Player.is_active.is_(True), Player.is_career.is_(False))
+                .order_by(Player.rating.desc(), Player.name).limit(CARD_SEARCH_LIMIT)).all()
+            return {"players": [_card_view(row) for row in rows]}
 
     @app.route("/events/studio/<int:event_id>", methods=["GET", "POST"])
     @login_required
