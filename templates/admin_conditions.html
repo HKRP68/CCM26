@@ -51,22 +51,28 @@
 </div>
 
 <details class="cond-fold" style="margin-bottom:1rem;">
-  <summary>➕ Add stadiums from JSON
-    <span class="cond-count">paste one ground or a list</span>
-  </summary>
+  <summary>➕ Add stadiums from JSON</summary>
   <div style="padding:0 1rem 1rem;">
     <p style="color:var(--muted); font-size:.85rem; margin:.8rem 0 .6rem;">
-      Adds the grounds in the paste and updates any whose name already exists. Nothing else is
-      touched. Out-of-range values are clamped and unknown keys dropped — each is reported back.
+      Add new grounds or update existing grounds by name. Out-of-range values are clamped and
+      unknown keys are dropped. Any adjustments are reported after saving.
       For a CSV, a full export bundle, modifiers, or to replace the whole list, use
       <a href="{{ url_for('admin_conditions_import') }}">Import</a>, which previews first.
     </p>
-    <form method="POST" action="{{ url_for('admin_conditions_stadium_json') }}">
+    <form method="POST" action="{{ url_for('admin_conditions_stadium_json') }}" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <textarea name="stadiums_json" rows="9" spellcheck="false" required
-                style="width:100%; padding:.7rem; background:var(--input-bg); border:1px solid var(--border);
-                       border-radius:10px; color:var(--text); font-family:monospace; font-size:.82rem; resize:vertical;"
-                placeholder='{"name": "Perth Stadium", "city": "Perth", "country": "Australia", ...}'></textarea>
+      <div class="form-group">
+        <label for="stadiums-file">Upload a JSON file (up to 2 MB)</label>
+        <input id="stadiums-file" name="stadiums_file" type="file" accept=".json,application/json"
+               aria-describedby="stadiums-file-help">
+        <small id="stadiums-file-help" style="color:var(--muted);">If you choose a file, it takes priority over pasted text.</small>
+      </div>
+      <div class="form-group">
+        <label for="stadiums-json">Or paste JSON</label>
+        <textarea id="stadiums-json" name="stadiums_json" rows="9" spellcheck="false"
+                  style="font-family:monospace; font-size:.82rem; resize:vertical;"
+                  placeholder='{"name": "Perth Stadium", "city": "Perth", "country": "Australia"}'></textarea>
+      </div>
       <button class="btn btn-primary" type="submit" style="margin-top:.6rem;">Add stadiums</button>
     </form>
     <details style="margin-top:.8rem;">
