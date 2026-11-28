@@ -94,7 +94,11 @@ async def _find_match(update, context):
     return None, None
 
 
-def _menu(mid, opts, outgoing=None):
+def _menu(mid, opts, outgoing=None, *, button=None):
+    if button is None:
+        def button(label, action, *values):
+            suffix = "".join(f"_{value}" for value in values)
+            return Button(label, callback_data=f"lb_{action}_{mid}{suffix}")
     tok = opts["token"]
     rows = []
     if outgoing is not None:
@@ -104,8 +108,8 @@ def _menu(mid, opts, outgoing=None):
             label = f"{p['name']} · {p['runs']} ({p['balls']})"
             if p["retired"]:
                 label += " · Resume"
-            rows.append([Button(label, callback_data=f"lb_r_{mid}_{tok}_{outgoing}_{p['id']}")])
-        rows.append([Button("‹ Back", callback_data=f"lb_v_{mid}")])
+            rows.append([button(label, "r", tok, outgoing, p["id"])])
+        rows.append([button("‹ Back", "v")])
     else:
         text = ("🏏 <b>Manage batting</b>\n"
                 "Retire either batter and choose who comes in. Retired players can resume "
@@ -116,17 +120,16 @@ def _menu(mid, opts, outgoing=None):
         text += "\n\nUse ↑ / ↓ to change who bats next. Changes apply to this innings only."
         if opts["waiting"]:
             for p in opts["atCrease"]:
-                rows.append([Button(f"Retire {p['name']} · {p['runs']} ({p['balls']})",
-                                    callback_data=f"lb_p_{mid}_{tok}_{p['id']}")])
+                rows.append([button(f"Retire {p['name']} · {p['runs']} ({p['balls']})", "p", tok, p["id"])])
         for i, p in enumerate(opts["waiting"]):
             moves = []
             if i:
-                moves.append(Button(f"↑ {p['name']}", callback_data=f"lb_o_{mid}_{tok}_{i}_{i-1}"))
+                moves.append(button(f"↑ {p['name']}", "o", tok, i, i - 1))
             if i < len(opts["waiting"]) - 1:
-                moves.append(Button(f"↓ {p['name']}", callback_data=f"lb_o_{mid}_{tok}_{i}_{i+1}"))
+                moves.append(button(f"↓ {p['name']}", "o", tok, i, i + 1))
             if moves:
                 rows.append(moves)
-    rows.append([Button("Close", callback_data=f"lb_x_{mid}")])
+    rows.append([button("Close", "x")])
     return text, Markup(rows)
 
 

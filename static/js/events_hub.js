@@ -317,72 +317,101 @@ const EventHub = (() => {
     const content = element('div');
     details.append(content);
 
-    async function show(call = null) {
-      content.replaceChildren(element('p', 'Loading match setup…', 'ev-meta'));
-      try {
-        const {setup} = await request('/action', {action: 'setup', ...identifiers, call});
-        const level = {easy: 'Easy', normal: 'Normal', hard: 'Hard', hard_plus: 'Hard++'}[setup.difficulty];
-        const info = [setup.format, setup.pitch + ' pitch', setup.venue, setup.weather, level].filter(Boolean);
-        const deadline = element('p', 'Start by ', 'ev-meta');
-        deadline.append(timeNode(setup.cutoff, event.timezone));
-        content.replaceChildren(element('p', `${setup.team} v ${setup.opponent}`),
-          element('p', info.join(' · '), 'ev-meta'), deadline);
-        for (const goal of setup.objectives) {
-          content.append(element('p', goal.key === 'win' ? goal.title : `${goal.title} · ${goal.threshold}`, 'ev-meta'));
-        }
-        if (!setup.toss) {
-          content.append(button('Heads', () => show('heads')), button('Tails', () => show('tails')));
-          return;
-        }
-        const toss = setup.toss;
-        const label = toss.human_won ? 'You won the toss.' : `${setup.opponent} elected to ${toss.decision} first.`;
-        content.append(element('p', `${toss.coin.toUpperCase()} · ${label}`));
-        const options = setup.squad.map(p => ({
-          value: p.roster_id, text: `${p.name} · ${p.version || 'Base'} · ${p.category} · ${p.rating}`,
+    let selected = [];
+    let setupPending = false;
+
+    function render(setup) {
+      const level = {easy: 'Easy', normal: 'Normal', hard: 'Hard', hard_plus: 'Hard++'}[setup.difficulty];
+      const info = [setup.format, setup.pitch + ' pitch', setup.venue, setup.weather, level].filter(Boolean);
+      const deadline = element('p', 'Start by ', 'ev-meta');
+      deadline.append(timeNode(setup.cutoff, event.timezone));
+      content.replaceChildren(element('p', `${setup.team} v ${setup.opponent}`),
+        element('p', info.join(' · '), 'ev-meta'), deadline);
+      for (const goal of setup.objectives) {
+        content.append(element('p', goal.key === 'win' ? goal.title : `${goal.title} · ${goal.threshold}`, 'ev-meta'));
+      }
+      const actions = element('div', null, 'ev-actions');
+
+      const toss = setup.toss;
+      if (!toss) {
+        actions.append(button('Heads', () => show({call: 'heads'})), button('Tails', () => show({call: 'tails'})));
+        content.append(element('h3', '🪙 Toss'), element('p', 'Call the coin.'), actions);
+        return;
+      }
+      if (!toss.decision) {
+        actions.append(button('🏏 Bat First', () => show({decision: 'bat'})),
+          button('🎳 Bowl First', () => show({decision: 'bowl'})));
+        content.append(element('p', `The coin lands on ${toss.coin.toUpperCase()} · You won the toss.`), actions);
+        return;
+      }
+
+      const winner = toss.human_won ? setup.team : setup.opponent;
+      content.append(element('p', `${winner} won the toss and elected to ${toss.decision} first.`));
+      const confirmed = setup.confirmed_xi;
+      const order = confirmed || (setup.fixed_xi ? setup.default_xi : selected);
+      const squad = new Map(setup.squad.map(player => [player.roster_id, player]));
+      const players = order.map(id => squad.get(id)).filter(Boolean);
+      if (confirmed) {
+        content.append(element('h3', '🏏 Match ready'));
+        const start = button('Start Match', e => mutate(e.currentTarget, {
+          ...identifiers, action: identifiers.game_id ? 'start' : 'attempt',
         }));
-        const picks = [];
-        const captain = select(options.filter(p => setup.default_xi.includes(p.value)), 'Captain');
+        start.classList.add('ev-primary');
+        actions.append(start);
+        if (!setup.fixed_xi) actions.append(button('✏️ Edit XI', () => show({edit: true})));
+      } else {
+        content.append(element('h3', `${setup.team} Playing XI Selection`),
+          element('p', `Selected: ${players.length}/11`, 'ev-meta'));
         if (!setup.fixed_xi) {
-          const field = element('fieldset');
-          field.append(element('legend', 'Playing XI in batting order'));
-          const updateCaptain = () => {
-            const selected = picks.map(p => Number(p.control.value));
-            const previous = captain.control.value;
-            captain.control.replaceChildren();
-            for (const id of new Set(selected)) {
-              const player = options.find(p => p.value === id);
-              if (!player) continue;
-              const option = element('option', player.text);
-              option.value = id;
-              captain.control.append(option);
-            }
-            if ([...captain.control.options].some(option => option.value === previous)) captain.control.value = previous;
-          };
-          for (let position = 0; position < 11; position++) {
-            const pick = select(options, `Position ${position + 1}`);
-            pick.control.value = setup.default_xi[position];
-            pick.control.onchange = updateCaptain;
-            picks.push(pick);
-            field.append(pick.field);
+          const picks = element('div', null, 'ev-xi-picks');
+          setup.squad.forEach((player, index) => {
+            const picked = selected.includes(player.roster_id);
+            const control = button(`${picked ? '✅ ' : ''}${index + 1}. ${player.name}`, () => {
+              if (!picked && selected.length >= 11) return say('Remove a player before adding another.', true);
+              selected = picked ? selected.filter(id => id !== player.roster_id) : [...selected, player.roster_id];
+              say('');
+              render(setup);
+              content.querySelectorAll('.ev-xi-picks button')[index]?.focus();
+            });
+            control.setAttribute('aria-pressed', String(picked));
+            picks.append(control);
+          });
+          content.append(picks);
+          if (!selected.length) {
+            actions.append(button('⚡ Use suggested XI', () => show({xi: setup.default_xi})));
+          } else {
+            actions.append(button('🧹 Clear', () => { selected = []; render(setup); }));
           }
-          field.append(button('Quick XI', () => {
-            picks.forEach((pick, position) => { pick.control.value = setup.default_xi[position]; });
-            updateCaptain();
-          }));
-          content.append(field);
         }
-        content.append(captain.field);
-        for (const decision of toss.human_won ? ['bat', 'bowl'] : [toss.decision]) {
-          const text = toss.human_won ? `Start · ${decision === 'bat' ? 'Bat' : 'Bowl'} first` : 'Start match';
-          content.append(button(text, e => {
-            const xi = picks.length ? picks.map(p => Number(p.control.value)) : setup.default_xi;
-            if (new Set(xi).size !== 11) return say('Choose 11 distinct players to start.', true);
-            const action = identifiers.game_id ? 'start' : 'attempt';
-            return mutate(e.currentTarget, {...identifiers, action, xi, decision, captain_id: Number(captain.control.value)});
-          }));
-        }
+        if (order.length === 11) actions.prepend(button('✅ Confirm XI', () => show({xi: order})));
+      }
+      if (players.length) {
+        const lineup = element('ol');
+        for (const player of players) lineup.append(element('li', `${player.name} · ${player.category}`));
+        content.append(element('p', 'Batting order'), lineup);
+      }
+      content.append(actions);
+    }
+
+    async function show(update = {}) {
+      if (setupPending) return;
+      setupPending = true;
+      content.querySelectorAll('button').forEach(control => { control.disabled = true; });
+      if (!content.childNodes.length) content.append(element('p', 'Loading match setup…', 'ev-meta'));
+      try {
+        const {setup} = await request('/action', {action: 'setup', ...identifiers, ...update});
+        if (setup.editing_xi) selected = setup.editing_xi;
+        say('');
+        render(setup);
       } catch (error) {
-        content.replaceChildren(element('p', error.message, 'ev-error'), button('Retry setup', () => show()));
+        say(error.message, true);
+        if (content.querySelector('button')) {
+          content.querySelectorAll('button').forEach(control => { control.disabled = false; });
+        } else {
+          content.replaceChildren(button('Retry setup', () => show()));
+        }
+      } finally {
+        setupPending = false;
       }
     }
     details.addEventListener('toggle', () => { if (details.open && !content.childNodes.length) show(); });

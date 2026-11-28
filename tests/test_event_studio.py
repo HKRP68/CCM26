@@ -573,9 +573,14 @@ def _check_signed_api():
         assert db.get(StudioGame, game_id).status == "scheduled"
     first = client.post(base + "/action", headers=signed(1000), json={**setup, "call": "heads"}).json["setup"]
     assert client.post(base + "/action", headers=signed(1000), json={**setup, "call": "tails"}).json["setup"]["toss"] == first["toss"]
-    assert client.post(base + "/action", headers=signed(1000), json={
-        "action": "start", "game_id": game_id, "decision": "bat", "tier": "diamond", "result": "win",
-    }).status_code == 200
+    launch = {"action": "start", "game_id": game_id, "tier": "diamond", "result": "win"}
+    assert client.post(base + "/action", headers=signed(1000), json=launch).status_code == 400
+    if first["toss"]["human_won"]:
+        election = client.post(base + "/action", headers=signed(1000), json={**setup, "decision": "bat"})
+        assert election.json["setup"]["toss"]["decision"] == "bat"
+    confirmed = client.post(base + "/action", headers=signed(1000), json={**setup, "xi": first["default_xi"]})
+    assert confirmed.json["setup"]["confirmed_xi"] == first["default_xi"]
+    assert client.post(base + "/action", headers=signed(1000), json=launch).status_code == 200
     arena = base + f"/arena/{game_id}"
     assert client.post(arena, headers=signed(1001), json={}).status_code == 400
     match = client.post(arena, headers=signed(1000), json={}).json
@@ -914,7 +919,7 @@ def test_chat_batting_and_bowling_use_committed_cipl_stages(sessions, monkeypatc
         text, _, _ = chat._match_panel(play.detail(db, user, event.id, NOW),
             play.game_view(game, None, entry.team_key, NOW, studio.revision(db, event, published=True).config),
             game.state)
-        assert "Choose your bowling approach." in text
+        assert "choose your <b>Bowling Approach</b>" in text
         assert "batting_approach" not in text
         with pytest.raises(ValueError, match="other surface"):
             play.submit_pick(db, user, game.id, game.version, picks.PICK_BOWL_APPROACH,
@@ -923,6 +928,75 @@ def test_chat_batting_and_bowling_use_committed_cipl_stages(sessions, monkeypatc
                          0, source="chat", clock=CLOCK)
         assert game.state["approach_log"][0]["bat"] == ai_pick
         db.commit()
+
+
+def test_event_chat_buttons_play_a_fixture_from_toss_to_result(sessions, monkeypatch):
+    from handlers import challenge, event_studio as chat
+    from services import match_broadcast
+    from telegram import InlineKeyboardButton
+
+    class FixtureClock(datetime):
+        @classmethod
+        def utcnow(cls):
+            return NOW
+
+    monkeypatch.setattr(chat, "datetime", FixtureClock)
+    monkeypatch.setattr(play, "datetime", FixtureClock)
+    monkeypatch.setattr(chat, "get_session", sessions)
+    monkeypatch.setattr(match_broadcast, "flip_coin", lambda call: (call, True))
+    monkeypatch.setattr(play, "token_hex", lambda _: "f" * 64)
+    with sessions() as db:
+        event = _publish(db, _seed(db))
+        user = db.scalar(select(User).order_by(User.id))
+        entry = _join(db, event, user)
+        game_id = db.scalar(select(StudioGame.id).filter_by(enrollment_id=entry.id))
+        event_id, telegram_id = event.id, user.telegram_id
+        db.commit()
+
+    drafts = {}
+
+    def press(data):
+        return chat._dispatch(telegram_id, data.split(":")[1:], drafts=drafts)
+
+    def find(panel, prefix):
+        return [b for row in panel[1] for b in row if (b.callback_data or "").startswith(prefix)]
+
+    panel = press(f"ev:setup:{event_id}:{game_id}:0")
+    assert [b.text for b in find(panel, "ev:coin:")] == ["Heads", "Tails"]
+    panel = press(find(panel, "ev:coin:")[0].callback_data)
+    expected = challenge.toss_decision_buttons(lambda label, value: InlineKeyboardButton(label))
+    assert [b.text for b in find(panel, "ev:elect:")] == [b.text for b in expected[0]]
+    assert not find(panel, "ev:xp:")
+    panel = press(find(panel, "ev:elect:")[1].callback_data)
+    assert not find(panel, "ev:launch:")
+    assert find(panel, "ev:xp:")[0].text.startswith("1. ")
+    for selection in find(panel, "ev:xp:"):
+        panel = press(selection.callback_data)
+    panel = press(find(panel, "ev:xc:")[0].callback_data)
+    assert find(panel, "ev:launch:")[0].text == "Start Match"
+    panel = press(find(panel, "ev:launch:")[0].callback_data)
+    assert "pick your bowler" in panel[0]
+    saw_chase = saw_batting = saw_bowling = False
+    for _ in range(160):
+        if "Match Over" in panel[0]:
+            break
+        options = find(panel, "ev:pick:")
+        assert options, panel[0]
+        code = options[0].callback_data.split(":")[-2]
+        assert code in {"a", "b", "n", "p"}
+        if code == "a":
+            saw_batting = True
+            assert [b.text for b in options] == [f"{emoji} {label}" for _, emoji, label in cricket.BATTING_APPROACHES]
+        if code == "p":
+            saw_bowling = True
+            assert [b.text for b in options] == [f"{emoji} {label}" for _, emoji, label in cricket.BOWLING_APPROACHES]
+        saw_chase |= "INNINGS BREAK" in panel[0]
+        panel = press(options[0].callback_data)
+    assert saw_chase and saw_batting and saw_bowling
+    assert "Match Over" in panel[0] and "stars" in panel[0] and "points" in panel[0]
+    assert not find(panel, "ev:pick:")
+    with sessions() as db:
+        assert db.get(StudioResult, game_id).kind == "completed"
 
 
 def test_wicket_checkpoint_timeout_and_surface_switch_preserve_resolved_balls(sessions, monkeypatch):
@@ -1157,6 +1231,7 @@ def test_t20_event_pins_enabled_measured_cipl_model(sessions, monkeypatch):
 
 
 def test_scheduled_conditions_and_impact_use_the_shared_t20_rules(sessions, monkeypatch):
+    from handlers import event_studio as chat
     from services import impact_player, match_broadcast
 
     monkeypatch.setattr(match_broadcast, "flip_coin", lambda call: (call, True))
@@ -1186,9 +1261,19 @@ def test_scheduled_conditions_and_impact_use_the_shared_t20_rules(sessions, monk
         assert impact["can_use"]
         leaving = next(p for p in impact["replaceable_players"] if p["category"] == "Bowler")
         incoming = impact["incoming_options"][0]
-        play.use_impact(db, user, game.id, game.version, incoming["roster_id"], leaving["roster_id"], None,
+        parts = ["impact", str(event.id), str(game.id), str(game.version)]
+        text, buttons, _ = chat._impact_panel(user, db, event.id, game.id, game.version, parts)
+        assert "Step 1 of 3" in text and len(buttons[0]) == 2
+        parts.append(str(leaving["roster_id"]))
+        text, buttons, _ = chat._impact_panel(user, db, event.id, game.id, game.version, parts)
+        assert "Step 2 of 3" in text and reserve.name in buttons[0][0].text
+        parts = buttons[0][0].callback_data.split(":")[1:]
+        text, buttons, _ = chat._impact_panel(user, db, event.id, game.id, game.version, parts)
+        assert "Step 3 of 3" in text and buttons[0][0].text == "#1 · Open"
+        play.use_impact(db, user, game.id, game.version, incoming["roster_id"], leaving["roster_id"], 0,
                         source="chat", clock=CLOCK)
         assert impact_player.summary(game.state)[0]["in_player"] == reserve.name
+        assert game.state["impact_players"]["usage"][entry.team_key]["bat_position"] == 0
         assert not impact_player.cipl_options(game.state, entry.team_key, game.state["event_next_action"])["can_use"]
         with pytest.raises(ValueError, match="full T20"):
             studio.normalize({**config, "format": "ODI"})

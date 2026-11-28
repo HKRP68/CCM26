@@ -16,11 +16,12 @@ logger = logging.getLogger(__name__)
 
 def sweep(clock=datetime.utcnow, limit=40):
     now = clock()
+    prompts = []
     _sweep_community(now)
     with get_session() as db:
         if not studio.flag("PUBLISH") and db.scalar(
                 select(StudioEvent.id).where(StudioEvent.status.in_(("scheduled", "live", "closing", "paused"))).limit(1)) is None:
-            return
+            return prompts
         ids = play.due_ids(db, now, limit)
     stop_at = monotonic() + 12
     for game_id in ids:
@@ -28,8 +29,13 @@ def sweep(clock=datetime.utcnow, limit=40):
             break
         try:
             with get_session() as db:
-                play.run_due(db, game_id, clock())
+                next_prompt = play.run_due(db, game_id, clock())
+                if next_prompt:
+                    user_id, event_id, version = next_prompt
+                    telegram_id = db.scalar(select(User.telegram_id).where(User.id == user_id))
                 db.commit()
+                if next_prompt and telegram_id:
+                    prompts.append((telegram_id, event_id, game_id, version))
         except Exception as exc:
             logger.exception("Events Studio job failed for game %s", game_id)
             with get_session() as db:
@@ -45,6 +51,7 @@ def sweep(clock=datetime.utcnow, limit=40):
     with get_session() as db:
         play.sync_lifecycle(db, clock())
         db.commit()
+    return prompts
 
 
 def _sweep_community(now):
@@ -79,7 +86,11 @@ def _sweep_community(now):
 
 
 async def _tick(context):
-    await asyncio.to_thread(sweep)
+    from handlers.event_studio import send_timeout_prompt
+
+    prompts = await asyncio.to_thread(sweep)
+    for prompt in prompts:
+        await send_timeout_prompt(context.bot, *prompt)
     await notices.send_due(context.bot)
 
 

@@ -321,16 +321,15 @@ def install(app, login_required, csrf_exempt, webapp_auth):
             elif action == "setup":
                 return {"setup": play.setup_fixture(
                     db, user, number("event_id"), number("game_id"), number("previous_attempt"),
-                    now, call=body.get("call"))}
+                    now, call=body.get("call"), decision=body.get("decision"),
+                    xi=body.get("xi"), edit=body.get("edit") is True)}
             elif action == "start":
-                game = play.start_fixture(db, user, number("game_id"), body.get("xi"), source="app",
-                                          decision=body.get("decision"), captain_id=body.get("captain_id"),
-                                          require_toss=True)
+                game = play.start_fixture(db, user, number("game_id"), None, source="app",
+                                          require_toss=True, require_confirmed=True)
                 return {"game_id": game.id}
             elif action == "attempt":
                 game = play.start_attempt(db, user, number("event_id"), number("previous_attempt"), source="app",
-                                          decision=body.get("decision"), selected=body.get("xi"),
-                                          captain_id=body.get("captain_id"), require_toss=True)
+                                          require_toss=True, require_confirmed=True)
                 return {"game_id": game.id}
             elif action == "abandon" and body.get("confirmed") is True:
                 play.abandon(db, user, number("game_id"), number("version"))

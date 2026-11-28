@@ -948,7 +948,7 @@ def _miniapp_row(state):
         # over-by-over match is spectate-only there.
         label = "🎮 Play in Mini App" if _app_mode(state) else "📊 View Match"
         kb = play_match_keyboard(
-            state["match_id"], chat_id=state.get("chat_id"),
+            _display_match_id(state), chat_id=state.get("chat_id"),
             is_private=bool(state.get("is_private")), label=label)
         rows = [list(row) for row in kb.inline_keyboard] if kb else []
         if state.get("tournament_id") and not state.get("is_private"):
@@ -1602,16 +1602,14 @@ async def cipl_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # The reveal is the critical edit: if it fails the toss is left frozen on
         # a mid-flip frame. Retry it, and only mark the winner once it actually
         # lands — otherwise release the lock so the caller can try again.
+        from handlers.challenge import toss_decision_buttons
+        choices = toss_decision_buttons(lambda label, decision: InlineKeyboardButton(
+            label, callback_data=f"cipl_toss_{decision}_{draft_id}_{winner_side}"))
         revealed = await reveal_toss_result(lambda: q.edit_message_text(
             f"🪙 The coin lands on <b>{coin.upper()}</b> — {caller_label} called "
             f"<b>{call.upper()}</b>.\n\n"
             f"🏆 {_mention(winner_tg, winner_name)} won the toss. Choose:",
-            parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏏 Bat First",
-                                     callback_data=f"cipl_toss_bat_{draft_id}_{winner_side}"),
-                InlineKeyboardButton("🎳 Bowl First",
-                                     callback_data=f"cipl_toss_bowl_{draft_id}_{winner_side}"),
-            ]])))
+            parse_mode="HTML", reply_markup=InlineKeyboardMarkup(choices)))
     if not revealed:
         # The animation edits already stripped the Heads/Tails keyboard, so a
         # bare alert would leave the guest with no button to retry. Clear the
@@ -2611,7 +2609,7 @@ def _progress(state):
 
 def _header(state):
     inn = state.get("innings", 1)
-    line = (f"🏏 <b>{state['bat_team_name']}</b> {cipl_match.format_score(state)} "
+    line = (f"🏏 <b>{html.escape(str(state['bat_team_name']))}</b> {cipl_match.format_score(state)} "
             f"({_progress(state)})")
     c = cipl_match.chase(state)
     if c:
@@ -2651,6 +2649,38 @@ async def _prompt_in_app(context, mid, state, action, actor_tg, lead="",
     await _mark_prompt_delivered(context, mid, state, delivered, action)
 
 
+def bowler_prompt(state, button):
+    elig = cipl_match.eligible_bowlers(state)
+    # When the front-line attack is exhausted, eligible_bowlers falls back to
+    # part-time batsmen — flag them in the picker so the captain knows.
+    only_part_timers = bool(elig) and all(
+        cipl_match.is_part_time_bowler(p) for p in elig)
+    rows, row = [], []
+    for p in elig:
+        tag = " 🧤" if cipl_match.is_part_time_bowler(p) else ""
+        left = cipl_match.overs_left(state, p)
+        if cipl_match.odi_approach.is_odi(state):
+            tag += " · " + cipl_match.odi_approach.bowler_workload(state, p).label
+        row.append(button(f"{p['name']} ({cipl_match.display_rating(p, 'bowl_rating')}) "
+                          f"· {left} left{tag}", p["roster_id"]))
+        if len(row) == 2:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    part_time_note = ("\n⚠️ <i>Front-line bowlers are bowled out — only part-time "
+                      "bowlers (🧤) are left.</i>" if only_part_timers else "")
+    text = (f"{_approach_card(state)}\n\n"
+            f"🎳 {_mention_tg(state, state['bowl_user_tg'])}, pick your bowler "
+            f"for {_unit_word(state)} {state['current_over']}:{part_time_note}")
+    prompt = [["🎳 ", _rich_mention(state, state['bowl_user_tg']),
+               f", pick your bowler for {_unit_word(state)} "
+               f"{state['current_over']}:"]]
+    if only_part_timers:
+        prompt.append(R.italic("⚠️ Front-line bowlers are bowled out — only "
+                               "part-time bowlers (🧤) are left."))
+    return text, rows, _approach_card_blocks(state, prompt)
+
+
 async def _prompt_bowler(context, mid, state=None, first=False):
     if state is None:
         state = await _gs(context, mid)
@@ -2677,39 +2707,10 @@ async def _prompt_bowler(context, mid, state=None, first=False):
         await _prompt_in_app(context, mid, state, A_PICK_CIPL_BOWLER,
                              state["bowl_user_tg"], fresh=True)
         return
-    elig = cipl_match.eligible_bowlers(state)
-    # When the front-line attack is exhausted, eligible_bowlers falls back to
-    # part-time batsmen — flag them in the picker so the captain knows.
-    only_part_timers = bool(elig) and all(
-        cipl_match.is_part_time_bowler(p) for p in elig)
-    rows, row = [], []
-    for p in elig:
-        tag = " 🧤" if cipl_match.is_part_time_bowler(p) else ""
-        left = cipl_match.overs_left(state, p)
-        if cipl_match.odi_approach.is_odi(state):
-            tag += " · " + cipl_match.odi_approach.bowler_workload(state, p).label
-        row.append(InlineKeyboardButton(
-            f"{p['name']} ({cipl_match.display_rating(p, 'bowl_rating')}) "
-            f"· {left} left{tag}",
-            callback_data=f"cipl_bowler_{mid}_{p['roster_id']}"))
-        if len(row) == 2:
-            rows.append(row); row = []
-    if row:
-        rows.append(row)
-    part_time_note = ("\n⚠️ <i>Front-line bowlers are bowled out — only part-time "
-                      "bowlers (🧤) are left.</i>" if only_part_timers else "")
-    text = (f"{_approach_card(state)}\n\n"
-            f"🎳 {_mention_tg(state, state['bowl_user_tg'])}, pick your bowler "
-            f"for {_unit_word(state)} {state['current_over']}:{part_time_note}")
-    prompt = [["🎳 ", _rich_mention(state, state['bowl_user_tg']),
-               f", pick your bowler for {_unit_word(state)} "
-               f"{state['current_over']}:"]]
-    if only_part_timers:
-        prompt.append(R.italic("⚠️ Front-line bowlers are bowled out — only "
-                               "part-time bowlers (🧤) are left."))
+    text, rows, blocks = bowler_prompt(
+        state, lambda label, value: InlineKeyboardButton(label, callback_data=f"cipl_bowler_{mid}_{value}"))
     try:
-        await _new_action_message(context, state, text, rows,
-                                  blocks=_approach_card_blocks(state, prompt))
+        await _new_action_message(context, state, text, rows, blocks=blocks)
         delivered = True
     except Exception:
         logger.exception("cipl: bowler prompt send failed for match %s", mid)
@@ -2813,6 +2814,23 @@ async def _bot_take_the_ball(context, mid, state):
     await _prompt_bowl_approach(context, mid, state)
 
 
+def approach_prompt(state, batting, button, *, auto=False):
+    options = BATTING_APPROACHES if batting else BOWLING_APPROACHES
+    rows = [[button(f"{emoji} {label}", idx)] for idx, (_, emoji, label) in enumerate(options)]
+    bowler = str(state["current_bowler"]["name"])
+    note = " <i>(auto-picked bowler)</i>" if auto and not batting else ""
+    actor = state["bat_user_tg"] if batting else state["bowl_user_tg"]
+    role = "Batting Approach" if batting else "Bowling Approach"
+    icon = "🏏 " if batting else ""
+    text = (f"{_approach_card(state)}\n\n"
+            f"🎳 Bowler: <b>{html.escape(bowler)}</b>{note}\n"
+            f"{icon}{_mention_tg(state, actor)}, choose your <b>{role}</b>:")
+    blocks = _approach_card_blocks(state, [
+        ["🎳 Bowler: ", R.bold(bowler), R.italic(" (auto-picked bowler)") if note else ""],
+        [icon, _rich_mention(state, actor), ", choose your ", R.bold(role), ":"]])
+    return text, rows, blocks
+
+
 async def _prompt_bowl_approach(context, mid, state, auto=False):
     if _bot_bowls(state):
         # The bot's plan is hidden from the batting captain, exactly as a human
@@ -2827,20 +2845,9 @@ async def _prompt_bowl_approach(context, mid, state, auto=False):
         await _prompt_in_app(context, mid, state, A_PICK_BOWL_APPROACH,
                              state["bowl_user_tg"])
         return
-    bowler = state["current_bowler"]
-    rows = [[InlineKeyboardButton(f"{emoji} {label}",
-                                  callback_data=f"cipl_bowlapp_{mid}_{idx}")]
-            for idx, (_, emoji, label) in enumerate(BOWLING_APPROACHES)]
-    note = " <i>(auto-picked bowler)</i>" if auto else ""
-    text = (f"{_approach_card(state)}\n\n"
-            f"🎳 Bowler: <b>{bowler['name']}</b>{note}\n"
-            f"{_mention_tg(state, state['bowl_user_tg'])}, choose your "
-            f"<b>Bowling Approach</b>:")
-    blocks = _approach_card_blocks(state, [
-        ["🎳 Bowler: ", R.bold(str(bowler['name'])),
-         R.italic(" (auto-picked bowler)") if auto else ""],
-        [_rich_mention(state, state['bowl_user_tg']), ", choose your ",
-         R.bold("Bowling Approach"), ":"]])
+    text, rows, blocks = approach_prompt(
+        state, False, lambda label, value: InlineKeyboardButton(label, callback_data=f"cipl_bowlapp_{mid}_{value}"),
+        auto=auto)
     try:
         await _edit_action_message(context, state, text, rows, blocks=blocks)
         delivered = True
@@ -2867,19 +2874,8 @@ async def _prompt_bat_approach(context, mid, state, auto=False):
             context, mid, state, A_PICK_BAT_APPROACH, state["bat_user_tg"],
             lead=(f"🎳 {html.escape(str(state['current_bowler']['name']))} to bowl.\n"))
         return
-    rows = [[InlineKeyboardButton(f"{emoji} {label}",
-                                  callback_data=f"cipl_batapp_{mid}_{idx}")]
-            for idx, (_, emoji, label) in enumerate(BATTING_APPROACHES)]
-    # The bowling captain's chosen Bowling Approach is hidden here so the batting
-    # captain (the opponent) can't read the bowling plan before picking their own.
-    text = (f"{_approach_card(state)}\n\n"
-            f"🎳 Bowler: <b>{state['current_bowler']['name']}</b>\n"
-            f"🏏 {_mention_tg(state, state['bat_user_tg'])}, choose your "
-            f"<b>Batting Approach</b>:")
-    blocks = _approach_card_blocks(state, [
-        ["🎳 Bowler: ", R.bold(str(state['current_bowler']['name']))],
-        ["🏏 ", _rich_mention(state, state['bat_user_tg']), ", choose your ",
-         R.bold("Batting Approach"), ":"]])
+    text, rows, blocks = approach_prompt(
+        state, True, lambda label, value: InlineKeyboardButton(label, callback_data=f"cipl_batapp_{mid}_{value}"))
     try:
         await _edit_action_message(context, state, text, rows, blocks=blocks)
         delivered = True
@@ -2954,8 +2950,7 @@ def _over_strip(timeline, bpu=6):
     return " · ".join(marks)
 
 
-async def _prompt_new_batsman(context, mid, state, summary=None):
-    """Ask the batting captain who walks in after a mid-over wicket."""
+def new_batsman_prompt(state, button, summary=None):
     out = cipl_match.dismissed_batsman(state) or {}
     bs = (state.get("bat_stats") or {}).get(str(out.get("roster_id")), {})
     progress = state.get("over_in_progress") or {}
@@ -2971,22 +2966,13 @@ async def _prompt_new_batsman(context, mid, state, summary=None):
         label = (f"{p['name']} · Resume {saved.get('runs', 0)} ({saved.get('balls', 0)})"
                  if saved.get("retired") else
                  f"{p['name']} ({cipl_match.display_rating(p, 'bat_rating')})")
-        row.append(InlineKeyboardButton(
-            label,
-            callback_data=f"cipl_newbat_{mid}_{p['roster_id']}"))
+        row.append(button(label, p["roster_id"]))
         if len(row) == 2:
             rows.append(row); row = []
     if row:
         rows.append(row)
 
     dismissal = bs.get("dismissal") or bs.get("how_out") or "out"
-    if _app_mode(state):
-        await _prompt_in_app(
-            context, mid, state, A_PICK_CIPL_NEW_BATSMAN, state["bat_user_tg"],
-            lead=(f"🔴 <b>WICKET!</b> {html.escape(str(out.get('name', 'Batter')))} "
-                  f"{int(bs.get('runs', 0) or 0)}({int(bs.get('balls', 0) or 0)}) — "
-                  f"{html.escape(str(dismissal))}\n"))
-        return
     balls_note = (f"{left} ball{'s' if left != 1 else ''} left in the "
                   f"{_unit_word(state)}" if left else
                   f"last ball of the {_unit_word(state)}")
@@ -2998,6 +2984,24 @@ async def _prompt_new_batsman(context, mid, state, summary=None):
             f"🏏 {_mention_tg(state, state['bat_user_tg'])}, who walks in? "
             f"<i>({balls_note})</i>\n"
             f"<i>No pick in time and the next in your batting order walks in.</i>")
+    return text, rows
+
+
+async def _prompt_new_batsman(context, mid, state, summary=None):
+    """Ask the batting captain who walks in after a mid-over wicket."""
+    if _app_mode(state):
+        out = cipl_match.dismissed_batsman(state) or {}
+        bs = (state.get("bat_stats") or {}).get(str(out.get("roster_id")), {})
+        dismissal = bs.get("dismissal") or bs.get("how_out") or "out"
+        await _prompt_in_app(
+            context, mid, state, A_PICK_CIPL_NEW_BATSMAN, state["bat_user_tg"],
+            lead=(f"🔴 <b>WICKET!</b> {html.escape(str(out.get('name', 'Batter')))} "
+                  f"{int(bs.get('runs', 0) or 0)}({int(bs.get('balls', 0) or 0)}) — "
+                  f"{html.escape(str(dismissal))}\n"))
+        return
+    text, rows = new_batsman_prompt(
+        state, lambda label, value: InlineKeyboardButton(label, callback_data=f"cipl_newbat_{mid}_{value}"),
+        summary)
     try:
         await _edit_action_message(context, state, text, rows)
         delivered = True
@@ -3875,6 +3879,15 @@ def _impact_label(p):
     return f"{p['name']}{plane} ({cipl_match.display_rating(p)})"
 
 
+def impact_batting_slots(state, side, outgoing):
+    if side == "bat":
+        return impact_player.cipl_batting_slots(state, outgoing)
+    future = [p for p in impact_player.active_players(state.get("bowl_xi") or [])
+              if p.get("roster_id") != outgoing]
+    return [(i, "Open" if i < 2 else f"Before {p['name']}") for i, p in enumerate(future)] + [
+        (len(future), "Last")]
+
+
 def _impact_overseas_block(state, side, offered=None, bench=None):
     """The IPL overseas rule as the picker shows it, or ``""`` with no cap.
 
@@ -4021,16 +4034,7 @@ async def cipl_impact_in_callback(update: Update, context: ContextTypes.DEFAULT_
             return
         await q.answer()
 
-        if opts["side"] == "bat":
-            slots = impact_player.cipl_batting_slots(state, out_rid)
-        else:
-            # This side bats next innings; quote its order as it will be then.
-            future = impact_player.active_players(state.get("bowl_xi") or [])
-            future = [p for p in future if p.get("roster_id") != out_rid]
-            slots = [(i, ("Open" if i < 2 else f"Before {future[i]['name']}"))
-                     for i in range(len(future))]
-            slots.append((len(future), "Last"))
-
+        slots = impact_batting_slots(state, opts["side"], out_rid)
         owner_tg = q.from_user.id
         rows, row = [], []
         for k, label in slots:
@@ -4941,13 +4945,18 @@ def _pitch_text(state):
     return f"🌱 {pitch} pitch" if pitch else ""
 
 
+def _display_match_id(state):
+    match_id = state.get("match_id")
+    return f"event-{match_id}" if state.get("official_event") else match_id
+
+
 def _card_heading_parts(state):
     """``(innings, team, pitch, match_id)`` for the approach card's heading.
 
     ``pitch`` / ``match_id`` are None when the state doesn't carry them.
     """
     return (state.get("innings", 1), str(state["bat_team_name"]),
-            state.get("pitch_type") or None, state.get("match_id"))
+            state.get("pitch_type") or None, _display_match_id(state))
 
 
 def _card_heading(state):
@@ -5600,6 +5609,19 @@ def _trait_boost_line(state):
             f"{bowl_code} {bowl['base']} → {bowl['effective']:.1f}")
 
 
+def innings_break_card(state, scorecard=None):
+    from services.innings_break_messages import build
+
+    progress = state["inn1_overs"] + ("" if cipl_match.is_hundred(state) else " overs")
+    return build(
+        first_team=state["inn1_team"], chasing_team=state["bat_team_name"],
+        runs=state["inn1_runs"], wickets=state["inn1_wickets"], progress=progress,
+        balls=cipl_match.total_balls(state), hundred=cipl_match.is_hundred(state),
+        next_action=("📱 Continue the chase in the Mini App." if _app_mode(state) else
+                     "🎳 Second innings next — follow the bowler and approach prompts."),
+        scorecard=scorecard)
+
+
 async def _innings_break(context, mid, state):
     # Clear the last over of innings 1 (its "simulating…" prompt + summary) so the
     # break message is the only thing left from innings 1 — even if the innings
@@ -5618,15 +5640,7 @@ async def _innings_break(context, mid, state):
         state["dls_target"] = revised
         dls_lines = rain.break_lines(state, revised)
     await _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
-    from services.innings_break_messages import build
-    progress = state["inn1_overs"] + ("" if cipl_match.is_hundred(state) else " overs")
-    blocks, text = build(
-        first_team=state["inn1_team"], chasing_team=state["bat_team_name"],
-        runs=state["inn1_runs"], wickets=state["inn1_wickets"], progress=progress,
-        balls=cipl_match.total_balls(state), hundred=cipl_match.is_hundred(state),
-        next_action=("📱 Continue the chase in the Mini App." if _app_mode(state) else
-                     "🎳 Second innings next — follow the bowler and approach prompts."),
-        scorecard=summary_text)
+    blocks, text = innings_break_card(state, summary_text)
     if dls_lines:
         text = f"{text}\n\n" + "\n".join(dls_lines)
         if blocks:
@@ -5651,6 +5665,19 @@ async def _innings_break(context, mid, state):
     await _prompt_bowler(context, mid, state, first=True)
 
 
+def match_result_line(result, mentions=None):
+    if result["tie"]:
+        return "🤝 <b>Match Tied!</b>"
+    winner = html.escape(str(result["winner"]))
+    loser = html.escape(str(result["loser"]))
+    if mentions:
+        winner = f"{mentions.get(result['winner'], f'<b>{winner}</b>')} ({winner})"
+        loser = f"{mentions.get(result['loser'], loser)} ({loser})"
+    else:
+        winner = f"<b>{winner}</b>"
+    return f"🏆 {winner} beat {loser} by {result['margin']} {result['margin_type']}!"
+
+
 def _completion_text(state, result, result_line, prize_info=None, injury_news=""):
     body = _innings_scorecard(state, innings_label='2nd Innings')
     costly = _costliest_drop_line(state)
@@ -5671,7 +5698,7 @@ def _completion_text(state, result, result_line, prize_info=None, injury_news=""
             f"<blockquote expandable>{body}</blockquote>")
     if injury_news:
         text += f"\n\n{injury_news}"
-    if _is_bot_match(state) or state.get("unranked"):
+    if not state.get("official_event") and (_is_bot_match(state) or state.get("unranked")):
         text += f"\n\n{UNRANKED_NOTE}"
     return text
 
@@ -5711,15 +5738,7 @@ async def _complete_match(context, mid, state):
     except Exception:
         logger.exception("cipl result mentions failed for match %s", mid)
         mentions = {}
-    if result["tie"]:
-        result_line = "🤝 <b>Match Tied!</b>"
-    else:
-        winner = html.escape(str(result["winner"]))
-        loser = html.escape(str(result["loser"]))
-        win_m = mentions.get(result["winner"], f"<b>{winner}</b>")
-        lose_m = mentions.get(result["loser"], loser)
-        result_line = (f"🏆 {win_m} ({winner}) beat {lose_m} ({loser}) "
-                       f"by {result['margin']} {result['margin_type']}!")
+    result_line = match_result_line(result, mentions)
     try:
         miniapp_row = list(_miniapp_row(state) or [])
         if _is_bot_match(state) or (state.get("auction_league") or {}).get("room_id"):
