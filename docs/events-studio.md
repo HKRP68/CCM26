@@ -21,12 +21,48 @@ The main risks are concurrent starts and finalization, randomness changes on res
 
 ## Author and publish
 
-1. Open **Event Studio** in the authenticated admin navigation or visit `/events/studio`.
-2. Create a draft with a new slug. Pick the opening and closing times from the calendar and clock. A local time that crosses a daylight-saving boundary needs an offset-aware ISO timestamp instead: enter it in the full configuration JSON and that field becomes a text box showing it.
-3. Choose a Challenge League at the top of the draft and select **Copy teams and squads**. It fills Team details with each active team's name, short name, logo and colours and Squads with its master card IDs, and takes the league's overseas rules with it. Team details and Squads are two views of the same team list, as Challenge Data separates them; teams and squad CSV can be imported instead, and a full configuration JSON can be imported or duplicated when creating a draft. Active master card IDs are the source of all ratings. Resolve missing cards through the existing player editor.
-4. Choose tracks, schedule, objectives and a per-asset budget. For a Moment or standalone boss, enable just the `tournament_team` track and author two teams with the playable team first. Every JSON field carries a collapsed example of its shape.
-5. Select **Auto Build Event** for schedule → objectives → rewards. Review the preview and select **Apply preview**. Each run records its generator version and digests. Fields edited after generation are preserved by default. Set fixture `locks`, reward `reward_locks` or `objectives_locked` to keep them even when replacing unlocked edits.
-6. Validate the draft, save any edits and publish the saved revision. Publication snapshots the legal XI, eligible squads, engine identifier, ground reference, objectives and reward policy. Draft copies omit the published snapshot and campaign records.
+A draft is laid out as ten steps, and the nav along the top is also the progress
+indicator: it marks the step you are on, the ones you have visited, and any step holding
+a field the browser refused. Nothing is published until the last step.
+
+1. Open **Event Studio** in the authenticated admin navigation or visit `/events/studio`, and select **Create New Event** with a new slug. A draft can also start as a duplicate of an existing event or from a pasted JSON export.
+2. **Event & league.** Choose the event type, match format, banner and description. Pick a Challenge League and select **Import teams and squads**: it fills the team table with each active team's name, short name, logo and colours and each squad's master card IDs, and takes the league's overseas rules with it. Edit any of it afterwards — this is the draft's own copy and never writes back to Challenge Data. Add a player by typing a name: the picker searches active master cards and stores the card ID, which remains the source of every rating. Challenge Data holds no ground for a team, so a home stadium is typed here rather than imported. Teams and squad CSV can still be imported, and both lists are editable as JSON under the same step.
+3. **Dates.** Pick the start and end from the calendar and clock, with the timezone they are read in, and the reward claim expiry. The step reports how long the event runs. A local time that crosses a daylight-saving boundary needs an offset-aware ISO timestamp instead: enter it in the full configuration on the Advanced step and that field becomes a text box showing it. There is no registration cutoff to author — see below.
+4. **Schedule.** Choose a schedule type — round robin, 1.5 round robin, group stage, knockout, double elimination, bilateral series, survival ladder or a manual schedule — and only the settings that type reads are shown. Choose a playoff bracket: no playoffs, top 2 direct final, top 4 semi-finals, top 4 IPL style, top 6 knockout, top 8 quarter-finals, or custom, where you author the rows yourself. Set the round interval, match deadline duration, grace, minimum rest between matches, playing days, blackout dates and maximum fixtures per day.
+5. Select **Generate Schedule**. It writes fixture keys, round numbers, opening times, deadlines, stadiums, pitches and weather, and shows the result in five views: an editable fixture table, a calendar, round by round, team by team, and the playoff bracket. The step says whether the whole schedule fits inside the event window. **Shuffle Fixtures** re-seeds which teams meet when. **Auto Fix Schedule** tightens the round interval and then the match window until the fixtures fit — it never changes the event's own dates, and says so plainly when no interval fits. **Lock** on a row pins it against the next generation.
+6. **Participation.** Three independent checkboxes — Solo, Team (multiplayer) and Own Roster — over the two lists the configuration stores. Set the maximum participants, registration window, minimum human managers and early start.
+7. **Match rules, Objectives, Rewards, Features.** AI difficulty, Impact Player, AI manager personalities, the points table, the objective table with **Auto Generate Objectives**, the Free and Diamond reward tables with **Auto Generate Rewards**, Event Pass milestones, and the per-event feature toggles. For a Moment or standalone boss, enable just the `tournament_team` track and author two teams with the playable team first.
+8. **Advanced** holds the whole configuration as JSON, the per-fixture overrides, and a collapsed example for every JSON field. It is the one source of truth: every control on every step reads and writes it, so an export is exactly what the steps produced. Select **Auto Build Event** at the top for schedule → objectives → rewards in one run; each records its generator version and digests, fields edited after generation are preserved by default, and fixture `locks`, reward `reward_locks` or `objectives_locked` keep them even when replacing unlocked edits.
+9. **Review.** A summary of the event, teams, fixtures, duration, modes, objectives, maximum stars and maximum reward expenditure. **Validate Event** runs the publish checks; **Publish Event** publishes the last *saved* revision, so save first. Publication snapshots the legal XI, eligible squads, engine identifier, ground reference, objectives and reward policy. Draft copies omit the published snapshot and campaign records.
+
+### Schedule types and playoff brackets
+
+A playoff slot is never a team: it is a reference the official final standings resolve
+(`rank:1`, `group_rank:a:1`) or an earlier playoff fixture does (`winner:qualifier`,
+`loser:qualifier`), so qualified teams advance from results rather than anyone
+re-authoring the bracket. The brackets live in one table in
+`services/event_studio_schedule.py`:
+
+| Bracket | Teams | Fixtures |
+| --- | --- | --- |
+| Top 2 — direct final | 2 | Final |
+| Top 4 — semifinals | 4 | Two semi-finals, final |
+| Top 4 — IPL style | 4 | Qualifier 1, Eliminator, Qualifier 2, final |
+| Top 6 — knockout | 6 | Two eliminators, two semi-finals, final |
+| Top 8 — quarterfinals | 8 | Four quarter-finals, two semi-finals, final |
+| Custom | — | None generated; your own rows stand |
+
+The two halves combine either way round. An automatic league takes custom playoffs:
+choose **Custom playoffs** and author the rows, and generating the league keeps them like
+any other manual fixture. A custom league takes an automatic bracket: choose the
+**Manual schedule** type with a bracket, and your authored league rows keep their own
+keys, slots, timings and grounds while only the bracket is written and timed, from the
+first date clear of the league.
+
+A 1.5 round robin plays every pair once, then a balanced subset again with home and away
+reversed, so team totals differ by at most one game. Leave **League games per team** empty
+for the default halfway point between one and two round robins, or set it to the average
+you want.
 
 Stadium Data (`/conditions`) groups its grounds into one collapsible per country, so an edit to a country's grounds does not mean scanning the whole list. The country is free text on a ground, with a list of the spellings already in use; spellings are folded when grouping, so `UAE` and `United Arab Emirates` stay one country.
 
@@ -42,6 +78,8 @@ A squad import replaces the listed teams' squads after preview. Its CSV headers 
 TEAM NAME,PLAYER NAME,VERSION
 Harbour XI,Example Player,Base
 ```
+
+Minimum rest between matches (`schedule.min_rest_minutes`) applies to every schedule type, and defaults to 0 so a draft or published revision saved before it existed schedules and validates exactly as it did. The Weekend Championship template keeps its own `rest_minutes`, which packs rounds into a two- or three-day window; where both are set, the larger applies.
 
 For a repeatable eight-team test cup select `round_robin` with two legs and `top4` playoffs. The generator produces 56 league fixtures and four playoff fixtures. Use a closing date that accommodates the final grace period. Group events use a mapping such as `{"a":["team-1","team-2"],"b":["team-3","team-4"]}` and `qualify_per_group` in the schedule settings. The survival ladder uses the first team as the playable side.
 
