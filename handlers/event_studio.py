@@ -3,7 +3,9 @@
 import asyncio
 from datetime import datetime
 from html import escape
+import logging
 import re
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -20,9 +22,40 @@ from services.miniapp_buttons import miniapp_button
 KINDS = {"eventplay": None, "events": None, "liveevents": "live", "myevents": "joined",
          "moments": "moment", "bossbattles": "boss", "bossbattle": "boss"}
 
+logger = logging.getLogger(__name__)
+
+STALE_TEXT = "This control has expired. Send /events to open it again."
+BROKEN_TEXT = "Something went wrong opening that. It has been logged — send /events to try again."
+
+
+class StaleControl(Exception):
+    """The callback data no longer points at anything we can show.
+
+    Raised only where a control is genuinely out of date — truncated or malformed
+    data, an index into a list that has since changed, a game row that is gone. It
+    is deliberately NOT what a bug in a panel raises: those are logged with their
+    traceback instead of being passed off to the player as an expired button.
+    """
+
 
 def _button(label, *parts):
     return InlineKeyboardButton(label, callback_data="ev:" + ":".join(map(str, parts)))
+
+
+def _part(parts, index, label="control"):
+    """One integer out of the callback data, or a stale control."""
+    try:
+        return int(parts[index])
+    except (IndexError, TypeError, ValueError) as exc:
+        raise StaleControl(f"callback data has no valid {label} at {index}") from exc
+
+
+def _when(stamp, zone):
+    """An ISO instant as a short local time, for a fixture window."""
+    try:
+        return datetime.fromisoformat(stamp).astimezone(ZoneInfo(zone)).strftime("%d %b %H:%M")
+    except (AttributeError, TypeError, ValueError, ZoneInfoNotFoundError):
+        return stamp
 
 
 def _user(db, telegram_id):
@@ -75,7 +108,8 @@ def _match_panel(event, game, state):
                           and not row.get("result") and row["status"] == "scheduled"), None)
         if following:
             lines.append(f'Next fixture · {following["home"]} v {following["away"]}')
-        if any(row["game_id"] == game["id"] and row["status"] == "claimable" for row in event["rewards"]):
+        if any(row["game_id"] == game["id"] and row["status"] == "claimable"
+               for row in event.get("rewards") or []):
             lines.append("Reward available in Events Hub.")
         for objective in result.get("objectives", []):
             lines.append(f'{objective["title"]} · {objective["measured"]}/{objective["threshold"]}')
@@ -237,23 +271,41 @@ def _event_panel(event):
                                     "teams", event_id, mode)])
     if event["joined"]:
         lines.append(event["team"])
-        personal = [game for game in event["games"] if game["personal"]]
+        personal = [game for game in event.get("games", []) if game["personal"]]
         if event["attempt_limit"] is not None:
             lines.append(f'{event["attempts_used"]}/{event["attempt_limit"]} attempts used · Best stars {event["best_stars"]}')
             if event["can_attempt"]:
                 buttons.append([_button("Start official attempt" if event["moment"] else "Match setup",
                                         "attempt" if event["moment"] else "setup", event_id, 0, len(personal))])
+        zone = event.get("timezone") or "UTC"
+        upcoming = []
         for game in personal[-20:]:
             kind = game["status"]
+            label = f'Round {game["round"]}' if game["round"] else f'Attempt {game["attempt"]}'
             if kind in ("in_progress", "grace", "under_review", "paused"):
                 buttons.append([_button("Resume official match", "match", event_id, game["id"])])
             elif game["can_start"]:
                 buttons.append([_button(f'Set up round {game["round"]}', "setup", event_id, game["id"], 0)])
-            elif game["result"]:
-                label = f'Round {game["round"]}' if game["round"] else f'Attempt {game["attempt"]}'
+            elif game.get("result"):
                 buttons.append([_button(f'{label} · {kind.replace("_", " ").capitalize()}', "match", event_id, game["id"])])
-        claimable = sum(reward["status"] == "claimable" for reward in event["rewards"])
-        if event["table"]:
+            else:
+                # Scheduled but not open yet, or a playoff slot still waiting on an
+                # earlier result. It has no result to show and cannot be started, but
+                # the player should still see that it is coming and when.
+                upcoming.append((label, game))
+        if upcoming:
+            lines.append("Upcoming fixtures")
+            for label, game in upcoming[:6]:
+                sides = (f'{game["home"]} v {game["away"]}' if game["home"] and game["away"]
+                         else "Opponent decided by an earlier result")
+                lines.append(f'{label} · {sides}\nOpens {_when(game["opens_at"], zone)}'
+                             f' · Deadline {_when(game.get("deadline") or game["cutoff"], zone)}')
+        if event.get("objectives"):
+            lines.append("Objectives\n" + "\n".join(
+                f'{row["title"]} · {row["threshold"]}' for row in event["objectives"][:5]))
+        rewards = event.get("rewards") or []
+        claimable = sum(reward["status"] == "claimable" for reward in rewards)
+        if event.get("table"):
             buttons.append([_button("Personal standings", "table", event_id)])
         buttons.append([_button("Stats and leaderboard", "stats", event_id),
                         _button("Rewards", "rewards", event_id)])
@@ -281,7 +333,8 @@ def _progress_panel(db, user, event, section):
         lines.append("Rewards")
         labels = {"coins": "Coins", "gems": "Gems", "quest_points": "Quest Points"}
         for row in event["rewards"][-20:]:
-            assets = ", ".join(f"{amount:,} {labels[asset]}" for asset, amount in row["assets"].items())
+            assets = ", ".join(f"{amount:,} {labels.get(asset, asset)}"
+                               for asset, amount in row["assets"].items())
             lines.append(f'{row["status"].capitalize()} · {assets}')
         if not event["rewards"]:
             lines.append("Earned wallet rewards will appear here.")
@@ -319,14 +372,17 @@ def _dispatch(telegram_id, parts=None, kind=None, drafts=None):
             if delay:
                 raise ValueError(f"Try again in {delay}s.")
             db.commit()
-        event_id = int(parts[1])
+        event_id = _part(parts, 1, "event id")
         game_id = None
         if action == "join":
             event = play.detail(db, user, event_id, now)
-            team = event["teams"][int(parts[3])]["key"]
+            choice = _part(parts, 3, "team")
+            if not 0 <= choice < len(event["teams"]):
+                raise StaleControl("team index is outside the published team list")
+            team = event["teams"][choice]["key"]
             play.join(db, user, event_id, team, parts[2], now)
         elif action in ("setup", "coin", "order", "xi", "quick", "captains", "captain", "launch"):
-            game_id, previous = map(int, parts[2:4])
+            game_id, previous = _part(parts, 2, "game id"), _part(parts, 3, "attempt")
             setup = play.setup_fixture(db, user, event_id, game_id, previous, now,
                                        call=parts[4] if action == "coin" else None)
             draft = drafts.setdefault(f"{event_id}:{game_id}:{previous}", {})
@@ -366,8 +422,11 @@ def _dispatch(telegram_id, parts=None, kind=None, drafts=None):
         elif action == "attempt":
             game_id = play.start_attempt(db, user, event_id, int(parts[3]), require_toss=True).id
         elif action == "pick":
-            kind = {"c": "continue", "b": picks.PICK_BOWLER, "p": picks.PICK_BOWL_APPROACH,
-                    "a": picks.PICK_BAT_APPROACH, "n": picks.PICK_NEW_BATSMAN}[parts[4]]
+            codes = {"c": "continue", "b": picks.PICK_BOWLER, "p": picks.PICK_BOWL_APPROACH,
+                     "a": picks.PICK_BAT_APPROACH, "n": picks.PICK_NEW_BATSMAN}
+            if len(parts) < 5 or parts[4] not in codes:
+                raise StaleControl(f"unknown pick code in {parts!r}")
+            kind = codes[parts[4]]
             try:
                 game_id = play.submit_pick(db, user, int(parts[2]), int(parts[3]),
                                            kind, int(parts[5]), source="chat").id
@@ -394,7 +453,7 @@ def _dispatch(telegram_id, parts=None, kind=None, drafts=None):
             buttons.append([_button("Back", "show", event_id)])
             return "Choose a team and confirm enrollment. Your choice is permanent for this campaign.", buttons
         if action in ("match", "confirm"):
-            game_id = int(parts[2])
+            game_id = _part(parts, 2, "game id")
         if action in ("table", "stats", "rewards") and event["joined"]:
             return _progress_panel(db, user, event, action)
         if game_id:
@@ -403,9 +462,12 @@ def _dispatch(telegram_id, parts=None, kind=None, drafts=None):
                 raise ValueError("Match is unavailable.")
             if action == "confirm":
                 return ("Abandon this official game? The result is permanent and no reward will be earned.",
-                        [[_button("Confirm abandon", "abandon", event_id, game_id, parts[3])],
+                        [[_button("Confirm abandon", "abandon", event_id, game_id, _part(parts, 3, "version"))],
                          [_button("Resume", "match", event_id, game_id)]])
-            return _match_panel(event, game, db.get(StudioGame, game_id).state)
+            row = db.get(StudioGame, game_id)
+            if row is None:
+                raise StaleControl(f"game {game_id} is no longer in the database")
+            return _match_panel(event, game, row.state)
         return _event_panel(event)
 
 
@@ -423,6 +485,12 @@ async def command(update, context):
         text, buttons = await asyncio.to_thread(_dispatch, update.effective_user.id, kind=KINDS.get(name))
     except ValueError as exc:
         text, buttons = str(exc), []
+    except StaleControl as exc:
+        logger.info("events: stale control for %s: %s", update.effective_user.id, exc)
+        text, buttons = STALE_TEXT, []
+    except Exception:
+        logger.exception("events: could not render /%s for %s", name, update.effective_user.id)
+        text, buttons = BROKEN_TEXT, []
     await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons) if buttons else None)
 
 
@@ -461,8 +529,14 @@ async def handle_match_command(update, context, action):
             await rich.send_rich_message(context.bot, update.effective_chat.id, render[0], text, reply_markup=markup)
         else:
             await update.effective_message.reply_text(text, reply_markup=markup)
-    except (ValueError, IndexError) as exc:
+    except ValueError as exc:
         await update.effective_message.reply_text(str(exc))
+    except (StaleControl, IndexError) as exc:
+        logger.info("events: stale match control for %s: %s", update.effective_user.id, exc)
+        await update.effective_message.reply_text(STALE_TEXT)
+    except Exception:
+        logger.exception("events: could not open match %s for %s", game_id, update.effective_user.id)
+        await update.effective_message.reply_text(BROKEN_TEXT)
     return True
 
 
@@ -477,9 +551,19 @@ async def callback(update, context):
         panel = await asyncio.to_thread(_dispatch, update.effective_user.id, parts,
                                         drafts=context.user_data.setdefault("event_xi", {}))
         text, buttons, *render = panel
-    except (ValueError, IndexError, KeyError) as exc:
-        text = str(exc) if isinstance(exc, ValueError) else "This control has expired."
-        await query.message.reply_text(text)
+    except ValueError as exc:
+        await query.message.reply_text(str(exc))
+        return
+    except StaleControl as exc:
+        logger.info("events: stale control %r for %s: %s", query.data, update.effective_user.id, exc)
+        await query.message.reply_text(STALE_TEXT)
+        return
+    except Exception:
+        # A panel that fails to render is a bug here, not a button the player sat on
+        # too long. Record it with its traceback and say so, rather than quietly
+        # blaming the control and leaving nothing to debug from.
+        logger.exception("events: could not render %r for %s", query.data, update.effective_user.id)
+        await query.message.reply_text(BROKEN_TEXT)
         return
     from telegram.error import BadRequest
     try:

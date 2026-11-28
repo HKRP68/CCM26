@@ -908,10 +908,15 @@ def game_view(game, result, human, now, config, *, paused=False, track="tourname
     actual_status = ("paused" if (paused and game.status == "in_progress") or player_paused else
                      "under_review" if under_review else
                      "grace" if game.status == "in_progress" and now > game.deadline else game.status)
+    # Every fixture carries the same keys whatever its status, so a caller can read
+    # result, score or scouting without first asking whether this one has them. A
+    # fixture that is scheduled, locked behind a playoff slot, or expired has none.
     view = {"id": game.id, "key": game.fixture_key, "attempt": game.attempt, "status": actual_status,
             "home": names[game.home]["name"] if game.home else None,
             "away": names[game.away]["name"] if game.away else None,
             "opens_at": schedule.utc_text(game.opens_at), "cutoff": schedule.utc_text(cutoff),
+            "deadline": schedule.utc_text(game.deadline),
+            "result": None, "score": None, "scouting": None,
             "version": game.version, "personal": personal,
             "player_paused": bool(player_paused), "event_paused": paused,
             "play_mode": (game.state or {}).get("play_mode", "chat"), "round": row["round"] if row else None,
@@ -1062,6 +1067,9 @@ def detail(db, user, event_id, now):
                    roster=[{key: p[key] for key in ("roster_id", "name", "version", "rating", "category")} for p in roster],
                    default_xi=([p["roster_id"] for p in team["default_xi"]] if entry.mode == "tournament_team" else []),
                    fixed_xi=(rules.is_moment(config) or entry.mode == "tournament_team" and "xi" in team))
+    # Always present, so a panel can read them without branching on the event kind.
+    summary.setdefault("attempts_used", 0)
+    summary.setdefault("can_attempt", False)
     if config["kind"] != "live":
         attempts_used = sum(game.status != "technical_void" for game, _ in rows)
         summary["attempts_used"] = attempts_used

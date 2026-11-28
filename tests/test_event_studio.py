@@ -1352,3 +1352,107 @@ def test_a_late_joiner_is_turned_away_rather_than_given_dead_fixtures(sessions):
         other = db.scalars(select(User).order_by(User.id)).all()[1]
         with pytest.raises(ValueError, match="Enrollment is closed"):
             play.join(db, other, event.id, team, "tournament_team", closes + timedelta(seconds=1))
+
+
+# ── Telegram Events panels ────────────────────────────────────────────────────
+# A joined Live Event used to raise KeyError('result') the moment any personal
+# fixture was neither in progress nor startable, which callback() reported to the
+# player as "This control has expired."
+
+def _panel(db, user, event_id, now=NOW):
+    from handlers import event_studio as handler
+    return handler._event_panel(play.detail(db, user, event_id, now))
+
+
+def test_every_fixture_view_carries_the_same_keys(sessions):
+    with sessions() as db:
+        event = _publish(db, _seed(db, count=4))
+        user = db.scalar(select(User).order_by(User.id))
+        entry = _join(db, event, user)
+        games = play.detail(db, user, event.id, NOW)["games"]
+        assert games
+        for game in games:
+            # Present on every fixture, whatever its status — a caller never has to
+            # ask whether this one happens to have them.
+            for field in ("result", "score", "scouting", "opens_at", "deadline", "cutoff",
+                          "status", "can_start", "personal", "round", "stage"):
+                assert field in game, f'{game["key"]} ({game["status"]}) is missing {field}'
+        assert all(game["result"] is None for game in games)   # nothing played yet
+        assert db.scalar(select(func.count(StudioGame.id)).filter_by(enrollment_id=entry.id))
+
+
+def test_opening_a_joined_live_event_lists_future_fixtures_with_their_window(sessions):
+    with sessions() as db:
+        event = _publish(db, _seed(db, count=4))
+        user = db.scalar(select(User).order_by(User.id))
+        _join(db, event, user)
+        text, buttons = _panel(db, user, event.id)
+        labels = [b.text for row in buttons for b in row]
+
+        # The enrolled player lands on a dashboard, not an error.
+        assert "Upcoming fixtures" in text
+        assert "Opens " in text and "Deadline " in text
+        assert "Objectives" in text
+        assert any(b.startswith("Set up round") for b in labels), labels
+        assert "Stats and leaderboard" in labels and "Rewards" in labels
+        assert "Personal standings" in labels
+
+        # Every future fixture names its two sides and its window.
+        future = [g for g in play.detail(db, user, event.id, NOW)["games"]
+                  if g["personal"] and not g["result"] and not g["can_start"]]
+        assert future
+        for game in future:
+            assert game["opens_at"] and game["deadline"]
+
+
+def test_the_panel_survives_active_completed_and_unresolved_playoff_fixtures(sessions):
+    with sessions() as db:
+        config = _seed(db, count=4)
+        config["schedule"]["playoffs"] = "top4"
+        config = studio.generate(studio.normalize(config), "all")
+        event = _publish(db, config)
+        user = db.scalar(select(User).order_by(User.id))
+        entry = _join(db, event, user)
+        games = db.scalars(select(StudioGame).filter_by(enrollment_id=entry.id)
+                           .order_by(StudioGame.id)).all()
+        playable = [g for g in games if g.status == "scheduled"
+                    and entry.team_key in (g.home, g.away)]
+        assert len(playable) >= 2 and any(g.status == "locked" for g in games)
+
+        # An active fixture, genuinely mid-match through the ordinary start path.
+        play.start_fixture(db, user, playable[0].id, None, lambda: playable[0].opens_at)
+        # A completed one, with a result.
+        done = playable[1]
+        done.status = "completed"
+        db.add(StudioResult(game_id=done.id, kind="completed", winner=entry.team_key,
+                            detail={"stars": 2}, recorded_at=NOW))
+        db.flush()
+
+        text, buttons = _panel(db, user, event.id)
+        labels = [b.text for row in buttons for b in row]
+        assert "Resume official match" in labels, labels
+        assert any("Completed" in b for b in labels), labels
+        assert text and "expired" not in text.lower()
+
+        # The locked playoff slots are still unresolved: no sides, no result, and the
+        # panel renders without reaching for either.
+        locked = [g for g in play.detail(db, user, event.id, NOW)["games"] if g["status"] == "locked"]
+        assert locked
+        assert all(g["home"] is None and g["away"] is None and g["result"] is None for g in locked)
+
+
+def test_a_rendering_bug_is_not_reported_to_the_player_as_a_stale_control():
+    from handlers import event_studio as handler
+
+    # A genuinely stale control: callback data that points nowhere.
+    assert issubclass(handler.StaleControl, Exception)
+    assert not issubclass(handler.StaleControl, ValueError)
+    with pytest.raises(handler.StaleControl):
+        handler._part(["show"], 1, "event id")
+    with pytest.raises(handler.StaleControl):
+        handler._part(["show", "not-a-number"], 1, "event id")
+    assert handler._part(["show", "7"], 1) == 7
+
+    # The two messages are distinct, so "expired" never stands in for a crash.
+    assert handler.STALE_TEXT != handler.BROKEN_TEXT
+    assert "expired" in handler.STALE_TEXT and "expired" not in handler.BROKEN_TEXT
