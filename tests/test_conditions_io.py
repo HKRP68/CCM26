@@ -9,6 +9,8 @@ import tempfile
 import unittest
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from engine.sim import config as sim_config, factors, stadium as stadium_mod
 from engine.sim.models import Conditions
@@ -191,7 +193,6 @@ def test_seeded_grounds_carry_their_character():
 
 # ── database store + admin pages ────────────────────────────────────────
 
-_MODULES = ("database", "models", "config", "admin", "engine.sim.store")
 
 
 class ConditionsAdminTests(unittest.TestCase):
@@ -199,49 +200,72 @@ class ConditionsAdminTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls._saved = {n: sys.modules.get(n) for n in _MODULES}
-        cls._prev_url = os.environ.get("DATABASE_URL")
-        for n in _MODULES:
-            sys.modules.pop(n, None)
-        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        cls._tmp.close()
-        os.environ["DATABASE_URL"] = f"sqlite:///{cls._tmp.name}"
-        os.environ.setdefault("BOT_TOKEN", "test-token")
-        os.environ.setdefault("ADMIN_PASSWORD", "test")
-        os.environ.setdefault("ADMIN_USERNAME", "admin")
-        from database import Base, engine
-        import models  # noqa: F401  (registers the tables)
-        Base.metadata.create_all(bind=engine)
-        cls.engine = engine
+        """Point the already-imported app at a throwaway database.
+
+        This used to pop ``database``/``models``/``admin`` out of ``sys.modules`` and
+        import them again. That builds a *second* declarative registry: 150 more mapped
+        classes for the same tables. Importing ``admin`` then forces SQLAlchemy to
+        configure mappers while both registries are live, and models.py's 102
+        ``relationship()`` strings resolve across the two. Mapper configuration is
+        cached, so restoring the modules afterwards does not undo it, and the next
+        suite to query one of those tables gets ``FROM players, players`` —
+        "ambiguous column name: players.id", a very long way from the cause.
+
+        ``get_session()`` is ``return SessionLocal()`` reading its module global at call
+        time, and every caller imports the *function*. So swapping ``SessionLocal``
+        redirects the whole app with one registry and no re-import.
+        """
+        import database
         try:
             import admin
         except Exception as exc:  # pragma: no cover - env-dependent
             raise unittest.SkipTest(f"admin app unavailable: {exc}")
-        admin.app.config["TESTING"] = True
-        admin.app.config["WTF_CSRF_ENABLED"] = False
-        cls.admin = admin
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        cls._database = database
+        cls._saved_factory = database.SessionLocal
+        cls._saved_engine = database.engine
+        cls.engine = None
+        # Past the first mutation everything is guarded, so a failure here cannot leave
+        # the app pointed at a deleted file for the rest of the session.
+        try:
+            cls.engine = create_engine(f"sqlite:///{cls._tmp.name}",
+                                       connect_args={"check_same_thread": False})
+            database.Base.metadata.create_all(bind=cls.engine)
+            database.SessionLocal = sessionmaker(bind=cls.engine, autoflush=False,
+                                                 autocommit=False)
+            database.engine = cls.engine
+            admin.app.config["TESTING"] = True
+            admin.app.config["WTF_CSRF_ENABLED"] = False
+            cls.admin = admin
+        except BaseException:
+            cls._restore()
+            raise
+
+    @classmethod
+    def _restore(cls):
+        """Undo everything setUpClass changed, whatever point it failed at."""
+        cls._database.SessionLocal = cls._saved_factory
+        cls._database.engine = cls._saved_engine
+        if cls.engine is not None:
+            try:
+                cls.engine.dispose()
+            except Exception:
+                pass
+            cls.engine = None
+        tmp = getattr(cls, "_tmp", None)
+        if tmp is not None:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+            cls._tmp = None
+        sim_config.reload()
+        stadium_mod.reload()
 
     @classmethod
     def tearDownClass(cls):
-        try:
-            cls.engine.dispose()
-        except Exception:
-            pass
-        for n in _MODULES:
-            sys.modules.pop(n, None)
-        for n, m in cls._saved.items():
-            if m is not None:
-                sys.modules[n] = m
-        if cls._prev_url is None:
-            os.environ.pop("DATABASE_URL", None)
-        else:
-            os.environ["DATABASE_URL"] = cls._prev_url
-        try:
-            os.unlink(cls._tmp.name)
-        except OSError:
-            pass
-        sim_config.reload()
-        stadium_mod.reload()
+        cls._restore()
 
     def setUp(self):
         from database import get_session

@@ -15,55 +15,68 @@ import os
 import sys
 import tempfile
 import unittest
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import _module_swap
-
-_MODULES = (
-    "database", "models", "models_community", "config",
-    "services.config_service", "services.gc_gate",
-    "services.community_config_service", "services.community_xp_service",
-    "services.community_chat_service", "services.community_achievement_service",
-    "services.community_answer_service", "services.community_game_service",
-    "services.community_level_service", "services.community_leaderboard_service",
-    "services.community_checkin_service", "services.community_hooks",
-    "services.community_profile_service", "services.community_admin_service",
-    "services.community_rich",
-)
-_SAVED = {}
-_PREV = None
 _PATH = None
 _ENGINE = None
+_SAVED_FACTORY = None
+_SAVED_ENGINE = None
 _TG = 970_000_000
 OFFICIAL = -1001555000
 
 
 def setUpModule():
-    global _SAVED, _PREV, _PATH, _ENGINE
-    _SAVED = _module_swap.save(_MODULES)
-    _module_swap.unload(_MODULES)
-    _PREV = os.environ.get("DATABASE_URL")
+    """Point the app at a throwaway database without re-importing ``models``.
+
+    Re-importing it builds a second declarative registry — another 150 mapped classes
+    for the same tables. Once anything configures mappers while both are live,
+    models.py's relationship() strings resolve across the two and queries come out as
+    ``FROM players, players``: "ambiguous column name: players.id", in whichever suite
+    runs next. Mapper configuration is cached, so putting the modules back does not
+    undo it.
+
+    ``database.get_session()`` is ``return SessionLocal()``, reading its module global
+    at call time, and every caller imports the function rather than the sessionmaker.
+    Swapping ``SessionLocal`` therefore redirects the whole app, with one registry.
+    """
+    global _PATH, _ENGINE, _SAVED_FACTORY, _SAVED_ENGINE
+    import database
+    import models  # noqa: F401  (already imported; named so the tables are registered)
+    import models_community  # noqa: F401
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         _PATH = tmp.name
-    os.environ["DATABASE_URL"] = f"sqlite:///{_PATH}"
-    from database import Base, engine
-    import models  # noqa: F401
-    import database
-    _ENGINE = engine
-    Base.metadata.create_all(engine)
-    database._seed_community_arena()
+    _SAVED_FACTORY, _SAVED_ENGINE = database.SessionLocal, database.engine
+    try:
+        _ENGINE = create_engine(f"sqlite:///{_PATH}", connect_args={"check_same_thread": False})
+        database.Base.metadata.create_all(_ENGINE)
+        database.SessionLocal = sessionmaker(bind=_ENGINE, autoflush=False, autocommit=False)
+        database.engine = _ENGINE
+        database._seed_community_arena()
+    except BaseException:
+        tearDownModule()
+        raise
 
 
 def tearDownModule():
-    _ENGINE.dispose()
-    if _PREV is None:
-        os.environ.pop("DATABASE_URL", None)
-    else:
-        os.environ["DATABASE_URL"] = _PREV
-    _module_swap.restore(_SAVED)
-    os.unlink(_PATH)
+    global _ENGINE, _PATH
+    import database
+    if _SAVED_FACTORY is not None:
+        database.SessionLocal = _SAVED_FACTORY
+    if _SAVED_ENGINE is not None:
+        database.engine = _SAVED_ENGINE
+    if _ENGINE is not None:
+        _ENGINE.dispose()
+        _ENGINE = None
+    if _PATH is not None:
+        try:
+            os.unlink(_PATH)
+        except OSError:
+            pass
+        _PATH = None
 
 
 def _new_tg():
