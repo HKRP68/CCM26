@@ -241,7 +241,7 @@ def _fixture(fx, teams, next_id):
 
 def tournament_payload(session, tour, tg_id=None):
     """Everything the Tournament tab shows except the stat boards."""
-    from services import injury_service, qualification
+    from services import competition_sources, injury_service, qualification
     tid = tour.id
     mine = my_team_ids(session, tour, tg_id)
     teams = {tt.id: tt for tt in
@@ -296,6 +296,8 @@ def tournament_payload(session, tour, tg_id=None):
             "id": tid, "name": tour.name, "kind": kind,
             "kind_label": KIND_LABEL.get(kind, ""),
             "description": tour.description,
+            "universe_analytics": competition_sources.enabled(competition_sources.CHALLENGE)
+                                   and competition_sources.flag("ANALYTICS") and kind == "challenge",
             "status": tour.status,
             "status_label": STATUS_LABEL.get((tour.status or "").lower(), tour.status),
             "format": tour.format, "overs": tour.overs,

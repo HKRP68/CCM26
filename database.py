@@ -208,6 +208,7 @@ def _create_missing_tables():
 
 
 def init_db():
+    import models_universe  # noqa: F401 — register additive competition tables
     import models_events  # noqa: F401 — register additive Events Studio tables
     from models import (  # noqa: F401
         User, UserWarning, Player, UserRoster, UserStats, Trade, ActivityLog,

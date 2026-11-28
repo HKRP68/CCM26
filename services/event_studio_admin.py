@@ -10,11 +10,12 @@ from sqlalchemy.exc import IntegrityError
 from database import get_session
 from models import ChallengeLeague, User
 from models_events import (
-    StudioAudit, StudioCompetition, StudioEnrollment, StudioEntitlement, StudioEvent, StudioFixture,
-    StudioGame, StudioParticipant, StudioRevision, StudioStarClaim,
+    StudioAudit, StudioAwardMedia, StudioCompetition, StudioEnrollment, StudioEntitlement, StudioEvent, StudioFixture,
+    StudioGame, StudioGroupNotice, StudioParticipant, StudioRevision, StudioStarClaim,
 )
 from services import event_studio as studio, event_studio_import as imports, event_studio_play as play
 from services import event_studio_competition as competitions, event_studio_objectives as goals
+from services.economy_transactions import reserve_miniapp_action
 from services.event_studio_rules import liability
 from services.event_studio_schedule import utc_instant, utc_text
 
@@ -75,10 +76,16 @@ def _screen(db, event=None, config=None, preview=None, error=None):
                     .where(StudioCompetition.event_id == event.id)
                     .group_by(StudioCompetition.id, User.first_name, User.username)
                     .order_by(StudioCompetition.id.desc()).limit(50)).all()
+                events_activity["award_art_ready"] = set(db.scalars(
+                    select(StudioAwardMedia.competition_id).join(StudioCompetition)
+                    .where(StudioCompetition.event_id == event.id, StudioAwardMedia.generated_at.is_not(None))))
                 events_activity["canonical"] = db.scalars(
                     select(StudioFixture).join(StudioCompetition, StudioCompetition.id == StudioFixture.competition_id)
                     .where(StudioCompetition.event_id == event.id)
                     .order_by(StudioFixture.failure_at.is_(None), StudioFixture.id.desc()).limit(50)).all()
+                events_activity["delivery"] = db.scalars(select(StudioGroupNotice).join(StudioCompetition)
+                    .where(StudioCompetition.event_id == event.id)
+                    .order_by(StudioGroupNotice.id.desc()).limit(30)).all()
                 events_activity["star_claims"] = db.execute(
                     select(StudioStarClaim, StudioParticipant.competition_id, StudioParticipant.team_key)
                     .join(StudioParticipant, StudioParticipant.id == StudioStarClaim.participant_id)
@@ -89,18 +96,36 @@ def _screen(db, event=None, config=None, preview=None, error=None):
                 events_activity["objective_progress"] = [(member, competitions._progress(db, member, current, datetime.utcnow()))
                                                           for member in members]
     clean_config = {key: value for key, value in current.items() if key in studio.defaults()}
+    from services.event_studio_items import liability as inventory_liability
     from services.pitch_report import WEATHERS
     return render_template("admin_event_studio.html", events=events, event=event, config=current,
                            config_json=json.dumps(clean_config, indent=2, ensure_ascii=False),
                            leagues=db.scalars(select(ChallengeLeague).order_by(ChallengeLeague.name).limit(200)).all(),
                            history=history, stale=studio.stale(current), preview=preview, error=error,
+                           inventory_maximum=inventory_liability(current),
                            activity=events_activity, audit=audit, maximum=liability(current),
                            pitches=[pitch for pitch in studio.PITCHES if pitch not in studio.LEGACY_PITCHES],
                            weathers=WEATHERS, stadium_countries=_stadium_countries(),
                            publish_enabled=studio.allowed(current["kind"], current["format"]),
+                           news_preview=_news_preview(db, event, current),
                            objective_metrics=goals.METRICS, objective_max=goals.max_stars(current),
                            objective_warnings=goals.warnings(current),
                            multi_enabled=competitions.mode_enabled(current, "multi"))
+
+
+def _news_preview(db, event, config):
+    if not event or not event.published_number or not config.get("competition", {}).get("news"):
+        return []
+    from services import event_studio_insights as newsroom
+    rooms = db.scalars(select(StudioCompetition).filter_by(event_id=event.id)
+                       .where(StudioCompetition.started_at.is_not(None))
+                       .order_by(StudioCompetition.id.desc()).limit(4))
+    result = []
+    for room in rooms:
+        frozen = competitions._table_config(competitions._config(db, room))
+        result.extend(newsroom.match_news(frozen, competitions._rows(db, room),
+                      newsroom.performances(db, room.id), limit=5)["items"])
+    return sorted(result, key=lambda item: item["recorded_at"], reverse=True)
 
 
 def _stadium_countries():
@@ -267,6 +292,8 @@ def install(app, login_required, csrf_exempt, webapp_auth):
                 now = datetime.utcnow()
                 payload = request.get_json(silent=True)
                 if payload is None:
+                    if request.is_json and request.content_length:
+                        return {"ok": False, "message": "Enter valid event request JSON."}, 400
                     payload = {}
                 if not isinstance(payload, dict):
                     return {"ok": False, "message": "Enter a valid request."}, 400
@@ -288,10 +315,155 @@ def install(app, login_required, csrf_exempt, webapp_auth):
                 return {"ok": False, "message": str(exc) if isinstance(exc, ValueError)
                         else "Invalid event request."}, 400
 
+    def limit_action(db, user):
+        delay = reserve_miniapp_action(db, user)
+        db.commit()
+        if delay:
+            raise ValueError(f"Try again in {delay}s.")
+
+    from services import competition_sources as universe_sources
+
+    app.jinja_env.globals["competition_universe_enabled"] = universe_sources.enabled
+    app.jinja_env.globals["competition_universe_feature"] = universe_sources.flag
+
+    @app.post("/api/webapp/competition-universe")
+    @csrf_exempt
+    def webapp_competition_universe():
+        def dispatch(db, user, body, now):
+            from services import competition_analytics, competition_collection, competition_rankings, competition_universe
+
+            if not universe_sources.enabled() or user.is_banned:
+                raise ValueError("Competition Universe is unavailable.")
+            action = body.get("action", "directory")
+            index = body.get("page", 0)
+            if action == "directory":
+                return competition_universe.directory(db, user, now, source=body.get("source", "all"),
+                    status=body.get("status", "all"), fmt=body.get("format"), page=index)
+            if action == "rankings":
+                return competition_rankings.page(db, user, scope=body.get("scope", "overall"),
+                    fmt=body.get("format", "all"), season=body.get("season", 0), index=index)
+            if action == "collection":
+                return competition_collection.page(db, user, index, source=body.get("source"),
+                    mode=body.get("mode"), fmt=body.get("format"), season=body.get("season"))
+            if action in ("analytics", "csv"):
+                key = body.get("instance")
+                if type(key) is not int or key < 1:
+                    raise ValueError("Choose a competition instance.")
+                result = competition_analytics.build(db, user, body.get("source"), key, body)
+                return {"csv": competition_analytics.export(result)} if action == "csv" else result
+            raise ValueError("Choose a valid Competition Universe section.")
+        return api(dispatch)
+
+    @app.route("/competitions/operations", methods=["GET", "POST"])
+    @login_required
+    def admin_competition_operations():
+        from models import AdminLog, ChallengeLeague, Tournament
+        from models_universe import CompetitionCatalogue, CompetitionCatalogueLink
+        from services import competition_collection, competition_operations, competition_rankings
+
+        if not universe_sources.enabled():
+            abort(404)
+        with get_session() as db:
+            now = datetime.utcnow()
+            report = error = None
+            if request.method == "POST":
+                try:
+                    action = request.form.get("action")
+                    if action in ("dry_run", "refresh"):
+                        report = {}
+                        dry = action == "dry_run"
+                        if universe_sources.flag("RANKINGS"):
+                            report["Rankings"] = competition_rankings.rebuild(db, now, dry_run=dry, force=True)
+                        if universe_sources.flag("COLLECTION"):
+                            report["Collection"] = competition_collection.sync(db, now, dry_run=dry)
+                        if not dry:
+                            db.add(AdminLog(action="competition_projection", detail=f"Refreshed by {_actor()}"))
+                    elif action in ("rotation_preview", "rotation_approve"):
+                        template_id, weeks, count = (int(request.form.get(key, "")) for key in ("template_id", "weeks", "count"))
+                        opening = request.form.get("first", "")
+                        if action == "rotation_preview":
+                            event, rev, plan = competition_operations.preview(db, template_id, opening, weeks, count, now)
+                            report = {"Rotation preview": [{**row, "opens": utc_text(row["opens"]), "close": utc_text(row["close"])}
+                                                            for row in plan],
+                                      "approval": {"template_id": event.id, "revision": rev.number,
+                                                   "first": opening, "weeks": weeks, "count": count}}
+                        else:
+                            template = studio.lock(db, StudioEvent, template_id)
+                            if template is None or template.published_number != int(request.form.get("revision", "0")):
+                                raise ValueError("The template changed. Preview the rotation again.")
+                            count = competition_operations.queue(db, template_id, opening, weeks, count, _actor(),
+                                                                  request.form.get("reason"), now)
+                            report = {"Queued or already scheduled": count}
+                    elif action == "rotation_retry":
+                        reason = (request.form.get("reason") or "").strip()
+                        if not 1 <= len(reason) <= 500:
+                            raise ValueError("Enter a short retry reason.")
+                        job = competition_operations.retry(db, int(request.form.get("job_id", "")), now)
+                        db.add(AdminLog(action="competition_rotation_retry", target_type="competition_rotation",
+                                        target_id=job.id, detail=f"{_actor()} · {reason}"))
+                        report = {"Rotation retry queued": job.id}
+                    elif action == "catalogue":
+                        if not universe_sources.flag("COLLECTION"):
+                            raise ValueError("Collection Book is disabled.")
+                        source = request.form.get("source")
+                        if not universe_sources.enabled(source) or source not in universe_sources.SCOPES:
+                            raise ValueError("Choose an enabled competition source.")
+                        family = int(request.form.get("family", ""))
+                        model = StudioEvent if source == universe_sources.LIVE else ChallengeLeague
+                        parent = studio.lock(db, model, family)
+                        if parent is None or source == universe_sources.LIVE and not parent.published_number:
+                            raise ValueError("Choose an existing catalogue family.")
+                        label = request.form.get("label", "").strip()
+                        category = request.form.get("category", "")
+                        if not 1 <= len(label) <= 100 or category not in ("domestic", "international", "challenge"):
+                            raise ValueError("Enter a label and choose a collection category.")
+                        row = db.get(CompetitionCatalogue, (source, family))
+                        if not row:
+                            row = CompetitionCatalogue(source=source, family_id=family, version=1)
+                            db.add(row)
+                        else:
+                            row.version += 1
+                        row.label, row.category = label, category
+                        row.retired_at = now if request.form.get("retired") else None
+                        db.add(AdminLog(action="competition_catalogue", target_type="competition",
+                                        target_id=family, detail=f"{_actor()} · {source} · {label}"))
+                    elif action == "catalogue_link":
+                        source = request.form.get("source")
+                        if (not universe_sources.flag("COLLECTION") or source not in universe_sources.SCOPES
+                                or not universe_sources.enabled(source)):
+                            raise ValueError("Choose an enabled Collection Book source.")
+                        edition, family = (int(request.form.get(key, "")) for key in ("edition", "family"))
+                        model = StudioEvent if source == universe_sources.LIVE else Tournament
+                        parent = studio.lock(db, model, edition)
+                        slot = db.get(CompetitionCatalogue, (source, family))
+                        if (slot is None or parent is None
+                                or source == universe_sources.LIVE and not parent.published_number
+                                or source == universe_sources.CHALLENGE and parent.kind not in (None, source)):
+                            raise ValueError("Choose a valid edition and a catalogue slot from the same source.")
+                        row = db.get(CompetitionCatalogueLink, (source, edition))
+                        before = row.family_id if row else None
+                        if row is None:
+                            row = CompetitionCatalogueLink(source=source, edition_id=edition)
+                            db.add(row)
+                        row.family_id = family
+                        db.add(AdminLog(action="competition_catalogue_link", target_type="competition",
+                                        target_id=edition, detail=f"{_actor()} · {source} · family {before} → {family}"))
+                        report = {"Edition assigned to family": family}
+                    else:
+                        raise ValueError("Choose a valid operations action.")
+                    db.commit()
+                except (ValueError, TypeError, IntegrityError) as exc:
+                    db.rollback()
+                    error = str(exc) if isinstance(exc, ValueError) else "Review the requested operation and retry."
+            snapshot = competition_operations.monitor(db, now)
+            return render_template("admin_competition_operations.html", monitor=snapshot, report=report, error=error), 400 if error else 200
+
     @app.post("/api/webapp/events-hub")
     @csrf_exempt
     def webapp_event_hub():
-        return api(lambda db, user, body, now: {"events": play.list_events(db, user, now)})
+        from services.event_studio_manager import trophies
+        return api(lambda db, user, body, now: {"events": play.list_events(db, user, now),
+                                                "trophies": trophies(db, user)})
 
     @app.post("/api/webapp/events-hub/<int:event_id>")
     @csrf_exempt
@@ -299,7 +471,9 @@ def install(app, login_required, csrf_exempt, webapp_auth):
         def read(db, user, body, now):
             event, config = play._published(db, event_id)
             if goals.tournament(config):
-                return {"competition": competitions.dashboard(db, user, event_id, now)}
+                page = body.get("news_page", 0)
+                studio.rules.integer(page, "News page", 0, 100)
+                return {"competition": competitions.dashboard(db, user, event_id, now, news_page=page)}
             return {"event": play.detail(db, user, event_id, now)}
         return api(read)
 
@@ -308,11 +482,13 @@ def install(app, login_required, csrf_exempt, webapp_auth):
     def webapp_event_competition(event_id):
         def dispatch(db, user, body, now):
             action = body.get("action")
+            if action in ("create", "claim_stars", "claim_rewards"):
+                limit_action(db, user)
             if action == "create":
-                competitions.create(db, user, event_id, body.get("mode"), body.get("team"), now, clock=datetime.utcnow)
+                competitions.create(db, user, event_id, body.get("mode"), body.get("team"), now, visibility=body.get("visibility"), consent=body.get("consent") is True, clock=datetime.utcnow)
             elif action in ("claim_stars", "claim_rewards"):
                 receipt = competitions.claim(db, user, event_id, now, objective_id=body.get("objective_id"),
-                                             reward_id=body.get("reward_id"), wallet=action == "claim_rewards")
+                                             reward_id=body.get("reward_id"), wallet=action == "claim_rewards", clock=datetime.utcnow)
                 return receipt
             elif action:
                 raise ValueError("Unknown competition action.")
@@ -326,15 +502,45 @@ def install(app, login_required, csrf_exempt, webapp_auth):
             invite, room_id = body.get("invite"), body.get("room_id")
             if room_id is not None and (type(room_id) is not int or room_id < 1):
                 raise ValueError("Choose a valid lobby.")
+            if body.get("action") == "list":
+                return {"lobbies": competitions.public_lobbies(db, user, now)}
             if not body.get("action"):
                 return {"lobby": competitions.lobby(db, user, room_id, invite=invite, now=now)}
             if body["action"] in ("start", "cancel") and body.get("confirmed") is not True:
                 raise ValueError("Confirm the lobby action before continuing.")
+            limit_action(db, user)
             if room_id is None:
                 room_id = competitions._by_invite(db, invite)
             return {"lobby": competitions.change_lobby(db, user, room_id, body["action"], now,
-                       team=body.get("team"), invite=invite, version=body.get("version"), clock=datetime.utcnow)}
+                       team=body.get("team"), invite=invite, version=body.get("version"), consent=body.get("consent") is True, clock=datetime.utcnow)}
         return api(dispatch, write=True)
+
+    @app.get("/events/studio/<int:event_id>/awards/<int:room_id>/<name>")
+    @login_required
+    def admin_event_award_art(event_id, room_id, name):
+        from base64 import b64decode
+        from flask import Response
+
+        with get_session() as db:
+            room = db.get(StudioCompetition, room_id)
+            media = db.get(StudioAwardMedia, room_id) if room and room.event_id == event_id else None
+            if not media or not media.images or name not in media.images:
+                abort(404)
+            return Response(b64decode(media.images[name]), mimetype="image/png")
+
+    @app.post("/api/webapp/events-hub/honours/<int:event_id>")
+    @csrf_exempt
+    def webapp_event_honours(event_id):
+        def read(db, user, body, now):
+            event = competitions._event(db, event_id)
+            member = competitions.membership(db, event, user.id)
+            if not member or user.is_banned:
+                raise ValueError("Your tournament entry is unavailable.")
+            media = db.get(StudioAwardMedia, member.competition_id)
+            if not media or not media.generated_at:
+                raise ValueError("Award graphics are being prepared.")
+            return {"images": media.images}
+        return api(read)
 
     @app.post("/api/webapp/events-hub/fixture/<int:fixture_id>")
     @csrf_exempt

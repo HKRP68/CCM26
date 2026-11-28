@@ -81,15 +81,21 @@ def defaults():
                      "round_spacing_days": 1, "window_hours": 20, "grace": 30,
                      "playing_days": list(range(1, 8)), "blackouts": [], "fixtures_per_day": 24,
                      "third_place": False, "groups": {}, "qualify_per_group": 2, "seed": None,
-                     "venue_countries": []},
+                     "venue_countries": [], "template": "", "rest_minutes": 60, "grand_final_reset": True, "previous_event_id": 0, "tour": []},
         "moment": {"side": "bat", "start_over": 16, "overs": 4, "goal": 35, "seed": 0, "goal_type": "segment",
                    "checkpoint": None, "objective_baseline": "earned"},
         "fixtures": [], "fixture_overrides": {}, "objectives": [], "rewards": {}, "reward_locks": [],
         "objectives_locked": False, "milestones": [],
-        "objective_scope": "fixture", "objective_preset": "balanced", "tournament_objectives": [],
+        "objective_scope": "fixture", "objective_preset": "balanced", "tournament_objectives": [], "objective_ladders": None, "ladder_generator": {},
         "competition": {"modes": ["solo", "multi"], "registration_minutes": 60,
-                        "early_start": True, "min_humans": 1, "match_rewards": True,
-                        "double_no_show_points": 0},
+                        "early_start": True, "auto_start_full": True, "min_humans": 1, "match_rewards": True,
+                        "double_no_show_points": 0, "event_pass": False,
+                        "dressing_room": False, "management_cap": 0, "management_weights": {}, "news": False, "news_upset_gap": 5, "manager_profile": False,
+                        "competitive_rating": False, "rating_k": 24, "manager_xp_cap": 500, "manager_xp_weights": {},
+                        "qualification": False, "predictor_samples": 0, "honour_board": False,
+                        "lobby_v2": False, "group_engagement": False, "world_rankings": False, "analytics": False},
+        "ai_managers": {"enabled": False, "blend": .12, "allowlist": [], "franchises": {}},
+        "pass_inventory": {"packs": 0, "cards": 0, "auto_free": [], "auto_diamond": []},
         "budget": {"coins": 0, "gems": 0, "quest_points": 0}, "generation": {},
     }
 
@@ -115,11 +121,11 @@ def normalize(raw):
         raw = {key: value for key, value in raw.items() if key not in LEGACY_KEYS}
     if not isinstance(raw, dict) or set(raw) - set(config):
         raise ValueError("Import contains unsupported fields.")
-    for key in ("schedule", "moment", "points", "community", "rotation", "notifications", "chapter", "competition"):
+    for key in ("schedule", "moment", "points", "community", "rotation", "notifications", "chapter", "competition", "pass_inventory", "ai_managers"):
         if key in raw and (not isinstance(raw[key], dict) or set(raw[key]) - set(config[key])):
             raise ValueError(f"{key}: unsupported fields.")
         config[key].update(raw.get(key, {}))
-    config.update({key: value for key, value in raw.items() if key not in ("schedule", "moment", "points", "community", "rotation", "notifications", "chapter", "competition")})
+    config.update({key: value for key, value in raw.items() if key not in ("schedule", "moment", "points", "community", "rotation", "notifications", "chapter", "competition", "pass_inventory", "ai_managers")})
     if type(config["schema_version"]) is not int or config["schema_version"] != 1:
         raise ValueError("Unsupported event schema version.")
     for key in ("description", "banner_url", "timezone", "kind", "format", "opens_at", "closes_at",
@@ -200,8 +206,13 @@ def normalize(raw):
                            ("window_hours", 1, 168), ("grace", 0, 240), ("fixtures_per_day", 1, 24),
                            ("qualify_per_group", 1, 4)):
         rules.integer(settings[key], key, low, high)
-    if settings["preset"] not in ("round_robin", "series", "knockout", "groups", "survival", "manual"):
+    schedule.validate_template(config)
+    if settings["preset"] not in ("round_robin", "series", "knockout", "groups", "survival", "manual", "double_elimination"):
         raise ValueError("Unsupported schedule preset.")
+    if type(settings["grand_final_reset"]) is not bool:
+        raise ValueError("Grand final reset must be enabled or disabled.")
+    if settings["preset"] == "double_elimination" and config["objective_scope"] != "tournament":
+        raise ValueError("Double elimination requires a shared tournament schedule.")
     if settings["playoffs"] not in ("none", "top2", "top4") or type(settings["third_place"]) is not bool:
         raise ValueError("Invalid playoff settings.")
     if settings["seed"] is not None:
@@ -241,6 +252,11 @@ def normalize(raw):
     rules.integer(moment["seed"], "Moment prefix seed", 0, 2**32 - 1)
     _validate_team_inputs(config["teams"])
     _validate_fixture_fields(config["fixtures"])
+    if config["objective_ladders"] is not None and not isinstance(config["objective_ladders"], dict):
+        raise ValueError("Objective ladders must be a versioned object.")
+    from services import competition_ai
+    competition_ai.validate(config)
+    tournament_goals.validate_generator(config)
     tournament_goals.validate(config)
     if config["kind"] != "live":
         config["objective_scope"] = "fixture"
@@ -254,8 +270,33 @@ def normalize(raw):
         rules.integer(settings["registration_minutes"], "Registration minutes", 60, 60)
         rules.integer(settings["min_humans"], "Minimum humans", 1, 16)
         rules.integer(settings["double_no_show_points"], "Double no-show points", 0, 20)
-        if any(type(settings[key]) is not bool for key in ("early_start", "match_rewards")):
-            raise ValueError("Early start and match rewards must be enabled or disabled.")
+        toggles = ("early_start", "auto_start_full", "match_rewards", "event_pass", "dressing_room", "news",
+                   "manager_profile", "competitive_rating", "qualification", "honour_board",
+                   "lobby_v2", "group_engagement", "world_rankings", "analytics")
+        if any(type(settings[key]) is not bool for key in toggles):
+            raise ValueError("Competition features must be enabled or disabled.")
+        rules.integer(settings["management_cap"], "Dressing Room rating cap", 0, 1)
+        weights = settings["management_weights"]
+        if (not isinstance(weights, dict) or weights.keys() - {"morale", "unity", "form", "fatigue", "captain"}
+                or any(type(value) not in (float, int) or not 0 <= value <= 1 for value in weights.values())):
+            raise ValueError("Set Dressing Room weights from zero to one.")
+        if settings["management_cap"] and (not settings["dressing_room"] or "solo" not in modes):
+            raise ValueError("Dressing Room gameplay effects require the Solo Dressing Room.")
+        rules.integer(settings["news_upset_gap"], "Upset strength gap", 1, 50)
+        if settings["world_rankings"] and ("multi" not in modes or not settings["lobby_v2"]):
+            raise ValueError("World Rankings require Multiplayer with public and private lobby controls.")
+        rules.integer(settings["rating_k"], "Rating K-factor", 1, 64)
+        rules.integer(settings["predictor_samples"], "Qualification samples", 0, 2000)
+        if settings["predictor_samples"] and not settings["qualification"]:
+            raise ValueError("Enable Qualification Centre before enabling estimates.")
+        rules.integer(settings["manager_xp_cap"], "Manager XP cap", 0, 10000)
+        xp_weights = settings["manager_xp_weights"]
+        if not isinstance(xp_weights, dict) or xp_weights.keys() - {"match", "win", "star", "completion", "title"}:
+            raise ValueError("Choose supported Manager XP sources.")
+        for amount in xp_weights.values():
+            rules.integer(amount, "Manager XP weight", 0, 500)
+        if settings["competitive_rating"] and (not settings["manager_profile"] or "multi" not in modes):
+            raise ValueError("Competitive rating requires the manager profile and Multiplayer.")
         if config["mode"] != ["tournament_team"] or config["objectives"]:
             raise ValueError("Tournament Live Events use published franchise squads and tournament objectives.")
     rules.validate_objectives(config)
@@ -283,6 +324,8 @@ def normalize(raw):
             raise ValueError("Rewards must contain tier, result and asset objects.")
     if len(config["milestones"]) > 20:
         raise ValueError("Enter at most 20 star milestones.")
+    from services import event_studio_items
+    event_studio_items.validate(config, require_budget=False)
     rules.validate_rewards(config, require_budget=False)
     if any(key not in ACTIONS or not isinstance(value, dict) or not isinstance(value.get("input"), str)
            for key, value in config["generation"].items()):
@@ -483,6 +526,9 @@ def _inputs(config, action):
                     "fixture_overrides"),
     }[action]
     inputs = {key: config[key] for key in fields}
+    if action == "schedule" and not inputs["schedule"].get("template") and inputs["schedule"]["preset"] != "double_elimination":
+        inputs["schedule"] = {key: value for key, value in inputs["schedule"].items()
+                              if key not in ("template", "rest_minutes", "grand_final_reset", "previous_event_id", "tour")}
     if action == "objectives":
         inputs["moment"] = {key: value for key, value in config["moment"].items()
                             if key not in ("checkpoint", "objective_baseline")}
@@ -494,7 +540,16 @@ def _inputs(config, action):
         }
     if tournament_goals.tournament(config) and action in ("objectives", "rewards"):
         inputs.update(objective_scope="tournament", tournament_objectives=config["tournament_objectives"]
-                      if action == "rewards" else None, competition=config["competition"])
+                      if action == "rewards" else None,
+                      competition={key: value for key, value in config["competition"].items()
+                                   if key in ("modes", "registration_minutes", "early_start", "min_humans",
+                                              "match_rewards", "double_no_show_points")})
+        if config.get("objective_ladders"):
+            inputs["objective_ladders"] = config["objective_ladders"]
+        if config.get("ladder_generator"):
+            inputs["ladder_generator"] = config["ladder_generator"]
+        if action == "rewards" and config["competition"].get("event_pass"):
+            inputs["event_pass"] = True
         if action == "objectives":
             inputs.update(preset=config["objective_preset"], teams=[row["key"] for row in config["teams"]],
                           fixtures=config["fixtures"])
@@ -568,6 +623,7 @@ def generate(config, action, *, overwrite=False):
         elif step == "objectives" and tournament_goals.tournament(updated):
             edited = False
             if not updated["objectives_locked"]:
+                updated["objective_ladders"] = tournament_goals.generate_ladders(updated, overwrite=overwrite)
                 updated["tournament_objectives"] = tournament_goals.generate(updated)
             tournament_goals.validate(updated)
         elif step == "objectives":
@@ -578,8 +634,13 @@ def generate(config, action, *, overwrite=False):
                 updated["objectives"] = rules.auto_objectives(updated)
             rules.validate_objectives(updated)
         else:
-            if tournament_goals.tournament(updated) and not updated["milestones"]:
-                updated["milestones"] = rules.auto_milestones(updated)
+            if tournament_goals.tournament(updated):
+                if updated["competition"].get("event_pass"):
+                    from services import event_studio_items, event_studio_pass
+                    updated["milestones"] = event_studio_pass.generate(updated, overwrite=overwrite)
+                    event_studio_items.generate(updated)
+                elif not updated["milestones"]:
+                    updated["milestones"] = rules.auto_milestones(updated)
             proposed = rules.auto_rewards(updated)
             previous = updated["generation"].get("rewards", {})
             preserved = set(updated["reward_locks"])
@@ -605,6 +666,9 @@ def generate(config, action, *, overwrite=False):
             output_key = "tournament_objectives"
         generated_metadata = {"version": 2 if output_key == "tournament_objectives" else 1, "input": _inputs(updated, step),
                               "output": digest(updated[output_key])}
+        if step == "objectives" and updated.get("ladder_generator"):
+            from services.event_objective_generator import GENERATOR_VERSION
+            generated_metadata["ladder_version"] = GENERATOR_VERSION
         if step == "schedule":
             generated_metadata["fields"] = {
                 row["key"]: {key: value for key, value in row.items()
@@ -701,6 +765,11 @@ def validate_publish(db, config, now):
             if earliest - max(opens, now) <= timedelta(minutes=90):
                 raise ValueError("Allow 60 minutes of registration and at least 30 minutes to play the first fixture.")
     maximum = rules.validate_rewards(config)
+    from services import event_studio_items, event_studio_pass
+    event_studio_pass.validate(config)
+    event_studio_items.validate(config)
+    inventory_snapshot = event_studio_items.freeze(db, config) if event_studio_pass.enabled(config) else {}
+
     frozen = snapshot_teams(db, config)
     pitches = {config["pitch"],
                *(row["pitch"] for row in config["fixtures"] if "pitch" in row),
@@ -729,6 +798,28 @@ def validate_publish(db, config, now):
                        "tuning": deepcopy(realism_config.get_config()),
                        "over_volatility": realism_config.over_volatility_enabled()}
             context.update(realism_profile=profile, realism_profile_hash=digest(profile))
+    if inventory_snapshot:
+        context["inventory_snapshot"] = inventory_snapshot
+    if config["ai_managers"]["enabled"]:
+        if not flag("AI_PERSONALITIES"):
+            raise ValueError("AI manager publication requires the staging rollout flag.")
+        from secrets import token_hex
+        context["ai_manager_seed"] = token_hex(32)
+    template = config["schedule"].get("template")
+    previous_id = config["schedule"].get("previous_event_id")
+    if template == "mystery":
+        from secrets import token_hex
+        context["mystery_seed"] = token_hex(32)
+    if previous_id:
+        previous = db.get(StudioEvent, previous_id)
+        before = revision(db, previous, published=True) if previous and previous.published_number else None
+        if not before or previous.closes_at > opens or before.config.get("objective_scope") != "tournament":
+            raise ValueError("Link a published tournament that closes before the new event opens.")
+        if template == "dynasty" and set(frozen) != set(before.config["snapshot"]):
+            raise ValueError("Dynasty editions must retain the same published franchise keys.")
+        if template == "champions" and not before.config["competition"].get("honour_board"):
+            raise ValueError("A champions-only predecessor must have a canonical Honour Board.")
+        context["previous_edition"] = {"id": previous_id, "revision": previous.published_number, "name": previous.name}
     prerequisite = config["chapter"]["prerequisite_slug"]
     if prerequisite:
         previous = db.scalar(select(StudioEvent).where(StudioEvent.slug == prerequisite,

@@ -265,10 +265,18 @@ def test_migration_rerun_keeps_legacy_and_shared_rows(sessions, monkeypatch):
         entry_id = entry.id
         db.commit()
         engine = db.get_bind()
-        before = [table for table in database.Base.metadata.tables.values()
+        metadata = database.Base.metadata
+        before = {table for table in metadata.tables.values()
                   if table.name.startswith(("studio_competition", "studio_participants", "studio_fixture",
-                                            "studio_contributions", "studio_star_claims"))]
-        database.Base.metadata.drop_all(engine, tables=before)
+                                            "studio_contributions", "studio_star_claims"))}
+        # Later Studio tables depend on the shared schema being removed in this test.
+        while True:
+            children = {table for table in metadata.tables.values() if table not in before
+                        and any(key.column.table in before for key in table.foreign_keys)}
+            if not children:
+                break
+            before.update(children)
+        metadata.drop_all(engine, tables=before)
         assert "studio_competitions" not in inspect(engine).get_table_names()
         monkeypatch.setattr(database, "engine", engine)
         database._create_missing_tables()

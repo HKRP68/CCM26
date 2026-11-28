@@ -173,8 +173,11 @@ def validate_rewards(config, *, require_budget=True):
     max_stars = (len(config["objectives"]) + 1 if is_moment(config)
                  else max_sources(config) * len(config["objectives"]))
     if config.get("objective_scope") == "tournament" and config["kind"] == "live":
-        max_stars = sum(row["stars"] for row in config["tournament_objectives"])
+        from services.event_studio_objectives import max_stars as tournament_stars
+        max_stars = tournament_stars(config)
     for row in config["milestones"]:
+        if not isinstance(row, dict):
+            raise ValueError("Each star milestone must be an object.")
         if require_budget and not max_stars:
             raise ValueError("Star milestones need a schedule and star objectives.")
         threshold = integer(row["stars"], "Milestone stars", 1, max_stars if require_budget else 1200)
@@ -198,7 +201,8 @@ def auto_milestones(config):
     """Price a four-step claimed-star road within its per-human reserve."""
     from math import ceil
 
-    stars = sum(row["stars"] for row in config["tournament_objectives"])
+    from services.event_studio_objectives import max_stars
+    stars = max_stars(config)
     if not stars:
         return []
     steps = sorted({ceil(stars * i / 4) for i in range(1, 5)})

@@ -4,6 +4,7 @@ from sqlalchemy import case, func, select
 
 from models_events import StudioEnrollment, StudioGame, StudioResult
 from services.event_studio_rules import is_moment
+from services.event_studio_brackets import effective_final
 
 
 def contribution(state, team):
@@ -25,7 +26,9 @@ def contribution(state, team):
             row = rows.setdefault(rid, {"name": player["name"], "version": player["version"],
                                         "player_id": player["player_id"]})
             keys = ("runs", "balls", "fours", "sixes", "out", "batted") if kind == "batting" else (
-                "runs", "balls", "wickets", "maidens")
+                "runs", "balls", "wickets", "maidens", "dots")
+            if kind == "bowling" and "dots" not in stat:
+                keys = tuple(key for key in keys if key != "dots")
             baseline = prefix.get(kind, {}).get(str(rid), {})
             row[kind] = {key: max(0, int(stat.get(key) or 0) - int(baseline.get(key) or 0)) for key in keys}
     return list(rows.values())
@@ -65,6 +68,29 @@ def player_stats(rows):
             "bowling": sorted(bowling.values(), key=lambda row: (-row["wickets"], row["name"]))}
 
 
+def world_tour(config, rows):
+    """Distinct series standings over the canonical, sequential tour fixtures."""
+    if config["schedule"].get("template") != "world_tour":
+        return []
+    from services.event_studio_play import table
+
+    roster = sorted(rows, key=lambda item: next(row["round"] for row in config["fixtures"]
+                                               if row["key"] == item[0].fixture_key))
+    offset, output = 0, []
+    for index, stop in enumerate(config["schedule"]["tour"], 1):
+        selected = roster[offset:offset + stop["games"]]
+        offset += stop["games"]
+        boards = table(config, selected)
+        complete = len(selected) == stop["games"] and all(
+            result is not None and result.kind != "cancelled" for _, result in selected)
+        ranked = [(row["points"], row["won"], row["nrr"]) for row in boards]
+        winner = boards[0]["team"] if complete and ranked[0] > ranked[1] else None
+        output.append({"series": index, "country": stop["country"], "games": stop["games"], "complete": complete,
+                       "winner": winner, "winner_name": config["snapshot"][winner]["name"] if winner else None,
+                       "points": {row["team"]: row["points"] for row in boards}})
+    return output
+
+
 def trophy(config, entry, rows, standings):
     kind = config["kind"]
     if kind != "live":
@@ -72,15 +98,24 @@ def trophy(config, entry, rows, standings):
             if result and (result.kind == "success" if is_moment(config) else result.winner == entry.team_key):
                 return "Moment completed" if kind == "moment" else "Boss defeated"
         return None
+    tour = world_tour(config, rows)
+    if tour:
+        if not all(item["complete"] for item in tour):
+            return None
+        wins = {row["team"]: sum(item["winner"] == row["team"] for item in tour) for row in standings}
+        champion = max(standings, key=lambda row: wins[row["team"]])
+        if champion["team"] == entry.team_key and (champion["won"] or wins[entry.team_key]):
+            return "World Tour champion"
+        return None
     if config["schedule"]["preset"] == "survival":
         if rows and all(result and result.winner == entry.team_key for _, result in rows):
             return "Survival Cup winner"
         return None
     playoff = [row for row in config["fixtures"] if row["stage"] == "playoff" and row["key"] != "third-place"]
     if playoff:
-        final = max(playoff, key=lambda row: row["round"])
+        final = effective_final(config, rows)
         for game, result in rows:
-            if game.fixture_key != final["key"] or not result:
+            if game.fixture_key != final or not result:
                 continue
             if result.winner == entry.team_key:
                 return "Tournament champion"

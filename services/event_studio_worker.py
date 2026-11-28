@@ -113,9 +113,10 @@ def _sweep_competition_xp(now):
             job.attempts += 1
             try:
                 with db.begin_nested():
-                    lock_user_for_update(db, db.get(User, user_id))
-                    award = on_event_match_completed(db, user_id, amount=job.amount, limit=job.daily_limit,
-                                                     now=now, source=f"studio-competition:{fixture}")
+                    account = lock_user_for_update(db, db.get(User, user_id))
+                    award = ({"reason": "banned"} if account.is_banned else
+                             on_event_match_completed(db, user_id, amount=job.amount, limit=job.daily_limit,
+                                                      now=now, source=f"studio-competition:{fixture}"))
                     if award["reason"] in ("error", "duplicate_race"):
                         raise RuntimeError("Competition XP needs retry.")
                 job.outcome, job.processed_at = award["reason"], now
@@ -159,6 +160,9 @@ async def _tick(context):
     from handlers.event_studio import send_timeout_prompt
 
     prompts = await asyncio.to_thread(sweep)
+    from services import event_studio_award_media, event_studio_predictor
+    await asyncio.to_thread(event_studio_predictor.sweep)
+    await asyncio.to_thread(event_studio_award_media.sweep)
     for prompt in prompts:
         if prompt[0] == "competition":
             from handlers.event_competitions import send_timeout_prompt as send_shared_prompt
@@ -167,6 +171,12 @@ async def _tick(context):
             await send_timeout_prompt(context.bot, *prompt)
     await notices.send_due(context.bot)
     await _send_competition_notices(context.bot)
+    from services.event_studio_group import send_due
+    await send_due(context.bot)
+    from services import competition_collection, competition_operations, competition_rankings
+    await asyncio.to_thread(competition_rankings.sweep)
+    await asyncio.to_thread(competition_collection.sweep)
+    await asyncio.to_thread(competition_operations.sweep)
 
 
 

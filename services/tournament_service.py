@@ -923,6 +923,11 @@ def _collect_player_lines(state):
         lines[0]["played_pitch"] = state["pitch_type"]
     from services.record_telemetry import detail
     telemetry = detail(state)
+    if lines:
+        from services.competition_sources import CHALLENGE, enabled, flag
+        if enabled(CHALLENGE) and flag("ANALYTICS"):
+            from services.competition_analytics import extract
+            lines[0]["universe_telemetry"] = extract(state)
     if lines and telemetry is not None:
         # Keep the player-row array compatible with existing aggregation. Match
         # context is embedded once on a real row, never as a fabricated player.
@@ -1854,6 +1859,8 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
     # A fresh completion cannot change record snapshots from earlier matches.
     # Replays replace evidence and still need the full correction pass.
     recompute_tournament(session, tid, appended_match=None if replacing_simulation else tm)
+    from services.competition_sources import capture_challenge
+    capture_challenge(session, tour, tm, state)
 
     # ── Injuries ──
     # Count one match off everyone already sidelined, then roll for new knocks.

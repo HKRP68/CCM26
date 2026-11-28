@@ -2,6 +2,7 @@
 
 from decimal import Decimal, InvalidOperation
 from math import ceil
+import json
 import re
 
 from services.event_studio_rules import FORMATS, integer
@@ -39,8 +40,93 @@ def tournament(config):
     return config.get("objective_scope") == "tournament" and config["kind"] == "live"
 
 
+def active_rows(config):
+    rows = config.get("tournament_objectives", [])
+    ladder = config.get("objective_ladders")
+    if not ladder:
+        return rows
+    from services.event_objective_rules import parse_objectives
+    stages = parse_objectives(json.dumps(ladder), match_format=config["format"], star_cap=120)
+    aliases = {"dots": "bowling_dot_balls", "win_streak": "consecutive_wins",
+               "chases": "successful_chases", "defenses": "successful_defenses"}
+    expanded = []
+    for objective in stages:
+        metric = aliases.get(objective.metric, objective.metric)
+        for stage in objective.stages:
+            expanded.append({"id": stage.id, "metric": metric, "target": stage.target, "stars": stage.stars,
+                             "title": f"{METRICS[metric]} · {stage.id.replace('_', ' ').title()}",
+                             "locked": stage.locked,
+                             "stages": ["playoff"] if objective.optional_playoffs else ["league", "survival"]})
+    return [*rows, *expanded]
+
+
+
+def generate_ladders(config, *, overwrite=False):
+    """Place generated stages on the same settlement and star receipts as authored ladders."""
+    options = config.get("ladder_generator", {})
+    metrics = options.get("metrics", [])
+    existing = config.get("objective_ladders")
+    if not metrics or existing and not overwrite:
+        return existing
+    from services.event_objective_generator import LeagueFixture, generate_ladder
+    from services.event_objective_rules import export_objectives, parse_objectives
+
+    format_name = config["format"]
+    stage_count = options.get("stage_count", 4)
+    remaining = options.get("star_cap", 120) - sum(row["stars"] for row in config["tournament_objectives"])
+    saved = {item.id: item for item in parse_objectives(json.dumps(existing), match_format=format_name, star_cap=120)} if existing else {}
+    teams = [team["key"] for team in config["teams"]]
+    keys = set(teams)
+    fixtures = [LeagueFixture(row["key"], row["home"], row["away"]) for row in config["fixtures"]
+                if row["stage"] == "league" and row["home"] in keys and row["away"] in keys]
+    results = [obj for obj in saved.values() if obj.metric not in metrics or obj.optional_playoffs]
+    remaining -= sum(stage.stars for obj in results for stage in obj.stages)
+    for position, metric in enumerate(metrics):
+        existing_row = next((row for row in saved.values() if row.metric == metric and not row.optional_playoffs), None)
+        future_locked = sum(stage.stars for row in saved.values() if row.metric in metrics[position+1:]
+                            and not row.optional_playoffs for stage in row.stages if stage.locked)
+        lock_cost = sum(stage.stars for stage in existing_row.stages if stage.locked) if existing_row else 0
+        available = remaining - future_locked
+        if available < lock_cost:
+            raise ValueError("Locked objective stages exceed the configured star cap.")
+        budget = min(available, max(lock_cost, available // (len(metrics) - position)))
+        if not budget:
+            continue
+        preview = generate_ladder(objective_id=existing_row.id if existing_row else metric, metric=metric,
+                                  match_format=format_name, fixtures=fixtures, team_ids=teams, star_cap=budget,
+                                  difficulty=options.get("preset", "Balanced"), stage_count=stage_count,
+                                  existing=existing_row, regenerate=existing_row is not None)
+        if preview.objective.stages:
+            results.append(preview.objective)
+            remaining -= preview.star_liability
+    return json.loads(export_objectives(results))
+
+
+def validate_generator(config):
+    from services.event_objective_generator import PRESETS as LADDER_PRESETS
+    from services.event_objective_rules import METRICS as LADDER_METRICS
+
+    options = config.get("ladder_generator", {})
+    if options == {}:
+        return
+    if not isinstance(options, dict) or options.keys() - {"metrics", "stage_count", "star_cap", "preset"}:
+        raise ValueError("Use supported objective ladder generator fields.")
+    metrics = options.get("metrics", [])
+    if (not isinstance(metrics, list) or not 1 <= len(metrics) <= 6 or
+            any(not isinstance(key, str) or key not in LADDER_METRICS for key in metrics) or
+            len(metrics) != len(set(metrics))):
+        raise ValueError("Choose one to six distinct ladder metrics.")
+    integer(options.get("stage_count", 4), "Ladder stage count", 1, 4)
+    integer(options.get("star_cap", 120), "Ladder star cap", 1, 120)
+    preset = options.get("preset", "Balanced")
+    if not isinstance(preset, str) or preset not in LADDER_PRESETS:
+        raise ValueError("Choose an Easy, Balanced, Hard or Extreme ladder preset.")
+    if not tournament(config):
+        raise ValueError("Auto ladders require tournament objectives.")
+
+
 def max_stars(config):
-    return sum(row["stars"] for row in config.get("tournament_objectives", []))
+    return sum(row["stars"] for row in active_rows(config))
 
 
 def guaranteed(config, stages=STAGES):
@@ -55,10 +141,10 @@ def validate(config, *, publishing=False):
     if config.get("objective_scope") not in ("fixture", "tournament"):
         raise ValueError("Choose fixture or tournament objectives.")
     if not tournament(config):
-        if config.get("tournament_objectives"):
+        if config.get("tournament_objectives") or config.get("objective_ladders"):
             raise ValueError("Tournament objectives apply to Live Events.")
         return
-    rows = config["tournament_objectives"]
+    rows = active_rows(config)
     if not isinstance(rows, list) or len(rows) > 24:
         raise ValueError("Enter up to 24 tournament objectives.")
     seen = set()
@@ -147,7 +233,7 @@ def estimates(config):
 def generate(config):
     preset = PRESETS[config["objective_preset"]]
     existing = config["tournament_objectives"]
-    if preset is None:
+    if preset is None or config.get("objective_ladders"):
         return existing
     matches = guaranteed(config)
     if not matches:
@@ -173,7 +259,7 @@ def generate(config):
 def warnings(config):
     if not tournament(config):
         return []
-    rows = config["tournament_objectives"]
+    rows = active_rows(config)
     source, _, _ = estimates(config)
     alerts = [f"{source} per guaranteed fixture. Fifties and centuries use conservative estimates."]
     count = guaranteed(config)

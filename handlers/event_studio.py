@@ -617,6 +617,22 @@ async def command(update, context):
         action = "manage" if len(args) > 1 and args[1].lower() == "manage" else "match"
         if await handle_match_command(update, context, action):
             return
+        if not args:
+            from models_events import StudioParticipant
+
+            def shared_entry():
+                with get_session() as db:
+                    user = _user(db, update.effective_user.id)
+                    return db.scalar(select(StudioParticipant.id).filter_by(user_id=user.id).limit(1))
+
+            try:
+                if await asyncio.to_thread(shared_entry):
+                    from handlers.event_competitions import _show
+                    await _show(update, context, ["joined", str(update.effective_user.id), "play"])
+                    return
+            except ValueError as exc:
+                await update.effective_message.reply_text(str(exc))
+                return
     try:
         text, buttons = await asyncio.to_thread(_dispatch, update.effective_user.id, kind=KINDS.get(name))
     except ValueError as exc:

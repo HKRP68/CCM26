@@ -305,3 +305,111 @@ class StudioCompetitionXP(Base):
     attempts = Column(Integer, nullable=False, default=0)
 
     __table_args__ = (Index("ix_studio_competition_xp_due", "processed_at", "due_at"),)
+
+
+class StudioTeamPerformance(Base):
+    __tablename__ = "studio_team_performance"
+
+    fixture_id = Column(Integer, ForeignKey("studio_fixture_results.fixture_id"), primary_key=True)
+    team_key = Column(String(40), primary_key=True)
+    detail = Column(JSON, nullable=False)
+
+
+class StudioHonourSnapshot(Base):
+    __tablename__ = "studio_honour_snapshots"
+
+    competition_id = Column(Integer, ForeignKey("studio_competitions.id"), primary_key=True)
+    version = Column(Integer, primary_key=True)
+    detail = Column(JSON, nullable=False)
+    created_at = Column(DateTime, nullable=False)
+
+
+class StudioManagerEntry(Base):
+    __tablename__ = "studio_manager_entries"
+
+    id = Column(Integer, primary_key=True)
+    participant_id = Column(Integer, ForeignKey("studio_participants.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    source = Column(String(64), nullable=False)
+    xp = Column(Integer, nullable=False)
+    rating = Column(JSON)
+    created_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (UniqueConstraint("participant_id", "source"),)
+
+
+class StudioLobbyPolicy(Base):
+    __tablename__ = "studio_lobby_policies"
+
+    competition_id = Column(Integer, ForeignKey("studio_competitions.id"), primary_key=True)
+    visibility = Column(String(12), nullable=False)
+    invite_nonce = Column(String(24), nullable=False)
+    ready = Column(JSON, nullable=False, default=list)
+    transfer_to = Column(String(40))
+
+
+class StudioGroupNotice(Base):
+    __tablename__ = "studio_group_notices"
+
+    id = Column(Integer, primary_key=True)
+    competition_id = Column(Integer, ForeignKey("studio_competitions.id"), nullable=False)
+    chat_id = Column(BigInteger, nullable=False)
+    source = Column(String(80), nullable=False)
+    text = Column(String(500), nullable=False)
+    due_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    leased_at = Column(DateTime)
+    sent_at = Column(DateTime)
+    telegram_message_id = Column(BigInteger)
+    fixture_id = Column(Integer, ForeignKey("studio_fixtures.id"))
+    lead_hours = Column(Integer)
+    failed_at = Column(DateTime)
+    attempts = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        UniqueConstraint("competition_id", "source", "chat_id"),
+        Index("ix_studio_group_notices_due", "sent_at", "failed_at", "due_at"),
+        Index("ix_studio_group_notices_chat", "chat_id", "leased_at"),
+    )
+
+
+class StudioQualificationJob(Base):
+    __tablename__ = "studio_qualification_jobs"
+
+    competition_id = Column(Integer, ForeignKey("studio_competitions.id"), primary_key=True)
+    result_version = Column(Integer, nullable=False, default=1)
+    computed_version = Column(Integer, nullable=False, default=0)
+    due_at = Column(DateTime, nullable=False)
+    calculated_at = Column(DateTime)
+    estimate = Column(JSON)
+
+    __table_args__ = (Index("ix_studio_qualification_jobs_due", "due_at"),)
+
+
+class StudioRewardItem(Base):
+    __tablename__ = "studio_reward_items"
+
+    reward_id = Column(Integer, ForeignKey("studio_competition_rewards.id"), primary_key=True)
+    position = Column(Integer, primary_key=True)
+    detail = Column(JSON, nullable=False)
+    granted_at = Column(DateTime, nullable=False)
+
+
+class StudioAwardMedia(Base):
+    __tablename__ = "studio_award_media"
+
+    competition_id = Column(Integer, ForeignKey("studio_competitions.id"), primary_key=True)
+    due_at = Column(DateTime, nullable=False, index=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    generated_at = Column(DateTime)
+    images = Column(JSON)
+
+
+class StudioAIManager(Base):
+    __tablename__ = "studio_ai_managers"
+
+    competition_id = Column(Integer, ForeignKey("studio_competitions.id"), primary_key=True)
+    team_key = Column(String(40), primary_key=True)
+    profile_key = Column(String(30), nullable=False)
+    profile_version = Column(Integer, nullable=False)
+    assignment_seed = Column(String(64), nullable=False)

@@ -2,6 +2,9 @@
 
 from copy import deepcopy
 from datetime import timedelta
+from hashlib import sha256
+from hmac import compare_digest, digest as hmac_digest
+import re
 from secrets import token_hex, randbelow
 import os
 from types import SimpleNamespace
@@ -11,12 +14,15 @@ from sqlalchemy.orm import defer
 
 from models import User
 from models_events import (
-    StudioAudit, StudioCompetition, StudioCompetitionNotice, StudioCompetitionReward, StudioCompetitionXP,
+    StudioAudit, StudioAwardMedia, StudioCompetition, StudioCompetitionNotice, StudioCompetitionReward, StudioCompetitionXP,
     StudioContribution, StudioEnrollment, StudioEvent, StudioFixture, StudioFixtureResult,
-    StudioParticipant, StudioRevision, StudioStarClaim,
+    StudioHonourSnapshot, StudioLobbyPolicy, StudioParticipant, StudioRevision, StudioStarClaim, StudioTeamPerformance,
 )
+from services import competition_ai, event_studio_brackets as brackets
 from services import cipl_picks as picks, event_studio as studio, event_studio_cricket as cricket
-from services import event_studio_objectives as goals, event_studio_play as legacy
+from services import event_studio_group as group, event_studio_insights as insights, event_studio_manager as manager
+from services import event_studio_dressing as dressing, event_studio_items as inventory, event_studio_predictor as predictor
+from services import event_studio_objectives as goals, event_studio_pass as event_pass, event_studio_play as legacy
 from services import event_studio_progress as progression, event_studio_rules as rules, event_studio_schedule as schedule
 from services.activity_service import log_activity
 from services.economy_transactions import lock_user_for_update
@@ -74,19 +80,35 @@ def _entrant(user):
         raise ValueError("Complete /debut with an active account to join.")
 
 
-def _reserve(db, event, config, competition, user, team, now):
+def _reserve(db, event, config, competition, user, team, now, *, consent=False):
     _entrant(user)
     if not _registration_open(event, config, now):
         raise ValueError("Enrollment is closed.")
+    if db.scalar(select(StudioEnrollment.id).filter_by(event_id=event.id, user_id=user.id)):
+        raise studio.Conflict("You already have a legacy entry in this event.")
+    prior = membership(db, event, user.id)
+    if prior and prior.competition_id != competition.id:
+        raise studio.Conflict("You already have an entry in this event.")
+    template = config["schedule"].get("template")
+    if template == "mystery":
+        if team is not None or consent is not True:
+            raise ValueError("Confirm that the server will assign your Mystery franchise.")
+        if prior:
+            return prior
+        occupied_teams = set(db.scalars(select(StudioParticipant.team_key).filter_by(competition_id=competition.id)))
+        seats = set(config["snapshot"]) - occupied_teams
+        if not seats:
+            raise ValueError("No Mystery franchise seats are available.")
+        secret = bytes.fromhex(config["mystery_seed"])
+        team = min(seats, key=lambda key: hmac_digest(secret, f"{user.id}:{key}".encode(), "sha256"))
+    if template == "champions" and config.get("previous_edition"):
+        if not manager.is_champion(db, user.id, config["previous_edition"]["id"]):
+            raise ValueError("Entry requires a verified trophy from the listed Champions League qualifier.")
     if team not in config["snapshot"] or (config["schedule"]["preset"] == "survival"
                                            and team != config["teams"][0]["key"]):
         raise ValueError("Choose an available franchise.")
-    prior = membership(db, event, user.id)
-    if prior:
-        if prior.competition_id != competition.id:
-            raise studio.Conflict("You already have an entry in this event.")
-        if prior.team_key == team:
-            return prior
+    if prior and prior.team_key == team:
+        return prior
     occupied = db.scalar(select(StudioParticipant.id).filter_by(competition_id=competition.id, team_key=team))
     if occupied:
         raise studio.Conflict("Another manager has claimed that franchise.")
@@ -105,7 +127,7 @@ def _reserve(db, event, config, competition, user, team, now):
     return entry
 
 
-def create(db, user, event_id, mode, team, now, *, chat_id=None, clock=None):
+def create(db, user, event_id, mode, team, now, *, chat_id=None, visibility=None, consent=False, clock=None):
     event = _event(db, event_id, lock=True)
     now = clock() if clock else now
     config = studio.revision(db, event, published=True).config
@@ -123,14 +145,24 @@ def create(db, user, event_id, mode, team, now, *, chat_id=None, clock=None):
     until = now + timedelta(minutes=config["competition"]["registration_minutes"]) if mode == "multi" else now
     if mode == "multi" and until + FIRST_FIXTURE_BUFFER > legacy._cutoff(event, config):
         raise ValueError("There is not enough time for the full registration hour and first fixture.")
+    use_policy = mode == "multi" and config["competition"].get("lobby_v2")
+    if visibility is not None and (not use_policy or visibility not in ("public", "private")):
+        raise ValueError("Choose a supported lobby visibility.")
+    visibility = visibility or ("public" if chat_id is not None else "private")
+    if use_policy and visibility == "private":
+        chat_id = None
     competition = StudioCompetition(event_id=event.id, revision=event.published_number,
                                     kind=mode, host_id=user.id, chat_id=chat_id,
                                     invite=token_hex(12) if mode == "multi" else None,
                                     created_at=now, join_until=until)
     db.add(competition)
     db.flush()
-    _reserve(db, event, config, competition, user, team, now)
-    _audit(db, event.id, user.id, "competition_created", now, competition=competition.id, mode=mode, team=team)
+    if use_policy:
+        policy = StudioLobbyPolicy(competition_id=competition.id, visibility=visibility, invite_nonce=token_hex(12))
+        competition.invite = _invite_hash(_lobby_code(policy))
+        db.add(policy)
+    entry = _reserve(db, event, config, competition, user, team, now, consent=consent)
+    _audit(db, event.id, user.id, "competition_created", now, competition=competition.id, mode=mode, team=entry.team_key)
     if mode == "solo":
         _start(db, competition, event, config, now)
     return competition
@@ -146,27 +178,54 @@ def _room(db, room_id, *, write=False):
     return row, event, _config(db, row)
 
 
-def _room_access(db, row, user, *, invite=None, chat_id=None):
+def _invite_hash(code):
+    return sha256(code.encode()).hexdigest()[:32]
+
+
+def _lobby_code(policy):
+    from config import BOT_TOKEN
+
+    return hmac_digest(BOT_TOKEN.encode(), f"live-event:{policy.invite_nonce}".encode(), "sha256").hex()[:24]
+
+
+def _room_access(db, row, user, *, invite=None, chat_id=None, now):
     _entrant(user)
     actor = _human_side(db, row, user.id)
-    if actor or row.status == "lobby" and ((invite and invite == row.invite)
-                                           or chat_id is not None and chat_id == row.chat_id):
+    policy = db.get(StudioLobbyPolicy, row.id)
+    if actor:
         return actor
+    credential = _invite_hash(invite) if policy and isinstance(invite, str) else invite
+    if row.status == "lobby" and (not policy or now < row.join_until) and (policy and policy.visibility == "public"
+                                  or chat_id is not None and chat_id == row.chat_id
+                                  or isinstance(credential, str) and row.invite and compare_digest(credential, row.invite)):
+        return None
     raise ValueError("Use a valid lobby invitation or open the lobby in its hosting group.")
 
 
 def _by_invite(db, invite):
-    if not isinstance(invite, str) or not 10 <= len(invite) <= 32:
+    if not isinstance(invite, str) or not re.fullmatch(r"[a-f0-9]{24}", invite):
         raise ValueError("Enter a valid lobby code.")
-    key = db.scalar(select(StudioCompetition.id).filter_by(invite=invite))
+    key = db.scalar(select(StudioCompetition.id).where(StudioCompetition.status == "lobby",
+                           StudioCompetition.invite.in_((invite, _invite_hash(invite)))))
     if key is None:
         raise ValueError("Lobby invitation is unavailable.")
     return key
 
 
+def public_lobbies(db, user, now):
+    _entrant(user)
+    rows = db.execute(select(StudioCompetition, StudioEvent).join(StudioLobbyPolicy)
+        .join(StudioEvent, StudioEvent.id == StudioCompetition.event_id)
+        .where(StudioLobbyPolicy.visibility == "public", StudioCompetition.status == "lobby",
+               StudioCompetition.join_until > now, StudioEvent.status.in_(studio.OPEN_STATUSES))
+        .order_by(StudioCompetition.join_until, StudioCompetition.id).limit(30)).all()
+    return [{"id": room.id, "name": event.name, "closes_at": schedule.utc_text(room.join_until)}
+            for room, event in rows if _registration_open(event, _config(db, room), now)]
+
+
 def lobby(db, user, room_id=None, *, invite=None, chat_id=None, now):
     row, event, config = _room(db, room_id if room_id is not None else _by_invite(db, invite))
-    actor = _room_access(db, row, user, invite=invite, chat_id=chat_id)
+    actor = _room_access(db, row, user, invite=invite, chat_id=chat_id, now=now)
     return _lobby_view(db, row, event, config, actor, user, now)
 
 
@@ -175,24 +234,32 @@ def _lobby_view(db, row, event, config, actor, user, now):
     names = {user_id: name for user_id, name in db.execute(
         select(User.id, func.coalesce(User.first_name, User.username, "Manager"))
         .where(User.id.in_([p.user_id for p in entries.values() if p.user_id])))}
-    invite = row.invite if user.id == row.host_id else None
+    policy = db.get(StudioLobbyPolicy, row.id)
+    ready = set(policy.ready) if policy else set()
+    invite = (_lobby_code(policy) if policy else row.invite) if user.id == row.host_id and row.status == "lobby" else None
     username = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
     return {"id": row.id, "event_id": event.id, "name": event.name, "kind": row.kind, "status": row.status,
             "invite_url": f"https://t.me/{username}?start=eventlobby_{invite}" if invite and username else None,
             "version": row.version, "invite": invite,
+            "features": {"ready": bool(policy), "visibility": policy.visibility if policy else None,
+                         "ready_count": len(ready), "host": names.get(row.host_id),
+                         "mystery": config["schedule"].get("template") == "mystery",
+                         "transfer_pending": bool(policy and actor and policy.transfer_to == actor.team_key)},
             "join_until": schedule.utc_text(row.join_until), "timezone": config["timezone"],
             "is_host": row.host_id == user.id, "my_team": actor.team_key if actor else None,
             "can_join": row.status == "lobby" and now < row.join_until and _registration_open(event, config, now),
             "early_start": config["competition"]["early_start"], "minimum": config["competition"]["min_humans"],
             "ai_count": len(config["snapshot"]) - sum(bool(p.user_id) for p in entries.values()),
-            "teams": [{"key": key, "name": team["name"], "owner": names.get(entries[key].user_id) if key in entries else None}
+            "teams": [{"key": key, "name": team["name"], "owner": names.get(entries[key].user_id) if key in entries else None,
+                       "ready": key in ready}
                       for key, team in config["snapshot"].items()]}
 
 
-def change_lobby(db, user, room_id, action, now, *, team=None, invite=None, chat_id=None, version=None, clock=None):
+def change_lobby(db, user, room_id, action, now, *, team=None, invite=None, chat_id=None, version=None, consent=False, clock=None):
     row, event, config = _room(db, room_id, write=True)
     now = clock() if clock else now
-    actor = _room_access(db, row, user, invite=invite, chat_id=chat_id)
+    actor = _room_access(db, row, user, invite=invite, chat_id=chat_id, now=now)
+    policy = db.get(StudioLobbyPolicy, row.id)
     if row.status != "lobby":
         if action == "claim" and actor or action == "start" and row.host_id == user.id and row.started_at:
             return _lobby_view(db, row, event, config, actor, user, now)
@@ -204,17 +271,45 @@ def change_lobby(db, user, room_id, action, now, *, team=None, invite=None, chat
     if action == "claim":
         if actor and actor.team_key == team:
             return _lobby_view(db, row, event, config, actor, user, now)
-        actor = _reserve(db, event, config, row, user, team, now)
-        if len(_entries(db, row)) == len(config["snapshot"]):
+        prior_team = actor.team_key if actor else None
+        actor = _reserve(db, event, config, row, user, team, now, consent=consent)
+        if policy and prior_team:
+            policy.ready = [key for key in policy.ready if key != prior_team]
+            if policy.transfer_to == prior_team:
+                policy.transfer_to = None
+        if config["competition"].get("auto_start_full", True) and len(_entries(db, row)) == len(config["snapshot"]):
             _start(db, row, event, config, now)
     elif action == "release":
+        if config["schedule"].get("template") == "mystery":
+            raise ValueError("Mystery franchise assignments stay fixed through registration.")
         if row.host_id == user.id:
             raise ValueError("The host can close the lobby before it starts.")
         if not actor:
             return _lobby_view(db, row, event, config, actor, user, now)
+        if policy:
+            policy.ready = [key for key in policy.ready if key != actor.team_key]
+            if policy.transfer_to == actor.team_key:
+                policy.transfer_to = None
         db.delete(actor)
         db.flush()
         actor = None
+    elif action in ("ready", "unready", "offer_host", "accept_host"):
+        if not policy or not actor:
+            raise ValueError("Join this lobby before changing its settings.")
+        if action in ("ready", "unready"):
+            keys = set(policy.ready)
+            keys.discard(actor.team_key)
+            if action == "ready":
+                keys.add(actor.team_key)
+            policy.ready = sorted(keys)
+        elif action == "offer_host":
+            if row.host_id != user.id or team == actor.team_key or team not in {p.team_key for p in _entries(db, row)}:
+                raise ValueError("The host can offer transfer to a registered manager.")
+            policy.transfer_to = team
+        elif policy.transfer_to == actor.team_key:
+            row.host_id, policy.transfer_to = user.id, None
+        else:
+            raise ValueError("There is no pending host transfer for you.")
     elif action in ("start", "cancel"):
         if row.host_id != user.id:
             raise ValueError("Only the lobby host can do that.")
@@ -224,6 +319,7 @@ def change_lobby(db, user, room_id, action, now, *, team=None, invite=None, chat
             _start(db, row, event, config, now)
         else:
             _cancel(db, row, now)
+            group.enqueue(db, row, config, "lobby:cancelled", f"{event.name}: lobby closed.", now)
             actor = None
     else:
         raise ValueError("Unknown lobby action.")
@@ -249,7 +345,9 @@ def _start(db, row, event, config, now):
     if len(humans) < minimum or not any(p.user_id == row.host_id for p in humans):
         raise ValueError(f"At least {minimum} human franchise manager(s), including the host, must claim seats.")
     owned = {part.team_key for part in humans}
-    for key in config["snapshot"].keys() - owned:
+    ai_teams = config["snapshot"].keys() - owned
+    competition_ai.assign(db, row, config, ai_teams)
+    for key in ai_teams:
         db.add(StudioParticipant(competition_id=row.id, event_id=event.id, revision=row.revision,
                                  team_key=key, joined_at=now))
     for template in config["fixtures"]:
@@ -265,10 +363,18 @@ def _start(db, row, event, config, now):
     row.status = "running"
     row.started_at = now
     row.version += 1
+    predictor.invalidate(db, row, config, now)
     if row.kind == "multi" and config["notifications"]["enabled"]:
         db.add_all([StudioCompetitionNotice(competition_id=row.id, user_id=p.user_id, created_at=now) for p in humans])
+    group.enqueue(db, row, config, "lobby:started",
+                  f"{event.name} has started with {len(humans)} human managers and "
+                  f"{len(config['snapshot']) - len(humans)} AI managers.", now)
     _audit(db, event.id, "system", "competition_started", now, competition=row.id, humans=len(humans))
     db.flush()
+    if row.kind == "multi" and row.chat_id and config["competition"].get("group_engagement"):
+        for fixture, _ in _rows(db, row):
+            if fixture.home in owned and fixture.away in owned:
+                group.schedule_fixture(db, row, fixture, config, event, now)
 
 
 def expire_lobby(db, room_id, now, *, clock=None):
@@ -279,6 +385,7 @@ def expire_lobby(db, room_id, now, *, clock=None):
     if (event.status not in studio.OPEN_STATUSES or now >= legacy._cutoff(event, config)
             or len(_entries(db, row)) < config["competition"]["min_humans"]):
         _cancel(db, row, now)
+        group.enqueue(db, row, config, "lobby:cancelled", f"{event.name}: registration closed without a start.", now)
         _audit(db, event.id, "system", "registration_expired", now, competition=row.id)
     else:
         _start(db, row, event, config, now)
@@ -339,10 +446,12 @@ def team_cards(config, team_key):
             "squad": [{key: p.get(key) for key in ("name", "version", "category", "rating", "roster_id")} for p in team["squad"]]}
 
 
-def _setup_view(row, config, actor, managers):
+def _setup_view(db, room, row, config, actor, managers):
     state = row.setup
     team = actor.team_key
     cards = team_cards(config, team)
+    opponent = row.away if team == row.home else row.home
+    pins = competition_ai.pins(db, room, sides=(opponent,)) if config.get("ai_manager_seed") else {}
     toss = state.get("toss")
     return {"id": row.id, "version": row.version, "status": row.status,
             "ready": team in state.get("ready", ()), "all_ready": set(managers) <= set(state.get("ready", ())),
@@ -350,7 +459,8 @@ def _setup_view(row, config, actor, managers):
             "confirmed_xi": state.get("xis", {}).get(team), "all_confirmed": set(managers) <= set(state.get("xis", {})),
             "team": cards, "fixed_xi": "xi" in config["snapshot"][team],
             "default_xi": [p["roster_id"] for p in config["snapshot"][team]["default_xi"]],
-            "opponent": config["snapshot"][row.away if team == row.home else row.home]["name"],
+            "opponent": config["snapshot"][opponent]["name"],
+            "ai_manager": competition_ai.public(*pins[opponent]) if opponent in pins else None,
             "manager_count": len(managers), "deadline": schedule.utc_text(row.deadline)}
 
 
@@ -359,13 +469,13 @@ def setup(db, user, fixture_id, now, *, action=None, version=None, value=None, s
     actor = _fixture_player(db, room, row, user)
     managers = _managers(db, room, row)
     if row.status == "in_progress" and action in (None, "start"):
-        return _setup_view(row, config, actor, managers)
+        return _setup_view(db, room, row, config, actor, managers)
     if row.failure_at:
         raise studio.ExecutionUnavailable("The fixture is awaiting technical review.")
     if row.status != "scheduled" or not _window(event, row, now) or not _round_open(db, room, row, config):
         raise ValueError("This fixture is waiting for its opening window or earlier fixtures.")
     if not action:
-        return _setup_view(row, config, actor, managers)
+        return _setup_view(db, room, row, config, actor, managers)
     if action != "ready" and (type(version) is not int or version != row.version):
         raise studio.Conflict("The fixture changed. Open its latest setup.")
     team = actor.team_key
@@ -420,13 +530,13 @@ def setup(db, user, fixture_id, now, *, action=None, version=None, value=None, s
         except RuntimeError as exc:
             note_failure(db, row.id, now, exc)
             raise studio.ExecutionUnavailable("The fixture is awaiting technical review.") from exc
-        return _setup_view(row, config, actor, managers)
+        return _setup_view(db, room, row, config, actor, managers)
     else:
         raise ValueError("Unknown fixture setup action.")
     if settings != row.setup:
         row.setup = settings
         row.version += 1
-    return _setup_view(row, config, actor, managers)
+    return _setup_view(db, room, row, config, actor, managers)
 
 
 def _launch(db, row, room, event, config, managers, now, source):
@@ -463,13 +573,16 @@ def _launch(db, row, room, event, config, managers, now, source):
     batting = winner if toss["decision"] == "bat" else other
     row.seed = row.seed or token_hex(32)
     human = next(iter(managers))
+    xis = _ai_order(db, room, config, xis)
+    xis, benches, management = dressing.ratings(db, config, room, xis, benches, now)
     state = cricket.build_state(effective, row.id, row.home, row.away, xis, row.seed, human=human,
                                 batting=batting, toss_winner=winner, toss_decision=toss["decision"], benches=benches)
+    _pin_lineups(state, xis, management)
+    _pin_ai(db, row, room, config, state)
     if len(managers) == 2:
         state.update(is_bot_match=False, is_vsbot=False, bot_user_id=None, event_pvp=True)
     state.update(event_match_key=f"competition-{row.id}", event_human_teams=list(managers), play_mode=source,
-                 is_private=True, user_names={str(p.telegram_id): p.first_name or p.username or "Captain" for p in users.values()},
-                 event_captains={side: xi[0]["roster_id"] for side, xi in xis.items()})
+                 is_private=True, user_names={str(p.telegram_id): p.first_name or p.username or "Captain" for p in users.values()})
     state["bat_user_tg"] = users[state["bat_team_id"]].telegram_id if state["bat_team_id"] in users else None
     state["bowl_user_tg"] = users[state["bowl_team_id"]].telegram_id if state["bowl_team_id"] in users else None
     cricket.prepare_pick(state, row.seed, row.step, human)
@@ -477,6 +590,27 @@ def _launch(db, row, room, event, config, managers, now, source):
     row.due_at = min(event.closes_at, row.deadline + legacy._grace(config, row.fixture_key))
     row.version += 1
     _audit(db, event.id, "system", "fixture_started", now, competition=room.id, fixture=row.id, humans=len(managers))
+
+
+def _ai_order(db, room, config, xis):
+    if not config.get("ai_manager_seed") or not config["ai_managers"]["blend"]:
+        return xis
+    managers = competition_ai.pins(db, room, sides=tuple(xis))
+    return {team: competition_ai.order_xi(xi, managers.get(team)) if "xi" not in config["snapshot"][team] else xi
+            for team, xi in xis.items()}
+
+
+def _pin_ai(db, row, room, config, state):
+    if config.get("ai_manager_seed"):
+        state["event_ai_managers"] = competition_ai.pins(db, room, sides=(row.home, row.away))
+        state["event_ai_blend"] = config["ai_managers"]["blend"]
+
+
+def _pin_lineups(state, xis, management):
+    state["event_lineups"] = {team: [card["roster_id"] for card in xi] for team, xi in xis.items()}
+    state["event_captains"] = {team: xi[0]["roster_id"] for team, xi in xis.items()}
+    if management:
+        state["event_management"] = management
 
 
 def _actor(state):
@@ -608,11 +742,11 @@ def _tier(db, entrant):
     return entrant.reward_tier
 
 
-def _reward(db, entrant, source, assets, expires):
-    assets = {key: amount for key, amount in assets.items() if amount > 0}
+def _reward(db, entrant, source, assets, expires, *, tier=None):
+    assets = {key: amount for key, amount in assets.items() if amount}
     if assets:
         db.add(StudioCompetitionReward(participant_id=entrant.id, source=source,
-                                       tier=entrant.reward_tier, assets=assets, expires_at=expires))
+                                       tier=tier or entrant.reward_tier, assets=assets, expires_at=expires))
 
 
 def _finish(db, row, room, event, config, kind, now, *, winner=None, reason=None, offender=None):
@@ -621,26 +755,74 @@ def _finish(db, row, room, event, config, kind, now, *, winner=None, reason=None
     detail = {"reason": reason, "offender": offender} if reason else {}
     if kind == "completed":
         winner, detail = cricket.match_result(row.state)
+        if config["competition"].get("news"):
+            detail["news_facts"] = cricket.news_facts(row.state)
+        if config["competition"].get("analytics") or config.get("ai_manager_seed"):
+            from services.competition_analytics import extract
+            detail["universe_telemetry"] = extract(row.state)
     db.add(StudioFixtureResult(fixture_id=row.id, kind=kind, winner=winner, detail=detail, recorded_at=now))
     row.status, row.next_pick_at = kind, None
     row.version += 1
     db.flush()
+    final_key = brackets.effective_final(config, ()) if not brackets.is_double(config) else brackets.FINAL
+    if brackets.is_double(config):
+        reset = db.scalar(select(StudioFixture).filter_by(competition_id=room.id, fixture_key=brackets.RESET))
+        if row.fixture_key == brackets.RESET:
+            final_key = brackets.RESET
+        elif row.fixture_key == brackets.FINAL and reset:
+            # The undefeated upper finalist is the home slot. On a tie or
+            # no-result the ordinary published seed rule decides advancement.
+            advancing = winner or min((row.home, row.away), key=list(config["snapshot"]).index)
+            if advancing == row.home:
+                reset.status = "cancelled"
+                reset.version += 1
+                db.add(StudioFixtureResult(fixture_id=reset.id, kind="cancelled",
+                                           detail={"reason": "grand_final_reset_not_needed"}, recorded_at=now))
+            else:
+                final_key = brackets.RESET
     if kind == "completed":
-        playoffs = [item for item in config["fixtures"] if item["stage"] == "playoff" and item["key"] != "third-place"]
-        final = bool(playoffs and row.fixture_key == max(playoffs, key=lambda item: item["round"])["key"])
+        final = row.fixture_key == final_key
         deadline = event.closes_at + timedelta(days=config["claim_days"])
         stage = rules.fixture_rows(config)[row.fixture_key]["stage"]
-        for team, entrant in _managers(db, room, row).items():
-            performance = progression.contribution(row.state, team)
+        settings = config["competition"]
+        managers = _managers(db, room, row)
+        detailed = any(settings.get(key) for key in ("dressing_room", "honour_board", "news", "group_engagement", "analytics"))
+        performances = {team: progression.contribution(row.state, team)
+                        for team in ((row.home, row.away) if detailed else managers)}
+        if detailed:
+            for team, performance in performances.items():
+                xi = row.state.get("event_lineups", {}).get(team, row.setup.get("xis", {}).get(team, ()))
+                captain_roster = row.state.get("event_captains", {}).get(team)
+                captain = next((card["player_id"] for card in config["snapshot"][team]["squad"]
+                                if card["roster_id"] == captain_roster), None)
+                db.add(StudioTeamPerformance(fixture_id=row.id, team_key=team,
+                    detail={"players": performance, "xi": xi, "captain": captain}))
+        if settings.get("group_engagement"):
+            highlights = []
+            if settings.get("news"):
+                highlights += [f'{item["name"]}: hat-trick' for item in detail["news_facts"]["hat_tricks"]]
+            for performance in performances.values():
+                for player in performance:
+                    if player["batting"]["runs"] >= 100:
+                        highlights.append(f'{player["name"]}: {player["batting"]["runs"]} runs')
+                    if player["bowling"]["wickets"] >= 5:
+                        highlights.append(f'{player["name"]}: {player["bowling"]["wickets"]} wickets')
+            if highlights:
+                group.enqueue(db, room, config, f"fixture:{row.id}:highlights",
+                              f"{event.name} · " + " · ".join(highlights[:4]), now)
+        manager.settle(db, config, room, row, managers, winner, now)
+        for team, entrant in managers.items():
+            performance = performances[team]
             db.add(StudioContribution(fixture_id=row.id, participant_id=entrant.id, stage=stage,
                                       metrics=goals.fixture_metrics(row.state, team, winner, performance, stage=stage, final=final),
                                       performance=performance))
             db.flush()
             all_samples = _contributions(db, entrant)
             earned = set(db.scalars(select(StudioStarClaim.objective_id).filter_by(participant_id=entrant.id)))
-            for objective in config["tournament_objectives"]:
+            for objective in goals.active_rows(config):
                 if objective["id"] not in earned and goals.measure(objective, all_samples)[1]:
-                    _tier(db, entrant)
+                    if not event_pass.enabled(config):
+                        _tier(db, entrant)
                     db.add(StudioStarClaim(participant_id=entrant.id, objective_id=objective["id"],
                                            fixture_id=row.id, stars=objective["stars"], earned_at=now,
                                            expires_at=deadline))
@@ -662,15 +844,48 @@ def _finish(db, row, room, event, config, kind, now, *, winner=None, reason=None
                     db.add(StudioFixtureResult(fixture_id=future.id, kind="cancelled",
                                                detail={"reason": "eliminated"}, recorded_at=now))
     db.flush()
+    if config["competition"].get("group_engagement") and room.chat_id:
+        templates = rules.fixture_rows(config)
+        if templates[row.fixture_key]["stage"] == "league":
+            rows = _rows(db, room)
+            league = [outcome for fixture, outcome in rows if templates[fixture.fixture_key]["stage"] == "league"]
+            if league and all(outcome and outcome.kind != "cancelled" for outcome in league):
+                table_config = _table_config(config)
+                board = legacy.table(table_config, rows)
+                qualified = [team["name"] for team in insights.qualification(table_config, rows, board) or []
+                             if team["status"] == "clinched"]
+                if qualified:
+                    group.enqueue(db, room, config, "league:qualifiers",
+                                  f"{event.name} · Qualified: " + ", ".join(qualified), now)
     outstanding = db.scalar(select(StudioFixture.id).where(
         StudioFixture.competition_id == room.id, StudioFixture.status.in_(PENDING)).limit(1))
     if not outstanding:
         room.status, room.closed_at = "completed", now
         room.version += 1
+        settings = config["competition"]
+        finale = f"{event.name} has finished. View the final standings."
+        if settings.get("honour_board") or settings.get("manager_profile"):
+            rows = _rows(db, room)
+            board = legacy.table(_table_config(config), rows)
+            if settings.get("honour_board"):
+                snapshot = insights.finalize_honours(db, room, config, rows, board, now)
+                if snapshot and snapshot["champion_name"]:
+                    finale = f'{event.name} has finished. Champion: {snapshot["champion_name"]}.'
+            if settings.get("manager_profile"):
+                for entry in _entries(db, room):
+                    if entry.user_id is None or not _contributions(db, entry):
+                        continue
+                    title = progression.trophy(config, entry, rows, board)
+                    completion_xp = manager.xp_weight(config, "completion")
+                    if title:
+                        completion_xp += manager.xp_weight(config, "title")
+                    manager.add(db, entry, config, "title" if title else "completion", completion_xp, now)
+        group.enqueue(db, room, config, "competition:finished", finale, now)
+    predictor.invalidate(db, room, config, now)
     _audit(db, event.id, "system", "fixture_result", now, fixture=row.id, winner=winner, kind=kind, reason=reason)
 
 
-def claim(db, user, event_id, now, *, objective_id=None, reward_id=None, wallet=False):
+def claim(db, user, event_id, now, *, objective_id=None, reward_id=None, wallet=False, clock=None):
     _entrant(user)
     event = _event(db, event_id, lock=True)
     entrant = membership(db, event, user.id)
@@ -678,6 +893,7 @@ def claim(db, user, event_id, now, *, objective_id=None, reward_id=None, wallet=
         raise ValueError("Your tournament entry is unavailable.")
     room = studio.lock(db, StudioCompetition, entrant.competition_id)
     entrant = studio.lock(db, StudioParticipant, entrant.id)
+    now = clock() if clock else now
     config = _config(db, room)
     if not wallet:
         stmt = select(StudioStarClaim).filter_by(participant_id=entrant.id)
@@ -692,13 +908,19 @@ def claim(db, user, event_id, now, *, objective_id=None, reward_id=None, wallet=
                 entrant.claimed_stars += row.stars
                 row.claimed_at = now
                 row.total_at_claim = entrant.claimed_stars
+                manager.add(db, entrant, config, f"stars:{row.objective_id}", manager.xp_weight(config, "star") * row.stars, now)
                 _audit(db, event.id, user.id, "stars_claimed", now,
                        participant=entrant.id, objective=row.objective_id, stars=row.stars)
         if entrant.claimed_stars > before:
             expires = event.closes_at + timedelta(days=config["claim_days"])
             for milestone in config["milestones"]:
                 if before < milestone["stars"] <= entrant.claimed_stars:
-                    _reward(db, entrant, f'stars:{milestone["stars"]}', milestone.get(_tier(db, entrant), {}), expires)
+                    if event_pass.enabled(config):
+                        account = lock_user_for_update(db, user)
+                        tier = "diamond" if get_tier(account) == "diamond" else "free"
+                        _reward(db, entrant, event_pass.source(milestone), inventory.bundle(config, entrant, milestone, tier), expires, tier=tier)
+                    else:
+                        _reward(db, entrant, f'stars:{milestone["stars"]}', milestone.get(_tier(db, entrant), {}), expires)
         return {"claimed_stars": entrant.claimed_stars, "receipts": [
             {"objective_id": p.objective_id, "stars": p.stars, "total": p.total_at_claim,
              "claimed_at": schedule.utc_text(p.claimed_at)} for p in rows if p.claimed_at]}
@@ -712,8 +934,11 @@ def claim(db, user, event_id, now, *, objective_id=None, reward_id=None, wallet=
     for reward in rows:
         if reward.claimed_at or reward.expires_at <= now:
             continue
-        for asset, amount in reward.assets.items():
-            field = rules.ASSETS[asset]
+        inventory.grant(db, account, reward, now)
+        for asset, field in rules.ASSETS.items():
+            amount = reward.assets.get(asset, 0)
+            if not amount:
+                continue
             total = (getattr(account, field) or 0) + amount
             if total > 2_147_483_647:
                 raise ValueError("This reward would exceed wallet capacity.")
@@ -724,7 +949,12 @@ def claim(db, user, event_id, now, *, objective_id=None, reward_id=None, wallet=
         db.flush()
         reward.claimed_at, reward.ledger_id = now, receipt.id
         _audit(db, event.id, user.id, "competition_reward_claim", now, reward=reward.id, receipt=receipt.id)
-    return {"receipts": [r.id for r in rows if r.claimed_at]}
+    result = {"receipts": [r.id for r in rows if r.claimed_at]}
+    if event_pass.enabled(config):
+        result["wallet_receipts"] = [r.ledger_id for r in rows if r.claimed_at]
+        result["items"] = inventory.receipts(db, result["receipts"])
+        result["balances"] = {asset: getattr(account, field) or 0 for asset, field in rules.ASSETS.items()}
+    return result
 
 
 def _table_config(config):
@@ -747,6 +977,8 @@ def run_fixture(db, fixture_id, now, *, budget=6):
         row.status = "scheduled"
         row.due_at = row.deadline if _managers(db, room, row) else row.opens_at
         row.version += 1
+        if len(_managers(db, room, row)) == 2:
+            group.schedule_fixture(db, room, row, config, event, now)
     if row.status in ("scheduled", "simulating") and (now < row.opens_at or not _round_open(db, room, row, config)):
         if row.due_at <= now:
             row.due_at = now + timedelta(seconds=20)
@@ -787,7 +1019,11 @@ def run_fixture(db, fixture_id, now, *, budget=6):
         row.seed = row.seed or token_hex(32)
         xis = {side: legacy._opponent_xi(config["snapshot"][side], effective, "tournament_team")
                for side in (row.home, row.away)}
+        xis = _ai_order(db, room, config, xis)
+        xis, _, management = dressing.ratings(db, config, room, xis, {}, now)
         state = cricket.build_state(effective, row.id, row.home, row.away, xis, row.seed)
+        _pin_lineups(state, xis, management)
+        _pin_ai(db, row, room, config, state)
     else:
         state = deepcopy(row.state)
     for _ in range(budget):
@@ -845,7 +1081,7 @@ def _progress(db, entrant, config, now):
     claims = {row.objective_id: row for row in db.scalars(select(StudioStarClaim).filter_by(participant_id=entrant.id))}
     samples = _contributions(db, entrant)
     entries = []
-    for obj in config["tournament_objectives"]:
+    for obj in goals.active_rows(config):
         measured, _ = goals.measure(obj, samples)
         receipt = claims.get(obj["id"])
         threshold = float(obj["target"])
@@ -864,7 +1100,7 @@ def _progress(db, entrant, config, now):
             "unclaimed": sum(row.stars for row in claims.values() if not row.claimed_at and row.expires_at > now)}
 
 
-def dashboard(db, user, event_id, now):
+def dashboard(db, user, event_id, now, *, news_page=0, news_limit=20):
     event = _event(db, event_id)
     config = studio.revision(db, event, published=True).config
     _entrant(user)
@@ -878,9 +1114,12 @@ def dashboard(db, user, event_id, now):
             "enroll_until": schedule.utc_text(legacy._cutoff(event, config)), "fixture_count": len(config["fixtures"]),
             "difficulty": config.get("difficulty") or "hard", "maximum": max_stars,
             "registration_open": _registration_open(event, config, now),
+            "lobby_v2": config["competition"].get("lobby_v2", False),
+            "template": config["schedule"].get("template") or None,
+            "previous_edition": config.get("previous_edition"),
             "modes": [mode for mode in config["competition"]["modes"] if mode_enabled(config, mode)],
             "objectives": [{**obj, "title": obj.get("title") or goals.METRICS[obj["metric"]]}
-                           for obj in config["tournament_objectives"]],
+                           for obj in goals.active_rows(config)],
             "milestones": sorted(config["milestones"], key=lambda m: m["stars"]),
             "teams": [team_cards(config, key) for key in config["snapshot"]]}
     if entrant is None:
@@ -895,6 +1134,11 @@ def dashboard(db, user, event_id, now):
     unresolved = [rules.fixture_rows(config)[fixture.fixture_key]["round"] for fixture, res in rows if not res]
     current_round = min(unresolved, default=0)
     managers = {team["key"]: team["owner"] for team in view["room"]["teams"]}
+    ai = competition_ai.pins(db, room) if config.get("ai_manager_seed") else {}
+    if ai:
+        records = competition_ai.scouting(rows, ai)
+        view["ai_managers"] = [{"team": config["snapshot"][team]["name"], **competition_ai.public(*pin),
+                                **records[team]} for team, pin in ai.items() if competition_ai.public(*pin)]
     view["fixtures"] = [_fixture_view(fixture, res, entrant, config, now, event,
                                       rules.fixture_rows(config)[fixture.fixture_key]["round"] <= current_round,
                                       managers={key: managers[key] for key in (fixture.home, fixture.away) if key})
@@ -906,10 +1150,13 @@ def dashboard(db, user, event_id, now):
     view["form"] = [("W" if res.winner == entrant.team_key else "L" if res.winner else
                      "T" if res.kind == "completed" else "NR") for res in recent[-5:]]
     view["trophy"] = progression.trophy(config, entrant, rows, board)
+    series = progression.world_tour(_table_config(config), rows)
+    if series:
+        view["tour_series"] = series
     if not view["trophy"] and room.status == "completed":
         playoffs = [item for item in config["fixtures"] if item["stage"] == "playoff" and item["key"] != "third-place"]
         if playoffs:
-            final_key = max(playoffs, key=lambda item: item["round"])["key"]
+            final_key = brackets.effective_final(config, rows)
             fixture, outcome = next((f, res) for f, res in rows if f.fixture_key == final_key)
             if outcome and outcome.kind == "no_result" and fixture.home and fixture.away:
                 seed_order = [side["team"] for side in board] if any(
@@ -924,12 +1171,44 @@ def dashboard(db, user, event_id, now):
         detail={"performance": row.performance})) for row in statistics])
     view["rewards"] = [_reward_view(row, now) for row in db.scalars(
         select(StudioCompetitionReward).filter_by(participant_id=entrant.id).order_by(StudioCompetitionReward.id))]
+    if event_pass.enabled(config):
+        view["event_pass"] = event_pass.view(config, entrant, view["rewards"],
+                                              event.closes_at + timedelta(days=config["claim_days"]), now)
+    settings = config["competition"]
+    from services import competition_sources as universe
+    view["universe_analytics"] = universe.enabled(universe.LIVE) and universe.flag("ANALYTICS")
+    if settings.get("dressing_room"):
+        view["dressing_room"] = insights.dressing_room(config, entrant.team_key,
+            insights.performances(db, room.id, team=entrant.team_key), now)
+        view["dressing_room"]["informational"] = room.kind != "solo" or not settings.get("management_cap")
+    if settings.get("qualification") and room.status != "cancelled":
+        table_config = _table_config(config)
+        view["qualification"] = insights.qualification(table_config, rows, board)
+        view["qualification_scenario"] = insights.win_out_scenario(
+            table_config, rows, board, view["qualification"], entrant.team_key)
+        if view["qualification"] and settings.get("predictor_samples"):
+            view["qualification_estimate"] = predictor.cached(db, room)
+    if settings.get("news"):
+        view["news"] = insights.match_news(_table_config(config), rows, insights.performances(db, room.id),
+                                           limit=news_limit, offset=news_page * news_limit)
+    if config["schedule"].get("template") == "dynasty":
+        view["dynasty_history"] = manager.dynasty_history(db, user, entrant, config)
+    if settings.get("manager_profile"):
+        view["manager"] = manager.profile(db, user)
+    if settings.get("honour_board"):
+        view["trophies"] = manager.trophies(db, user)
+    if settings.get("honour_board"):
+        snapshot = db.get(StudioHonourSnapshot, (room.id, 1))
+        view["honour_board"] = dict(snapshot.detail) if snapshot else {"awards": {}, "champion_name": None}
+        art = db.scalar(select(StudioAwardMedia.generated_at).filter_by(competition_id=room.id))
+        view["honour_board"]["media_ready"] = art is not None
     view["leaderboard"] = leaderboard(db, event, entrant, room.kind)
     return view
 
 
 def _reward_view(row, now):
-    return {"id": row.id, "source": row.source, "tier": row.tier, "assets": row.assets,
+    return {"id": row.id, "source": row.source, "tier": row.tier, "assets": {k: v for k, v in row.assets.items() if k != "items"},
+            "items": [item["label"] for item in row.assets.get("items", [])],
             "expires_at": schedule.utc_text(row.expires_at), "status": "claimed" if row.claimed_at else
             "expired" if row.expires_at <= now else "claimable", "receipt": row.ledger_id}
 
@@ -980,6 +1259,8 @@ def operate(db, event, action, actor, reason, now, *, shift=None):
     for room in rooms:
         if room.status == "lobby" and action == "cancel":
             _cancel(db, room, now)
+            group.enqueue(db, room, _config(db, room), "lobby:cancelled",
+                          f"{event.name}: registration cancelled.", now)
         if room.status != "running":
             continue
         for fixture, result in _rows(db, room):
@@ -1008,10 +1289,11 @@ def administer(db, event_id, actor, action, target, reason, now, *, deadline=Non
     if not reason or len(reason) > 500:
         raise ValueError("Enter an operations reason.")
     if action == "close_lobby":
-        room, event, _ = _room(db, target, write=True)
+        room, event, config = _room(db, target, write=True)
         if event.id != event_id or room.status != "lobby":
             raise ValueError("Only a pre-start lobby can be closed.")
         _cancel(db, room, now)
+        group.enqueue(db, room, config, "lobby:cancelled", f"{event.name}: lobby closed.", now)
         _audit(db, event.id, actor, action, now, competition=room.id, reason=reason)
         return
     row, room, event, config = _fixture(db, target, write=True)

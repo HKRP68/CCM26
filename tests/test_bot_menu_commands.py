@@ -147,6 +147,9 @@ def test_no_scope_has_duplicates():
 # This is an allowlist, not an amnesty: a command added without a menu entry
 # and without a line here still fails the test below.
 UNPUBLISHED_ON_PURPOSE = {
+    # Documented match controls and championship tools reached from the
+    # corresponding match or WTC workflow. No additional global menu slots.
+    "managebatting", "matchremind", "restorematch", "wtctoday",
     # The player menus are at capacity. Events is discoverable in /commands and the MiniApp.
     "events",
     # Existing tournament/medical commands are on /tourhelp; pause/clear and

@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Competition Operations{% endblock %}
+{% block content %}
+<main>
+  <h2>Competition Operations</h2>
+  <p><a href="{{ url_for('admin_event_studio') }}">Event Studio</a></p>
+  {% if error %}<p role="alert">{{ error }}</p>{% endif %}
+  <div class="card">
+    <h3>Competition status</h3>
+    {% for source, counts in monitor.statuses.items() %}
+      <p><strong>{{ source|title }}</strong>
+      {% for status, count in counts.items() %} · {{ status|title }} {{ count }}{% endfor %}</p>
+    {% endfor %}
+  </div>
+  {% if monitor.live_windows %}
+  <div class="card">
+    <h3>Live Event windows and maximum wallet exposure</h3>
+    {% for event in monitor.live_windows %}
+      <p><a href="{{ url_for('admin_event_studio_detail', event_id=event.id) }}">{{ event.name }}</a>
+      · {{ event.format }} · {{ event.status|title }} · {{ event.capacity }} managers
+      {% if event.opens %}· {{ event.opens }} to {{ event.closes }} UTC{% endif %}</p>
+      <ul>{% for asset, amount in event.maximum.items() %}<li>{{ asset|replace('_', ' ')|capitalize }} · {{ amount }}</li>{% endfor %}</ul>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <div class="card">
+    <h3>Lobbies and incidents</h3>
+    {% for room, event, until in monitor.lobbies %}
+      <p><a href="{{ url_for('admin_event_studio_detail', event_id=event) }}">Lobby {{ room }}</a> · Registration closes {{ until }} UTC</p>
+    {% endfor %}
+    {% for fixture, event, failure, deadline in monitor.incidents %}
+      <p><a href="{{ url_for('admin_event_studio_detail', event_id=event) }}">Fixture {{ fixture }}</a> · {{ failure or "Awaiting review" }} · {{ deadline }} UTC</p>
+    {% endfor %}
+    {% for id, name, deadline in monitor.challenge_deadlines %}
+      <p>Challenge League #{{ id }} · {{ name }} · Round deadline passed at {{ deadline }} UTC</p>
+    {% endfor %}
+    {% if not monitor.lobbies and not monitor.incidents and not monitor.challenge_deadlines %}<p>No lobbies or incidents to review.</p>{% endif %}
+  </div>
+  {% if competition_universe_feature('RANKINGS') or competition_universe_feature('COLLECTION') %}
+  <div class="card">
+    <h3>Rankings and Collection Book</h3>
+    {% for projection in monitor.projections %}
+      <p>{{ "Rankings" if projection.id == 1 else "Collection Book" }} · Last refresh {{ projection.computed_at }} UTC</p>
+      <ul>{% for name, count in projection.counts.items() %}<li>{{ name|replace('_', ' ')|capitalize }} · {{ count }}</li>{% endfor %}</ul>
+    {% endfor %}
+    {% if monitor.ranking_flags %}
+    <h4>Recent rating signals</h4>
+    <ul>
+      {% for flag in monitor.ranking_flags %}
+      <li>{{ flag.source|title }} · Competition {{ flag.instance }} · Fixture {{ flag.fixture }} · {{ flag.signals|join(', ')|replace('_', ' ') }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button name="action" value="dry_run">Dry-run reconciliation</button>
+      <button name="action" value="refresh">Refresh projections</button>
+    </form>
+  </div>
+  {% endif %}
+  {% if competition_universe_feature('ROTATION') %}
+  <div class="card">
+    <h3>Draft rotation</h3>
+    <p>Approved editions are created as drafts in Event Studio.</p>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>Published template ID <input type="number" name="template_id" min="1" required></label>
+      <label>First opening in the template timezone <input type="datetime-local" name="first" required></label>
+      <label>Weeks apart <input type="number" name="weeks" value="1" min="1" max="26" required></label>
+      <label>Editions <input type="number" name="count" value="1" min="1" max="12" required></label>
+      <button name="action" value="rotation_preview">Preview editions</button>
+    </form>
+    {% for job in monitor.rotation %}
+      <p>Template {{ job.template_id }} · {{ job.opens_at }} UTC · {{ job.status|title }}
+         {% if job.draft_id %}· <a href="{{ url_for('admin_event_studio_detail', event_id=job.draft_id) }}">Open draft</a>{% endif %}
+         {% if job.error %}· {{ job.error }}{% endif %}</p>
+      {% if job.status == 'failed' %}
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="job_id" value="{{ job.id }}">
+          <label>Retry reason <input name="reason" maxlength="500" required></label>
+          <button name="action" value="rotation_retry">Retry failed draft</button>
+        </form>
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if report %}
+  <div class="card">
+    <h3>Operation result</h3>
+    {% for module, detail in report.items() if module != "approval" %}
+      <h4>{{ module }}</h4><pre>{{ detail|tojson(indent=2) }}</pre>
+    {% endfor %}
+    {% if report.approval %}
+      <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% for name, value in report.approval.items() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+        <label>Approval reason <input name="reason" maxlength="500" required></label>
+        <button name="action" value="rotation_approve">Approve draft creation</button>
+      </form>
+    {% endif %}
+  </div>
+  {% endif %}
+  {% if competition_universe_feature('COLLECTION') %}
+  <div class="card">
+    <h3>Collection catalogue</h3>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>Source <select name="source"><option value="live">Live Event</option><option value="challenge">Challenge League</option></select></label>
+      <label>Published event or league ID <input type="number" name="family" min="1" required></label>
+      <label>Family label <input name="label" maxlength="100" required></label>
+      <label>Collection <select name="category"><option value="domestic">Franchise World</option><option value="international">International Glory</option><option value="challenge">Challenge League Hall of Fame</option></select></label>
+      <label><input type="checkbox" name="retired"> Retired slot</label>
+      <button name="action" value="catalogue">Save catalogue slot</button>
+    </form>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>Edition source <select name="source"><option value="live">Live Event</option><option value="challenge">Challenge League</option></select></label>
+      <label>Edition event or tournament ID <input type="number" name="edition" min="1" required></label>
+      <label>Existing catalogue family ID <input type="number" name="family" min="1" required></label>
+      <button name="action" value="catalogue_link">Link edition to family</button>
+    </form>
+  </div>
+  {% endif %}
+</main>
+{% endblock %}

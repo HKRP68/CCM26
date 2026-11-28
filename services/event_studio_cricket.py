@@ -206,6 +206,26 @@ def resolve_over(state, seed, step, *, human=None, moment=None):
 def advance(state, seed, step):
     """Simulate an over for an AI-only fixture or a reproducible Moment prefix."""
     bat, bowl, bowler = _automated_choices(state)
+    if state.get("event_ai_managers") and state.get("event_ai_blend"):
+        from services import competition_ai
+
+        phase = match.approach_phase(state)
+        rng = rng_for(seed, f"automatic-captains:{step}")
+        for side, batting, initial, choices in (
+            ("bowl_team_id", False, bowl, competition_ai.BOWL),
+            ("bat_team_id", True, bat, competition_ai.BAT),
+        ):
+            if state[side] not in state["event_ai_managers"]:
+                continue
+            # This path has an existing phase policy rather than a solver mix.
+            # Take a bounded sample of departures from that policy.
+            weights = competition_ai.mix(state, {key: 1 if key == initial else .001 for key in choices},
+                                         batting=batting, phase=phase, controller=state[side])
+            choice = rng.choices(tuple(weights), weights=tuple(weights.values()), k=1)[0]
+            if batting:
+                bat = choice
+            else:
+                bowl = choice
     state.update(batting_approach=bat, bowling_approach=bowl, current_bowler=bowler)
     return resolve_over(state, seed, step)
 
@@ -304,6 +324,23 @@ def match_result(state):
     ]
     winner = None if result["tie"] else (second if result["margin_type"] == "wickets" else first)
     return winner, {"innings": innings, "margin": result["margin"], "margin_type": result["margin_type"]}
+
+
+
+def news_facts(state):
+    """Keep only verifiable facts needed for the event newsroom."""
+    streaks, hat_tricks = {}, []
+    for delivery in state.get("record_deliveries", []):
+        if not delivery["legal"]:
+            continue
+        key = (delivery["innings"], delivery["bid"])
+        streaks[key] = streaks.get(key, 0) + 1 if delivery["bowler_wicket"] else 0
+        if streaks[key] == 3:
+            bowling_team = state["bat_team_id"] if delivery["innings"] == 1 else state["inn1_bat_team_id"]
+            hat_tricks.append({"name": delivery["bowler"], "team": bowling_team,
+                               "delivery": delivery["seq"]})
+    return {"chase_last_over": match.total_balls(state) - match.balls_bowled(state) < 6,
+            "hat_tricks": hat_tricks}
 
 
 def objective_progress(config, state, team, *, won=False):

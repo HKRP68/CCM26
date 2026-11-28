@@ -1619,10 +1619,14 @@ def main():
         app.add_handler(CommandHandler(["events", "eventplay", "liveevents", "myevents", "moments", "bossbattles", "bossbattle"], event_command))
         from handlers.event_competitions import command as competition_command, callback as competition_callback
         app.add_handler(CommandHandler(
-            ["event", "eventlobby", "eventobjectives", "eventtable", "eventstats", "eventrewards"],
-            competition_command))
+            ["event", "hotevents", "eventjoin", "eventlobby", "eventroom", "eventhelp", "myevent",
+             "eventfixtures", "eventobjectives", "eventtable", "eventqualification", "eventstats",
+             "eventrewards", "eventpass", "eventclaim", "eventnews", "eventhistory", "eventawards",
+             "trophies", "manager"], competition_command))
         app.add_handler(CallbackQueryHandler(competition_callback, pattern=r"^ec:"))
         app.add_handler(CallbackQueryHandler(event_callback, pattern=r"^ev:"))
+        from handlers.competition_universe import register as register_competition_universe
+        register_competition_universe(app)
         app.add_handler(CommandHandler(["botstatus", "bstatus", "ping"], botstatus_handler))
         app.add_handler(CommandHandler(["start", "s"], start_handler))
         app.add_handler(CommandHandler(["debut", "d"], debut_handler))

@@ -47,7 +47,6 @@ def award_caption(session, tour, honour):
 
 def award_photo(session, tour, honour, *, use_team_photo=True):
     """Use the team's supplied photo, or compose its crest / player's card."""
-    from PIL import Image, ImageDraw, ImageFont
     from models import TournamentTeam
     from services.tournament_awards import AWARD_LABEL, player_for_stats
     team = session.query(TournamentTeam).filter_by(tournament_id=tour.id, name=honour.team_name).first()
@@ -77,6 +76,15 @@ def award_photo(session, tour, honour, *, use_team_photo=True):
     if source is None:
         from services.team_logo_service import logo_png_for_team_name
         source = logo_png_for_team_name(session, honour.team_name)
+    label = AWARD_LABEL.get(honour.award, honour.award).split(' ', 1)[-1]
+    return compose_award_photo(tour.name, label, honour.player_name, honour.team_name,
+                               contribution(session, honour), source)
+
+
+def compose_award_photo(tournament, label, subject, team, facts="", source=None):
+    """Shared CMU award frame for canonical events and Challenge League."""
+    from PIL import Image, ImageDraw, ImageFont
+
     # A photo remains available for imported players without a master card.
     canvas = Image.new('RGB', (1000, 1120), '#101827')
     draw = ImageDraw.Draw(canvas)
@@ -91,20 +99,18 @@ def award_photo(session, tour, honour, *, use_team_photo=True):
             text = text[:-2]
         draw.text((500, y), text, anchor='mt', font=chosen, fill=color)
     line('AWARDS CEREMONY', 35, title_font, '#f6c65a')
-    line(tour.name or 'Tournament', 100)
+    line(tournament or 'Tournament', 100)
     if source:
         art = Image.open(io.BytesIO(source)).convert('RGBA')
         art.thumbnail((850, 690))
         canvas.paste(art, ((1000-art.width)//2, 170+(690-art.height)//2), art)
     else:
-        line(honour.player_name or honour.team_name or 'Not awarded', 430, title_font)
-    # Strip emoji from the photo label; the caption keeps the original.
-    label = AWARD_LABEL.get(honour.award, honour.award).split(' ', 1)[-1]
+        line(subject or team or 'Not awarded', 430, title_font)
     line(label, 885, title_font, '#f6c65a')
-    line(honour.player_name or honour.team_name or '', 952)
-    if honour.player_name:
-        line(honour.team_name or '', 1000)
-    line(contribution(session, honour), 1060)
+    line(subject or team or '', 952)
+    if subject:
+        line(team or '', 1000)
+    line(facts, 1060)
     out = io.BytesIO()
     canvas.save(out, format='PNG')
     return out.getvalue()

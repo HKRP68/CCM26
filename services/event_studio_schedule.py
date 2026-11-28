@@ -6,6 +6,8 @@ from random import Random
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import json
 
+from services import event_studio_brackets as brackets
+
 MAX_FIXTURES = 240
 
 
@@ -103,15 +105,67 @@ def _knockout(rows, entries, third_place):
         stage += 1
 
 
+EVENT_TEMPLATES = {
+    "weekend": ("round_robin", "knockout"),
+    "nations": ("round_robin", "groups", "knockout"),
+    "legends": ("round_robin", "groups", "knockout"),
+    "rivalry": ("round_robin", "series", "groups"),
+    "road_to_final": ("survival",),
+    "survival_league": ("survival",),
+    "mystery": ("round_robin", "groups", "knockout", "double_elimination"),
+    "champions": ("round_robin", "groups", "knockout", "double_elimination"),
+    "underdog": ("round_robin", "groups", "knockout"),
+    "dynasty": ("round_robin", "groups", "series"),
+    "world_tour": ("series",),
+    "double_elimination": ("double_elimination",),
+}
+
+
+def validate_template(config):
+    from services.event_studio_rules import integer
+
+    settings = config["schedule"]
+    template = settings.get("template", "")
+    integer(settings.get("rest_minutes", 60), "Minimum rest in minutes", 0, 1440)
+    previous = integer(settings.get("previous_event_id", 0), "Previous event ID", 0, 2_147_483_647)
+    tour = settings.get("tour", [])
+    if previous and template not in ("dynasty", "champions"):
+        raise ValueError("Only Dynasty and Champions League can link an earlier edition.")
+    if template == "dynasty" and not previous:
+        raise ValueError("Link the previous Dynasty edition.")
+    if not isinstance(tour, list) or (tour and template != "world_tour"):
+        raise ValueError("Country series apply only to World Tour.")
+    if template == "world_tour":
+        if not 2 <= len(tour) <= 8:
+            raise ValueError("Enter two to eight country series for World Tour.")
+        for stop in tour:
+            if (not isinstance(stop, dict) or set(stop) != {"country", "games"} or
+                    not isinstance(stop["country"], str) or not 1 <= len(stop["country"].strip()) <= 60):
+                raise ValueError("Enter a country and game count for each World Tour stop.")
+            integer(stop["games"], "World Tour games per series", 1, 7)
+    if template == "":
+        return
+    if (not isinstance(template, str) or template not in EVENT_TEMPLATES
+            or settings["preset"] not in EVENT_TEMPLATES[template]
+            or config["kind"] != "live" or config["objective_scope"] != "tournament"):
+        raise ValueError("Choose a schedule compatible with the Live Event template.")
+
+
+def seeded_teams(config):
+    keys = [team["key"] for team in config["teams"]]
+    seed = config["schedule"]["seed"]
+    if seed is not None:
+        Random(seed).shuffle(keys)
+    return keys
+
+
 def generate(config, venues=None, pitches=None):
     if config["kind"] != "live":
         return []
-    keys = [team["key"] for team in config["teams"]]
+    keys = seeded_teams(config)
     if len(keys) < 2:
         raise ValueError("Add at least two teams before generating fixtures.")
     settings = config["schedule"]
-    if settings["seed"] is not None:
-        Random(settings["seed"]).shuffle(keys)
     preset = settings.get("preset", "round_robin")
     rows = []
     if preset == "round_robin":
@@ -132,7 +186,9 @@ def generate(config, venues=None, pitches=None):
     elif preset == "series":
         if len(keys) != 2:
             raise ValueError("A bilateral series requires two teams.")
-        for index in range(settings["games"]):
+        tour = settings.get("tour", []) if settings.get("template") == "world_tour" else []
+        games = sum(stop["games"] for stop in tour) if tour else settings["games"]
+        for index in range(games):
             pair = tuple(keys[::1 if index % 2 == 0 else -1])
             _append_round(rows, [pair], "league")
     elif preset == "groups":
@@ -152,6 +208,10 @@ def generate(config, venues=None, pitches=None):
         for opponent in keys:
             if opponent != challenger:
                 _append_round(rows, [(challenger, opponent)], "survival")
+    elif preset == "double_elimination":
+        for round_rows in brackets.double_elimination(keys, reset=settings.get("grand_final_reset", True)):
+            _append_round(rows, [(home, away) for _, home, away in round_rows], "playoff",
+                          [key for key, _, _ in round_rows])
     elif preset == "knockout":
         _knockout(rows, keys, settings.get("third_place", False))
     else:
@@ -163,13 +223,20 @@ def generate(config, venues=None, pitches=None):
     start = utc_instant(config["opens_at"], zone)
     calendar = start.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(zone)).replace(tzinfo=None)
     close = utc_instant(config["closes_at"], zone)
+    weekend = settings.get("template") == "weekend"
+    interval = timedelta(hours=settings["window_hours"],
+                         minutes=settings["grace"] + settings.get("rest_minutes", 60))
     current_round = 0
     round_usage = 0
     cap = settings.get("fixtures_per_day", 24)
     for row in rows:
         if current_round != row["round"] or round_usage >= cap:
             if current_round:
-                calendar += timedelta(days=settings["round_spacing_days"])
+                if weekend:
+                    stamp = utc_instant(calendar.isoformat(), zone) + interval
+                    calendar = stamp.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(zone)).replace(tzinfo=None)
+                else:
+                    calendar += timedelta(days=settings["round_spacing_days"])
             while (calendar.isoweekday() not in settings["playing_days"]
                    or calendar.date().isoformat() in settings["blackouts"]):
                 calendar += timedelta(days=1)
@@ -183,8 +250,21 @@ def generate(config, venues=None, pitches=None):
         round_usage += 1
     if venues and pitches:
         salt = _salt(config)
-        for row in rows:
-            row.update(draw_conditions(config, row["key"], venues, pitches, salt=salt))
+        world = settings.get("template") == "world_tour"
+        if world:
+            from services.draft_service import country_key
+            from services.tournament_stadiums import all_rows
+            approved = set(venues)
+            pools = {}
+            for record in all_rows():
+                if record.get("name") in approved:
+                    pools.setdefault(country_key(record.get("country")), []).append(record["name"])
+            trips = [stop["country"] for stop in settings["tour"] for _ in range(stop["games"])]
+        for index, row in enumerate(rows):
+            options = sorted(set(pools.get(country_key(trips[index]), ()))) if world else venues
+            if not options:
+                raise ValueError(f"No eligible stadium in {trips[index]} for World Tour.")
+            row.update(draw_conditions(config, row["key"], options, pitches, salt=salt))
     validate(config, rows)
     return rows
 
@@ -196,9 +276,35 @@ def validate(config, rows):
         return
     if not isinstance(rows, list) or not 1 <= len(rows) <= MAX_FIXTURES:
         raise ValueError(f"Enter 1 to {MAX_FIXTURES} fixtures.")
+    validate_template(config)
     zone = config["timezone"]
     opens = utc_instant(config["opens_at"], zone)
     close = utc_instant(config["closes_at"], zone)
+    weekend = config["schedule"].get("template") == "weekend"
+    rest = timedelta(minutes=config["schedule"].get("rest_minutes", 60) if weekend else 0)
+    if weekend and not timedelta(days=2) <= close - opens <= timedelta(days=3):
+        raise ValueError("Weekend Championship must fit a two- or three-day event window.")
+    if brackets.is_double(config):
+        expected = {key: (home, away, round_no)
+                    for round_no, group in enumerate(brackets.double_elimination(
+                        seeded_teams(config), reset=config["schedule"].get("grand_final_reset", True)), 1)
+                    for key, home, away in group}
+        if len(rows) != len(expected) or any(
+                (row["home"], row["away"], row["round"]) != expected.get(row["key"]) or row["stage"] != "playoff"
+                for row in rows):
+            raise ValueError("Regenerate the double-elimination bracket. Its dependencies are fixed.")
+    if config["schedule"].get("template") == "world_tour":
+        trips = [stop["country"] for stop in config["schedule"]["tour"] for _ in range(stop["games"])]
+        if len(rows) != len(trips):
+            raise ValueError("The World Tour schedule must contain its published series games.")
+        from services.draft_service import country_key
+        from services.tournament_stadiums import all_rows
+        venue_countries = {row["name"]: country_key(row.get("country")) for row in all_rows() if row.get("name")}
+        ordered = sorted(rows, key=lambda row: row["round"])
+        for fixture, country in zip(ordered, trips):
+            effective = config["fixture_overrides"].get(fixture["key"], {}).get("venue", fixture.get("venue"))
+            if effective and venue_countries.get(effective) != country_key(country):
+                raise ValueError(f'{fixture["key"]}: choose a venue in {country}.')
     keys = {team["key"] for team in config["teams"]}
     ladder = config["schedule"]["preset"] == "survival"
     if ladder:
@@ -221,7 +327,7 @@ def validate(config, rows):
         for team in (row["home"], row["away"]):
             if team in keys:
                 intervals = occupied.setdefault(team, [])
-                if any(round_number == rnd or (start < to and end > since)
+                if any(round_number == rnd or (start < to + rest and end + rest > since)
                        for rnd, since, to in intervals):
                     raise ValueError(f"{key}: {team} has an overlapping fixture or round.")
                 intervals.append((round_number, start, end))
@@ -236,11 +342,11 @@ def validate(config, rows):
                     group, _, rank = dependency.partition(":")
                     size = len(config["schedule"]["groups"].get(group, []))
                 if (not rank.isdigit() or not 1 <= int(rank) <= size
-                        or not league or any(rnd >= round_number or until > start
+                        or not league or any(rnd >= round_number or until + rest > start
                                             for rnd, until in league)):
                     raise ValueError(f"{key}: league ranking must resolve before this fixture.")
             elif (kind not in ("winner", "loser") or dependency not in seen
-                  or seen[dependency][0] >= round_number or seen[dependency][1] > start
+                  or seen[dependency][0] >= round_number or seen[dependency][1] + rest > start
                   or dependency in {f["key"] for f in rows if f["stage"] == "league"}):
                 raise ValueError(f"{key}: unresolved or overlapping playoff dependency {team}.")
         if row["stage"] == "league":

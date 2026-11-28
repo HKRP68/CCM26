@@ -196,6 +196,8 @@ def assign_persona(state, key=None):
 
 def _persona(state):
     """This match's persona dict, drawing one lazily for older/None states."""
+    if state and state.get("bot_user_id") in state.get("event_ai_managers", {}):
+        return PERSONAS[DEFAULT_PERSONA]
     key = (state or {}).get("bot_persona")
     if key not in PERSONAS:
         key = assign_persona(state) if isinstance(state, dict) else DEFAULT_PERSONA
@@ -204,6 +206,12 @@ def _persona(state):
 
 def persona_label(state):
     """Human-readable captaincy style for the match cards (e.g. "🧠 Tactician")."""
+    pin = (state or {}).get("event_ai_managers", {}).get((state or {}).get("bot_user_id"))
+    if pin:
+        from services.competition_ai import public
+        profile = public(*pin)
+        if profile:
+            return profile["name"]
     return _persona(state)["label"]
 
 
@@ -549,14 +557,21 @@ def _blend_with_solver(state, prior, *, bot_batting):
     """
     solved = _solver_mix(state, bot_batting=bot_batting)
     if not solved:
+        if state.get("event_ai_managers"):
+            from services.competition_ai import mix
+            return mix(state, prior, batting=bot_batting, phase=phase(state))
         return prior
 
     trust = _difficulty(state)["solver"]
     total = sum(max(0.0, v) for v in prior.values()) or 1.0
     if cipl_match.odi_approach.is_odi(state):
         trust = min(0.65, 0.42 * trust)
-        return {key: (1 - trust) * weight / total + trust * solved.get(key, 0.0)
-                for key, weight in prior.items()}
+        blended = {key: (1 - trust) * weight / total + trust * solved.get(key, 0.0)
+                   for key, weight in prior.items()}
+        if state.get("event_ai_managers"):
+            from services.competition_ai import mix
+            blended = mix(state, blended, batting=bot_batting, phase=phase(state), solver=solved)
+        return blended
     blended = {}
     for key, weight in prior.items():
         share = max(1e-6, weight / total)
@@ -568,7 +583,11 @@ def _blend_with_solver(state, prior, *, bot_batting):
     # become the thing setting the mix — compressing a 200:1 solver preference
     # into 20:1 on Hard. The guard should catch bad input, not do the tuning.
     scale = sum(blended.values()) or 1.0
-    return {key: value / scale for key, value in blended.items()}
+    blended = {key: value / scale for key, value in blended.items()}
+    if state.get("event_ai_managers"):
+        from services.competition_ai import mix
+        blended = mix(state, blended, batting=bot_batting, phase=phase(state), solver=solved)
+    return blended
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -757,6 +776,10 @@ def pick_bowler(state):
 
     if cipl_match.odi_approach.is_odi(state):
         scores = cipl_match.odi_approach.bowling_scores(state, candidates)
+        if state.get("event_ai_managers"):
+            from services.competition_ai import bowling_bias
+            scores = [score + bowling_bias(state, player, phase(state))
+                      for score, player in zip(scores, candidates)]
         best = max(scores)
         temperature = max(0.35, 2.1 * _difficulty(state)["temperature"])
         return _odi_rng(state, "bowler").choices(
@@ -770,6 +793,9 @@ def pick_bowler(state):
               for p, bonus in zip(candidates, matchup)]
     if state.get("official_event") and state.get("event_ai_policy") == "hard-plus-v1":
         scores = _event_bowling_lookahead(state, candidates, scores)
+    if state.get("event_ai_managers"):
+        from services.competition_ai import bowling_bias
+        scores = [score + bowling_bias(state, player, ph) for score, player in zip(scores, candidates)]
     scored = list(zip(candidates, scores))
     best = max(score for _p, score in scored)
     # Floor only guards against a zero/negative temperature blowing up the

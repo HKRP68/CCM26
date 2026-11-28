@@ -2687,6 +2687,9 @@
 
 <!-- ════ Achievements screen ════ -->
 <section class="screen hub-screen" id="screen-profile" aria-labelledby="profile-title">
+  {% if competition_universe_enabled is defined and competition_universe_enabled() and competition_universe_feature('COLLECTION') %}
+    <button type="button" class="hub-button" onclick="CompetitionUniverse.open('collection')">Collection Book</button>
+  {% endif %}
   <h2 id="profile-title" class="hub-title">Player profile</h2>
   <div id="hub-profile-body"><div class="empty">Loading profile…</div></div>
 </section>
@@ -3022,9 +3025,19 @@
   <p id="club-reward-feedback" role="status"></p>
 </section>
 
+{% if competition_universe_enabled is defined and competition_universe_enabled() %}
+<section class="screen events-hub" id="screen-competition-universe" aria-labelledby="universe-title">
+  <header class="cmu-page-heading"><h2 id="universe-title">Competition Universe</h2></header>
+  <p id="universe-status" role="status" aria-live="polite"></p>
+  <div id="universe-content"></div>
+</section>
+{% endif %}
 <section class="screen" id="screen-compete" aria-labelledby="elite-compete-title">
   <header class="cmu-page-heading"><h2 id="elite-compete-title">Compete</h2><p id="elite-competition-summary">Check fixtures, standings and tournament registration.</p></header>
   <div class="cmu-list">
+    {% if competition_universe_enabled is defined and competition_universe_enabled() %}
+    <button type="button" onclick="CompetitionUniverse.open()">{{ icon('cup') }}<span>Competition Universe</span>{{ icon('chevron') }}</button>
+    {% endif %}
     <button type="button" onclick="navigate('events')">{{ icon('calendar') }}<span>Events Hub</span>{{ icon('chevron') }}</button>
     <button type="button" onclick="openTournamentDirectory()">{{ icon('cup') }}<span>Tournament Centre</span>{{ icon('chevron') }}</button>
     <button type="button" onclick="navigate('leaderboard')">{{ icon('ranks') }}<span>Leaderboards</span>{{ icon('chevron') }}</button>
@@ -3274,7 +3287,10 @@
   </div>
 </div>
 
-<script src="{{ url_for('static', filename='js/events_hub.js', v='4') }}"></script>
+<script src="{{ url_for('static', filename='js/events_hub.js', v='6') }}"></script>
+{% if competition_universe_enabled is defined and competition_universe_enabled() %}
+<script src="{{ url_for('static', filename='js/competition_universe.js', v='1') }}"></script>
+{% endif %}
 <script>
 const tg = window.Telegram?.WebApp;
 if (tg) {
@@ -10277,6 +10293,18 @@ function tnNrr(v) {
 
 function renderTournament() {
   const el = document.getElementById('tn-content');
+  const addUniverseAnalytics = () => {
+    if (typeof CompetitionUniverse === 'undefined' || !tnData?.tournament?.universe_analytics) return;
+    const id = tnId, archive = tnArchive;
+    const control = document.createElement('button');
+    control.type = 'button';
+    control.className = 'hub-button';
+    control.textContent = 'Tournament Analytics';
+    control.addEventListener('click', () => CompetitionUniverse.open('analytics', {source:'challenge', instance:id},
+      () => openDirectoryTournament(id, archive)));
+    el.prepend(control);
+  };
+
   const d = tnData;
   if (!d) return;
   const t = d.tournament;
@@ -10306,6 +10334,7 @@ function renderTournament() {
   else if (tnSub === 'teams') body = tnTeamsView(d);
   else if (tnSub === 'injuries') body = tnInjuriesView(d);
   el.innerHTML = head + tabs + body;
+  addUniverseAnalytics();
 }
 
 function tnTeamName(fx, n) {
@@ -10655,6 +10684,10 @@ function handleHashDeepLink() {
   if (eventMatchLink) { location.assign('/cricket?event_match_id=' + eventMatchLink[1]); return; }
   const eventLink = target.match(/^events_(\d+)$/);
   if (eventLink) { navigate('events'); EventHub.open(Number(eventLink[1])); return; }
+  if (['universe', 'worldrank', 'collection'].includes(target) && typeof CompetitionUniverse !== 'undefined') {
+    CompetitionUniverse.open(({universe:'directory', worldrank:'rankings', collection:'collection'})[target]);
+    return;
+  }
   if (target === 'tournament') openTournamentDirectory();
   else if (validScreens.includes(target) && target !== 'home') navigate(target);
 }

@@ -298,6 +298,9 @@ def delete_tournament(session, tour, *, keep_stats=True):
     Returns the ``StatsSeason`` made, or None when nothing was kept.
     """
     season = archive_tournament(session, tour) if keep_stats else None
+    if season:
+        from services.competition_rankings import archive_challenge
+        archive_challenge(session, tour)
     # A League Seasons season pointing at this tournament keeps its honours
     # and follows it to the saved season — the same move the links above make.
     from services import league_season_service

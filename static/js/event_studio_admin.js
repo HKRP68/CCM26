@@ -4,6 +4,9 @@
   const source = form.elements.config;
   const fields = [...form.querySelectorAll('[data-config-path]')];
   const errors = new Map();
+  const passEditor = form.querySelector('[data-pass-editor]');
+  const milestoneField = form.querySelector('[data-config-path="milestones"]');
+  let editingMilestones = false;
   form.querySelector('[data-studio-source]').open = false;
   form.querySelector('[data-studio-fields]').hidden = false;
 
@@ -108,7 +111,7 @@
       !(config.kind === 'moment' || config.kind === 'boss' && config.challenge_style === 'moment');
     const tournament = config.kind === 'live' && config.objective_scope === 'tournament';
     form.querySelector('[data-kind-live]').hidden = config.kind !== 'live';
-    form.querySelector('[data-tournament-objectives]').hidden = !tournament;
+    for (const section of form.querySelectorAll('[data-tournament-objectives]')) section.hidden = !tournament;
     form.querySelector('[data-legacy-objectives]').hidden = tournament;
     form.querySelector('[data-event-budget-label]').textContent = tournament ? 'Total human capacity' : 'Players covered by the budget';
     form.querySelector('[data-auto-objectives]').textContent = tournament ? 'Auto Tournament Objectives' : 'Auto Objectives';
@@ -117,6 +120,82 @@
       const value = path(field).reduce((object, key) => object?.[key], config);
       if (field.type === 'checkbox') field.checked = Boolean(value);
       else field.value = display(field, value, config);
+    }
+    drawMilestones(config, tournament);
+  }
+
+  function saveMilestones(rows, rebuild = false) {
+    milestoneField.value = JSON.stringify(rows, null, 2);
+    editingMilestones = !rebuild;
+    milestoneField.dispatchEvent(new Event('input'));
+    editingMilestones = false;
+  }
+
+  function drawMilestones(config, tournament) {
+    if (!passEditor) return;
+    passEditor.hidden = !(tournament && config.competition?.event_pass);
+    if (passEditor.hidden || editingMilestones) return;
+    const body = passEditor.querySelector('[data-pass-rows]');
+    const rows = Array.isArray(config.milestones) ? config.milestones : [];
+    body.replaceChildren();
+    const add = passEditor.querySelector('[data-pass-add]');
+    add.disabled = rows.length >= 20;
+    add.onclick = () => {
+      const next = (rows.at(-1)?.stars || 0) + 1;
+      rows.push({id: 'milestone-' + next, stars: next, free: {}, diamond: {}});
+      saveMilestones(rows, true);
+      body.lastElementChild?.querySelector('input')?.focus();
+    };
+    for (const [index, row] of rows.entries()) {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+      const item = body.insertRow();
+      const cell = item.insertCell();
+      function input(parent, label, type, value, change) {
+        const wrapper = document.createElement('label');
+        wrapper.append(label);
+        const control = document.createElement('input');
+        control.type = type;
+        if (type === 'checkbox') control.checked = Boolean(value);
+        else control.value = value ?? '';
+        if (type === 'number') control.min = '0';
+        wrapper.append(control);
+        parent.append(wrapper);
+        control.addEventListener('change', () => {
+          change(type === 'checkbox' ? control.checked : type === 'number' ? Number(control.value) : control.value);
+          saveMilestones(rows);
+        });
+        return control;
+      }
+      const id = input(cell, 'Stable ID', 'text', row.id, value => row.id = value);
+      id.maxLength = 40;
+      const stars = input(cell, 'Claimed stars', 'number', row.stars, value => row.stars = value);
+      stars.min = '1'; stars.max = '120';
+      for (const tier of ['free', 'diamond']) {
+        const box = document.createElement('div');
+        box.className = 'studio-pass-bundle';
+        item.insertCell().append(box);
+        for (const [asset, label] of [['coins', 'Coins'], ['gems', 'Gems'], ['quest_points', 'Quest Points']]) {
+          const amount = input(box, label, 'number', row[tier]?.[asset], value => {
+            const bundle = row[tier] ??= {};
+            if (value) bundle[asset] = value;
+            else delete bundle[asset];
+          });
+          amount.max = '1000000';
+        }
+      }
+      const actions = item.insertCell();
+      input(actions, 'Lock', 'checkbox', row.locked, value => row.locked = value);
+      input(actions, 'Optional', 'checkbox', row.bonus, value => row.bonus = value);
+      const remove = document.createElement('button');
+      remove.className = 'btn btn-ghost';
+      remove.type = 'button';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', () => {
+        rows.splice(index, 1);
+        saveMilestones(rows, true);
+        add.focus();
+      });
+      actions.append(remove);
     }
   }
 

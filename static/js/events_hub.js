@@ -78,7 +78,7 @@ const EventHub = (() => {
       say('');
       if (data.competition) renderCompetition(data.competition);
       else if (eventId) renderDetail(data.event);
-      else { heading.textContent = 'Events Hub'; renderList(data.events); }
+      else { heading.textContent = 'Events Hub'; renderList(data.events, data.trophies); }
     } catch (error) {
       if (epoch !== screenEpoch) return;
       say(error.message, true);
@@ -127,7 +127,12 @@ const EventHub = (() => {
     return button(text, event => mutate(event.currentTarget, body));
   }
 
-  function renderList(events) {
+  function renderList(events, trophies = []) {
+    if (trophies.length) {
+      const cabinet = detailsCard('Collection Book · Event trophies', root);
+      for (const trophy of trophies) cabinet.append(button(
+        `${trophy.event} · ${trophy.team} · ${title(trophy.mode)} ${trophy.format}`, () => load(trophy.event_id)));
+    }
     if (!events.length) {
       root.append(element('p', 'There are no published events available right now.', 'ev-meta'));
       lobbyEntry(root);
@@ -598,7 +603,20 @@ const EventHub = (() => {
     input.maxLength = 24;
     field.append(input);
     const form = element('details');
-    form.append(element('summary', 'Join existing lobby'), field, button('Open lobby', () => openLobby(input.value.trim())));
+    const summary = element('summary', 'Join existing lobby');
+    const publicRooms = element('div');
+    form.append(summary, field, button('Open lobby', () => openLobby(input.value.trim())), publicRooms);
+    form.addEventListener('toggle', async () => {
+      if (!form.open) return;
+      publicRooms.replaceChildren(element('p', 'Loading public lobbies…', 'ev-meta'));
+      try {
+        const {lobbies} = await request('/lobby', {action: 'list'});
+        publicRooms.replaceChildren(...lobbies.map(room => button(room.name, () => openLobby(null, room.id))));
+        if (!lobbies.length) publicRooms.append(element('p', 'No open public lobbies.', 'ev-meta'));
+      } catch (error) {
+        publicRooms.replaceChildren(element('p', error.message, 'ev-error'));
+      }
+    });
     box.append(form);
   }
 
@@ -622,6 +640,13 @@ const EventHub = (() => {
       line.append(timeNode(event[key], event.timezone));
       intro.append(line);
     }
+    const templates = {weekend: 'Weekend Championship', nations: 'Nations Cup', legends: 'Legends League',
+      rivalry: 'Rivalry Cup', road_to_final: 'Road to the Final', mystery: 'Mystery Tournament',
+      double_elimination: 'Double Elimination', survival_league: 'Survival League', champions: 'Champions League',
+      underdog: 'Underdog Championship', dynasty: 'Franchise Dynasty', world_tour: 'World Tour'};
+    if (event.template) intro.append(element('p', templates[event.template], 'ev-meta'));
+    if (event.previous_edition) intro.append(element('p',
+      `Previous edition · ${event.previous_edition.name}`, 'ev-meta'));
     if (event.description) intro.append(element('p', event.description));
     if (event.banner) {
       const banner = element('img', null, 'ev-banner');
@@ -634,6 +659,21 @@ const EventHub = (() => {
       if (event.registration_open) {
         for (const mode of event.modes) {
           const choices = detailsCard(mode === 'solo' ? 'Join Solo' : 'Join Multi', root);
+          let visibility;
+          if (mode === 'multi' && event.lobby_v2) {
+            const control = select([{value: 'private', text: 'Private · invite required'},
+              {value: 'public', text: 'Public · listed in Events Hub'}], 'Lobby visibility');
+            choices.append(control.field);
+            visibility = control.control;
+          }
+          if (event.template === 'mystery') {
+            choices.append(element('p', 'Your franchise will be assigned and stays fixed through registration.'));
+            choices.append(liveAction('Join with random franchise', async () => {
+              await request('/competitions/' + event.id, {action: 'create', mode, consent: true, visibility: visibility?.value});
+              await load(event.id);
+            }));
+            continue;
+          }
           for (const team of event.teams.filter(team => team.eligible)) {
             const card = detailsCard(team.name, choices);
             if (team.crest) {
@@ -644,7 +684,7 @@ const EventHub = (() => {
             card.append(element('p', [team.venue, team.ovr + ' OVR'].filter(Boolean).join(' · '), 'ev-meta'));
             for (const player of team.squad) card.append(element('p', `${player.name} · ${player.category} · ${player.rating}`, 'ev-meta'));
             card.append(liveAction('Confirm ' + team.name, async () => {
-              await request('/competitions/' + event.id, {action: 'create', mode, team: team.key});
+              await request('/competitions/' + event.id, {action: 'create', mode, team: team.key, visibility: visibility?.value});
               await load(event.id);
             }));
           }
@@ -670,20 +710,65 @@ const EventHub = (() => {
     const next = event.fixtures.find(f => f.personal && !f.result);
     if (next) renderFixture(panel, next, event);
     root.append(panel);
+    if (event.universe_analytics && typeof CompetitionUniverse !== 'undefined') {
+      panel.append(button('Tournament Analytics', () => CompetitionUniverse.open('analytics',
+        {source:'live', instance:event.room.id}, () => { navigate('events'); load(event.id); })));
+    }
     const fixtures = detailsCard('Fixtures', root);
     for (const fixture of event.fixtures) renderFixture(fixtures, fixture, event);
     const board = detailsCard('Standings', root);
     for (const [index, row] of event.standings.entries()) {
       board.append(element('p', `${index + 1}. ${row.name} · ${row.points} pts · ${row.won}W ${row.lost}L · NRR ${row.nrr.toFixed(3)}`));
     }
-    const squad = detailsCard('Squad', root);
+    if (event.tour_series?.length) {
+      const tour = detailsCard('World Tour series', root);
+      tour.append(dataTable(['Series', 'Country', 'Games', 'Result'], event.tour_series.map(series =>
+        [series.series, series.country, series.games, series.winner_name || (series.complete ? 'Drawn' : 'Upcoming')])));
+    }
+    if (event.qualification?.length) {
+      const qualifier = detailsCard('Playoff qualification', root);
+      const estimate = event.qualification_estimate;
+      const headers = ['Team', 'Status', 'Left', 'Max points'];
+      if (estimate) headers.push('Estimated chance');
+      qualifier.append(dataTable(headers, event.qualification.map(row => {
+        const values = [row.name, row.status, row.remaining, row.max_points];
+        const chance = estimate?.teams[row.team];
+        if (estimate) values.push(chance ? `${chance.percent}% ±${chance.sample_margin} pp` : "—");
+        return values;
+      })));
+      qualifier.append(element('p', 'Points bounds leave unresolved tiebreaks in contention.', 'ev-meta'));
+      const scenario = event.qualification_scenario;
+      if (scenario) qualifier.append(element('p',
+        `Win all ${scenario.wins_needed_for_scenario} remaining league matches to finish on ${scenario.points} points. `
+        + (scenario.guaranteed ? 'That guarantees qualification.' : 'Qualification can still depend on other results or tiebreakers.')));
+      if (estimate) qualifier.append(element('p', `${estimate.model} ${estimate.samples} runs · ${date(estimate.calculated_at, event.timezone)}`, 'ev-meta'));
+    }
+    const squad = detailsCard(event.dressing_room ? 'Dressing Room' : 'Squad', root);
     for (const player of team.squad) squad.append(element('p', `${player.name} · ${player.category} · ${player.rating}`));
+    if (event.dressing_room) {
+      const room = event.dressing_room;
+      squad.append(element('p', `Morale ${room.morale}/100 · Unity ${room.unity ?? '—'}`, 'ev-meta'));
+      squad.append(element('p', `Reputation ${room.reputation ?? 0} · Fan support ${room.fan_support ?? 0}`, 'ev-meta'));
+      squad.append(element('p', room.informational ? 'Form and workload are informational.' :
+        'Solo fixtures use the published Dressing Room rating cap.', 'ev-meta'));
+      squad.append(dataTable(['Player', 'Apps', 'Runs', 'SR', 'Wkts', 'Econ', 'Load'],
+        room.players.map(p => [p.name, p.appearances, p.runs, p.strike_rate ?? '—', p.wickets, p.economy ?? '—', p.workload])));
+    }
     const stars = detailsCard(`Objectives · ${event.stars.claimed}/${event.maximum} stars claimed`, root);
     stars.open = true;
     stars.append(element('p', `${event.stars.earned} earned · ${event.stars.unclaimed} ready to claim`));
     const claim = (text, action, id = {}) => liveAction(text, async () => {
-      await request('/competitions/' + event.id, {action, ...id});
+      const result = await request('/competitions/' + event.id, {action, ...id});
       await load(event.id);
+      if (result.wallet_receipts?.length) {
+        const claimed = result.items || [];
+        say(`Receipts ${result.wallet_receipts.join(', ')} · Wallet ${assets(result.balances)}`
+          + (claimed.length ? ` · Items ${claimed.map(item => item.name).join(', ')}` : ''));
+        if (claimed.some(item => item.kind === 'pack') && typeof navigate === 'function') {
+          const pack = button('Open pack inventory', () => navigate('packs'));
+          root.prepend(pack);
+        }
+      }
     });
     if (event.stars.unclaimed) stars.append(claim('Claim All Stars', 'claim_stars'));
     const states = {ready: 'Ready to claim', claimed: 'Claimed', expired: 'Expired', locked: 'Locked', in_progress: 'In progress'};
@@ -695,10 +780,10 @@ const EventHub = (() => {
       if (obj.status === 'ready') stars.append(element('p', 'Claim by ' + date(obj.expires_at, event.timezone), 'ev-meta'),
         claim('Claim Star', 'claim_stars', {objective_id: obj.id}));
     }
-    const road = renderRewardRoad(event, event.stars.claimed);
-    if (event.tier) road.append(element('p', `Reward tier: ${title(event.tier)} · fixed at first eligibility`, 'ev-meta'));
+    const road = renderRewardRoad(event, event.stars.claimed, claim);
+    if (event.tier && !event.event_pass) road.append(element('p', `Reward tier: ${title(event.tier)} · fixed at first eligibility`, 'ev-meta'));
     if (event.rewards.some(r => r.status === 'claimable')) road.append(claim('Claim All Rewards', 'claim_rewards'));
-    for (const reward of event.rewards) {
+    for (const reward of event.rewards.filter(row => !row.source?.startsWith('pass:'))) {
       const line = element('p', `${assets(reward.assets)} · ${title(reward.status)}`);
       road.append(line);
       if (reward.status === 'claimable') road.append(element('p', 'Claim by ' + date(reward.expires_at, event.timezone), 'ev-meta'),
@@ -709,13 +794,128 @@ const EventHub = (() => {
     for (const p of event.statistics.bowling.slice(0, 15)) stats.append(element('p', `${p.name} · ${p.wickets} wickets`));
     const table = detailsCard(`${event.room.kind === 'solo' ? 'Solo' : 'Multiplayer'} leaderboard`, root);
     for (const row of event.leaderboard) table.append(element('p', `${row.rank}. ${row.name} · ${row.stars} ★`));
+    renderCompetitionExtras(event);
   }
 
-  function renderRewardRoad(event, claimed) {
-    const road = detailsCard('Reward road', root);
-    for (const row of event.milestones) road.append(element('p',
-      `${row.stars} ★ · ${row.stars <= claimed ? 'Unlocked' : 'Locked'} · Free ${assets(row.free || {}) || '—'} · Diamond ${assets(row.diamond || {}) || '—'}`));
+  function renderRewardRoad(event, claimed, claim) {
+    const pass = event.event_pass;
+    const road = detailsCard(pass ? 'Event Pass' : 'Reward road', root);
+    if (pass) {
+      road.append(element('p', `${pass.claimed} claimed stars · Claims close ${date(pass.expires_at, event.timezone)}`, 'ev-meta'),
+        element('p', 'Diamond replaces Free at the time a milestone unlocks.', 'ev-meta'));
+      if (pass.next_target !== null) {
+        const progress = element('progress');
+        progress.max = pass.next_target;
+        progress.value = pass.claimed;
+        progress.setAttribute('aria-label', `Next milestone at ${pass.next_target} stars`);
+        road.append(element('p', `Next milestone ${pass.claimed}/${pass.next_target} stars`), progress);
+      }
+    }
+    for (const row of (pass || event).milestones) {
+      const status = row.state ? title(row.state) : row.stars <= claimed ? 'Unlocked' : 'Locked';
+      const bundle = tier => [assets(row[tier] || {}), ...(row.item_preview?.[tier] || [])].filter(Boolean).join(' · ') || '—';
+      const bundles = row.reward
+        ? [title(row.reward.tier), assets(row.reward.assets), ...(row.reward.items || [])].filter(Boolean).join(' · ')
+        : `Free ${bundle('free')} · Diamond ${bundle('diamond')}`;
+      road.append(element('p', `${row.stars} ★ · ${status} · ${bundles}${row.bonus ? ' · Optional' : ''}`));
+      if (row.state === 'claimable' && claim) {
+        road.append(element('p', 'Claim by ' + date(row.reward.expires_at, event.timezone), 'ev-meta'),
+          claim('Claim Reward', 'claim_rewards', {reward_id: row.reward.id}));
+      }
+    }
     return road;
+  }
+
+  function renderCompetitionExtras(event) {
+    if (event.ai_managers?.length) {
+      const people = detailsCard('AI managers', root);
+      for (const person of event.ai_managers) {
+        const summary = element('article');
+        summary.append(element('h3', `${person.team} · ${person.name}`), element('p', person.summary));
+        if (person.recorded_overs) {
+          for (const phase of ['batting', 'bowling']) {
+            const approaches = Object.entries(person[phase] || {}).sort((left, right) => right[1] - left[1]);
+            if (approaches.length) {
+              const count = approaches.reduce((total, entry) => total + entry[1], 0);
+              summary.append(element('p', `${phase === 'batting' ? 'Batting' : 'Bowling'} · ${count} overs · ${approaches.map(([name, times]) => `${name} ${times}`).join(', ')}`, 'ev-meta'));
+            }
+          }
+        }
+        people.append(summary);
+      }
+    }
+    if (event.news) {
+      const news = detailsCard('Tournament News', root);
+      const content = element('div');
+      news.append(content);
+      async function renderPage(feed, page) {
+        content.replaceChildren();
+        for (const story of feed.items) {
+          const article = element('article');
+          article.append(element('h3', story.title), element('p', story.summary),
+            timeNode(story.recorded_at, event.timezone));
+          const fixture = event.fixtures.find(row => row.id === story.fixture_id && row.personal && row.result?.kind === 'completed');
+          if (fixture) article.append(button('Scorecard', () => competitionArena(fixture.id)));
+          content.append(article);
+        }
+        if (!feed.items.length) content.append(element('p', 'Match reports appear once fixtures settle.'));
+        const actions = element('div', null, 'ev-actions');
+        async function turn(next) {
+          const response = await request('/' + event.id, {news_page: next});
+          renderPage(response.competition.news, next);
+        }
+        if (page > 0) actions.append(liveAction('Previous reports', () => turn(page - 1)));
+        if (feed.has_more) actions.append(liveAction('More reports', () => turn(page + 1)));
+        content.append(actions);
+      }
+      renderPage(event.news, 0);
+    }
+    if (event.honour_board) {
+      const board = detailsCard('Honour Board', root);
+      const honour = event.honour_board;
+      const names = {runs: 'Orange Cap', wickets: 'Purple Cap', high_score: 'Highest score',
+        figures: 'Best figures', strike_rate: 'Strike rate', economy: 'Economy',
+        fours: 'Most fours', sixes: 'Most sixes', fifties: 'Most fifties', centuries: 'Most centuries', player_of_tournament: 'Player of the Tournament',
+        player_of_final: 'Player of the Final', winning_captain: 'Winning Captain', team_of_tournament: 'Team of the Tournament'};
+      if (honour.champion_name) board.append(element('h3', `Champion · ${honour.champion_name}`));
+      if (honour.runner_up) board.append(element('p', `Runner-up · ${honour.runner_up}`));
+      if (honour.media_ready) board.append(liveAction('View award graphics', async () => {
+        const {images} = await request('/honours/' + event.id);
+        const gallery = element('section');
+        for (const [key, data] of Object.entries(images)) {
+          const panel = detailsCard(key === 'champion' ? 'Championship graphic' : names[key], gallery);
+          const art = element('img');
+          art.loading = 'lazy';
+          art.style.maxWidth = '100%';
+          art.alt = key === 'champion' ? 'Champion ' + honour.champion_name : names[key];
+          art.src = 'data:image/png;base64,' + data;
+          panel.append(art);
+        }
+        board.append(gallery);
+      }));
+      if (!Object.keys(honour.awards).length) board.append(element('p', 'No finalized player awards yet.'));
+      for (const [key, winners] of Object.entries(honour.awards)) {
+        for (const winner of winners) board.append(element('p', `${names[key]} · ${winner.name} (${winner.team}) · ${[].concat(winner.value).join('/')}`));
+      }
+    }
+    if (event.dynasty_history?.length) {
+      const editions = detailsCard('Franchise history', root);
+      for (const row of event.dynasty_history) editions.append(element('p',
+        `${row.event} · ${row.wins}/${row.played} wins${row.title ? ' · Champion' : ''}`));
+    }
+    if (event.trophies?.length) {
+      const trophies = detailsCard('Trophy cabinet', root);
+      for (const trophy of event.trophies) trophies.append(element('p', `${trophy.event} · ${trophy.team} · ${title(trophy.mode)} ${trophy.format}`));
+    }
+    if (event.manager) {
+      const manager = detailsCard('Manager Profile', root);
+      manager.append(element('p', `${event.manager.rank} · ${event.manager.xp} Manager XP`));
+      if (event.manager.next_xp !== null) manager.append(element('p', `Next rank at ${event.manager.next_xp} XP`, 'ev-meta'));
+      for (const mode of event.manager.modes) manager.append(element('p',
+        `${title(mode.mode)} ${mode.format} · ${mode.wins}W ${mode.losses}L ${mode.ties}T · ${mode.titles} titles`));
+      for (const rating of event.manager.ratings) manager.append(element('p',
+        `${rating.format} PvP ${rating.strength_band} · ${rating.rating} · ${rating.games} matches${rating.provisional ? ' · Provisional' : ''}`));
+    }
   }
 
   function renderFixture(box, fixture, event) {
@@ -743,6 +943,7 @@ const EventHub = (() => {
     const menu = element('div');
     box.replaceChildren(element('summary', 'Match setup'), menu);
     menu.append(element('p', `${setup.team.name} v ${setup.opponent}`));
+    if (setup.ai_manager) menu.append(element('p', `${setup.ai_manager.name} · ${setup.ai_manager.summary}`, 'ev-meta'));
     const controls = element('div', null, 'ev-actions');
     const op = (text, action, value) => liveAction(text, () => showCompetitionSetup(box, fixture, {action, value, version: setup.version}));
     if (!setup.ready) controls.append(op('Ready', 'ready'));
@@ -781,9 +982,9 @@ const EventHub = (() => {
     menu.append(controls);
   }
 
-  async function openLobby(invite) {
+  async function openLobby(invite, roomId = null) {
     try {
-      const {lobby} = await request('/lobby', {invite});
+      const {lobby} = await request('/lobby', {invite, room_id: roomId});
       stop();
       activeEvent = lobby.event_id;
       root.replaceChildren(button('All events', () => load()));
@@ -798,10 +999,13 @@ const EventHub = (() => {
     const panel = element('section', null, 'ev-panel');
     root.append(panel);
     const route = () => ({room_id: lobby.id, invite: invite || lobby.invite});
+    let timerLabel;
     async function refresh() {
       const response = await request('/lobby', route());
-      lobby = response.lobby;
-      draw();
+      if (lobby.version !== response.lobby.version || lobby.can_join !== response.lobby.can_join) {
+        lobby = response.lobby;
+        draw();
+      }
     }
     function draw() {
       panel.replaceChildren(element('h2', 'Multiplayer lobby'));
@@ -811,37 +1015,72 @@ const EventHub = (() => {
         if (lobby.my_team) panel.append(button('Open tournament', () => load(lobby.event_id)));
         return;
       }
-      panel.append(element('p', `${lobby.ai_count} AI managers if started now · ${duration(lobby.join_until)}`),
-        timeNode(lobby.join_until, lobby.timezone));
+      timerLabel = element('p', `${lobby.ai_count} AI managers if started now · ${duration(lobby.join_until)}`);
+      panel.append(timerLabel, timeNode(lobby.join_until, lobby.timezone));
+      const features = lobby.features;
+      if (features?.ready) panel.append(element('p',
+        `${title(features.visibility)} · ${features.ready_count} ready${features.host ? ' · Host ' + features.host : ''}`, 'ev-meta'));
       if (lobby.invite) {
         panel.append(element('p', 'Lobby code ' + lobby.invite));
         if (navigator.clipboard) panel.append(button('Copy code', () => navigator.clipboard.writeText(lobby.invite)));
         if (navigator.share) panel.append(button('Share lobby', () => navigator.share(lobby.invite_url ? {url: lobby.invite_url, title: lobby.name} : {text: 'Join my CCM26 Live Event with lobby code ' + lobby.invite})));
       }
-      const op = (text, action, team, confirm = false) => liveAction(text, async () => {
+      const op = (text, action, team, confirm = false, consent = false) => liveAction(text, async () => {
         if (confirm && !window.confirm(confirm)) return;
-        const result = await request('/lobby', {...route(), action, team, version: lobby.version,
-                                                confirmed: Boolean(confirm)});
-        lobby = result.lobby;
+        try {
+          const result = await request('/lobby', {...route(), action, team, version: lobby.version,
+                                                  confirmed: Boolean(confirm), consent});
+          lobby = result.lobby;
+        } catch (error) {
+          if (error.conflict) await refresh();
+          throw error;
+        }
         if (lobby.status === 'running' && lobby.my_team) await load(lobby.event_id);
         else draw();
       });
       for (const team of lobby.teams) {
-        const row = element('p', `${team.name} · ${team.owner || 'Open'}`);
-        if (lobby.can_join && !team.owner) row.append(op('Claim seat', 'claim', team.key));
+        const row = element('p', `${team.name} · ${team.owner || 'Open'}${team.ready ? ' · Ready' : ''}`);
+        if (lobby.can_join && !team.owner && !features?.mystery) row.append(op('Claim seat', 'claim', team.key));
         panel.append(row);
       }
-      if (lobby.can_join && lobby.my_team && !lobby.is_host) panel.append(op('Release my team', 'release'));
+      if (lobby.can_join && !lobby.my_team && features?.mystery) {
+        panel.append(op('Join with random franchise', 'claim', null,
+          'Accept a randomly assigned franchise for this tournament?', true));
+      }
+      if (lobby.can_join && lobby.my_team && features?.ready) {
+        const mine = lobby.teams.find(team => team.key === lobby.my_team);
+        panel.append(op(mine.ready ? 'Cancel ready' : 'Mark ready', mine.ready ? 'unready' : 'ready'));
+        if (features.transfer_pending) panel.append(op('Accept host role', 'accept_host'));
+        if (lobby.is_host) {
+          const candidates = lobby.teams.filter(team => team.owner && team.key !== lobby.my_team);
+          for (const team of candidates) panel.append(op(`Offer host role to ${team.owner}`, 'offer_host', team.key));
+        }
+      }
+      if (lobby.can_join && lobby.my_team && !lobby.is_host && !features?.mystery) panel.append(op('Release my team', 'release'));
       if (lobby.is_host) {
-        if (lobby.can_join && lobby.early_start) panel.append(op('Start Now', 'start', null, `Start with ${lobby.ai_count} AI managers?`));
+        if (lobby.can_join && lobby.early_start && lobby.teams.filter(team => team.owner).length >= lobby.minimum) panel.append(op('Start Now', 'start', null, `Start with ${lobby.ai_count} AI managers?`));
         panel.append(op('Close lobby', 'cancel', null, 'Close registration and release all seats?'));
       }
     }
     draw();
     const epoch = screenEpoch;
-    countdown = setInterval(() => {
-      if (!pending && epoch === screenEpoch && lobby.status === 'lobby') refresh().catch(e => say(e.message, true));
-    }, 6000);
+    let nextPoll = Date.now() + 6000;
+    let delay = 6000;
+    countdown = setInterval(async () => {
+      if (epoch !== screenEpoch || lobby.status !== 'lobby') return;
+      timerLabel.textContent = `${lobby.ai_count} AI managers if started now · ${duration(lobby.join_until)}`;
+      if (pending || Date.now() < nextPoll) return;
+      nextPoll = Infinity;
+      try {
+        await refresh();
+        delay = 6000;
+      } catch (error) {
+        say(error.message, true);
+        delay = Math.min(60000, delay * 2);
+      } finally {
+        nextPoll = Date.now() + delay;
+      }
+    }, 1000);
   }
 
   function stop() {
@@ -851,5 +1090,5 @@ const EventHub = (() => {
     activeEvent = null;
   }
 
-  return {open: load, openLobby, stop};
+  return {open: load, openLobby, openFixture: competitionArena, stop};
 })();
